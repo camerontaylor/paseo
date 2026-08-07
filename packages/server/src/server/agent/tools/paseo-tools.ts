@@ -173,6 +173,8 @@ interface ProviderSummary {
   label: string;
   description: string;
   enabled: boolean;
+  source?: "builtin" | "custom";
+  baseProviderId?: string;
   modes: AgentMode[];
   status: string;
   error?: string;
@@ -296,6 +298,8 @@ function toProviderSummary(entry: {
   label?: string;
   description?: string;
   enabled: boolean;
+  source?: "builtin" | "custom";
+  baseProviderId?: string;
   modes?: AgentMode[];
   status: string;
   error?: string;
@@ -305,6 +309,8 @@ function toProviderSummary(entry: {
     label: entry.label ?? entry.provider,
     description: entry.description ?? "",
     enabled: entry.enabled,
+    ...(entry.source ? { source: entry.source } : {}),
+    ...(entry.baseProviderId ? { baseProviderId: entry.baseProviderId } : {}),
     modes: entry.modes ?? [],
     status: entry.status === "ready" ? "available" : entry.status,
     ...(entry.error ? { error: entry.error } : {}),
@@ -2913,7 +2919,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     "list_providers",
     {
       title: "List providers",
-      description: "List configured agent providers, availability, and their modes.",
+      description:
+        "List configured agent providers and accounts, including availability, modes, and each account's base provider.",
       inputSchema: {},
       outputSchema: {
         providers: z.array(ProviderSummarySchema),
@@ -2994,6 +3001,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         label: z.string().nullable().optional(),
         description: z.string().nullable().optional(),
         enabled: z.boolean(),
+        source: z.enum(["builtin", "custom"]).optional(),
+        baseProviderId: z.string().optional(),
         status: z.string(),
         modes: z.array(ProviderModeSchema).nullish(),
         selectedModel: z.string().nullable(),
@@ -3035,6 +3044,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           label: summary.label,
           description: summary.description,
           enabled: summary.enabled,
+          ...(summary.source ? { source: summary.source } : {}),
+          ...(summary.baseProviderId ? { baseProviderId: summary.baseProviderId } : {}),
           status: summary.status,
           modes: summary.modes,
           selectedModel: selectedModel ?? null,
