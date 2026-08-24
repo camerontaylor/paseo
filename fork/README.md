@@ -7,16 +7,18 @@ namespace exists. Keep fork-only files here rather than in `docs/`.
 The lesson comes from the fork survey in
 [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md): the most
 repeated commit message across the entire fork corpus is some variant of
-*"restore X dropped during upstream merge"*, and `yooztech` invented a
+_"restore X dropped during upstream merge"_, and `yooztech` invented a
 `packages/app/src/fork/` namespace for exactly this reason.
 
 ## What's here
 
-| File | |
-|---|---|
-| [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md) | Research into upstream, its 1,546 forks, 490 open PRs and 467 open issues — features built, pain points, and the PR grab basket setup. Point-in-time; upstream merges ~30 community PRs a week. |
-| [upstream-candidates.md](upstream-candidates.md) | Changes we could write that fit upstream's code and philosophy. Bug-shaped, layer-correct, one concern each. Offered upstream, carried either way. |
-| [local-fork-candidates.md](local-fork-candidates.md) | Changes we would build and keep. Upstream has declined them or would build them differently. Permanent carries, with their maintenance cost stated. |
+| File                                                                   |                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md)     | Research into upstream, its 1,546 forks, 490 open PRs and 467 open issues — features built, pain points, and the PR grab basket setup. Point-in-time; upstream merges ~30 community PRs a week.                                            |
+| [upstream-candidates.md](upstream-candidates.md)                       | Changes we could write that fit upstream's code and philosophy. Bug-shaped, layer-correct, one concern each. Offered upstream, carried either way.                                                                                         |
+| [local-fork-candidates.md](local-fork-candidates.md)                   | Changes we would build and keep. Upstream has declined them or would build them differently. Permanent carries, with their maintenance cost stated.                                                                                        |
+| [side-conversations-2026-08-23.md](side-conversations-2026-08-23.md)   | Research into the `/btw` side-question mechanism — what it is in Claude Code, the Codex and OpenCode equivalents, why upstream #2056 was closed unevaluated, and what building it here would cost. Backs the Side conversations candidate. |
+| [side-conversations-phase1-plan.md](side-conversations-phase1-plan.md) | Phase 1 implementation plan for side conversations — the provider seam, four PR-sized steps, and the one vendor joint no gate catches. **Approved** after two critic passes.                                                               |
 
 The two candidate files split on one question: **does it need a product decision?**
 If it is a defect at the right layer, it is an upstream candidate — cheaper to
@@ -31,10 +33,10 @@ feature request and is open as a defect. Framing decides the outcome.
 
 Two-branch discipline, borrowed from `UnbrokenHunter/paseo`'s `docs/fork-workflow.md`:
 
-| Branch | |
-|---|---|
-| `main` | **Mirrors upstream 1:1. Never commit here.** Tracks `origin/main`, which follows `getpaseo/paseo`. Sync with `git fetch upstream && git switch main && git merge --ff-only upstream/main && git push origin main`. |
-| `custom` | Everything of ours, including this directory. Rebase or merge `main` into it when upstream moves. |
+| Branch   |                                                                                                                                                                                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `main`   | **Mirrors upstream 1:1. Never commit here.** Tracks `origin/main`, which follows `getpaseo/paseo`. Sync with `git fetch upstream && git switch main && git merge --ff-only upstream/main && git push origin main`. |
+| `custom` | Everything of ours, including this directory. Rebase or merge `main` into it when upstream moves.                                                                                                                  |
 
 Why it matters: a mirror branch stays a fast-forward only while it has no local
 commits. Put `fork/` on `main` and every sync becomes a merge — and the first
