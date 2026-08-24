@@ -35,6 +35,10 @@ A workspace is a flexible canvas:
 - Open terminals alongside agents
 - Mix and match providers within the same workspace
 
+Consider Paseo-managed shell command history for terminals. It should let users recall and search
+commands across reconnects and devices instead of relying only on the shell receiving Up and Down
+key presses.
+
 ### The daemon
 
 Paseo is a client-server system. The daemon (Node.js) runs on your machine, manages agent processes, and streams output in real time over WebSocket. Clients connect to the daemon — locally or remotely.
