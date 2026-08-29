@@ -10,24 +10,20 @@ Codex, Copilot and Pi do not.
 
 ## State
 
-Eight review findings are fixed in the working tree. Nothing is committed.
+Eight review findings are fixed. The feature is committed as `7308e46e7`, this
+doc as `e32d3396e`, pushed to `origin`. No open PR.
 
-Verified across the combined tree after all fixes landed:
+Verified against the committed tree:
 
-- Typecheck clean — server, client, app, protocol (run `npm run build:client` first).
-- Lint clean — 0 warnings, 0 errors, 3763 files.
-- Format clean, except four pre-existing `fork/*.md` files from `3a083f01d`.
+- Typecheck clean across all twelve workspaces, via the lefthook pre-commit hook.
+- Lint clean — 0 warnings, 0 errors.
+- Format clean.
+- Every side-conversation suite green: server store and manager, `agent-manager`
+  (174), `session` (156), Claude `side-question` (11), OpenCode `side-question`
+  (7), plus the app and client suites.
 
-**One verification gap.** The Claude and OpenCode `side-question.test.ts` suites
-ran before `agent-sdk-types.ts` was widened with the `options?: { signal? }`
-parameter. The change is type-only and the combined typecheck covers signature
-mismatches, so exposure is low — but those two suites have not run against the
-final tree. Run them before you trust a green board:
-
-```bash
-npx vitest run packages/server/src/server/agent/providers/claude/side-question.test.ts --bail=1
-npx vitest run packages/server/src/server/agent/providers/opencode/side-question.test.ts --bail=1
-```
+The whole test suite has never run on this branch — `CLAUDE.md` forbids it
+locally. Push to CI for that.
 
 ## Follow-ups
 
