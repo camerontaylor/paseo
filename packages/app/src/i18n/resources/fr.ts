@@ -84,6 +84,35 @@ export const fr: TranslationResources = {
       settingOff: "Désactivé",
     },
   },
+  sideConversations: {
+    title: "Conversation parallèle",
+    composer: {
+      placeholder: "Posez une question en parallèle...",
+      send: "Demander",
+      pending: "Envoi...",
+    },
+    states: {
+      loading: "Chargement de la conversation parallèle...",
+      empty: "Posez une question sans interrompre la tâche principale de l'agent.",
+      pending: "En attente d'une réponse...",
+      removed: "Cette conversation parallèle n'est plus sur l'hôte.",
+    },
+    errors: {
+      unavailable: "Les conversations parallèles ne sont pas disponibles pour cet agent.",
+      timeout: "La conversation parallèle a expiré.",
+      failed: "Échec de la conversation parallèle : {{error}}",
+      duplicate: "Une question parallèle est déjà en cours.",
+    },
+    notices: {
+      singleShot: "Ce fournisseur accepte une seule question à la fois.",
+      degraded: "Cette réponse peut ne pas inclure tout le contexte de conversation de l'agent.",
+    },
+    actions: {
+      openRow: "Ouvrir la conversation parallèle",
+      open: "Ouvrir",
+      new: "Nouvelle conversation parallèle",
+    },
+  },
   composer: {
     placeholders: {
       desktop: "Envoyez un message à l'agent, marquez@filesou utilisez/commandset/skills",

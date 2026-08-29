@@ -151,6 +151,238 @@ test("cancel_agent_request reports refusal only through its response", async () 
   ]);
 });
 
+test("side conversation ask reports archived agents unavailable without loading them", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const askSideQuestion = vi.fn();
+  const session = createSessionForTest({
+    messages,
+    agentManager: { askSideQuestion },
+    agentStorage: {
+      get: vi.fn().mockResolvedValue({ archivedAt: "2026-08-24T00:00:00.000Z" }),
+    },
+  });
+
+  await session.handleMessage({
+    type: "agent.side_conversation.ask.request",
+    parentAgentId: agentId,
+    threadId: "thread-1",
+    question: "What happened?",
+    requestId: "side-ask-1",
+  });
+
+  expect(askSideQuestion).not.toHaveBeenCalled();
+  expect(messages).toEqual([
+    {
+      type: "agent.side_conversation.ask.response",
+      payload: {
+        requestId: "side-ask-1",
+        parentAgentId: agentId,
+        threadId: "thread-1",
+        answer: { status: "unavailable" },
+        error: null,
+      },
+    },
+  ]);
+});
+
+function captureAgentManagerEvents(): {
+  subscribe: ReturnType<typeof vi.fn>;
+  dispatch: (event: AgentManagerEvent) => void;
+} {
+  const callbacks: Array<(event: AgentManagerEvent) => void> = [];
+  return {
+    subscribe: vi.fn((callback: (event: AgentManagerEvent) => void) => {
+      callbacks.push(callback);
+      return () => {};
+    }),
+    dispatch: (event) => {
+      for (const callback of callbacks) callback(event);
+    },
+  };
+}
+
+const SIDE_CONVERSATION_RECORD = {
+  parentAgentId: "11111111-1111-4111-8111-111111111111",
+  threadId: "thread-1",
+  exchanges: [{ question: "What happened?", answer: "A merge conflict." }],
+  items: [
+    { type: "user_message" as const, text: "What happened?" },
+    { type: "assistant_message" as const, text: "A merge conflict." },
+  ],
+  pendingQuestion: null,
+  lastAnswer: {
+    status: "answered" as const,
+    content: "A merge conflict.",
+    synthetic: false,
+    threading: "threaded" as const,
+  },
+};
+
+const SIDE_CONVERSATION_SNAPSHOT = {
+  parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+  threadId: SIDE_CONVERSATION_RECORD.threadId,
+  items: SIDE_CONVERSATION_RECORD.items,
+  pendingQuestion: null,
+  lastAnswer: SIDE_CONVERSATION_RECORD.lastAnswer,
+};
+
+test("side conversation manager events reach every capable client", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true });
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  events.dispatch({
+    type: "side_conversation",
+    event: {
+      type: "remove",
+      parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+      threadId: SIDE_CONVERSATION_RECORD.threadId,
+    },
+  });
+
+  expect(messages).toEqual([
+    { type: "agent.side_conversation.update", payload: SIDE_CONVERSATION_SNAPSHOT },
+    {
+      type: "agent.side_conversation.removed",
+      payload: {
+        parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+        threadId: SIDE_CONVERSATION_RECORD.threadId,
+      },
+    },
+  ]);
+});
+
+test("side conversation manager events stay off the wire for clients without the capability", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const events = captureAgentManagerEvents();
+  createSessionForTest({ messages, agentManager: { subscribe: events.subscribe } });
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  events.dispatch({
+    type: "side_conversation",
+    event: {
+      type: "remove",
+      parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+      threadId: SIDE_CONVERSATION_RECORD.threadId,
+    },
+  });
+
+  expect(messages).toEqual([]);
+});
+
+test("side conversation ask leaves the update broadcast to the manager", async () => {
+  const agentId = SIDE_CONVERSATION_RECORD.parentAgentId;
+  const messages: SessionOutboundMessage[] = [];
+  const askSideQuestion = vi.fn().mockResolvedValue(SIDE_CONVERSATION_RECORD.lastAnswer);
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      askSideQuestion,
+      getAgent: vi.fn(() => ({ id: agentId })),
+      waitForAgentClose: vi.fn().mockResolvedValue(undefined),
+    },
+  });
+  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true });
+
+  await session.handleMessage({
+    type: "agent.side_conversation.ask.request",
+    parentAgentId: agentId,
+    threadId: "thread-1",
+    question: "What happened?",
+    requestId: "side-ask-2",
+  });
+
+  expect(askSideQuestion).toHaveBeenCalledWith(agentId, "thread-1", "What happened?");
+  expect(messages).toEqual([
+    {
+      type: "agent.side_conversation.ask.response",
+      payload: {
+        requestId: "side-ask-2",
+        parentAgentId: agentId,
+        threadId: "thread-1",
+        answer: SIDE_CONVERSATION_RECORD.lastAnswer,
+        error: null,
+      },
+    },
+  ]);
+});
+
+test("side conversation list returns every thread for the parent", async () => {
+  const agentId = SIDE_CONVERSATION_RECORD.parentAgentId;
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      getAgent: vi.fn(() => ({ id: agentId })),
+      waitForAgentClose: vi.fn().mockResolvedValue(undefined),
+      listSideConversations: vi.fn(() => [SIDE_CONVERSATION_RECORD]),
+    },
+  });
+
+  await session.handleMessage({
+    type: "agent.side_conversation.list.request",
+    parentAgentId: agentId,
+    requestId: "side-list-1",
+  });
+
+  expect(messages).toEqual([
+    {
+      type: "agent.side_conversation.list.response",
+      payload: {
+        requestId: "side-list-1",
+        parentAgentId: agentId,
+        threads: [SIDE_CONVERSATION_SNAPSHOT],
+        error: null,
+      },
+    },
+  ]);
+});
+
+test("side conversation list reports failures instead of dropping the request", async () => {
+  const agentId = SIDE_CONVERSATION_RECORD.parentAgentId;
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      getAgent: vi.fn(() => ({ id: agentId })),
+      waitForAgentClose: vi.fn().mockResolvedValue(undefined),
+      listSideConversations: vi.fn(() => {
+        throw new Error(`Unknown agent '${agentId}'`);
+      }),
+    },
+  });
+
+  await session.handleMessage({
+    type: "agent.side_conversation.list.request",
+    parentAgentId: agentId,
+    requestId: "side-list-2",
+  });
+
+  expect(messages).toEqual([
+    {
+      type: "agent.side_conversation.list.response",
+      payload: {
+        requestId: "side-list-2",
+        parentAgentId: agentId,
+        threads: [],
+        error: `Unknown agent '${agentId}'`,
+      },
+    },
+  ]);
+});
+
 test("legacy cancel_agent_request reports refusal through the activity log", async () => {
   const agentId = "11111111-1111-4111-8111-111111111111";
   const messages: SessionOutboundMessage[] = [];

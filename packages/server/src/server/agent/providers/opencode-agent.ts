@@ -54,6 +54,8 @@ import {
   type ProviderCatalog,
   type SteerActiveTurnOptions,
   type SteerResult,
+  type SideAnswer,
+  type SideConversationExchange,
   type ToolCallDetail,
   type ToolCallTimelineItem,
 } from "../agent-sdk-types.js";
@@ -99,6 +101,7 @@ import { renderPromptAttachmentAsText } from "../prompt-attachments.js";
 import { composeSystemPromptParts } from "../system-prompt.js";
 import { normalizeProviderReplayTimestamp } from "../provider-history-timestamps.js";
 import { revertOpenCodeConversationAndFiles } from "./opencode/rewind.js";
+import { askOpenCodeSideQuestion } from "./opencode/side-question.js";
 import {
   claimOpenCodeSubagentFallbackTitle,
   foldOpenCodeSubagentPresentation,
@@ -3476,6 +3479,35 @@ class OpenCodeAgentSession implements AgentSession {
         return { status: "unavailable" };
       }
       throw error;
+    }
+  }
+
+  async askSideQuestion(
+    question: string,
+    history: readonly SideConversationExchange[],
+    options?: { signal?: AbortSignal },
+  ): Promise<SideAnswer> {
+    if (this.closed) return { status: "unavailable" };
+    try {
+      return await askOpenCodeSideQuestion({
+        client: this.client,
+        parentSessionId: this.sessionId,
+        cwd: this.config.cwd,
+        question,
+        history,
+        messageId: createOpenCodeMessageId(),
+        logger: this.logger,
+        signal: options?.signal,
+        model: this.parseModel(this.config.model),
+        agent: resolveOpenCodeRuntimeAgentId(this.currentMode) ?? undefined,
+        variant: this.config.thinkingOptionId,
+      });
+    } catch (error) {
+      return {
+        status: "failed",
+        error: toDiagnosticErrorMessage(error),
+        threading: "threaded",
+      };
     }
   }
 

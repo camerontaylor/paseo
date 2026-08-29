@@ -69,6 +69,7 @@ import { toErrorMessage } from "@/utils/error-messages";
 import { showProviderNoticeToast } from "@/utils/provider-notice-toast";
 import { applyCheckoutStatusUpdateFromEvent } from "@/git/checkout-status-cache";
 import { useProviderSubagentStore } from "@/subagents/provider-store";
+import { useSideConversationStore } from "@/side-conversations/store";
 import { revalidateSessionAfterResume } from "@/contexts/session-resume-revalidation";
 
 type TimelineResponsePayload = Extract<
@@ -793,6 +794,19 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       useProviderSubagentStore.getState().applyUpdate(serverId, message.payload);
     });
 
+    const unsubSideConversationUpdate = client.on("agent.side_conversation.update", (message) => {
+      if (message.type !== "agent.side_conversation.update") return;
+      useSideConversationStore.getState().applySnapshot(serverId, message.payload);
+    });
+
+    // The daemon drops threads on archive, reload, and history clear. Without this the row stays
+    // in the subagents track and its tab opens a thread nothing on the host still has.
+    const unsubSideConversationRemoved = client.on("agent.side_conversation.removed", (message) => {
+      if (message.type !== "agent.side_conversation.removed") return;
+      const { parentAgentId, threadId } = message.payload;
+      useSideConversationStore.getState().remove(serverId, parentAgentId, threadId);
+    });
+
     const unsubScriptStatusUpdate = client.on("script_status_update", (message) => {
       if (message.type !== "script_status_update") return;
       setWorkspaces(serverId, (prev) => patchWorkspaceScripts(prev, message.payload));
@@ -986,6 +1000,8 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       unsubAgentStream();
       unsubAgentTimeline();
       unsubProviderSubagentUpdate();
+      unsubSideConversationUpdate();
+      unsubSideConversationRemoved();
       unsubAgentAttention();
       unsubScriptStatusUpdate();
       unsubCheckoutStatusUpdate();

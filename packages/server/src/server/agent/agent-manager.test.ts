@@ -44,6 +44,8 @@ import type {
   ImportProviderSessionInput,
   ImportProviderSessionContext,
   ResolveAgentDefaultModeInput,
+  SideAnswer,
+  SideConversationExchange,
 } from "./agent-sdk-types.js";
 import type { PaseoToolCatalog } from "./tools/types.js";
 import type { ProviderDefinition } from "./provider-registry.js";
@@ -516,6 +518,52 @@ class TestAgentSession implements AgentSession {
   }
 
   async close(): Promise<void> {}
+}
+
+class SideQuestionTestSession extends TestAgentSession {
+  private pending: Deferred<SideAnswer> | null = null;
+  readonly signals: Array<AbortSignal | undefined> = [];
+
+  async askSideQuestion(
+    question: string,
+    history: readonly SideConversationExchange[],
+    options?: { signal?: AbortSignal },
+  ): Promise<SideAnswer> {
+    this.signals.push(options?.signal);
+    if (question === "remember") {
+      return { status: "answered", content: "orchid-731", synthetic: false, threading: "threaded" };
+    }
+    if (question === "recall") {
+      return {
+        status: "answered",
+        content: history[0]?.answer ?? "missing",
+        synthetic: false,
+        threading: "threaded",
+      };
+    }
+    this.pending = deferred();
+    return await this.pending.promise;
+  }
+
+  resolvePending(answer: SideAnswer): void {
+    this.pending?.resolve(answer);
+  }
+
+  rejectPending(error: Error): void {
+    this.pending?.reject(error);
+  }
+
+  override async close(): Promise<void> {
+    this.pending?.reject(new Error("Side question session closed"));
+  }
+}
+
+class SideQuestionTestClient extends TestAgentClient {
+  readonly session = new SideQuestionTestSession({ provider: "codex", cwd: process.cwd() });
+
+  override async createSession(): Promise<AgentSession> {
+    return this.session;
+  }
 }
 
 class McpCapableTestAgentSession extends TestAgentSession {
@@ -10024,4 +10072,213 @@ test("onWorkspaceStateMayHaveChanged is not called for running shell tool calls"
   await manager.runAgent(snapshot.id, { text: "merge it" });
 
   expect(onWorkspaceStateMayHaveChanged).not.toHaveBeenCalled();
+});
+test("side-question follow-ups receive answered history without polluting the main timeline", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-threading-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await expect(manager.askSideQuestion(agent.id, "thread", "remember")).resolves.toMatchObject({
+      status: "answered",
+      content: "orchid-731",
+      threading: "threaded",
+    });
+    await expect(manager.askSideQuestion(agent.id, "thread", "recall")).resolves.toMatchObject({
+      status: "answered",
+      content: "orchid-731",
+      threading: "threaded",
+    });
+    expect(manager.getTimeline(agent.id)).toEqual([]);
+    expect(manager.getSideConversation(agent.id, "thread")?.items).toEqual([
+      { type: "user_message", text: "remember" },
+      { type: "assistant_message", text: "orchid-731" },
+      { type: "user_message", text: "recall" },
+      { type: "assistant_message", text: "orchid-731" },
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("closing an agent fails its pending side question without hanging or leaking a rejection", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-close-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const answer = manager.askSideQuestion(agent.id, "thread", "pending", 1_000);
+    await manager.closeAgent(agent.id);
+    await expect(answer).resolves.toMatchObject({
+      status: "failed",
+      error: "Side question session closed",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a side question survives its record being wiped mid-flight", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-wiped-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const answered = manager.askSideQuestion(agent.id, "thread", "pending", 1_000);
+    await manager.deleteAgentState(agent.id);
+    client.session.resolvePending({
+      status: "answered",
+      content: "late",
+      synthetic: false,
+      threading: "threaded",
+    });
+    await expect(answered).resolves.toMatchObject({ status: "answered", content: "late" });
+    expect(manager.getSideConversation(agent.id, "thread")).toBeNull();
+
+    const failed = manager.askSideQuestion(agent.id, "thread", "pending", 1_000);
+    await manager.deleteAgentState(agent.id);
+    client.session.rejectPending(new Error("provider exploded"));
+    await expect(failed).resolves.toEqual({
+      status: "failed",
+      error: "provider exploded",
+      threading: "single_shot",
+    });
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("side questions are refused for internal agents before any provider work", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-internal-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, internal: true },
+    undefined,
+    { workspaceId: undefined },
+  );
+  try {
+    await expect(manager.askSideQuestion(agent.id, "thread", "remember")).rejects.toThrow(
+      `Unknown agent '${agent.id}'`,
+    );
+    expect(client.session.signals).toEqual([]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("side-conversation changes broadcast to every subscriber and report removals", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-broadcast-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const first: AgentManagerEvent[] = [];
+  const second: AgentManagerEvent[] = [];
+  manager.subscribe((event) => first.push(event), { replayState: false });
+  manager.subscribe((event) => second.push(event), { replayState: false });
+  try {
+    await manager.askSideQuestion(agent.id, "thread", "remember");
+
+    const sideEvents = (events: AgentManagerEvent[]) =>
+      events.filter((event) => event.type === "side_conversation").map((event) => event.event);
+    const expectedAsk = [
+      {
+        type: "update",
+        record: expect.objectContaining({
+          threadId: "thread",
+          pendingQuestion: "remember",
+          items: [{ type: "user_message", text: "remember" }],
+        }),
+      },
+      {
+        type: "update",
+        record: expect.objectContaining({
+          threadId: "thread",
+          pendingQuestion: null,
+          items: [
+            { type: "user_message", text: "remember" },
+            { type: "assistant_message", text: "orchid-731" },
+          ],
+        }),
+      },
+    ];
+    expect(sideEvents(first)).toEqual(expectedAsk);
+    expect(sideEvents(second)).toEqual(expectedAsk);
+
+    await manager.deleteAgentState(agent.id);
+    expect(sideEvents(first).at(-1)).toEqual({
+      type: "remove",
+      parentAgentId: agent.id,
+      threadId: "thread",
+    });
+    expect(sideEvents(second).at(-1)).toEqual({
+      type: "remove",
+      parentAgentId: agent.id,
+      threadId: "thread",
+    });
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("listSideConversations returns every thread for a public parent", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-list-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await manager.askSideQuestion(agent.id, "one", "remember");
+    await manager.askSideQuestion(agent.id, "two", "remember");
+    expect(manager.listSideConversations(agent.id).map((record) => record.threadId)).toEqual([
+      "one",
+      "two",
+    ]);
+    await manager.deleteAgentState(agent.id);
+    expect(manager.listSideConversations(agent.id)).toEqual([]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a timed-out side question aborts the provider instead of leaving it running", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-abort-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await expect(manager.askSideQuestion(agent.id, "thread", "pending", 0)).resolves.toEqual({
+      status: "timed_out",
+      threading: "single_shot",
+    });
+    expect(client.session.signals).toHaveLength(1);
+    expect(client.session.signals[0]?.aborted).toBe(true);
+  } finally {
+    client.session.resolvePending({ status: "unavailable" });
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });

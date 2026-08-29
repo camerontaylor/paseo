@@ -82,6 +82,35 @@ export const ko: TranslationResources = {
       settingOff: "꺼짐",
     },
   },
+  sideConversations: {
+    title: "사이드 대화",
+    composer: {
+      placeholder: "사이드 질문하기...",
+      send: "질문",
+      pending: "질문 중...",
+    },
+    states: {
+      loading: "사이드 대화 불러오는 중...",
+      empty: "에이전트의 기본 작업을 중단하지 않고 질문하세요.",
+      pending: "답변을 기다리는 중...",
+      removed: "이 사이드 대화는 호스트에 더 이상 없습니다.",
+    },
+    errors: {
+      unavailable: "이 에이전트에서는 사이드 대화를 사용할 수 없습니다.",
+      timeout: "사이드 대화 시간이 초과되었습니다.",
+      failed: "사이드 대화 실패: {{error}}",
+      duplicate: "사이드 질문이 이미 진행 중입니다.",
+    },
+    notices: {
+      singleShot: "이 제공자는 한 번에 하나의 질문을 지원합니다.",
+      degraded: "이 답변에는 에이전트의 전체 대화 맥락이 포함되지 않을 수 있습니다.",
+    },
+    actions: {
+      openRow: "사이드 대화 열기",
+      open: "열기",
+      new: "새 사이드 대화",
+    },
+  },
   composer: {
     placeholders: {
       desktop: "에이전트에게 메시지를 보내거나 @files 태그, /commands, /skills를 사용하세요",

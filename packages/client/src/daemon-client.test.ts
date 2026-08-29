@@ -741,6 +741,7 @@ test("advertises client capabilities in hello", async () => {
       custom_mode_icons: true,
       project_updates: true,
       provider_subagents: true,
+      side_conversations: true,
       reasoning_merge_enum: true,
       terminal_reflowable_snapshot: true,
       browser_host: {
@@ -1541,6 +1542,103 @@ test("gets a structured plugin log snapshot", async () => {
       message: "ready",
     },
   ]);
+});
+
+test("lists side conversations for a parent", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connectPromise = client.connect();
+  mock.triggerOpen({ features: { sideConversations: true } });
+  await connectPromise;
+
+  const response = client.listSideConversations("agent-1");
+  const request = parseSentFrame(mock.sent[0]);
+  expect(request).toMatchObject({
+    type: "agent.side_conversation.list.request",
+    parentAgentId: "agent-1",
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "agent.side_conversation.list.response",
+      payload: {
+        requestId: request.requestId,
+        parentAgentId: "agent-1",
+        threads: [
+          {
+            parentAgentId: "agent-1",
+            threadId: "thread-1",
+            items: [{ type: "user_message", text: "What changed?" }],
+            pendingQuestion: null,
+            lastAnswer: null,
+          },
+        ],
+        error: null,
+      },
+    }),
+  );
+
+  await expect(response).resolves.toMatchObject({
+    parentAgentId: "agent-1",
+    threads: [{ threadId: "thread-1" }],
+  });
+});
+
+test("surfaces a side conversation list error as a rejection", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connectPromise = client.connect();
+  mock.triggerOpen({ features: { sideConversations: true } });
+  await connectPromise;
+
+  const response = client.listSideConversations("agent-1");
+  const request = parseSentFrame(mock.sent[0]);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "agent.side_conversation.list.response",
+      payload: {
+        requestId: request.requestId,
+        parentAgentId: "agent-1",
+        threads: [],
+        error: "Agent is archived: agent-1",
+      },
+    }),
+  );
+
+  await expect(response).rejects.toThrow("Agent is archived: agent-1");
+});
+
+test("refuses to list side conversations when the host lacks the feature", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connectPromise = client.connect();
+  mock.triggerOpen();
+  await connectPromise;
+
+  await expect(client.listSideConversations("agent-1")).rejects.toThrow(
+    "Update the host to use side conversations.",
+  );
+  expect(mock.sent).toHaveLength(0);
 });
 
 test("keeps waitForAgentUpsert initial fetch inside the requested deadline", async () => {

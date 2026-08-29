@@ -18,6 +18,7 @@ export interface WorkspaceTabMenuLabels {
   closeOthers: string;
   reloadAgent: string;
   reloadAgentTooltip: string;
+  newSideConversation: string;
   close: string;
 }
 
@@ -34,6 +35,7 @@ export const DEFAULT_WORKSPACE_TAB_MENU_LABELS: WorkspaceTabMenuLabels = {
   closeOthers: i18n.t("workspace.tabs.menu.closeOthers"),
   reloadAgent: i18n.t("workspace.tabs.menu.reloadAgent"),
   reloadAgentTooltip: i18n.t("workspace.tabs.menu.reloadAgentTooltip"),
+  newSideConversation: i18n.t("sideConversations.actions.new"),
   close: i18n.t("workspace.tabs.menu.close"),
 };
 
@@ -49,6 +51,7 @@ export type WorkspaceTabMenuEntry =
         | "arrow-right-to-line"
         | "copy-x"
         | "pencil"
+        | "message-circle-plus"
         | "x";
       hint?: string;
       tooltip?: string;
@@ -73,6 +76,11 @@ interface BuildWorkspaceTabMenuEntriesInput {
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  /**
+   * Absent when the host has no side conversations. The entry is dropped rather than disabled —
+   * a greyed row with nothing to explain it is worse than one that was never offered.
+   */
+  onStartSideConversation?: (agentId: string, options: { parentTabId: string }) => void;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
   onCloseTabsBefore: (tabId: string) => Promise<void> | void;
@@ -90,6 +98,7 @@ interface BuildWorkspaceDesktopTabActionsInput {
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  onStartSideConversation?: (agentId: string, options: { parentTabId: string }) => void;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
   onCloseTabsToLeft: (tabId: string) => Promise<void> | void;
@@ -145,6 +154,9 @@ function getCloseButtonTestId(tab: WorkspaceTabDescriptor): string {
   if (tab.target.kind === "provider_subagent") {
     return `workspace-provider-subagent-close-${tab.target.subagentId}`;
   }
+  if (tab.target.kind === "side_conversation") {
+    return `workspace-side-conversation-close-${tab.target.threadId}`;
+  }
   if (tab.target.kind === "commit_diff") {
     return `workspace-commit-diff-close-${encodeFilePathForPathSegment(tab.target.sha)}`;
   }
@@ -174,6 +186,7 @@ export function buildWorkspaceTabMenuEntries(
     onCopyTerminalId,
     onCopyFilePath,
     onReloadAgent,
+    onStartSideConversation,
     onRenameTab,
     onCloseTab,
     onCloseTabsBefore,
@@ -185,6 +198,22 @@ export function buildWorkspaceTabMenuEntries(
   const isLastTab = index === tabCount - 1;
   const isOnlyTab = tabCount <= 1;
   const entries: WorkspaceTabMenuEntry[] = [];
+
+  if (tab.target.kind === "agent" && onStartSideConversation) {
+    const { agentId } = tab.target;
+    const { tabId } = tab;
+    entries.push({
+      kind: "item",
+      key: "new-side-conversation",
+      label: labels.newSideConversation,
+      icon: "message-circle-plus",
+      testID: `${menuTestIDBase}-new-side-conversation`,
+      onSelect: () => {
+        onStartSideConversation(agentId, { parentTabId: tabId });
+      },
+    });
+    entries.push({ kind: "separator", key: "new-side-conversation-separator" });
+  }
 
   if (tab.target.kind === "agent") {
     const { agentId } = tab.target;
@@ -335,6 +364,7 @@ export function buildWorkspaceDesktopTabActions(
       onCopyTerminalId: input.onCopyTerminalId,
       onCopyFilePath: input.onCopyFilePath,
       onReloadAgent: input.onReloadAgent,
+      onStartSideConversation: input.onStartSideConversation,
       onRenameTab: input.onRenameTab,
       onCloseTab: input.onCloseTab,
       onCloseTabsBefore: input.onCloseTabsToLeft,

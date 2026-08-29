@@ -91,6 +91,22 @@ describe("compact surface", () => {
     toggleSidePanel(compact);
     expect(isSidePanelOpen({ isCompact: true, workspaceKey: WORKSPACE_KEY })).toBe(true);
   });
+
+  it("opens a side conversation in the single compact pane", () => {
+    const tabId = openSupportingTab({
+      ...compact,
+      target: {
+        kind: "side_conversation",
+        parentAgentId: "parent-1",
+        threadId: "thread-1",
+      },
+      openInSidePanelByDefault: true,
+    });
+
+    expect(tabId).not.toBeNull();
+    expect(collectAllPanes(layout().root)).toHaveLength(1);
+    expect(paneIdHolding(tabId as string)).toBe(layout().focusedPaneId);
+  });
 });
 
 describe("non-compact with splits", () => {
@@ -141,6 +157,22 @@ describe("non-compact with splits", () => {
       supportsPaneSplits: true,
       workspaceKey: WORKSPACE_KEY,
       target: { kind: "files" },
+      openInSidePanelByDefault: true,
+    });
+
+    expect(tabId).not.toBeNull();
+    expect(paneIdHolding(tabId as string)).toBe(sidePanelPaneId());
+    expect(isSidePanelOpen(wide)).toBe(true);
+  });
+
+  it("routes a side conversation into the wide side panel", () => {
+    const tabId = openSupportingTab({
+      ...wide,
+      target: {
+        kind: "side_conversation",
+        parentAgentId: "parent-1",
+        threadId: "thread-1",
+      },
       openInSidePanelByDefault: true,
     });
 

@@ -36,6 +36,7 @@ export type WorkspaceTabTarget =
   | { kind: "draft"; draftId: string; setup?: WorkspaceDraftTabSetup }
   | { kind: "agent"; agentId: string }
   | { kind: "provider_subagent"; parentAgentId: string; subagentId: string }
+  | { kind: "side_conversation"; parentAgentId: string; threadId: string }
   | { kind: "terminal"; terminalId: string }
   | { kind: "browser"; browserId: string }
   | { kind: "files" }

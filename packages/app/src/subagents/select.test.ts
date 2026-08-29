@@ -1,7 +1,12 @@
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { afterEach, describe, expect, it } from "vitest";
-import { selectProviderSubagentsForParent, selectSubagentsForParent } from "./select";
+import {
+  selectProviderSubagentsForParent,
+  selectSideConversationsForParent,
+  selectSubagentsForParent,
+} from "./select";
 import { useProviderSubagentStore } from "./provider-store";
+import { useSideConversationStore } from "@/side-conversations/store";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 
 const SERVER_ID = "server-1";
@@ -64,6 +69,122 @@ afterEach(() => {
     descriptors: new Map(),
     timelines: new Map(),
     hiddenFromTrack: new Set(),
+  });
+  useSideConversationStore.setState({ records: new Map() });
+});
+
+describe("selectSideConversationsForParent", () => {
+  it("gates records by capability and parent, and surfaces pending and degraded states", () => {
+    const store = useSideConversationStore.getState();
+    store.applySnapshot(SERVER_ID, {
+      parentAgentId: "parent-a",
+      threadId: "pending-thread",
+      items: [{ type: "user_message", text: "Check the migration risk" }],
+      pendingQuestion: "Check the migration risk",
+      lastAnswer: null,
+    });
+    store.applySnapshot(SERVER_ID, {
+      parentAgentId: "parent-a",
+      threadId: "degraded-thread",
+      items: [{ type: "user_message", text: "Check the fallback" }],
+      pendingQuestion: null,
+      lastAnswer: {
+        status: "answered",
+        content: "Fallback answer",
+        synthetic: true,
+        threading: "single_shot",
+      },
+    });
+    store.applySnapshot(SERVER_ID, {
+      parentAgentId: "parent-b",
+      threadId: "other-thread",
+      items: [{ type: "user_message", text: "Other parent" }],
+      pendingQuestion: null,
+      lastAnswer: { status: "unavailable" },
+    });
+    const params = { serverId: SERVER_ID, parentAgentId: "parent-a" };
+    const snapshot = useSideConversationStore.getState();
+
+    expect(selectSideConversationsForParent(snapshot, params, "claude-code", false)).toEqual([]);
+    expect(
+      selectSideConversationsForParent(snapshot, params, "claude-code", true).map((row) => ({
+        id: row.id,
+        title: row.title,
+        status: row.status,
+        requiresAttention: row.requiresAttention,
+      })),
+    ).toEqual([
+      {
+        id: "pending-thread",
+        title: "Check the migration risk",
+        status: "running",
+        requiresAttention: false,
+      },
+      {
+        id: "degraded-thread",
+        title: "Check the fallback",
+        status: "idle",
+        requiresAttention: true,
+      },
+    ]);
+  });
+
+  it("drops a thread the daemon removed", () => {
+    const store = useSideConversationStore.getState();
+    store.applySnapshot(SERVER_ID, {
+      parentAgentId: "parent-a",
+      threadId: "thread-1",
+      items: [{ type: "user_message", text: "Still here" }],
+      pendingQuestion: null,
+      lastAnswer: null,
+    });
+    store.applySnapshot(SERVER_ID, {
+      parentAgentId: "parent-a",
+      threadId: "thread-2",
+      items: [{ type: "user_message", text: "Going away" }],
+      pendingQuestion: null,
+      lastAnswer: null,
+    });
+    const params = { serverId: SERVER_ID, parentAgentId: "parent-a" };
+
+    store.remove(SERVER_ID, "parent-a", "thread-2");
+    expect(
+      selectSideConversationsForParent(
+        useSideConversationStore.getState(),
+        params,
+        "claude-code",
+        true,
+      ).map((row) => row.id),
+    ).toEqual(["thread-1"]);
+
+    store.clearParent(SERVER_ID, "parent-a");
+    expect(
+      selectSideConversationsForParent(
+        useSideConversationStore.getState(),
+        params,
+        "claude-code",
+        true,
+      ),
+    ).toEqual([]);
+  });
+
+  it("leaves a thread that has no question yet out of the track", () => {
+    useSideConversationStore.getState().applySnapshot(SERVER_ID, {
+      parentAgentId: "parent-a",
+      threadId: "unasked-thread",
+      items: [],
+      pendingQuestion: null,
+      lastAnswer: null,
+    });
+
+    expect(
+      selectSideConversationsForParent(
+        useSideConversationStore.getState(),
+        { serverId: SERVER_ID, parentAgentId: "parent-a" },
+        "claude-code",
+        true,
+      ),
+    ).toEqual([]);
   });
 });
 

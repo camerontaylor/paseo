@@ -87,6 +87,23 @@ export const AgentTracks = memo(function AgentTracks({
     },
     [canSplit, isCompact, openInSidePanelByDefault, openTab, tabId, workspaceKey],
   );
+  const handleOpenSideConversation = useCallback(
+    (parentAgentId: string, threadId: string) => {
+      const target = { kind: "side_conversation" as const, parentAgentId, threadId };
+      if (canSplit && workspaceKey) {
+        openSupportingTab({
+          isCompact,
+          workspaceKey,
+          target,
+          openInSidePanelByDefault,
+          parentTabId: tabId,
+        });
+        return;
+      }
+      openTab(target);
+    },
+    [canSplit, isCompact, openInSidePanelByDefault, openTab, tabId, workspaceKey],
+  );
 
   if (!hasAgentTracks({ subagentRows, tasks, archiveFinishedStatus })) {
     return null;
@@ -98,6 +115,7 @@ export const AgentTracks = memo(function AgentTracks({
         rows={subagentRows}
         onOpenSubagent={handleOpenSubagent}
         onOpenProviderSubagent={handleOpenProviderSubagent}
+        onOpenSideConversation={handleOpenSideConversation}
         onArchiveSubagent={archiveSubagent}
         onArchiveFinished={onArchiveFinished}
         archiveFinishedStatus={archiveFinishedStatus}

@@ -1169,6 +1169,7 @@ export function removeTabFromTree(root: SplitNode, tabId: string): SplitNode {
 const SIDE_PANEL_EXCLUDED_TAB_KINDS: ReadonlySet<WorkspaceTabTarget["kind"]> = new Set([
   "agent",
   "provider_subagent",
+  "side_conversation",
   "terminal",
   "draft",
   "browser",

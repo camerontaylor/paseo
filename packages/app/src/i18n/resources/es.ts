@@ -82,6 +82,36 @@ export const es: TranslationResources = {
       settingOff: "Desactivado",
     },
   },
+  sideConversations: {
+    title: "Conversación paralela",
+    composer: {
+      placeholder: "Haz una pregunta paralela...",
+      send: "Preguntar",
+      pending: "Preguntando...",
+    },
+    states: {
+      loading: "Cargando la conversación paralela...",
+      empty: "Haz una pregunta sin interrumpir la tarea principal del agente.",
+      pending: "Esperando una respuesta...",
+      removed: "Esta conversación paralela ya no está en el host.",
+    },
+    errors: {
+      unavailable: "Las conversaciones paralelas no están disponibles para este agente.",
+      timeout: "La conversación paralela agotó el tiempo de espera.",
+      failed: "La conversación paralela falló: {{error}}",
+      duplicate: "Ya hay una pregunta paralela en curso.",
+    },
+    notices: {
+      singleShot: "Este proveedor admite una pregunta a la vez.",
+      degraded:
+        "Es posible que esta respuesta no incluya todo el contexto de conversación del agente.",
+    },
+    actions: {
+      openRow: "Abrir conversación paralela",
+      open: "Abrir",
+      new: "Nueva conversación paralela",
+    },
+  },
   composer: {
     placeholders: {
       desktop: "Envíe un mensaje al agente, etiquete@fileso use/commandsy/skills",
