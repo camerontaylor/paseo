@@ -1,6 +1,7 @@
 {
   "worktree": {
     "setup": [
+      "bash ./scripts/worktree-trust-mise.sh",
       "npm ci",
       "node ./scripts/seed-ios-native-cache.mjs",
       "node ./scripts/seed-worktree-dev-state.mjs",
