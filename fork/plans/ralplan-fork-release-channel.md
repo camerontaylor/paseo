@@ -5,6 +5,8 @@ Owner session/run: c409637d-6e43-400f-8beb-805bf36088a3. Branch: plan/fork-relea
 
 Consensus record: pass 1 — Architect WATCH/REQUEST_CHANGES (F1 blocker + F2–F5), Critic ITERATE (3 required changes); revision stage-03 incorporated all ten items; pass 2 — Architect CLEAR/APPROVE, Critic OKAY against revision sha 874627b3…, both lanes delta-only and monotonic. Receipts under `.gjc/_session-c409637d-6e43-400f-8beb-805bf36088a3/plans/ralplan/c409637d-6e43-400f-8beb-805bf36088a3/` (stages 01, 03–06).
 
+Stage byte-counts: planner 26757 · intent 2792 · revision 40050 · architect-p1 11053 · critic-p1 9303 · architect-p2 6338 · critic-p2 6358 · post-interview 1993 · final 42321 · pending-approval 42321 · index 3238. Draft-side 69599 vs review-side 35045 bytes.
+
 ## Summary
 
 Give fork code on `custom` a durable path onto all three fleet hosts by publishing a **versioned fork CLI/daemon artifact** through a fork release channel that mirrors `docs/release.md`, then repointing each host daemon launcher at it — the systemd unit on ceres, the LaunchAgent plist on saturn/neptune — leaving the stock Paseo.app in place as a client. Two sittings: ceres end-to-end spike first, then both Macs; a third sitting exists only as an obstacle-discipline escape hatch, never a lowered bar. Tier T3 (external-durable): published versioned artifacts plus a runbook section that outlive the session.
