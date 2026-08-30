@@ -85,6 +85,35 @@ export const ar: TranslationResources = {
       settingOff: "إيقاف",
     },
   },
+  sideConversations: {
+    title: "محادثة جانبية",
+    composer: {
+      placeholder: "اطرح سؤالاً جانبياً...",
+      send: "اسأل",
+      pending: "جارٍ السؤال...",
+    },
+    states: {
+      loading: "جارٍ تحميل المحادثة الجانبية...",
+      empty: "اطرح سؤالاً من دون مقاطعة مهمة الوكيل الرئيسية.",
+      pending: "في انتظار الإجابة...",
+      removed: "لم تعد هذه المحادثة الجانبية موجودة على المضيف.",
+    },
+    errors: {
+      unavailable: "المحادثات الجانبية غير متاحة لهذا الوكيل.",
+      timeout: "انتهت مهلة المحادثة الجانبية.",
+      failed: "فشلت المحادثة الجانبية: {{error}}",
+      duplicate: "هناك سؤال جانبي قيد التنفيذ بالفعل.",
+    },
+    notices: {
+      singleShot: "يدعم هذا المزوّد سؤالاً واحداً في كل مرة.",
+      degraded: "قد لا تتضمن هذه الإجابة سياق محادثة الوكيل بالكامل.",
+    },
+    actions: {
+      openRow: "فتح المحادثة الجانبية",
+      open: "فتح",
+      new: "محادثة جانبية جديدة",
+    },
+  },
   composer: {
     placeholders: {
       desktop: "أرسل رسالة إلى الوكيل أو ضع علامة على @files أو استخدم /commands و /skills",

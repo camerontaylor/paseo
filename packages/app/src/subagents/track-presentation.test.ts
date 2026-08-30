@@ -1,6 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { i18n } from "@/i18n/i18next";
-import type { PaseoSubagentRow, ProviderSubagentRow, SubagentRow } from "./select";
+import type {
+  PaseoSubagentRow,
+  ProviderSubagentRow,
+  SideConversationRow,
+  SubagentRow,
+} from "./select";
 import {
   buildSubagentPillPresentation,
   buildSubagentRowPresentationData,
@@ -198,6 +203,45 @@ describe("buildSubagentRowPresentationData", () => {
       buildSubagentRowPresentationData(row({ id: "a", status: "idle", requiresAttention: true }))
         .statusBucket,
     ).toBe("done");
+  });
+});
+
+describe("buildSubagentRowPresentationData for side conversations", () => {
+  function sideConversationRow(overrides: Partial<SideConversationRow> = {}): SideConversationRow {
+    return {
+      kind: "side_conversation",
+      id: "thread-a",
+      parentAgentId: "parent-a",
+      provider: "claude-code",
+      title: "Check the migration risk",
+      description: null,
+      subtitle: null,
+      status: "idle",
+      requiresAttention: false,
+      createdAt: new Date(0),
+      ...overrides,
+    };
+  }
+
+  it("uses a distinct key and the question as the row label", () => {
+    expect(buildSubagentRowPresentationData(sideConversationRow())).toEqual(
+      expect.objectContaining({
+        key: "side_conversation_subagent_thread-a",
+        label: "Check the migration risk",
+        statusBucket: "done",
+      }),
+    );
+  });
+
+  it("shows pending questions as running and degraded answers as attention", () => {
+    expect(
+      buildSubagentRowPresentationData(sideConversationRow({ status: "running" })).statusBucket,
+    ).toBe("running");
+    expect(
+      buildSubagentRowPresentationData(
+        sideConversationRow({ status: "idle", requiresAttention: true }),
+      ).statusBucket,
+    ).toBe("attention");
   });
 });
 

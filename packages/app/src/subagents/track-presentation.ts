@@ -7,8 +7,8 @@ import { isFinishedSubagent } from "./archive-finished";
 import { providerSubagentLifecycleStatus } from "./provider-store";
 
 function presentationStatus(row: SubagentRow) {
-  if (row.kind === "paseo") return row.status;
-  return providerSubagentLifecycleStatus(row.status);
+  if (row.kind === "provider") return providerSubagentLifecycleStatus(row.status);
+  return row.status;
 }
 
 export interface SubagentRowPresentationData {
@@ -37,7 +37,7 @@ export function buildSubagentRowPresentationData(row: SubagentRow): SubagentRowP
     titleState: label ? "ready" : "loading",
     statusBucket: deriveSidebarStateBucket({
       status,
-      requiresAttention: false,
+      requiresAttention: row.kind === "side_conversation" && row.requiresAttention,
     }),
   };
 }

@@ -85,6 +85,35 @@ export const zhCN: TranslationResources = {
       settingOff: "关",
     },
   },
+  sideConversations: {
+    title: "旁路对话",
+    composer: {
+      placeholder: "提出旁路问题...",
+      send: "提问",
+      pending: "正在提问...",
+    },
+    states: {
+      loading: "正在加载旁路对话...",
+      empty: "在不中断智能体主任务的情况下提出问题。",
+      pending: "正在等待回答...",
+      removed: "此旁路对话已不在主机上。",
+    },
+    errors: {
+      unavailable: "此智能体不支持旁路对话。",
+      timeout: "旁路对话已超时。",
+      failed: "旁路对话失败：{{error}}",
+      duplicate: "已有旁路问题正在进行。",
+    },
+    notices: {
+      singleShot: "此提供商一次仅支持一个问题。",
+      degraded: "此回答可能未包含智能体的完整对话上下文。",
+    },
+    actions: {
+      openRow: "打开旁路对话",
+      open: "打开",
+      new: "新建旁路对话",
+    },
+  },
   composer: {
     placeholders: {
       desktop: "给 Agent 发消息，标记 @files，或使用 /commands 和 /skills",

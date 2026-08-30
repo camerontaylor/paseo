@@ -82,6 +82,35 @@ export const en = {
       settingOff: "Off",
     },
   },
+  sideConversations: {
+    title: "Side conversation",
+    composer: {
+      placeholder: "Ask a side question...",
+      send: "Ask",
+      pending: "Asking...",
+    },
+    states: {
+      loading: "Loading side conversation...",
+      empty: "Ask a question without interrupting the agent's main task.",
+      pending: "Waiting for an answer...",
+      removed: "This side conversation is no longer on the host.",
+    },
+    errors: {
+      unavailable: "Side conversations aren't available for this agent.",
+      timeout: "The side conversation timed out.",
+      failed: "Side conversation failed: {{error}}",
+      duplicate: "A side question is already in progress.",
+    },
+    notices: {
+      singleShot: "This provider supports one question at a time.",
+      degraded: "This answer may not include the agent's full conversation context.",
+    },
+    actions: {
+      openRow: "Open side conversation",
+      open: "Open",
+      new: "New side conversation",
+    },
+  },
   composer: {
     placeholders: {
       desktop: "Message the agent, tag @files, or use /commands and /skills",

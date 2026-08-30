@@ -11,17 +11,17 @@ reading, not a fact.
 can land in a rebase conflict. That is the single most repeated lesson from the
 fork survey below: `yooztech` invented a `packages/app/src/fork/` namespace for
 exactly this reason, and the most common commit message across the whole fork
-corpus is some variant of *"restore X dropped during upstream merge"*. Keep
+corpus is some variant of _"restore X dropped during upstream merge"_. Keep
 fork-local material out of upstream's paths.
 
 ## Scope
 
-| Source | Coverage |
-|---|---|
-| Forks | 1,546 enumerated, 678 compared against upstream, ~45 with real divergence |
-| Open PRs | 490 |
-| Merged PRs + releases | 1,119 merged, 100 releases |
-| Issues | 467 open, 983 closed |
+| Source                | Coverage                                                                  |
+| --------------------- | ------------------------------------------------------------------------- |
+| Forks                 | 1,546 enumerated, 678 compared against upstream, ~45 with real divergence |
+| Open PRs              | 490                                                                       |
+| Merged PRs + releases | 1,119 merged, 100 releases                                                |
+| Issues                | 467 open, 983 closed                                                      |
 
 Upstream at snapshot: 14,584 stars, 1,544 forks, created 2025-10-13.
 
@@ -56,17 +56,17 @@ The project began 2025-10-13 as **`voice-dev-mcp`** — a voice-first agent
 orchestrator on OpenAI's Realtime API, migrated to LiveKit, renamed to Paseo on
 2025-11-15. The voice-first origin explains why speech surfaces sit where they do.
 
-| Period | Landed |
-|---|---|
-| Oct–Dec 2025 | Agent lifecycle, registry, multi-daemon, sub-agents, git diff viewer, worktrees |
-| Jan 2026 | CLI from zero (#4, +11k/108 files), relay transport, QR pairing, file explorer |
-| Feb 2026 | E2E encryption for the relay (#5), Electron desktop, `@`-file autocomplete |
-| Mar 2026 | **projects → workspaces → tabs**, split panes, terminal tabs, service proxy |
-| Apr 2026 | **SQLite persistence + first-class terminals** (#230, +38,332/326 files); **ACP base provider, hardcoded provider unions removed** (#170) |
-| May 2026 | Consolidation, e2e/test infrastructure, rewind-from-any-message (#1154) |
-| Jun 2026 | i18n migration (#1282, 199 files), multi-host sidebar merge (#1538), browser tools (#1359) |
-| Jul 2026 | Pluggable forge abstraction — GitLab/Gitea/Forgejo/Codeberg (#1913, +20,966, external); OMP provider (#2067); Hub (#2035) |
-| Aug 2026 | Mobile terminal rewrite (#1607), agent profiles (#3208), `@getpaseo/client` SDK (#3141), **plugins** (#3222), **active-turn steering** (#3394, #3580) |
+| Period       | Landed                                                                                                                                                |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Oct–Dec 2025 | Agent lifecycle, registry, multi-daemon, sub-agents, git diff viewer, worktrees                                                                       |
+| Jan 2026     | CLI from zero (#4, +11k/108 files), relay transport, QR pairing, file explorer                                                                        |
+| Feb 2026     | E2E encryption for the relay (#5), Electron desktop, `@`-file autocomplete                                                                            |
+| Mar 2026     | **projects → workspaces → tabs**, split panes, terminal tabs, service proxy                                                                           |
+| Apr 2026     | **SQLite persistence + first-class terminals** (#230, +38,332/326 files); **ACP base provider, hardcoded provider unions removed** (#170)             |
+| May 2026     | Consolidation, e2e/test infrastructure, rewind-from-any-message (#1154)                                                                               |
+| Jun 2026     | i18n migration (#1282, 199 files), multi-host sidebar merge (#1538), browser tools (#1359)                                                            |
+| Jul 2026     | Pluggable forge abstraction — GitLab/Gitea/Forgejo/Codeberg (#1913, +20,966, external); OMP provider (#2067); Hub (#2035)                             |
+| Aug 2026     | Mobile terminal rewrite (#1607), agent profiles (#3208), `@getpaseo/client` SDK (#3141), **plugins** (#3222), **active-turn steering** (#3394, #3580) |
 
 Today: 6 first-class providers plus an ACP catalog, 5 forges, 9 locales, 4 platforms.
 
@@ -86,20 +86,20 @@ Today: 6 first-class providers plus an ACP catalog, 5 forges, 9 locales, 4 platf
 Conventional commits on `main`: **1,211 `fix` vs 491 `feat` — 2.47:1 overall.**
 By month:
 
-| Month | feat | fix | ratio |
-|---|---|---|---|
-| 2026-01 | 64 | 40 | 0.6 |
-| 2026-03 | 86 | 155 | 1.8 |
-| **2026-04** | 87 | **360** | **4.1** |
-| 2026-05 | 33 | 141 | 4.3 |
-| 2026-07 | 31 | 143 | 4.6 |
-| 2026-08 | 50 | 167 | 3.3 |
+| Month       | feat | fix     | ratio   |
+| ----------- | ---- | ------- | ------- |
+| 2026-01     | 64   | 40      | 0.6     |
+| 2026-03     | 86   | 155     | 1.8     |
+| **2026-04** | 87   | **360** | **4.1** |
+| 2026-05     | 33   | 141     | 4.3     |
+| 2026-07     | 31   | 143     | 4.6     |
+| 2026-08     | 50   | 167     | 3.3     |
 
 April 2026 is when #230 landed the SQLite/workspace/terminal rewrite. The ratio
 quadrupled and **never returned**. Release notes agree: 142 "Fixed" bullets
 against 80 "Added" across recent releases.
 
-The recurring fixes name the debt precisely, and they are all *lifecycle-boundary*
+The recurring fixes name the debt precisely, and they are all _lifecycle-boundary_
 bugs — sleep, reconnect, archive, exit:
 
 - terminal sessions lost after host sleep or worker stalls (#3235, #3263)
@@ -125,30 +125,30 @@ rather than interrupting), and compact-form-factor mobile polish.
 
 This is the more useful half — it maps the shape of the gap.
 
-| Capability | Built independently by |
-|---|---|
-| **Task board / kanban** | **6 forks**: `hubtool/hubcode`, `haikostudio/Haiko-devtool`, `AngusFu`, `sumaliqinghua/HumanBoss`, `mcrowder65`, `jtalborough` |
-| **Multi-user auth / accounts** | **4 forks**: `affil-ai` (`packages/auth-gateway`, Google OAuth + Better Auth + SQLite), `PowerDi/paseo-dashboard` (`packages/dashboard`, passkeys, invitations, tenant isolation), `haikostudio` (Caddy + systemd + own auth server), `figuernd` (relay pairing enrollment + revocation) |
-| **Remote / SSH hosts & fleets** | 3 forks — `jingwangsg` (remote-daemon proxy with terminal-ID rewriting, download-token bridging), `hahahuy` (machines RPC + Tailscale + `install.sh`), `sakurayun` (SSH host manager, keychain, known-hosts, forwards) — plus 2 open PRs (#2396, #3115) |
-| **Editor integration** | `hinneslung` (shipping on the VS Code Marketplace, upstream links it), `HamiltonHuaji` (relay-backed second attempt) |
-| **Composer prompt history** | **4 competing open PRs**: #671, #2248, #2996, #3507 |
-| **Providers** | ~64 open PRs + 10 forks: Droid, Cursor, DeepSeek V4, Grok, Kimi, Yeet Code, CLIProxyAPI, Codex-compatible endpoint profiles |
-| **Chat / email / Slack surfaces** | `affil-ai`'s `packages/chat` — explicitly an "office of CTO" agent, not a coding agent |
-| **Cost & completion awareness** | `alnimra` ("quota windows, not dollars"), `JrDw0` (per-turn tokens + generation speed), `JLarky` (idle chime, send ding) |
-| **Knowledge bases + MCP OAuth polyfill** | `AngusFu` — for MCP servers that block dynamic client registration (Atlassian, Figma) |
+| Capability                               | Built independently by                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Task board / kanban**                  | **6 forks**: `hubtool/hubcode`, `haikostudio/Haiko-devtool`, `AngusFu`, `sumaliqinghua/HumanBoss`, `mcrowder65`, `jtalborough`                                                                                                                                                           |
+| **Multi-user auth / accounts**           | **4 forks**: `affil-ai` (`packages/auth-gateway`, Google OAuth + Better Auth + SQLite), `PowerDi/paseo-dashboard` (`packages/dashboard`, passkeys, invitations, tenant isolation), `haikostudio` (Caddy + systemd + own auth server), `figuernd` (relay pairing enrollment + revocation) |
+| **Remote / SSH hosts & fleets**          | 3 forks — `jingwangsg` (remote-daemon proxy with terminal-ID rewriting, download-token bridging), `hahahuy` (machines RPC + Tailscale + `install.sh`), `sakurayun` (SSH host manager, keychain, known-hosts, forwards) — plus 2 open PRs (#2396, #3115)                                  |
+| **Editor integration**                   | `hinneslung` (shipping on the VS Code Marketplace, upstream links it), `HamiltonHuaji` (relay-backed second attempt)                                                                                                                                                                     |
+| **Composer prompt history**              | **4 competing open PRs**: #671, #2248, #2996, #3507                                                                                                                                                                                                                                      |
+| **Providers**                            | ~64 open PRs + 10 forks: Droid, Cursor, DeepSeek V4, Grok, Kimi, Yeet Code, CLIProxyAPI, Codex-compatible endpoint profiles                                                                                                                                                              |
+| **Chat / email / Slack surfaces**        | `affil-ai`'s `packages/chat` — explicitly an "office of CTO" agent, not a coding agent                                                                                                                                                                                                   |
+| **Cost & completion awareness**          | `alnimra` ("quota windows, not dollars"), `JrDw0` (per-turn tokens + generation speed), `JLarky` (idle chime, send ding)                                                                                                                                                                 |
+| **Knowledge bases + MCP OAuth polyfill** | `AngusFu` — for MCP servers that block dynamic client registration (Atlassian, Figma)                                                                                                                                                                                                    |
 
 ### Forks worth watching
 
-| Fork | Ahead/behind | What it is |
-|---|---|---|
-| `haikostudio/Haiko-devtool` | 702 / 508 | French-language kanban + deploy console; own self-host auth stack |
-| `AngusFu/paseo` | 687 / 795 | Knowledge bases, FastMCP CLI with OAuth polyfill, kanban |
-| `sakurayun/paseo-reclaude` | 478 / 449 | Most-starred (20★). Chinese distribution, ReClaude billing, Grok, SSH, 40 own releases |
-| `colonelpanic8/paseo` (`assembled`) | 418 / **3** | **A PR grab basket.** See §4 |
-| `team-harness/paseo` | 174 / **3** | Daily upstream resync; chat sharing, prompt library, own APK/TestFlight pipeline |
-| `hinneslung/paseo` (`vscode-extension`) | 157 / 175 | VS Code extension, shipping product, releases 0.1.2 → 0.4.0 |
-| `walter-erquinigo/paseito` | 23 / 175 | Best fork-maintenance automation in the corpus. See §4 |
-| `citizenll/xCodexMobile` | 19 / 1740 | Keeps *only* the mobile connector; an explicit AGPL disclosure boundary for a closed desktop product |
+| Fork                                    | Ahead/behind | What it is                                                                                           |
+| --------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
+| `haikostudio/Haiko-devtool`             | 702 / 508    | French-language kanban + deploy console; own self-host auth stack                                    |
+| `AngusFu/paseo`                         | 687 / 795    | Knowledge bases, FastMCP CLI with OAuth polyfill, kanban                                             |
+| `sakurayun/paseo-reclaude`              | 478 / 449    | Most-starred (20★). Chinese distribution, ReClaude billing, Grok, SSH, 40 own releases               |
+| `colonelpanic8/paseo` (`assembled`)     | 418 / **3**  | **A PR grab basket.** See §4                                                                         |
+| `team-harness/paseo`                    | 174 / **3**  | Daily upstream resync; chat sharing, prompt library, own APK/TestFlight pipeline                     |
+| `hinneslung/paseo` (`vscode-extension`) | 157 / 175    | VS Code extension, shipping product, releases 0.1.2 → 0.4.0                                          |
+| `walter-erquinigo/paseito`              | 23 / 175     | Best fork-maintenance automation in the corpus. See §4                                               |
+| `citizenll/xCodexMobile`                | 19 / 1740    | Keeps _only_ the mobile connector; an explicit AGPL disclosure boundary for a closed desktop product |
 
 ---
 
@@ -162,12 +162,12 @@ All three sources agree.
 
 - 490 open PRs, **465 community, 242 distinct authors — `boudra` has commented on 11.**
 - 67 have zero comments of any kind. One label in use across all 490.
-- Yet median merge latency *when he engages* is **1.3 days** (p90 7.5). Bimodal:
+- Yet median merge latency _when he engages_ is **1.3 days** (p90 7.5). Bimodal:
   picked up and merged in a day, or never touched.
 
-`CONTRIBUTING.md` states the cause plainly: *"product, design, architecture, and
-workflow decisions are currently all made by the maintainer"* and *"QA is the main
-bottleneck of Paseo's product development."* Review parallelizes; product
+`CONTRIBUTING.md` states the cause plainly: _"product, design, architecture, and
+workflow decisions are currently all made by the maintainer"_ and _"QA is the main
+bottleneck of Paseo's product development."_ Review parallelizes; product
 judgment held by one person does not. The most common closure reason on community
 PRs is **"superseded by my own PR."**
 
@@ -185,14 +185,14 @@ Forks confirm it independently — see §4.
 
 Strongest reproduction evidence in the tracker.
 
-- **#3217** — one send creates six agents. *"Thirty six milliseconds between the
-  first create and the last, so this is not me pressing send several times."*
+- **#3217** — one send creates six agents. _"Thirty six milliseconds between the
+  first create and the last, so this is not me pressing send several times."_
   Four independent repros across Linux, Windows, macOS, three releases.
 - **#3273** — a follow-up message kills running background subagents. Three repros.
-  *"Every `replaceAgentRun` failure maps 1:1 onto killed Claude Code subagents, to
-  the millisecond."*
+  _"Every `replaceAgentRun` failure maps 1:1 onto killed Claude Code subagents, to
+  the millisecond."_
 - **#1937** (`p1`, 44 days on `needs-more-info`) — orphaned `claude` processes,
-  ~240 MB each: *"~25 orphaned claude processes … alive for up to 1 day 5 hours."*
+  ~240 MB each: _"~25 orphaned claude processes … alive for up to 1 day 5 hours."_
 - **#3061** — a daemon restart mid-turn aborts the provider turn; from an
   orchestrator's view the agent looks finished-but-silent.
 
@@ -200,33 +200,33 @@ Strongest reproduction evidence in the tracker.
 
 A hard 8 MB socket bound plus a relay message cap make heavy use the failure trigger.
 
-- **#2610** — a 96 MB / 45,700-line transcript *"can never fit under the 8 MB
-  bound."* The agent is permanently unopenable; restart does not help.
+- **#2610** — a 96 MB / 45,700-line transcript _"can never fit under the 8 MB
+  bound."_ The agent is permanently unopenable; restart does not help.
 - **#2300** (`p1`) — 4 GB V8 heap OOM, at least three occurrences, two users.
-  *"The available reproduction takes one to two days."*
+  _"The available reproduction takes one to two days."_
 - **#2221** — one oversized frame closes the shared transport and **every** session
   on that daemon stops loading until a force-quit.
 - **#2474** — 243 workspaces / 190 worktrees / **124 GB in a week**, never reclaimed,
   also burning the forge-poll quota. Filed as a bug with hard numbers; reclassified
   as a feature request and closed.
 
-E2EE base64 inflates payloads 4/3 *before* the relay cap applies, which is why
+E2EE base64 inflates payloads 4/3 _before_ the relay cap applies, which is why
 image-heavy sessions (#2220) trip it first.
 
 ### 3.4 Auth is the #1 first-contact failure
 
 - **#3023** (pinned tracking) — Claude OAuth regression on headless/programmatic
-  launches, all three OSes. Credentials get truncated: *"a healthy 509-byte
+  launches, all three OSes. Credentials get truncated: _"a healthy 509-byte
   `.credentials.json` became a 368-byte file … `expiresAt`, `refreshTokenExpiresAt`,
-  and `scopes` disappeared, followed by a forced login."*
+  and `scopes` disappeared, followed by a forced login."_
 - **#176** — **open 141 days**, the oldest unfixed issue. API-key mode dead-ends:
-  *"Paseo doesn't recognize /login as a command."*
+  _"Paseo doesn't recognize /login as a command."_
 - **#3325** (`p1`) — no recovery path: no account attribution, no credential
   re-check, `/login` unavailable in-app.
 - **#2780** — multi-account switching, the strongest "this blocks me" language in
-  the tracker: *"the only way out is to open a new session on the other provider
+  the tracker: _"the only way out is to open a new session on the other provider
   and lose the conversation context, which defeats the purpose of the multi-profile
-  setup described in the docs."*
+  setup described in the docs."_
 
 ### 3.5 Distribution is broken for anyone who isn't upstream
 
@@ -236,16 +236,16 @@ image-heavy sessions (#2220) trip it first.
   burned 4 commits fighting runner OOM; `staoran` 8 (swap, memory caps, Gradle
   cache keys); `team-harness`, `citizenll`, `lzm04521`, `JrDw0`, `yooztech` too.
 - macOS code signing appears in five forks. `amitbtcai` has two separate
-  *"support unsigned"* commits; `MinLeeV5` ships *"install ad-hoc macOS updates directly"*.
+  _"support unsigned"_ commits; `MinLeeV5` ships _"install ad-hoc macOS updates directly"_.
 - `jtalborough` spent 14 consecutive commits on iPhone OTA delivery.
-- `lululau/paseo`'s 31 commits are *entirely* CI plumbing to produce a desktop build.
+- `lululau/paseo`'s 31 commits are _entirely_ CI plumbing to produce a desktop build.
 
 ### 3.6 One daemon = one machine = one user
 
 All three assumptions get broken by someone.
 
-- **#1695** — *"Project settings says: 'We don't have an editable copy of this
-  project on any connected host'"*, confirmed by a headless-remote user and a
+- **#1695** — _"Project settings says: 'We don't have an editable copy of this
+  project on any connected host'"_, confirmed by a headless-remote user and a
   same-host user. #3223, #2509 are the same shape.
 - **Team use is essentially absent from issues** (one discussion, one comment) but
   is the single most-built fork capability. The people who need it fork rather than
@@ -255,15 +255,15 @@ All three assumptions get broken by someone.
 ### 3.7 Extension seams exist for one case, not the general one
 
 - Adding a provider still edits three `packages/protocol/` files (`cleverunicornz`).
-- `UnbrokenHunter` had to add *"let custom ACP profiles opt into a built-in adapter"*
+- `UnbrokenHunter` had to add _"let custom ACP profiles opt into a built-in adapter"_
   because config-only providers can't reuse built-in behavior.
 - `providers.claude.command` swaps the binary but not auth or quota — so `sakurayun`
   reverse-engineered a private cookie API and hand-added a `features.reclaudeUsage`
   capability bit.
 - The Electron bridge isn't a neutral host contract — so `hinneslung` impersonated
   `window.paseoDesktop` and added a fifth platform gate.
-- The universal workaround, quoted in three PRs: *"the only way to set that up is
-  hand-editing `config.json`."* One upstream agent ships a `gjc setup paseo`
+- The universal workaround, quoted in three PRs: _"the only way to set that up is
+  hand-editing `config.json`."_ One upstream agent ships a `gjc setup paseo`
   command whose entire job is writing Paseo's config file for the user (#3471).
 
 Both real forks in the top-star tier understood upstream's conventions well enough
@@ -272,8 +272,8 @@ from outside.
 
 ### 3.8 CJK / IME is systematically broken
 
-- **#2193** — *"a PTY that emits `中文` is captured as `中 文`, with a literal ASCII
-  space between the two characters. The emitted bytes contain no space."* Fix PR
+- **#2193** — _"a PTY that emits `中文` is captured as `中 文`, with a literal ASCII
+  space between the two characters. The emitted bytes contain no space."_ Fix PR
   #2319 open and unmerged since July.
 - #3513 (daemon spawns terminals with no locale), #3511 (IME candidate window
   misplaced), #3560 (Android Korean IME), plus five separate CJK IME composition
@@ -284,8 +284,8 @@ from outside.
 
 ### 3.9 Notifications fail in every direction
 
-- **#1349** — *"I do receive the corresponding notifications, but they seem to
-  appear on my Desktop device rather than on Android."* **77 days, zero replies.**
+- **#1349** — _"I do receive the corresponding notifications, but they seem to
+  appear on my Desktop device rather than on Android."_ **77 days, zero replies.**
 - **#1841** — no sound, because Electron notifications hard-set `silent: true`.
   The reporter shipped an external notifier as a workaround. **Fixed upstream by
   #2582, merged 2026-08-08** (verified 2026-08-22).
@@ -295,8 +295,8 @@ from outside.
 
 ### 3.10 Rebase cost is what actually kills forks
 
-The most repeated commit across the entire fork corpus is *"restore X dropped
-during upstream merge"* — verbatim in `iamriajul` (chat outline navigation),
+The most repeated commit across the entire fork corpus is _"restore X dropped
+during upstream merge"_ — verbatim in `iamriajul` (chat outline navigation),
 `fav-devs` (session handlers), `sakurayun` (×4: deps, build scripts), `so2liu`,
 `litnimax`. `sakurayun`'s final week before going quiet is entirely merge-damage
 repair.
@@ -305,9 +305,9 @@ Mitigations forks invented, worth stealing:
 
 - `walter-erquinigo/paseito` — `automation/feature-registry.json`: every fork
   feature has an `id`, `intent`, machine-checkable `invariants`, and a `contracts`
-  array of vitest commands. Plus a written evidence policy: *"An upstream
+  array of vitest commands. Plus a written evidence policy: _"An upstream
   implementation replaces a local feature only when … a separate read-only reviewer
-  can locate the same evidence. Use `blocked` rather than guessing."*
+  can locate the same evidence. Use `blocked` rather than guessing."_
 - `yooztech` — a `packages/app/src/fork/` namespace to keep fork code out of
   conflict range.
 - `UnbrokenHunter` — `docs/fork-workflow.md`: `main` mirrors upstream 1:1, no
@@ -336,10 +336,10 @@ The pain re-files itself — #1628 → #3629, the queued-message trio → #3464.
 **Issue #2982: AGPL-3.0 → Apache-2.0**, opened 2026-08-07, deadline **2026-08-21**
 (the day before this snapshot), 100+ comments, still open at snapshot time.
 
-- *"Pull requests from contributors who have not consented will remain blocked
-  until they provide consent."*
-- *"If a contributor has not responded by the deadline, I will remove or
-  independently rewrite their remaining contributions before relicensing."*
+- _"Pull requests from contributors who have not consented will remain blocked
+  until they provide consent."_
+- _"If a contributor has not responded by the deadline, I will remove or
+  independently rewrite their remaining contributions before relicensing."_
 
 I read every non-boilerplate comment: **zero dissent** — it is a consent drive, not
 a controversy. But it has two consequences for us:
@@ -348,8 +348,8 @@ a controversy. But it has two consequences for us:
    response data above.
 2. **It changes how long we carry a PR.** A PR whose author has not consented
    cannot merge upstream until they do, so it is a long-haul carry rather than
-   something that lands soon. The rewrite threat applies only to code *already
-   merged* upstream, so a contributor with no merged PRs has nothing at risk —
+   something that lands soon. The rewrite threat applies only to code _already
+   merged_ upstream, so a contributor with no merged PRs has nothing at risk —
    verify that before treating non-consent as a hazard. Checked 2026-08-22:
    `kingsleydon` (#1826), `dkribeiro` (#2664) and `Ctrl-Creeper` (#3474) have
    each commented nowhere on #2982 and have zero merged PRs upstream.
@@ -371,7 +371,7 @@ and built tooling to route around it:
 - **`sakurayun/paseo-reclaude`** — 25 cherry-picked unmerged upstream PRs.
 - **`finelly977`** — a different set (#3315, #3235, #3243, #3107, #3059, #2306, #3227).
 - **`fav-devs`** — `7f71b8a "scripts for merging upstream pull requests in
-  PowerShell and Bash"`.
+PowerShell and Bash"`.
 
 ### Use desvio
 
@@ -382,7 +382,7 @@ It came out of maintaining their own Paseo build carrying their own rejected and
 pending PRs — the README's example output shows real Paseo PR numbers (#3206,
 #2504, #3034, #2084, all theirs).
 
-> *Paseo is Spanish for a walk. A desvío is the detour you take on the way.*
+> _Paseo is Spanish for a walk. A desvío is the detour you take on the way._
 
 It ships **`examples/paseo/`** — a complete working config: preflight against a
 running daemon, `npm ci` gated on the lockfile, an Expo router-types seed,
@@ -395,15 +395,15 @@ print what you got. The build tree is a `git worktree` of your checkout, not a
 clone. Your topic branches are never written to.
 
 **Why merge rather than cherry-pick** — worth internalizing, it is the core design
-argument: *"A merge resolves once against a whole topic. Cherry-pick replays a
+argument: _"A merge resolves once against a whole topic. Cherry-pick replays a
 branch commit by commit, so a branch that builds on itself conflicts with itself
-and you answer the same question once per commit."* This is how `git.git` builds
+and you answer the same question once per commit."_ This is how `git.git` builds
 its `seen` branch.
 
 **Conflicts.** First occurrence goes to Claude Code (no shell tool, writes confined
 to the worktree, every local branch OID snapshotted before and verified after);
 after that `rerere` replays it forever. Delete/modify conflicts — which rerere
-structurally *cannot* record and which would otherwise recur on every build forever
+structurally _cannot_ record and which would otherwise recur on every build forever
 — are classified from `git ls-files -u` and answered with a one-bit read-only
 question, cached on path + class + blob OIDs.
 
@@ -427,16 +427,16 @@ need nine companion fixes between them.
 
 Note what green means: static checks only. Nothing was executed — no unit tests,
 no e2e, no manual QA. The build sits on the unreleased dev tip plus five unmerged
-PRs, so it is *less* tested than the current beta release, not more. Use it to
+PRs, so it is _less_ tested than the current beta release, not more. Use it to
 pull a specific fix you need, not as a daily driver.
 
 **Four environment fixes were needed on Linux**, all recorded at their site:
 
-| Fix | Why |
-|---|---|
-| `DESVIO_REMOTE="upstream"` | A GitHub fork does not mirror the parent's `refs/pull/*`, so no manifest line resolved against `origin`. |
-| `/proc/$pid/cwd` in `desvio_preflight` | `lsof` is absent on Arch, so the guard against building under a live daemon silently no-opped. |
-| `.omc/` in `.git/info/exclude` | The local skill-distiller writes there on every `claude` run, tripping desvio's resolver fingerprint (which hashes `ls-files --others --exclude-standard`). |
+| Fix                                       | Why                                                                                                                                                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DESVIO_REMOTE="upstream"`                | A GitHub fork does not mirror the parent's `refs/pull/*`, so no manifest line resolved against `origin`.                                                                             |
+| `/proc/$pid/cwd` in `desvio_preflight`    | `lsof` is absent on Arch, so the guard against building under a live daemon silently no-opped.                                                                                       |
+| `.omc/` in `.git/info/exclude`            | The local skill-distiller writes there on every `claude` run, tripping desvio's resolver fingerprint (which hashes `ls-files --others --exclude-standard`).                          |
 | `desvio_install` rewritten on `sha256sum` | desvio's `stamp_digest` shells out to `shasum`, absent on Arch. The empty digest read as a cache hit, skipping `npm ci` forever on a tree with no `node_modules`. A fail-open cache. |
 
 The last two are portability bugs in desvio worth reporting to `cleiter` — the
@@ -483,34 +483,34 @@ features; refuse second answers.**
   features that add a capability upstream has no answer for at all (#1826 queued
   messages, #2785 multi-account). These merge cheaply and carry indefinitely,
   because nothing upstream contests the same ground.
-- **Refuse** — a PR offering a *second answer to a question upstream already
-  answered differently*, regardless of diff size. #280 is the worked example:
+- **Refuse** — a PR offering a _second answer to a question upstream already
+  answered differently_, regardless of diff size. #280 is the worked example:
   upstream ships Cursor over ACP, the PR ships it over the headless CLI, and both
   claim the `cursor` key in `PROVIDER_CLIENT_FACTORIES`. No amount of merge skill
   reconciles that — it needs a product verdict upstream has withheld for 131 days,
   and the PR's client still implements the removed `listModels`/`listModes` API
   rather than the required `fetchCatalog`.
 
-The general point: a grab basket absorbs *merge* cost indefinitely — that is
+The general point: a grab basket absorbs _merge_ cost indefinitely — that is
 mechanical, delegable, and `rerere` amortizes it to zero. It cannot absorb a
-*decision*. Diff size is the wrong intake filter; contested ground is the right one.
+_decision_. Diff size is the wrong intake filter; contested ground is the right one.
 
 ### Candidate manifest lines
 
 Bug fixes with strong evidence, ordered oldest-first per the middle-band rule.
 **Verify current state before adding — several may have landed or closed since.**
 
-| PR | What | Evidence |
-|---|---|---|
-| #2319 | CJK / Hangul terminal corruption | Fixes #2193, reproduced on 0.3.1 |
-| #1826 | Persist queued messages on the daemon | +5,642/45 files, capability-gated, 3 tagged `COMPAT()` sites, rebased 4× |
-| #2237 | Materialize Codex `toolSurface` screenshots | +177, small; also relieves the relay cap (#2610/#2220) |
-| #2664 | Byte-bound projected timeline pages | Third party ported the diff 1:1 onto 0.2.5 across an 11-workspace deployment and confirmed it |
-| #3474 | Don't treat a 403 as stale auth | Stops rewriting `.credentials.json` every ~5 min |
-| #1834 | Provider-native session fork | +2,084/36 files, capability-gated, 18 CI checks green |
-| #280 | Cursor provider via headless CLI | 8 reactions, most-reacted open PR, 131 days |
-| #2785 | Multi-account support | +3,722, `needs-maintainer-qa` |
-| #1813 | Image diff viewer | Maintainer wants a scoped-down version — carry the full one |
+| PR    | What                                        | Evidence                                                                                      |
+| ----- | ------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| #2319 | CJK / Hangul terminal corruption            | Fixes #2193, reproduced on 0.3.1                                                              |
+| #1826 | Persist queued messages on the daemon       | +5,642/45 files, capability-gated, 3 tagged `COMPAT()` sites, rebased 4×                      |
+| #2237 | Materialize Codex `toolSurface` screenshots | +177, small; also relieves the relay cap (#2610/#2220)                                        |
+| #2664 | Byte-bound projected timeline pages         | Third party ported the diff 1:1 onto 0.2.5 across an 11-workspace deployment and confirmed it |
+| #3474 | Don't treat a 403 as stale auth             | Stops rewriting `.credentials.json` every ~5 min                                              |
+| #1834 | Provider-native session fork                | +2,084/36 files, capability-gated, 18 CI checks green                                         |
+| #280  | Cursor provider via headless CLI            | 8 reactions, most-reacted open PR, 131 days                                                   |
+| #2785 | Multi-account support                       | +3,722, `needs-maintainer-qa`                                                                 |
+| #1813 | Image diff viewer                           | Maintainer wants a scoped-down version — carry the full one                                   |
 
 Note #467 (battery drain from hidden terminal renderers, issue #468) was **closed
 unmerged** — desvio handles that case fine, it is exactly the "rejected upstream"
@@ -520,7 +520,7 @@ front-of-manifest category.
 
 1. Check the author's relicensing consent in **#2982** (see §3.12).
 2. Check whether it already landed — desvio marks a contributing-nothing line `○`
-   and says *why*, distinguishing "already upstream" (delete the line) from "nothing
+   and says _why_, distinguishing "already upstream" (delete the line) from "nothing
    was ever committed to this branch" (keep it, look for uncommitted work).
 3. Set `desvio_verify` to typecheck **and** lint, per `CLAUDE.md`'s standing rule.
    Never run the full test suite in the gate — it will freeze the machine.
@@ -542,7 +542,7 @@ front-of-manifest category.
   seam? If so, several fork divergences (#3.7) collapse. The PR body is explicit
   that plugins are trusted code in the React tree with no sandboxing claim.
 - What is Hub's relationship to the relay? #2035 says the daemon owns a durable
-  outbound WebSocket and explicitly does *not* use the relay. Worth tracking — the
+  outbound WebSocket and explicitly does _not_ use the relay. Worth tracking — the
   website's Cloud page was replaced by "Paseo Hub".
 - Did #2982 close on 2026-08-21, and were non-consenting contributions removed or
   rewritten? Directly affects grab-basket safety.

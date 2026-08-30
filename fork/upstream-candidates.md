@@ -19,12 +19,12 @@ across 74 closed community PRs (research §5):
 
 **Qualifies**
 
-- **Bug-shaped, with an existing issue.** *"Feature requests opened as issues will
-  get closed automatically."* No issue and not a bug means it is not this file.
+- **Bug-shaped, with an existing issue.** _"Feature requests opened as issues will
+  get closed automatically."_ No issue and not a bug means it is not this file.
 - **One focused change.** Bundling unrelated changes is a stated rejection reason.
-- **At the right layer.** Two verbatim closures: *"the client is the wrong place
-  for this"*, and *"no Claude specific knowledge must leak out of the claude
-  provider / manifests."*
+- **At the right layer.** Two verbatim closures: _"the client is the wrong place
+  for this"_, and _"no Claude specific knowledge must leak out of the claude
+  provider / manifests."_
 - **Protocol-safe.** New fields optional, capability gated on
   `server_info.features.*`, any shim tagged `COMPAT(name)`. See
   `docs/protocol-compatibility.md`.
@@ -34,31 +34,31 @@ across 74 closed community PRs (research §5):
 
 **Disqualifies**
 
-- Redirects a feature or the design — *"takes a feature or the design in a
-  direction I don't want."*
-- Vendors or adapts third-party code: *"i do not want to adapt any third party
-  code to paseo, because i will be inheriting decisions and maintenance debt."*
+- Redirects a feature or the design — _"takes a feature or the design in a
+  direction I don't want."_
+- Vendors or adapts third-party code: _"i do not want to adapt any third party
+  code to paseo, because i will be inheriting decisions and maintenance debt."_
 - Belongs in a plugin. Themes were explicitly routed to plugin contributions
   rather than core.
 - Reads as fully AI-generated. Paste raw evidence and repro steps, never an
   agent's diagnosis — the maintainer is on record that agent analyses are
-  *"99% wrong and draw causation from nearby logs"* (#3217).
+  _"99% wrong and draw causation from nearby logs"_ (#3217).
 
 ## Candidates
 
 Verified open on 2026-08-23. Re-check before starting: `gh issue view <n> -R getpaseo/paseo`.
 
-| Issue | What | Layer | Size | Why it qualifies |
-|---|---|---|---|---|
-| **#3513** | Desktop app gives its daemon no locale, corrupting CJK in every terminal it spawns | desktop → daemon spawn | XS | Pure defect, one env var at one spawn site, no design surface. Untriaged, 0 comments. |
-| **#678** | Services reverse proxy shows the `.localhost` URL to a remote client | server | S | **Maintainer already agreed**: *"The current UI showing the `.localhost` proxy URL while connected remotely is misleading; I'll fix that too."* Open 113 days since. Blessed direction, unowned work. |
-| **#3416** | `paseo daemon pair` reports "did not provide a pairing offer" for every client-side failure, discarding the real cause | cli | XS | Error-reporting defect. Strictly additive diagnostics, no behaviour change. |
-| **#1349** | Android prompts fire notifications on Desktop instead of Android | server push routing | M | **79 days, zero replies.** Labelled `bug`/`p2`. Needs routing evidence first — see below. |
-| **#3514** | A WebSocket that dies without a close frame goes unnoticed ~50s; nothing probes on resume or network change | client/server | M | Defect with a clear mechanism. Touches reconnect, so needs care and real QA. |
-| **#3625** | No way to paste into the terminal on iPad — the paste button is phone-only | app | S | Form-factor gate bug. `useIsCompactFormFactor()` exists for exactly this (`CLAUDE.md`). |
-| **#3019** | Cannot disable desktop notifications | desktop | S | `p3`. Small settings gap; check it doesn't collide with a notifications redesign first. |
-| **#1937** | Daemon leaves orphaned `claude` children — ~25 processes, up to 1d5h, ~240 MB each | server lifecycle | M–L | `p1`, but **stuck on `needs-more-info` for 46 days**. The valuable contribution here is the evidence, not the patch. |
-| **#2470** | Forge PR poller has no global API budget — ~9,340 GraphQL points/hour at 144 targets | server | M | `p1`, open, 2 comments. Burning a user's whole GitHub quota is squarely a defect. Watch the boundary with #2474, which was closed as a feature. |
+| Issue     | What                                                                                                                   | Layer                  | Size | Why it qualifies                                                                                                                                                                                      |
+| --------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **#3513** | Desktop app gives its daemon no locale, corrupting CJK in every terminal it spawns                                     | desktop → daemon spawn | XS   | Pure defect, one env var at one spawn site, no design surface. Untriaged, 0 comments.                                                                                                                 |
+| **#678**  | Services reverse proxy shows the `.localhost` URL to a remote client                                                   | server                 | S    | **Maintainer already agreed**: _"The current UI showing the `.localhost` proxy URL while connected remotely is misleading; I'll fix that too."_ Open 113 days since. Blessed direction, unowned work. |
+| **#3416** | `paseo daemon pair` reports "did not provide a pairing offer" for every client-side failure, discarding the real cause | cli                    | XS   | Error-reporting defect. Strictly additive diagnostics, no behaviour change.                                                                                                                           |
+| **#1349** | Android prompts fire notifications on Desktop instead of Android                                                       | server push routing    | M    | **79 days, zero replies.** Labelled `bug`/`p2`. Needs routing evidence first — see below.                                                                                                             |
+| **#3514** | A WebSocket that dies without a close frame goes unnoticed ~50s; nothing probes on resume or network change            | client/server          | M    | Defect with a clear mechanism. Touches reconnect, so needs care and real QA.                                                                                                                          |
+| **#3625** | No way to paste into the terminal on iPad — the paste button is phone-only                                             | app                    | S    | Form-factor gate bug. `useIsCompactFormFactor()` exists for exactly this (`CLAUDE.md`).                                                                                                               |
+| **#3019** | Cannot disable desktop notifications                                                                                   | desktop                | S    | `p3`. Small settings gap; check it doesn't collide with a notifications redesign first.                                                                                                               |
+| **#1937** | Daemon leaves orphaned `claude` children — ~25 processes, up to 1d5h, ~240 MB each                                     | server lifecycle       | M–L  | `p1`, but **stuck on `needs-more-info` for 46 days**. The valuable contribution here is the evidence, not the patch.                                                                                  |
+| **#2470** | Forge PR poller has no global API budget — ~9,340 GraphQL points/hour at 144 targets                                   | server                 | M    | `p1`, open, 2 comments. Burning a user's whole GitHub quota is squarely a defect. Watch the boundary with #2474, which was closed as a feature.                                                       |
 
 ### Where to start
 

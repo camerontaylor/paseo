@@ -85,6 +85,35 @@ export const ptBR: TranslationResources = {
       settingOff: "Desligado",
     },
   },
+  sideConversations: {
+    title: "Conversa paralela",
+    composer: {
+      placeholder: "Faça uma pergunta paralela...",
+      send: "Perguntar",
+      pending: "Perguntando...",
+    },
+    states: {
+      loading: "Carregando a conversa paralela...",
+      empty: "Faça uma pergunta sem interromper a tarefa principal do agente.",
+      pending: "Aguardando uma resposta...",
+      removed: "Esta conversa paralela não está mais no host.",
+    },
+    errors: {
+      unavailable: "As conversas paralelas não estão disponíveis para este agente.",
+      timeout: "A conversa paralela atingiu o limite de tempo.",
+      failed: "Falha na conversa paralela: {{error}}",
+      duplicate: "Já há uma pergunta paralela em andamento.",
+    },
+    notices: {
+      singleShot: "Este provedor aceita uma pergunta por vez.",
+      degraded: "Esta resposta pode não incluir todo o contexto da conversa do agente.",
+    },
+    actions: {
+      openRow: "Abrir conversa paralela",
+      open: "Abrir",
+      new: "Nova conversa paralela",
+    },
+  },
   composer: {
     placeholders: {
       desktop: "Envie uma mensagem ao agente, marque @files ou use /commands e /skills",

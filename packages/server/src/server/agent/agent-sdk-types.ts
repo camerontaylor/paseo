@@ -633,6 +633,24 @@ export interface AgentPermissionResult {
   followUpPrompt?: AgentPromptInput;
 }
 
+export type SideConversationThreading = "threaded" | "single_shot";
+
+export interface SideConversationExchange {
+  question: string;
+  answer: string;
+}
+
+export type SideAnswer =
+  | {
+      status: "answered";
+      content: string;
+      synthetic: boolean;
+      threading: SideConversationThreading;
+    }
+  | { status: "unavailable" }
+  | { status: "timed_out"; threading: SideConversationThreading }
+  | { status: "failed"; error: string; threading: SideConversationThreading };
+
 export interface AgentSession {
   readonly provider: AgentProvider;
   readonly id: string | null;
@@ -641,6 +659,11 @@ export interface AgentSession {
   run(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<AgentRunResult>;
   startTurn(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<{ turnId: string }>;
   steerActiveTurn?(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult>;
+  askSideQuestion?(
+    question: string,
+    history: readonly SideConversationExchange[],
+    options?: { signal?: AbortSignal },
+  ): Promise<SideAnswer>;
   subscribe(callback: (event: AgentStreamEvent) => void): () => void;
   streamHistory(): AsyncGenerator<AgentStreamEvent>;
   getRuntimeInfo(): Promise<AgentRuntimeInfo>;
