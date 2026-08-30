@@ -1,5 +1,5 @@
 ---
-description: Resume the Paseo fork work from this checkout — verify state, then dispatch the two pending ralplans via Paseo.
+description: Resume the Paseo fork work from this checkout — verify state, then pick up the side-conversations port or a pending plan review.
 ---
 
 You are picking up fork work in this checkout. Orient, verify, then act.
@@ -8,13 +8,17 @@ You are picking up fork work in this checkout. Orient, verify, then act.
 
 Read, in this order:
 
-- `fork/handover-2026-08-29.md` — the migration record and the state of the work.
 - `fork/README.md` — the `fork/` namespace, branch discipline, the PR grab basket.
+- `fork/side-conversations-merge-blocker.md` — the live executable task, below.
+- `fork/handover-2026-08-29.md` — the migration record and the gjc ACP diagnosis.
 - `CLAUDE.local.md` (symlink to `fork/claude-local.md`) — origin/upstream remotes.
 
 Do not re-derive the gjc ACP diagnosis; it is written up with file:line anchors in the
-handover. Verify any anchor before acting on it — upstream moves fast and this branch
-gets rebased.
+handover and in `specs/gjc-acp-foreground-turn-trace.md`. Verify any anchor before
+acting on it — upstream moves fast and this branch gets rebased.
+
+`custom` is worked from more than one host. Fetch before you commit and rebase before
+you push; a plain `git push` will be rejected if another host got there first.
 
 ## 2. Verify this checkout
 
@@ -23,44 +27,82 @@ git status --short && git log --oneline -1
 git fetch origin && git status -sb | head -1
 ```
 
-Then confirm the workspace declarations are built. If `packages/protocol/dist` is
-missing, `npm run typecheck` fails everywhere with `Cannot find module
-'@getpaseo/protocol/...'` — stale-declaration noise, not real breakage — and the
-lefthook pre-commit hook fails on **every** commit, including docs-only ones:
+Then make the checkout buildable. Two separate failures present identically, and the
+lefthook pre-commit hook runs a full workspace typecheck, so either one blocks **every**
+commit including docs-only ones:
 
 ```bash
 ls -d packages/protocol/dist >/dev/null 2>&1 || npm run build:server
+ls -d node_modules/expo-sqlite >/dev/null 2>&1 || npm install
 ```
+
+The build fixes missing declarations (`Cannot find module '@getpaseo/protocol/...'`).
+Only the install fixes `packages/app`, whose `expo-sqlite` and `fake-indexeddb` arrived
+with the upstream rebase — a `node_modules` that predates it is missing them. After
+`npm install`, `git checkout -- package-lock.json`: npm rewrites hundreds of
+`"peer": true` markers, which is nothing but future rebase conflict.
 
 On a fresh clone, run `mise trust` before `npm ci`. An untrusted `.mise.toml` makes
 mise abort _before_ npm runs, so the install fails while a piped `$?` reports success.
-Capture exit codes directly, never through `| tail`.
+Capture exit codes directly, never through `| tail`. Worktrees are covered
+automatically by `scripts/worktree-trust-mise.sh`, the first `paseo.json` setup step.
 
-## 3. The two pending plans
+## 3. Work in flight
 
-Both are shaped, both have committed dispatch briefs, neither has been run:
+### A. Land side conversations on `custom` — runnable anywhere
 
-| Card                                            | Brief                                              | Output the plan should write                 |
-| ----------------------------------------------- | -------------------------------------------------- | -------------------------------------------- |
-| `gjc-acp-busy-turn` (T2, ~2h)                   | `fork/plans/brief-ralplan-gjc-acp-busy-turn.md`    | `fork/plans/ralplan-gjc-acp-busy-turn.md`    |
-| `paseo-fork-release-channel` (T3, two sittings) | `fork/plans/brief-ralplan-fork-release-channel.md` | `fork/plans/ralplan-fork-release-channel.md` |
+The one task that needs no gjc. `read/side-conversations-phase1-plan` carries a
+finished, test-verified Phase 1 feature that has never landed, because the branch was
+cut before upstream #3826 deleted the API its app layer calls.
 
-The cards themselves live in `~/repos/hart/triage/proposals.md` (commits `b5db173f`,
-`a75e4e93`) with Done, Tier, First move, Appetite, Tail, Obstacle and Not-doing. Treat
-the pre-resolved decisions in each brief as settled; do not reopen them.
+**Read `fork/side-conversations-merge-blocker.md` first.** It has the deleted surface
+and its three replacements, all six conflicts with a resolution each, and the two files
+that merge without a git conflict and then fail to build.
 
-Branches `plan/gjc-acp-busy-turn` and `plan/fork-release-channel` exist and are pushed.
-The worktrees that once backed them were reaped by Paseo, so recreate workspaces.
+```bash
+git switch -c read/side-conversations-phase1-plan origin/read/side-conversations-phase1-plan
+git switch custom
+git merge --no-ff read/side-conversations-phase1-plan
+```
 
-### Where these can run
+Do not treat the conflict list as the work list. Grep the whole deleted surface —
+`openSupportingTab`, `openSidePanelView`, `showSidePanel`, `hideSidePanel` — across
+`packages/app/src` before trusting a clean merge.
 
-**Not from this machine if it has no gjc.** Check first:
+Verify with `npm run typecheck`, `npm run lint`, and the suites named in the blocker
+doc. Targeted only: `npx vitest run <file> --bail=1`.
+
+### B. Three plans, all pending approval, none implemented
+
+| Plan                                                  | State                                                         |
+| ----------------------------------------------------- | ------------------------------------------------------------- |
+| `fork/plans/ralplan-fork-release-channel.md`          | Consensus reached, pending your approval                      |
+| `fork/plans/ralplan-gjc-acp-busy-turn.md`             | Consensus reached, but superseded in approach — see below     |
+| `fork/plans/ralplan-gjc-acp-cancellation-boundary.md` | Planner revision 2, **pending fresh Architect/Critic review** |
+
+The cancellation-boundary plan reopened the busy-turn plan because that plan's
+foreground `interrupt()` override delegates to the notification-only base path and so
+does not fix the race. It was recovered from codex `gpt-5.6-sol` rollouts after the
+session died on a provider usage limit mid-second-Architect-pass, so it has never been
+through a full consensus round. Its evidence is `specs/gjc-acp-foreground-turn-trace.md`.
+The busy-turn plan is retained for history; do not implement it as written.
+
+The cards live in `~/repos/hart/triage/proposals.md` (commits `b5db173f`, `a75e4e93`).
+Treat the pre-resolved decisions in each brief as settled; do not reopen them.
+
+Base drift to know about: `fork/CHANGELOG.md` records the fork base advancing to
+upstream `v0.7.0-beta.2`, and `plan/fork-release-channel` is rebased onto that tag.
+`custom` is still on `0.7.0-beta.1`.
+
+### Where the gjc work can run
+
+**Not from a machine without gjc.** Check first:
 
 ```bash
 which gjc || echo "no gjc here — dispatch to a host that has it"
 ```
 
-As of 2026-08-29: ceres and saturn have gjc; neptune does not. gjc also needs
+As of 2026-08-30: ceres and saturn have gjc; neptune does not. gjc also needs
 `~/.gjc/agent/config.yml` with working credentials, which is per-host.
 
 Saturn has gjc **but its Paseo has no gjc provider registered**. Registering it means
@@ -112,6 +154,11 @@ time out at 30s. Create them one at a time, and expect the first agent create to
 
 Then stop and let `notifyOnFinish` deliver. Do not poll running agents.
 
+A gjc plan agent can die mid-run on a provider usage limit without writing its output.
+Its stage receipts survive under `.gjc/_session-<id>/plans/ralplan/<run>/`, and a codex
+worker's reasoning survives in `~/.codex/sessions`. Recover from those before re-running
+a plan from scratch.
+
 ## 4. Traps worth knowing
 
 - **Never restart the Paseo daemon on port 6767.** It manages every running agent,
@@ -120,5 +167,8 @@ Then stop and let `notifyOnFinish` deliver. Do not poll running agents.
 - **macOS: exclude `node_modules` from Spotlight** before any large install. It burned
   ~190% CPU against npm's 35% on neptune. `touch <dir>/.metadata_never_index`; Spotlight
   has no glob rule, so it is per-directory or exclude a parent.
+- **`fork/README.md` conflicts on every row.** oxfmt aligns markdown table columns, so
+  adding one long row re-pads the whole table. Two hosts editing that table always
+  collide; resolve by taking one side's table and re-inserting the other's rows.
 - Fork-local material goes in `fork/`, never `docs/` — `docs/` is upstream's and is the
   first thing a rebase fight breaks.
