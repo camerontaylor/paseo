@@ -1,0 +1,20 @@
+[
+  {
+    "schemaVersion": 1,
+    "batchId": "VB001-generic-acp-stop-boundary",
+    "memberIds": ["G001"],
+    "finalGoalId": "G001"
+  },
+  {
+    "schemaVersion": 1,
+    "batchId": "VB002-gjc-ownerless-two-fact-gate",
+    "memberIds": ["G002"],
+    "finalGoalId": "G002"
+  },
+  {
+    "schemaVersion": 1,
+    "batchId": "VB003-manager-docs-integration",
+    "memberIds": ["G003", "G004"],
+    "finalGoalId": "G004"
+  }
+]
