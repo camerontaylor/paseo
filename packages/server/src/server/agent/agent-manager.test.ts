@@ -1,14 +1,18 @@
-import { expect, test, vi } from "vitest";
+import { afterEach, describe, expect, beforeEach, test, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import type { PromptResponse } from "@agentclientprotocol/sdk";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
+import { asInternals } from "../test-utils/class-mocks.js";
+import { ACPAgentSession, type ACPAdmissionState } from "./providers/acp-agent.js";
 import {
   AgentManager,
   AgentManagerShuttingDownError,
+  AgentRunCancellationError,
   commandMayHaveChangedExternalState,
   type AgentManagerEvent,
   type ManagedAgent,
@@ -44,6 +48,7 @@ import type {
   AgentTimelineItem,
   ImportProviderSessionInput,
   ImportProviderSessionContext,
+  ProviderCatalog,
   ResolveAgentDefaultModeInput,
   SideAnswer,
   SideConversationExchange,
@@ -9713,11 +9718,19 @@ test("authoritative timeline records a daemon-handled submitted prompt before it
   }
 });
 
-test("replaceAgentRun succeeds when foreground turn terminal event is never delivered", async () => {
+// Plan item 8 (manager integration list): this fixture survives the stop
+// boundary only because its fake provider is already terminal/fenced at the
+// adapter the moment interrupt() returns. Nothing adapter-side is still owed
+// for the stopped turn, so the manager's 2s force settlement cannot race a
+// pending replacement start. The ACP boundary variant of this scenario — where
+// the provider owes terminal proof and a settled cancel write — is covered by
+// the "AgentManager ACP cancellation boundary" block below.
+test("replaceAgentRun force-settles a provider that is already fenced when interrupt returns and never emits a terminal event", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stale-fg-"));
   const storagePath = join(workdir, "agents");
   const storage = new AgentStorage(storagePath, logger);
   const allowSecondRunToEnd = deferred<void>();
+  const fenceOrder: string[] = [];
 
   // Session where the first foreground turn never emits a terminal event
   // (simulates the claude-agent pendingInterruptAbort suppression bug),
@@ -9727,6 +9740,7 @@ test("replaceAgentRun succeeds when foreground turn terminal event is never deli
       this.interrupted = false;
       const turnId = `turn-${++this.turnIdCounter}`;
       const turnNum = this.turnIdCounter;
+      fenceOrder.push(`startTurn:${turnNum}`);
 
       setTimeout(async () => {
         this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
@@ -9744,7 +9758,10 @@ test("replaceAgentRun succeeds when foreground turn terminal event is never deli
 
     override async interrupt(): Promise<void> {
       this.interrupted = true;
-      // No events produced — the terminal event was suppressed
+      // No events produced — the terminal event was suppressed. The fence is
+      // already in place when this returns: no adapter-side stop work is left
+      // for the manager's force settlement to race.
+      fenceOrder.push("interrupt-returned-fenced");
     }
   }
 
@@ -9799,6 +9816,10 @@ test("replaceAgentRun succeeds when foreground turn terminal event is never deli
   expect(collectedEvents.some((e) => e.type === "turn_completed")).toBe(true);
   expect(manager.getAgent(snapshot.id)?.lifecycle).toBe("idle");
   expect(manager.getAgent(snapshot.id)?.activeForegroundTurnId).toBeNull();
+
+  // The replacement turn started only after interrupt() had already returned
+  // with the fence in place — the precondition this fixture depends on.
+  expect(fenceOrder).toEqual(["startTurn:1", "interrupt-returned-fenced", "startTurn:2"]);
 }, 10_000);
 
 class RecordingPersistedAgentsClient implements AgentClient {
@@ -10439,4 +10460,687 @@ test("a timed-out side question aborts the provider instead of leaving it runnin
     await manager.closeAgent(agent.id).catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });
   }
+||||||| parent of 6d9d68590 (fix(server): manager-owned cancellation logs and replace-race fixtures)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Manager integration coverage for the ACP cancellation boundary.
+//
+// Each test drives the real ACPAgentSession through AgentManager, so the fence
+// under test is the generic ACP stop boundary itself rather than a fake that
+// re-implements it. The session's ACP connection is a stub whose prompt and
+// cancel writes settle on test-controlled deferred promises. Fake timers move
+// the manager's 2s settlement window and the adapter's 10s admission deadline;
+// nothing sleeps.
+//
+// Numbered against the plan's "Manager integration tests" list in
+// fork/plans/ralplan-gjc-acp-cancellation-boundary.md.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface CapturedLog {
+  source: "manager" | "acp";
+  msg: string;
+  data: Record<string, unknown> | undefined;
+}
+
+function createCapturingLogger(
+  source: CapturedLog["source"],
+  sink: CapturedLog[],
+): ReturnType<typeof createTestLogger> {
+  const capturing = createTestLogger();
+  for (const level of ["info", "warn", "error"] as const) {
+    vi.spyOn(capturing, level).mockImplementation((data: unknown, msg?: string) => {
+      sink.push({
+        source,
+        msg: msg ?? "",
+        data:
+          typeof data === "object" && data !== null ? (data as Record<string, unknown>) : undefined,
+      });
+      return capturing;
+    });
+  }
+  return capturing;
+}
+
+interface DeferredCalls<T> {
+  fn: (input: unknown) => Promise<T>;
+  calls: Array<{
+    promise: Promise<T>;
+    resolve: (value: T) => void;
+    reject: (error: Error) => void;
+  }>;
+}
+
+function createDeferredCalls<T>(): DeferredCalls<T> {
+  const calls: DeferredCalls<T>["calls"] = [];
+  const fn = (input: unknown) => {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    calls.push({ promise, resolve, reject });
+    void input;
+    return promise;
+  };
+  return { fn, calls };
+}
+
+interface ManagedAcpStop {
+  stopId: string;
+  stoppedTurnId: string;
+  kind: string;
+  terminalObserved: boolean;
+  cancelIssuedRevision: number;
+  cancelAttempts: Array<{ revision: number; settled: boolean; outcome: string }>;
+  stagedSuccessor: { token: string } | null;
+}
+
+interface ManagedAcpInternals {
+  sessionId: string | null;
+  connection: {
+    prompt: (input: {
+      sessionId: string;
+      messageId: string;
+      prompt: unknown;
+    }) => Promise<PromptResponse>;
+    cancel: (input: { sessionId: string }) => Promise<void>;
+  } | null;
+  connectionRevision: number;
+  activeForegroundTurnId: string | null;
+  admissionState: ACPAdmissionState;
+  stop: ManagedAcpStop | null;
+}
+
+const MANAGED_ACP_PROVIDER = "claude-acp";
+const MANAGED_ACP_SESSION_ID = "acp-session-1";
+
+function createManagedAcpSession(sessionLogger: ReturnType<typeof createTestLogger>): {
+  session: ACPAgentSession;
+  prompt: DeferredCalls<PromptResponse>;
+  cancel: DeferredCalls<void>;
+  internals: ManagedAcpInternals;
+} {
+  const session = new ACPAgentSession(
+    { provider: MANAGED_ACP_PROVIDER, cwd: "/tmp/paseo-acp-manager-test" },
+    {
+      provider: MANAGED_ACP_PROVIDER,
+      logger: sessionLogger,
+      defaultCommand: ["claude", "--acp"],
+      defaultModes: [],
+      capabilities: {
+        supportsStreaming: true,
+        supportsSessionPersistence: true,
+        supportsDynamicModes: true,
+        supportsMcpServers: true,
+        supportsReasoningStream: true,
+        supportsToolInvocations: true,
+      },
+    },
+  );
+
+  const prompt = createDeferredCalls<PromptResponse>();
+  const cancel = createDeferredCalls<void>();
+  const internals = asInternals<ManagedAcpInternals>(session);
+  internals.sessionId = MANAGED_ACP_SESSION_ID;
+  internals.connection = { prompt: prompt.fn, cancel: cancel.fn };
+  internals.connectionRevision = 1;
+  return { session, prompt, cancel, internals };
+}
+
+class ManagedAcpClient {
+  readonly provider = MANAGED_ACP_PROVIDER;
+  readonly capabilities = TEST_CAPABILITIES;
+
+  constructor(private readonly session: ACPAgentSession) {}
+
+  async isAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  async createSession(): Promise<AgentSession> {
+    return this.session;
+  }
+
+  async resumeSession(): Promise<AgentSession> {
+    throw new Error("resumeSession is not used by the ACP manager harness");
+  }
+
+  async fetchCatalog(): Promise<ProviderCatalog> {
+    return { models: [], modes: [] };
+  }
+}
+
+interface ManagedAcpHarness {
+  manager: AgentManager;
+  agentId: string;
+  prompt: DeferredCalls<PromptResponse>;
+  cancel: DeferredCalls<void>;
+  internals: ManagedAcpInternals;
+  logs: CapturedLog[];
+}
+
+async function createManagedAcpHarness(): Promise<ManagedAcpHarness> {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-acp-stop-"));
+  const logs: CapturedLog[] = [];
+  const { session, prompt, cancel, internals } = createManagedAcpSession(
+    createCapturingLogger("acp", logs),
+  );
+  const manager = new AgentManager({
+    clients: { [MANAGED_ACP_PROVIDER]: new ManagedAcpClient(session) },
+    logger: createCapturingLogger("manager", logs),
+  });
+  const snapshot = await manager.createAgent(
+    { provider: MANAGED_ACP_PROVIDER, cwd: workdir },
+    undefined,
+    { workspaceId: undefined },
+  );
+  return { manager, agentId: snapshot.id, prompt, cancel, internals, logs };
+}
+
+/** Iterates a run, collecting events, and reports the error that ended it (if any). */
+function collectAgentStream(iterator: AsyncGenerator<AgentStreamEvent>): {
+  events: AgentStreamEvent[];
+  done: Promise<Error | null>;
+} {
+  const events: AgentStreamEvent[] = [];
+  const done = (async () => {
+    for await (const event of iterator) {
+      events.push(event);
+    }
+    return null;
+  })().catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+  return { events, done };
+}
+
+/** Drains promise microtasks without touching the fake clock. */
+async function flushMicrotasks(count = 10): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+/** Waits until the manager has issued cancellation write `index`, leaving it pending. */
+async function waitForCancelWrite(harness: ManagedAcpHarness, index: number): Promise<void> {
+  for (let attempt = 0; attempt < 1_000 && harness.cancel.calls.length <= index; attempt += 1) {
+    await Promise.resolve();
+  }
+  if (!harness.cancel.calls[index]) {
+    throw new Error(`ACP cancellation write ${index} was never issued`);
+  }
+}
+
+/**
+ * Settles the ACP cancellation write at `index` once it has been issued. The
+ * manager reaches `interrupt()` a few microtasks after the call that asked for
+ * it, so the write is never available to the test synchronously.
+ */
+async function settleCancelWrite(
+  harness: ManagedAcpHarness,
+  index: number,
+  outcome: { ok: true } | { ok: false; error: Error },
+): Promise<void> {
+  for (let attempt = 0; attempt < 1_000 && harness.cancel.calls.length <= index; attempt += 1) {
+    await Promise.resolve();
+  }
+  const call = harness.cancel.calls[index];
+  if (!call) {
+    throw new Error(`ACP cancellation write ${index} was never issued`);
+  }
+  if (outcome.ok) {
+    call.resolve(undefined);
+    return;
+  }
+  call.reject(outcome.error);
+}
+
+function managerLogs(logs: CapturedLog[]): CapturedLog[] {
+  return logs.filter((entry) => entry.source === "manager");
+}
+
+function logsWithMessage(logs: CapturedLog[], msg: string): CapturedLog[] {
+  return logs.filter((entry) => entry.msg === msg);
+}
+
+const MANAGER_FORCE_SETTLE_MSG =
+  "cancelAgentRun: manager settlement wait timed out; force-settling the manager-owned run";
+const MANAGER_REPLACE_INVOKED_MSG = "agent.replace.start_turn_invoked";
+const MANAGER_REPLACE_RESOLVED_MSG = "agent.replace.start_turn_resolved";
+
+describe("AgentManager ACP cancellation boundary", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // Plan: manager integration test 1 — the 1,500/5,000 ms reproduction.
+  test("1. a 5,000ms ACP prompt is still untouched at 1,500ms: no force settlement, no replacement prompt", async () => {
+    const harness = await createManagedAcpHarness();
+    const original = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    expect(harness.prompt.calls).toHaveLength(1);
+    const originalTurnId = harness.internals.activeForegroundTurnId;
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    // The cancellation notification write settles at once; the prompt does not.
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    // The manager has not force-settled, and the replacement has no prompt.
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_FORCE_SETTLE_MSG)).toHaveLength(0);
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.manager.getAgent(harness.agentId)?.activeForegroundTurnId).toBe(originalTurnId);
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+    expect(harness.internals.admissionState).toBe("stopping");
+
+    // The manager's own 2s window closes; the adapter still holds the turn.
+    await vi.advanceTimersByTimeAsync(500);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.stop?.stagedSuccessor).not.toBeNull();
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_REPLACE_INVOKED_MSG)).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(harness.internals.stop).toBeNull();
+    expect(harness.internals.admissionState).toBe("running");
+    expect(harness.internals.activeForegroundTurnId).not.toBe(originalTurnId);
+    expect(await original.done).toBeNull();
+    // The staged replacement arrives late and still runs to its own terminal.
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    expect(await replacement.done).toBeNull();
+  });
+
+  // Plan: manager integration test 2 — the 2,000/5,000 ms production race.
+  test("2. the 2s manager force settlement stages the replacement of a 5s ACP prompt without sending it", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    const originalTurnId = harness.internals.activeForegroundTurnId;
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+
+    // Manager-owned record of what it did, carrying the ids it owns.
+    const [forceSettled] = logsWithMessage(managerLogs(harness.logs), MANAGER_FORCE_SETTLE_MSG);
+    expect(forceSettled?.data).toMatchObject({
+      agentId: harness.agentId,
+      turnId: originalTurnId,
+      sessionId: MANAGED_ACP_SESSION_ID,
+    });
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_REPLACE_INVOKED_MSG)).toHaveLength(1);
+
+    // The adapter stages the replacement and sends nothing at or after 2s.
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.stagedSuccessor).not.toBeNull();
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+
+    const stopId = harness.internals.stop?.stopId;
+    const [staged] = logsWithMessage(harness.logs, "provider.acp.successor_staged");
+    expect(staged?.data).toMatchObject({
+      stopId,
+      stoppedTurnId: originalTurnId,
+      sessionId: MANAGED_ACP_SESSION_ID,
+    });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    // The original prompt terminalizes at 5,000ms: admission opens and the
+    // staged replacement is the prompt that goes out.
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(logsWithMessage(harness.logs, "provider.acp.admission_released")).toMatchObject([
+      { data: { stopId } },
+    ]);
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_REPLACE_RESOLVED_MSG)).toHaveLength(
+      1,
+    );
+    // Both runs close clean: the original ended with the manager's forced
+    // cancellation, not an error, and the replacement runs to its own terminal.
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    const [firstResult, replacementResult] = await Promise.all([first.done, replacement.done]);
+    expect(firstResult).toBeNull();
+    expect(replacementResult).toBeNull();
+    expect(harness.internals.stop).toBeNull();
+  });
+
+  // Plan: manager integration test 3.
+  test("3. terminal plus every cancel write settled sends the single staged replacement exactly once", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    const originalTurnId = harness.internals.activeForegroundTurnId;
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(1);
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(2);
+    const successorTurnId = harness.internals.activeForegroundTurnId;
+    expect(successorTurnId).not.toBe(originalTurnId);
+
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    const [firstResult, replacementResult] = await Promise.all([first.done, replacement.done]);
+    expect(firstResult).toBeNull();
+    expect(replacementResult).toBeNull();
+
+    // One successor, one prompt, and no foreground-active or busy failure anywhere.
+    expect(harness.internals.stop).toBeNull();
+    expect(harness.internals.admissionState).toBe("idle");
+    const agent = harness.manager.getAgent(harness.agentId);
+    expect(agent?.lifecycle).toBe("idle");
+    expect(agent?.lastError).toBeUndefined();
+    expect(
+      harness.logs.some((entry) => entry.msg.includes("A foreground turn is already active")),
+    ).toBe(false);
+    expect(JSON.stringify(harness.logs)).not.toContain("A foreground turn is already active");
+  });
+
+  // Plan: manager integration test 4.
+  test("4. a settled cancel notification does not release the replacement while the terminal is missing", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    expect(logsWithMessage(harness.logs, "provider.acp.cancel_attempt_settled")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: true, outcome: "success" },
+    ]);
+    expect(harness.internals.stop?.stagedSuccessor).not.toBeNull();
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(2);
+    // The staged replacement runs to its own terminal and both streams close.
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    const [firstResult, replacementResult] = await Promise.all([first.done, replacement.done]);
+    expect(firstResult).toBeNull();
+    expect(replacementResult).toBeNull();
+  });
+
+  // Plan: manager integration test 5.
+  test("5. an observed terminal does not release the replacement while a cancel write is delayed or rejected", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    // Delayed write: the terminal arrives first, the manager settles its run on
+    // its own, and the successor still waits for the cancellation ledger.
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await waitForCancelWrite(harness, 0);
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+    expect(await first.done).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    // Drain the replacement stream concurrently: phase B cancels the run this
+    // stream started, and the manager settles that run without a provider
+    // terminal, so the stream has no end to assert on here.
+    const replacementEvents: AgentStreamEvent[] = [];
+    const replacementDrain = (async () => {
+      for await (const event of await replacementPromise) {
+        replacementEvents.push(event);
+      }
+    })();
+    replacementDrain.catch(() => undefined);
+    await flushMicrotasks();
+
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_FORCE_SETTLE_MSG)).toHaveLength(0);
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.stop?.terminalObserved).toBe(true);
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: false, outcome: "pending" },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    // The delayed write finally settles and only then does admission open.
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    expect(replacementEvents.some((event) => event.type === "turn_started")).toBe(true);
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(harness.internals.stop).toBeNull();
+
+    // Rejected write: the manager refuses the next replacement and the session
+    // stays stopping with nothing sent behind it.
+    const secondReplacement = harness.manager.replaceAgentRun(harness.agentId, "third");
+    // Attach the rejection handler now: the promise settles while the fake
+    // clock advances, before the assertion below runs.
+    const secondFailure = secondReplacement.catch((error: unknown) => error);
+    await settleCancelWrite(harness, 1, { ok: false, error: new Error("cancel write rejected") });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await secondFailure).toBeInstanceOf(AgentRunCancellationError);
+
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(harness.internals.admissionState).toBe("stopping");
+    // A rejected newest write keeps the session stopping: the ledger never
+    // reads as satisfied, so the rejected replacement sends nothing.
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: true, outcome: "rejected" },
+    ]);
+    expect(harness.internals.stop?.stagedSuccessor).toBeNull();
+  });
+
+  // Plan: manager integration test 6.
+  test("6. stop invalidates a staged replacement and the eventual terminal sends nothing", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    expect(harness.internals.stop?.stagedSuccessor).not.toBeNull();
+
+    // A plain Stop repeats the stop: the staged successor is invalidated and a
+    // fresh cancellation write is issued for the same stop.
+    const stopPromise = harness.manager.cancelAgentRun(harness.agentId);
+    await settleCancelWrite(harness, 1, { ok: true });
+    await flushMicrotasks();
+    expect(await stopPromise).toEqual({ status: "settled" });
+
+    const replacementFailure = await replacement.done;
+    expect(replacementFailure?.message).toContain("staged replacement was invalidated");
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.stop?.stagedSuccessor).toBeNull();
+    expect(harness.internals.stop?.terminalObserved).toBe(true);
+    expect(logsWithMessage(harness.logs, "provider.acp.successor_invalidated")).toMatchObject([
+      { data: { reason: "interrupt" } },
+    ]);
+    expect(await first.done).toBeNull();
+  });
+
+  // Plan: manager integration test 7.
+  test("7. the 10s admission deadline rejects the replacement without sending a prompt or reporting readiness", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const replacementFailure = await replacement.done;
+    expect(replacementFailure?.message).toContain("was not admitted within 10000ms");
+
+    // The deadline rejected the caller and nothing else: no prompt, no turn, and
+    // no manager claim that the adapter became ready.
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+    expect(harness.internals.stop?.stagedSuccessor).toBeNull();
+    const agent = harness.manager.getAgent(harness.agentId);
+    expect(agent?.lifecycle).toBe("error");
+    expect(agent?.lastError).toContain("was not admitted within 10000ms");
+    // The manager settled the original run on its own schedule even though the
+    // adapter never saw a terminal for it.
+    expect(await first.done).toBeNull();
+    expect(
+      managerLogs(harness.logs).some((entry) =>
+        /acknowledg|ready|admission|gated|provider\.acp\./i.test(entry.msg),
+      ),
+    ).toBe(false);
+    expect(logsWithMessage(harness.logs, "provider.acp.admission_deadline")).toMatchObject([
+      { data: { unresolved: { terminal: true, cancelWrites: false } } },
+    ]);
+  });
+
+  // Plan: manager integration test 9. Recovery after a force settlement is
+  // session close/recreate: the plan promises no repeated-Stop retry.
+  test("9. after a force settlement repeated stop reports not_running and close is the recovery", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    const stopPromise = harness.manager.cancelAgentRun(harness.agentId);
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await stopPromise).toEqual({ status: "settled" });
+    expect(harness.manager.getAgent(harness.agentId)?.lifecycle).toBe("idle");
+    expect(await first.done).toBeNull();
+
+    // The manager no longer addresses the run, and the adapter is still stopping:
+    // a repeated Stop cannot retry it.
+    expect(await harness.manager.cancelAgentRun(harness.agentId)).toEqual({
+      status: "not_running",
+    });
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    // Close/recreate is the recovery: the boundary is dropped and the pending
+    // prompt never crosses.
+    const closing = harness.manager.closeAgent(harness.agentId);
+    await settleCancelWrite(harness, 1, { ok: true });
+    await flushMicrotasks();
+    await closing;
+    expect(harness.internals.stop).toBeNull();
+    expect(harness.internals.admissionState).toBe("idle");
+
+    // A late terminal after close emits nothing and starts nothing.
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(1);
+  });
+
+  // Plan: manager integration test 10.
+  test("10. manager and adapter logs correlate by session and turn id without the manager claiming gate state", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    const originalTurnId = harness.internals.activeForegroundTurnId;
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(2);
+    // Run the replacement to its own terminal so both streams close.
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    const [firstResult, replacementResult] = await Promise.all([first.done, replacement.done]);
+    expect(firstResult).toBeNull();
+    expect(replacementResult).toBeNull();
+
+    const manager = managerLogs(harness.logs);
+    const [forceSettled] = logsWithMessage(manager, MANAGER_FORCE_SETTLE_MSG);
+    const [installed] = logsWithMessage(harness.logs, "provider.acp.stop_installed");
+    const [staged] = logsWithMessage(harness.logs, "provider.acp.successor_staged");
+    const [released] = logsWithMessage(harness.logs, "provider.acp.admission_released");
+
+    // manager force-settled → replacement start invoked → adapter successor
+    // staged → adapter admission released, one id chain.
+    expect(forceSettled?.data).toMatchObject({
+      agentId: harness.agentId,
+      turnId: originalTurnId,
+      sessionId: MANAGED_ACP_SESSION_ID,
+    });
+    expect(installed?.data).toMatchObject({
+      sessionId: MANAGED_ACP_SESSION_ID,
+      stoppedTurnId: originalTurnId,
+    });
+    const stopId = installed?.data?.stopId;
+    expect(staged?.data).toMatchObject({ stopId, stoppedTurnId: originalTurnId });
+    expect(released?.data).toMatchObject({ stopId });
+    expect(logsWithMessage(manager, MANAGER_REPLACE_INVOKED_MSG)).toHaveLength(1);
+    expect(logsWithMessage(manager, MANAGER_REPLACE_RESOLVED_MSG)).toHaveLength(1);
+    expect(logsWithMessage(manager, "interruptSession: interrupt call returned")).toHaveLength(1);
+
+    // Every manager line states a manager-owned fact: what it called, what it
+    // waited for, what it force-settled. Gate state belongs to the adapter.
+    const managerVocabulary = new Set(manager.map((entry) => entry.msg));
+    expect(
+      [...managerVocabulary].every((msg) => /agent\.|cancelAgentRun|interruptSession/.test(msg)),
+    ).toBe(true);
+    expect(
+      manager.some(
+        (entry) =>
+          /acknowledg|admission|successor|stop[ _]|ready|gated|unblocked|terminal/i.test(
+            entry.msg,
+          ) ||
+          /acknowledg|admission|stopId|terminal|successor|staged/i.test(
+            JSON.stringify(entry.data ?? {}),
+          ),
+      ),
+    ).toBe(false);
+  });
 });
