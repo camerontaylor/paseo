@@ -441,7 +441,7 @@ interface ACPAgentClientOptions {
   terminateProcess?: ProcessTerminator;
 }
 
-interface ACPAgentSessionOptions {
+export interface ACPAgentSessionOptions {
   provider: string;
   logger: Logger;
   runtimeSettings?: ProviderRuntimeSettings;
@@ -861,7 +861,7 @@ export class ACPAgentClient implements AgentClient {
     launchContext?: AgentLaunchContext,
   ): Promise<AgentSession> {
     this.assertProvider(config);
-    const session = new ACPAgentSession(
+    const session = this.createAgentSession(
       { ...config, provider: this.provider },
       {
         provider: this.provider,
@@ -892,6 +892,18 @@ export class ACPAgentClient implements AgentClient {
     return session;
   }
 
+  /**
+   * Builds the session instance behind `createSession`/`resumeSession`. A fork
+   * provider overrides this to substitute its own session subclass while
+   * keeping the shared launch, transform, and capability plumbing.
+   */
+  protected createAgentSession(
+    config: AgentSessionConfig,
+    options: ACPAgentSessionOptions,
+  ): ACPAgentSession {
+    return new ACPAgentSession(config, options);
+  }
+
   async resumeSession(
     handle: AgentPersistenceHandle,
     overrides?: Partial<AgentSessionConfig>,
@@ -913,7 +925,7 @@ export class ACPAgentClient implements AgentClient {
       provider: this.provider,
       cwd,
     };
-    const session = new ACPAgentSession(mergedConfig, {
+    const session = this.createAgentSession(mergedConfig, {
       provider: this.provider,
       logger: this.logger,
       runtimeSettings: this.runtimeSettings,
@@ -1391,11 +1403,121 @@ export class ACPAgentClient implements AgentClient {
   }
 }
 
+/**
+ * Fail-closed ceiling on how long a staged replacement may wait for the stop
+ * boundary in front of it. Follows the OpenCode pending-abort deadline: it
+ * bounds the caller's wait, it never manufactures provider readiness. Expiry
+ * rejects only the queued replacement and leaves the session stopping.
+ */
+export const ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS = 10_000;
+
+const ACP_FOREGROUND_ACTIVE_ERROR = "A foreground turn is already active";
+
+/**
+ * Foreground admission phases for one ACP session.
+ *
+ * - `idle` — no foreground turn and no unresolved stop.
+ * - `reserved` — a successor atomically acquired the foreground slot but has not
+ *   called `connection.prompt` yet.
+ * - `running` — a foreground prompt is active.
+ * - `stopping` — an immutable stop boundary is installed for a foreground or
+ *   provider-owned turn; admission is closed until that stop's proof completes.
+ *
+ * Transitions: idle→running (ordinary start), idle→stopping (stop installed),
+ * stopping→reserved (gates satisfied, successor committed), reserved→running
+ * (before the prompt write), reserved→idle and reserved→stopping (reservation
+ * rolled back when the send fails). `running` leaves only through `finishTurn`
+ * (→idle) or a stop install (→stopping); a stop never reverts to running for the
+ * turn it stopped. `activeForegroundTurnId` carries the turn that owns the
+ * foreground slot in every non-idle phase, so a stopping session still tags its
+ * events with the turn being stopped.
+ */
+export type ACPAdmissionState = "idle" | "reserved" | "running" | "stopping";
+
+/**
+ * Which kind of turn a stop boundary stops. `foreground` is a Paseo-issued ACP
+ * prompt; `provider-owned` is a turn a provider started on its own and mirrors
+ * into Paseo. The boundary mechanics are identical for both.
+ */
+export type ACPStopKind = "foreground" | "provider-owned";
+
+interface ACPStopCancelAttempt {
+  readonly revision: number;
+  settled: boolean;
+  outcome: "pending" | "success" | "rejected";
+}
+
+interface ACPStagedSuccessor {
+  /** Names the queued replacement; independent of stop identity and revision. */
+  readonly token: string;
+  readonly release: Deferred<void>;
+  readonly deadline: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * One stop boundary over a single turn. Identity fields are immutable for the
+ * life of the stop: a repeated Stop reuses the same record and only moves proof
+ * and revision state, so an old promise can never open a newer stop.
+ *
+ * Three concepts stay separate here: `stopId` (identity), `cancelIssuedRevision`
+ * (retry/attempt number), and `successorToken` (which queued replacement may
+ * commit). Never derive one from another.
+ */
+export interface ACPStopRecord {
+  readonly stopId: string;
+  /** Explicit id of the foreground or provider-owned turn being stopped. */
+  readonly stoppedTurnId: string;
+  /** Session and ordered live connection captured at install time. */
+  readonly sessionId: string;
+  readonly connection: ClientSideConnection;
+  /** Bumped whenever the session adopts a connection; detects a replacement. */
+  readonly connectionRevision: number;
+  readonly kind: ACPStopKind;
+  /** Terminal proof for `stoppedTurnId`; duplicate terminals stay idempotent. */
+  terminalObserved: boolean;
+  /** Guards exactly-once terminal delivery for the stopped turn. */
+  terminalDelivered: boolean;
+  /** Every cancellation write issued for this stop, in issue order. */
+  readonly cancelAttempts: ACPStopCancelAttempt[];
+  cancelIssuedRevision: number;
+  cancelSettledRevision: number;
+  newestCancelSucceeded: boolean;
+  /** At most one queued successor. `releasedSuccessorToken` names the one that may commit. */
+  stagedSuccessor: ACPStagedSuccessor | null;
+  releasedSuccessorToken: string | null;
+  /** Provider-specific proof slot. The generic boundary only reads it. */
+  providerGateSatisfied: boolean;
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+}
+
+/**
+ * What one `startTurn` call has to do before it may reserve the foreground slot:
+ * nothing, or wait as the stop's registered successor.
+ */
+type ACPAdmissionStaging =
+  | { kind: "immediate" }
+  | { kind: "queued"; stop: ACPStopRecord; token: string; release: Deferred<void> };
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 export class ACPAgentSession implements AgentSession, ACPClient {
   readonly provider: string;
   readonly capabilities: AgentCapabilityFlags;
 
-  private readonly logger: Logger;
+  protected readonly logger: Logger;
   private readonly runtimeSettings?: ProviderRuntimeSettings;
   private readonly defaultCommand: [string, ...string[]];
   private readonly defaultModes: AgentMode[];
@@ -1454,6 +1576,16 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private readonly extensionCommandsParser?: ACPExtensionCommandsParser;
   private currentTurnUsage: AgentUsage | undefined;
   private activeForegroundTurnId: string | null = null;
+  /**
+   * Foreground admission state and the stop boundary in front of it. See
+   * {@link ACPAdmissionState} for the phases and their transitions. Both move
+   * only inside synchronous sections: a reservation is never split across an
+   * `await`, so no event, echo, turn id, or prompt can escape before ownership
+   * is taken.
+   */
+  private admissionState: ACPAdmissionState = "idle";
+  private stop: ACPStopRecord | null = null;
+  private connectionRevision = 0;
   private fallbackAssistantMessageId: string | null = null;
   private closed = false;
   private historyPending = false;
@@ -1492,6 +1624,37 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.waitForInitialCommands = options.waitForInitialCommands ?? false;
     this.initialCommandsWaitTimeoutMs = options.initialCommandsWaitTimeoutMs ?? 1500;
     this.extensionCommandsParser = options.extensionCommandsParser;
+  }
+
+  // ── Provider-neutral extension seams ────────────────────────────────────
+  // A provider subclass builds on this session without reaching into private
+  // state. Everything below is read-only unless named explicitly; none of it
+  // hands out the mutable connection, environment, or stop internals in a way
+  // that would let a subclass bypass the admission boundary.
+
+  protected getAcpSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  protected getAcpConnection(): ClientSideConnection | null {
+    return this.connection;
+  }
+
+  protected getForegroundTurnId(): string | null {
+    return this.activeForegroundTurnId;
+  }
+
+  protected getAdmissionState(): ACPAdmissionState {
+    return this.admissionState;
+  }
+
+  protected getCurrentStop(): ACPStopRecord | null {
+    return this.stop;
+  }
+
+  /** One-key read-only view of the launch environment. Never exposes the object. */
+  protected getLaunchEnv(name: string): string | undefined {
+    return this.launchEnv?.[name];
   }
 
   get id(): string | null {
@@ -1607,49 +1770,487 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
+    return this.startTurnWithAdmission(prompt, options);
+  }
+
+  /**
+   * The single admission path for every foreground prompt, ordinary or staged
+   * behind a stop.
+   *
+   * 1. A call that arrives while a stop is installed becomes that stop's staged
+   *    successor — at most one per stop; a second concurrent call throws the
+   *    foreground-active error instead of displacing the first.
+   * 2. It then waits for the stop's gates (authoritative terminal, settled and
+   *    successful cancellation writes, provider proof) inside
+   *    {@link ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS}. The deadline rejects only
+   *    this waiter; it never sends a prompt and never opens readiness.
+   * 3. {@link reserveForegroundSlot} rechecks every fact and reserves the
+   *    foreground slot with no `await` in between.
+   * 4. Only after the reservation are the turn id and the start-side effects
+   *    produced, in the order ACP always used them.
+   */
+  protected async startTurnWithAdmission(
+    prompt: AgentPromptInput,
+    options?: AgentRunOptions,
+  ): Promise<{ turnId: string }> {
     if (this.closed) {
       throw new Error(`${this.provider} session is closed`);
     }
     if (!this.connection || !this.sessionId) {
       throw new Error(`${this.provider} session is not initialized`);
     }
-    if (this.activeForegroundTurnId) {
-      throw new Error("A foreground turn is already active");
+
+    const staging = this.stageAdmission();
+    if (staging.kind === "queued") {
+      // Rejects on invalidation, deadline expiry, or close; resolves only when
+      // the stop's gates are satisfied. The reservation rechecks everything.
+      await staging.release.promise;
     }
 
-    this.deliverTranslatedEvents(this.flushPendingUserMessage());
-    const turnId = randomUUID();
-    const messageId = options?.clientMessageId ?? randomUUID();
-    this.activeForegroundTurnId = turnId;
-    this.fallbackAssistantMessageId = null;
-    this.submittedUserMessageTurnId = null;
-    this.emitBootstrapThreadEvent();
-    this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
-    this.emitSubmittedUserMessage(prompt, messageId, turnId, options?.clientMessageId);
+    // ── Synchronous commit section ────────────────────────────────────────
+    // No `await` may appear between the checks in reserveForegroundSlot and the
+    // reservation it performs, and no successor side effect may run before it.
+    const detachedStop = this.reserveForegroundSlot(staging);
 
-    void this.connection
-      .prompt({
-        sessionId: this.sessionId,
-        messageId,
-        prompt: toACPContentBlocks(prompt),
-      })
-      .then((response) => {
-        this.handlePromptResponse(response, turnId);
-        return;
-      })
-      .catch((error) => {
-        const summary = summarizeACPRequestError(error);
-        this.finishTurn({
-          type: "turn_failed",
-          provider: this.provider,
-          error: summary.message,
-          code: summary.code,
-          diagnostic: this.collectDiagnostic(summary.diagnostic ?? summary.message),
-          turnId,
+    let turnId: string | null = null;
+    try {
+      this.deliverTranslatedEvents(this.flushPendingUserMessage());
+      turnId = randomUUID();
+      const foregroundTurnId: string = turnId;
+      const messageId = options?.clientMessageId ?? randomUUID();
+      this.activeForegroundTurnId = foregroundTurnId;
+      this.fallbackAssistantMessageId = null;
+      this.submittedUserMessageTurnId = null;
+      this.emitBootstrapThreadEvent();
+      this.pushEvent({ type: "turn_started", provider: this.provider, turnId: foregroundTurnId });
+      this.emitSubmittedUserMessage(prompt, messageId, foregroundTurnId, options?.clientMessageId);
+      // reserved → running happens before the prompt write: from this line the
+      // foreground slot belongs to `foregroundTurnId` for admission purposes.
+      this.admissionState = "running";
+      const connection = this.connection;
+      const sessionId = this.sessionId;
+      void connection
+        .prompt({
+          sessionId,
+          messageId,
+          prompt: toACPContentBlocks(prompt),
+        })
+        .then((response) => {
+          this.handlePromptResponse(response, foregroundTurnId);
+          return;
+        })
+        .catch((error) => {
+          const summary = summarizeACPRequestError(error);
+          this.finishTurn(foregroundTurnId, {
+            type: "turn_failed",
+            provider: this.provider,
+            error: summary.message,
+            code: summary.code,
+            diagnostic: this.collectDiagnostic(summary.diagnostic ?? summary.message),
+            turnId: foregroundTurnId,
+          });
         });
-      });
+    } catch (error) {
+      // Roll back only this reservation. A stop that was in front of it keeps
+      // every fact it earned; it is never reopened by a failed send.
+      this.rollbackReservation(detachedStop, turnId);
+      throw error;
+    }
 
     return { turnId };
+  }
+
+  /**
+   * Registers the caller as a stop's sole staged successor. A call with no stop
+   * in front of it commits immediately; a call while the foreground slot is held
+   * throws, exactly as it always has.
+   */
+  private stageAdmission(): ACPAdmissionStaging {
+    const stop = this.stop;
+    if (!stop) {
+      if (this.admissionState !== "idle") {
+        throw new Error(ACP_FOREGROUND_ACTIVE_ERROR);
+      }
+      return { kind: "immediate" };
+    }
+    if (stop.stagedSuccessor) {
+      throw new Error(ACP_FOREGROUND_ACTIVE_ERROR);
+    }
+
+    const token = randomUUID();
+    const release = createDeferred<void>();
+    const staged: ACPStagedSuccessor = {
+      token,
+      release,
+      deadline: setTimeout(
+        () => this.expireStagedSuccessor(stop, token),
+        ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS,
+      ),
+    };
+    stop.stagedSuccessor = staged;
+    // Newest-wins across the one-microtask window between gate release and
+    // reserveForegroundSlot: staging a new successor clears the released token,
+    // so a released-but-uncommitted caller loses the slot and throws the
+    // foreground-active error. Exactly one caller ever commits.
+    stop.releasedSuccessorToken = null;
+    this.logger.info(
+      {
+        stopId: stop.stopId,
+        stoppedTurnId: stop.stoppedTurnId,
+        token,
+        kind: stop.kind,
+        sessionId: stop.sessionId,
+        timeoutMs: ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS,
+      },
+      "provider.acp.successor_staged",
+    );
+    // The stop's facts may already be complete, in which case the waiter is
+    // released before the first await and the commit recheck decides.
+    this.evaluateStopGate(stop);
+    return { kind: "queued", stop, token, release };
+  }
+
+  /**
+   * Deadline expiry rejects the queued replacement and nothing else: no prompt,
+   * no turn event, no user echo, no turn id. The stop stays installed, so a
+   * later request can still be evaluated on its own facts.
+   */
+  private expireStagedSuccessor(stop: ACPStopRecord, token: string): void {
+    if (this.stop !== stop) {
+      return;
+    }
+    const staged = stop.stagedSuccessor;
+    if (!staged || staged.token !== token) {
+      return;
+    }
+    const unresolved = {
+      terminal: !stop.terminalObserved,
+      cancelWrites: !this.isCancelLedgerSatisfied(stop),
+      providerGate: !this.isProviderStopGateSatisfied(stop),
+    };
+    this.takeStagedSuccessor(stop);
+    this.logger.info(
+      {
+        stopId: stop.stopId,
+        token,
+        stoppedTurnId: stop.stoppedTurnId,
+        timeoutMs: ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS,
+        unresolved,
+      },
+      "provider.acp.admission_deadline",
+    );
+    staged.release.reject(
+      new Error(
+        `${this.provider} replacement turn was not admitted within ${ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS}ms; the previous turn is still being stopped`,
+      ),
+    );
+  }
+
+  /**
+   * Detaches and disarms the stop's staged successor, clearing the deadline and
+   * the token slot together. This is the whole of successor cleanup, so close and
+   * supersession can call it without touching stop state.
+   */
+  private takeStagedSuccessor(stop: ACPStopRecord): ACPStagedSuccessor | null {
+    const staged = stop.stagedSuccessor;
+    if (!staged) {
+      return null;
+    }
+    stop.stagedSuccessor = null;
+    stop.releasedSuccessorToken = null;
+    clearTimeout(staged.deadline);
+    return staged;
+  }
+
+  /** Invalidates the queued replacement without touching the stop identity. */
+  protected invalidateStagedSuccessor(stop: ACPStopRecord, reason: string): void {
+    const staged = this.takeStagedSuccessor(stop);
+    if (!staged) {
+      return;
+    }
+    this.logger.info(
+      { stopId: stop.stopId, token: staged.token, reason, stoppedTurnId: stop.stoppedTurnId },
+      "provider.acp.successor_invalidated",
+    );
+    staged.release.reject(
+      new Error(`${this.provider} staged replacement was invalidated (${reason})`),
+    );
+  }
+
+  /**
+   * Opens the staged successor only when every fact the stop owes is present:
+   * the session identity it captured, terminal proof for the turn it stopped, a
+   * fully settled and successful cancellation ledger, and provider proof. Any
+   * gap keeps the session stopping — nothing infers readiness here.
+   */
+  private evaluateStopGate(stop: ACPStopRecord): void {
+    if (this.closed || this.stop !== stop || !this.stopIdentityMatches(stop)) {
+      return;
+    }
+    if (!stop.terminalObserved || !this.isCancelLedgerSatisfied(stop)) {
+      return;
+    }
+    if (!this.isProviderStopGateSatisfied(stop)) {
+      return;
+    }
+    const staged = this.takeStagedSuccessor(stop);
+    if (!staged) {
+      return;
+    }
+    stop.releasedSuccessorToken = staged.token;
+    this.logger.info(
+      {
+        stopId: stop.stopId,
+        token: staged.token,
+        stoppedTurnId: stop.stoppedTurnId,
+        satisfiedGates: ["terminal", "cancelWrites", "providerGate"],
+      },
+      "provider.acp.admission_released",
+    );
+    staged.release.resolve();
+  }
+
+  /**
+   * The cancellation ledger: every cancellation write issued for the stop must
+   * have settled, and the newest must have succeeded. An older rejected write is
+   * recovered only by a newer successful one after everything has settled, so no
+   * unresolved write can trail behind a committed successor. A stop that never
+   * issued a write owes the ledger nothing — foreground stops always issue their
+   * first write synchronously after install, and a write that throws before it is
+   * sent is recorded as rejected.
+   */
+  private isCancelLedgerSatisfied(stop: ACPStopRecord): boolean {
+    if (stop.cancelAttempts.length === 0) {
+      return true;
+    }
+    const newest = stop.cancelAttempts[stop.cancelAttempts.length - 1];
+    return (
+      newest.revision === stop.cancelIssuedRevision &&
+      stop.cancelAttempts.every((attempt) => attempt.settled) &&
+      newest.outcome === "success"
+    );
+  }
+
+  /** The stop's captured identity must still be the live one. */
+  private stopIdentityMatches(stop: ACPStopRecord): boolean {
+    return (
+      this.connection === stop.connection &&
+      this.connectionRevision === stop.connectionRevision &&
+      this.sessionId === stop.sessionId
+    );
+  }
+
+  /**
+   * Reserves the foreground slot. Every check re-verifies a fact the release
+   * already proved; any mismatch fails closed and leaves the stop installed.
+   */
+  private reserveForegroundSlot(staging: ACPAdmissionStaging): ACPStopRecord | null {
+    if (this.closed) {
+      throw new Error(`${this.provider} session is closed`);
+    }
+    if (!this.connection || !this.sessionId) {
+      throw new Error(`${this.provider} session is not initialized`);
+    }
+
+    const stop = this.stop;
+    if (stop) {
+      if (staging.kind !== "queued" || stop.releasedSuccessorToken !== staging.token) {
+        throw new Error(ACP_FOREGROUND_ACTIVE_ERROR);
+      }
+      if (stop.stagedSuccessor) {
+        throw new Error(ACP_FOREGROUND_ACTIVE_ERROR);
+      }
+      if (!this.stopIdentityMatches(stop)) {
+        throw new Error(
+          `${this.provider} session identity changed while a stop boundary was installed`,
+        );
+      }
+      if (!stop.terminalObserved) {
+        throw new Error(`${this.provider} stop boundary is missing terminal proof`);
+      }
+      if (!this.isCancelLedgerSatisfied(stop)) {
+        throw new Error(`${this.provider} stop boundary still has unresolved cancellation writes`);
+      }
+      if (!this.isProviderStopGateSatisfied(stop)) {
+        throw new Error(`${this.provider} stop boundary is missing provider stop proof`);
+      }
+
+      this.stop = null;
+      this.admissionState = "reserved";
+      return stop;
+    }
+
+    if (this.admissionState !== "idle") {
+      throw new Error(ACP_FOREGROUND_ACTIVE_ERROR);
+    }
+    this.admissionState = "reserved";
+    return null;
+  }
+
+  private rollbackReservation(stop: ACPStopRecord | null, turnId: string | null): void {
+    if (this.activeForegroundTurnId && this.activeForegroundTurnId === turnId) {
+      this.activeForegroundTurnId = null;
+    }
+    if (stop) {
+      this.stop = stop;
+      this.admissionState = "stopping";
+      return;
+    }
+    this.admissionState = "idle";
+  }
+
+  /**
+   * Installs a stop boundary. Must run synchronously before the first
+   * cancellation write it is followed by, so admission closes before any
+   * asynchronous cancellation work begins.
+   */
+  protected installStop(input: {
+    kind: ACPStopKind;
+    stoppedTurnId: string;
+    reason: string;
+  }): ACPStopRecord {
+    if (!this.connection || !this.sessionId) {
+      throw new Error(`${this.provider} session is not initialized`);
+    }
+    const stop: ACPStopRecord = {
+      stopId: randomUUID(),
+      stoppedTurnId: input.stoppedTurnId,
+      sessionId: this.sessionId,
+      connection: this.connection,
+      connectionRevision: this.connectionRevision,
+      kind: input.kind,
+      terminalObserved: false,
+      terminalDelivered: false,
+      cancelAttempts: [],
+      cancelIssuedRevision: 0,
+      cancelSettledRevision: 0,
+      newestCancelSucceeded: false,
+      stagedSuccessor: null,
+      releasedSuccessorToken: null,
+      providerGateSatisfied: true,
+    };
+    this.stop = stop;
+    this.admissionState = "stopping";
+    this.logger.info(
+      {
+        stopId: stop.stopId,
+        stoppedTurnId: stop.stoppedTurnId,
+        kind: stop.kind,
+        reason: input.reason,
+        sessionId: stop.sessionId,
+        connectionRevision: stop.connectionRevision,
+      },
+      "provider.acp.stop_installed",
+    );
+    return stop;
+  }
+
+  /**
+   * The one foreground stop operation. Interrupt, permission denial, and a
+   * repeated Stop all land here: it installs the boundary, or reuses the one
+   * installed, and returns when the cancellation write it issued settles.
+   * Settling a write proves transport completion only — the stop stays installed
+   * until terminal proof and a fully settled ledger arrive.
+   */
+  protected async stopForegroundTurn(input: { reason: string }): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    const existing = this.stop;
+    if (existing) {
+      // Repeated Stop keeps stop identity and retries the same stop: the queued
+      // successor is invalidated and a fresh attempt revision is issued.
+      this.invalidateStagedSuccessor(existing, input.reason);
+      await this.issueCancelWrite(existing);
+      return;
+    }
+
+    const turnId = this.activeForegroundTurnId;
+    if (!turnId || !this.connection || !this.sessionId) {
+      // Deliberate delta from pre-stop-boundary behavior (AC13): a permission
+      // denial arriving with no foreground turn and no installed stop sends no
+      // cancellation. An untracked session-scoped cancel write is exactly what
+      // the ledger exists to prevent.
+      return;
+    }
+    const stop = this.installStop({
+      kind: "foreground",
+      stoppedTurnId: turnId,
+      reason: input.reason,
+    });
+    await this.issueCancelWrite(stop);
+  }
+
+  /**
+   * Issues one cancellation write on the connection the stop captured and tracks
+   * its promise in that stop's ledger. A write that rejects — or throws before it
+   * is sent — is recorded as rejected, which keeps the boundary closed.
+   */
+  private issueCancelWrite(stop: ACPStopRecord): Promise<void> {
+    if (!this.stopIdentityMatches(stop)) {
+      return Promise.reject(
+        new Error(
+          `${this.provider} cannot cancel a stopped turn on a replaced session or connection`,
+        ),
+      );
+    }
+
+    const revision = stop.cancelIssuedRevision + 1;
+    stop.cancelIssuedRevision = revision;
+    const attempt: ACPStopCancelAttempt = { revision, settled: false, outcome: "pending" };
+    stop.cancelAttempts.push(attempt);
+    this.logger.info(
+      { stopId: stop.stopId, revision, sessionId: stop.sessionId },
+      "provider.acp.cancel_attempt_started",
+    );
+
+    let write: Promise<void>;
+    try {
+      write = stop.connection.cancel({ sessionId: stop.sessionId }).then(
+        () => {
+          this.settleCancelAttempt(stop, attempt, "success");
+          return undefined;
+        },
+        (error) => {
+          this.settleCancelAttempt(stop, attempt, "rejected");
+          throw error;
+        },
+      );
+    } catch (error) {
+      this.settleCancelAttempt(stop, attempt, "rejected");
+      throw error;
+    }
+    return write;
+  }
+
+  private settleCancelAttempt(
+    stop: ACPStopRecord,
+    attempt: ACPStopCancelAttempt,
+    outcome: "success" | "rejected",
+  ): void {
+    attempt.settled = true;
+    attempt.outcome = outcome;
+    stop.cancelSettledRevision = Math.max(stop.cancelSettledRevision, attempt.revision);
+    const newest = stop.cancelAttempts[stop.cancelAttempts.length - 1];
+    stop.newestCancelSucceeded = newest.settled && newest.outcome === "success";
+    this.logger.info(
+      { stopId: stop.stopId, revision: attempt.revision, outcome },
+      "provider.acp.cancel_attempt_settled",
+    );
+    // A rejected newest write keeps the session stopping; only a newer
+    // successful retry on the same connection can recover it.
+    this.evaluateStopGate(stop);
+  }
+
+  /** Provider-specific stop proof. The generic boundary needs none of it. */
+  protected isProviderStopGateSatisfied(stop: ACPStopRecord): boolean {
+    return stop.providerGateSatisfied;
+  }
+
+  /** Records provider stop proof and re-evaluates admission. */
+  protected markProviderStopGateSatisfied(stop: ACPStopRecord): void {
+    stop.providerGateSatisfied = true;
+    this.evaluateStopGate(stop);
   }
 
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
@@ -2144,8 +2745,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       turnId: pending.turnId ?? undefined,
     });
 
-    if (response.behavior === "deny" && response.interrupt && this.connection && this.sessionId) {
-      await this.connection.cancel({ sessionId: this.sessionId });
+    // A denied prompt is stopped through the same boundary as Stop: the boundary
+    // closes admission before the cancellation write, so no replacement can
+    // cross the denied turn before its terminal and cancellation are settled.
+    if (response.behavior === "deny" && response.interrupt) {
+      await this.stopForegroundTurn({ reason: "permission-denied" });
     }
   }
 
@@ -2164,26 +2768,38 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     };
   }
 
+  /**
+   * Cancels the current foreground turn through the stop boundary. Returning
+   * means the cancellation notification write settled — nothing more. It does not
+   * clear the stop, does not terminalize the turn, and does not make the session
+   * ready for a replacement.
+   */
   async interrupt(): Promise<void> {
-    if (!this.connection || !this.sessionId) {
-      return;
-    }
-
     for (const pending of this.pendingPermissions.values()) {
       pending.resolve({ outcome: { outcome: "cancelled" } });
     }
     this.pendingPermissions.clear();
 
-    if (this.activeForegroundTurnId) {
-      await this.connection.cancel({ sessionId: this.sessionId });
-    }
+    await this.stopForegroundTurn({ reason: "interrupt" });
   }
 
   async close(): Promise<void> {
     if (this.closed) {
       return;
     }
+    // Marked closed before any asynchronous teardown: from here no new
+    // reservation is possible and no late settlement, control result, phase
+    // update, or terminal can touch admission state again.
     this.closed = true;
+
+    const stop = this.stop;
+    this.stop = null;
+    this.admissionState = "idle";
+    if (stop) {
+      // Rejects the queued replacement and clears its deadline; the stop record
+      // itself is dropped, not mutated.
+      this.invalidateStagedSuccessor(stop, "closed");
+    }
 
     this.deliverTranslatedEvents(this.flushPendingUserMessage());
     this.settleCommandsReady();
@@ -2499,14 +3115,15 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       if (this.closed) {
         return;
       }
-      if (this.activeForegroundTurnId) {
+      const foregroundTurnId = this.activeForegroundTurnId;
+      if (foregroundTurnId) {
         this.synthesizeCanceledToolCalls();
-        this.finishTurn({
+        this.finishTurn(foregroundTurnId, {
           type: "turn_failed",
           provider: this.provider,
           error: `ACP agent exited unexpectedly (${code ?? "null"}${signal ? `, ${signal}` : ""})`,
           diagnostic: stderrChunks.join("").trim() || undefined,
-          turnId: this.activeForegroundTurnId,
+          turnId: foregroundTurnId,
         });
       }
     });
@@ -2518,9 +3135,12 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     );
     const connection = new ClientSideConnection(() => this, stream);
     // Take ownership before initialize so the outer initialization guard can
-    // close the process even when the ACP handshake itself rejects.
+    // close the process even when the ACP handshake itself rejects. The revision
+    // identifies this connection: stop boundaries capture it at install so a
+    // replacement connection can never be opened by an older stop's writes.
     this.child = child;
     this.connection = connection;
+    this.connectionRevision += 1;
     const initialize = await this.runACPRequest(() =>
       connection.initialize({
         protocolVersion: PROTOCOL_VERSION,
@@ -2850,7 +3470,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     switch (response.stopReason) {
       case "cancelled":
         this.synthesizeCanceledToolCalls();
-        this.finishTurn({
+        this.finishTurn(turnId, {
           type: "turn_canceled",
           provider: this.provider,
           reason: "Interrupted",
@@ -2862,7 +3482,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       case "max_turn_requests":
       case "refusal":
       default:
-        this.finishTurn({
+        this.finishTurn(turnId, {
           type: "turn_completed",
           provider: this.provider,
           usage: this.currentTurnUsage,
@@ -2881,7 +3501,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     };
   }
 
-  private pushEvent(event: AgentStreamEvent): void {
+  protected pushEvent(event: AgentStreamEvent): void {
     this.logger.trace(
       {
         agentId: this.agentId,
@@ -2935,11 +3555,67 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     };
   }
 
+  /**
+   * Settles a foreground turn. `turnId` is checked against live state before
+   * anything moves:
+   *
+   * - the stopped turn of the installed boundary records terminal proof (once)
+   *   and releases the gate, without leaving the stopping phase while
+   *   cancellation writes are still unresolved or failed;
+   * - the current foreground turn settles ordinarily and hands the slot back;
+   * - anything else is a terminal from an earlier generation and is dropped
+   *   instead of clearing a reserved or running successor.
+   *
+   * After close nothing is emitted and no state moves.
+   */
   private finishTurn(
+    turnId: string,
+    event: Extract<AgentStreamEvent, { type: "turn_completed" | "turn_failed" | "turn_canceled" }>,
+  ): void {
+    if (this.closed) {
+      return;
+    }
+
+    const stop = this.stop;
+    if (stop && turnId === stop.stoppedTurnId) {
+      if (!this.stopIdentityMatches(stop)) {
+        this.logger.warn(
+          { stopId: stop.stopId, turnId, sessionId: stop.sessionId },
+          "Ignored ACP terminal for the stopped turn: session identity changed",
+        );
+        return;
+      }
+      stop.terminalObserved = true;
+      this.logger.info(
+        { stopId: stop.stopId, turnId, kind: stop.kind },
+        "provider.acp.stop_terminal_observed",
+      );
+      if (!stop.terminalDelivered) {
+        stop.terminalDelivered = true;
+        this.deliverTerminal(event);
+      }
+      this.evaluateStopGate(stop);
+      return;
+    }
+
+    if (turnId !== this.activeForegroundTurnId) {
+      this.logger.warn(
+        { turnId, activeTurnId: this.activeForegroundTurnId ?? undefined },
+        "Ignored ACP terminal for a turn that no longer owns the foreground",
+      );
+      return;
+    }
+
+    this.deliverTerminal(event);
+    this.activeForegroundTurnId = null;
+    this.admissionState = "idle";
+  }
+
+  /** Emits a terminal event once, after the buffered provider echo is flushed. */
+  private deliverTerminal(
     event: Extract<AgentStreamEvent, { type: "turn_completed" | "turn_failed" | "turn_canceled" }>,
   ): void {
     this.deliverTranslatedEvents(this.flushPendingUserMessage());
-    this.activeForegroundTurnId = null;
     this.fallbackAssistantMessageId = null;
     if (this.submittedUserMessageTurnId === event.turnId) {
       this.submittedUserMessageTurnId = null;

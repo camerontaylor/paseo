@@ -1,6 +1,6 @@
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -16,8 +16,11 @@ import {
 } from "@agentclientprotocol/sdk";
 
 import {
+  ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS,
   ACPAgentClient,
   ACPAgentSession,
+  type ACPAdmissionState,
+  type ACPStopKind,
   type SpawnedACPProcess,
   type SessionStateResponse,
   buildACPClientCapabilities,
@@ -3787,6 +3790,807 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
       sessionId: "session-1",
       cwd: "/tmp/paseo-acp-test",
       mcpServers: [],
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Generic ACP stop boundary.
+//
+// A foreground replacement may be staged while a stop is installed, but it
+// cannot reserve the foreground slot, allocate a turn id, emit an event, or
+// send a prompt until the stopped turn has an authoritative terminal and every
+// cancellation write issued for the stop has settled with the newest one
+// successful.
+//
+// Each test is numbered against the plan's generic ACP unit test list.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface DeferredResolution<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+}
+
+interface DeferredCalls<T> {
+  fn: (input: unknown) => Promise<T>;
+  calls: Array<DeferredResolution<T>>;
+  inputs: unknown[];
+}
+
+function createDeferredCalls<T>(): DeferredCalls<T> {
+  const calls: Array<DeferredResolution<T>> = [];
+  const inputs: unknown[] = [];
+  const fn = (input: unknown) => {
+    inputs.push(input);
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    calls.push({ promise, resolve, reject });
+    return promise;
+  };
+  return { fn, calls, inputs };
+}
+
+type ACPStopBoundaryTerminalEvent = Extract<
+  AgentStreamEvent,
+  { type: "turn_completed" | "turn_failed" | "turn_canceled" }
+>;
+
+interface ACPStopBoundaryInternals {
+  sessionId: string | null;
+  connection: {
+    prompt: (input: {
+      sessionId: string;
+      messageId: string;
+      prompt: unknown;
+    }) => Promise<PromptResponse>;
+    cancel: (input: { sessionId: string }) => Promise<void>;
+  } | null;
+  connectionRevision: number;
+  activeForegroundTurnId: string | null;
+  admissionState: ACPAdmissionState;
+  stop: {
+    stopId: string;
+    stoppedTurnId: string;
+    kind: ACPStopKind;
+    terminalObserved: boolean;
+    terminalDelivered: boolean;
+    cancelIssuedRevision: number;
+    cancelAttempts: Array<{
+      revision: number;
+      settled: boolean;
+      outcome: "pending" | "success" | "rejected";
+    }>;
+    stagedSuccessor: { token: string } | null;
+    releasedSuccessorToken: string | null;
+    providerGateSatisfied: boolean;
+  } | null;
+  child: ChildProcess | null;
+  finishTurn(turnId: string, event: ACPStopBoundaryTerminalEvent): void;
+}
+
+/** The session subclass a provider fork would build on: invalidation by token. */
+class StopBoundarySession extends ACPAgentSession {
+  invalidateStagedReplacement(reason: string): void {
+    const stop = this.getCurrentStop();
+    if (stop) {
+      this.invalidateStagedSuccessor(stop, reason);
+    }
+  }
+}
+
+interface ACPStopBoundaryHarness {
+  session: StopBoundarySession;
+  internals: ACPStopBoundaryInternals;
+  prompt: DeferredCalls<PromptResponse>;
+  cancel: DeferredCalls<void>;
+  events: AgentStreamEvent[];
+}
+
+function createStopBoundarySession(terminateProcess?: ProcessTerminator): ACPStopBoundaryHarness {
+  const session = new StopBoundarySession(
+    { provider: "claude-acp", cwd: "/tmp/paseo-acp-test" },
+    {
+      provider: "claude-acp",
+      logger: createTestLogger(),
+      defaultCommand: ["claude", "--acp"],
+      defaultModes: [],
+      capabilities: {
+        supportsStreaming: true,
+        supportsSessionPersistence: true,
+        supportsDynamicModes: true,
+        supportsMcpServers: true,
+        supportsReasoningStream: true,
+        supportsToolInvocations: true,
+      },
+      ...(terminateProcess ? { terminateProcess } : {}),
+    },
+  );
+
+  const prompt = createDeferredCalls<PromptResponse>();
+  const cancel = createDeferredCalls<void>();
+  const internals = asInternals<ACPStopBoundaryInternals>(session);
+  internals.sessionId = "session-1";
+  internals.connection = { prompt: prompt.fn, cancel: cancel.fn };
+  internals.connectionRevision = 1;
+
+  const events: AgentStreamEvent[] = [];
+  session.subscribe((event) => events.push(event));
+
+  return { session, internals, prompt, cancel, events };
+}
+
+/** Drains promise microtasks without touching the fake clock. */
+async function flushMicrotasks(count = 10): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+async function startForegroundTurn(harness: ACPStopBoundaryHarness, text: string): Promise<string> {
+  const { turnId } = await harness.session.startTurn(text);
+  return turnId;
+}
+
+/**
+ * True once `promise` settles inside a fixed window of resolved microtasks. The
+ * race makes the check deterministic: no clock, no sleep, and a rejection that
+ * arrives inside the window is handled, not reported unhandled.
+ */
+async function hasSettled(promise: Promise<unknown>): Promise<boolean> {
+  return Promise.race([
+    promise.then(
+      () => true,
+      () => true,
+    ),
+    flushMicrotasks().then(() => false),
+  ]);
+}
+
+function turnStartedIds(events: AgentStreamEvent[]): string[] {
+  return events.flatMap((event) => (event.type === "turn_started" ? [event.turnId] : []));
+}
+
+function turnTerminalTypes(events: AgentStreamEvent[]): string[] {
+  return events.flatMap((event) =>
+    event.type === "turn_completed" ||
+    event.type === "turn_failed" ||
+    event.type === "turn_canceled"
+      ? [event.type]
+      : [],
+  );
+}
+
+function userMessageEchoes(events: AgentStreamEvent[]): number {
+  return events.filter((event) => event.type === "timeline" && event.item.type === "user_message")
+    .length;
+}
+
+function cancelledTurnEvent(turnId: string, reason: string): ACPStopBoundaryTerminalEvent {
+  return { type: "turn_canceled", provider: "claude-acp", reason, turnId };
+}
+
+describe("ACPAgentSession stop boundary", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  test("1. holds the replacement until the cancellation write settles and the terminal arrives", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+
+    const interrupting = harness.session.interrupt();
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.cancel.calls).toHaveLength(1);
+
+    const staged = harness.session.startTurn("replacement");
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+    await flushMicrotasks();
+
+    // The write settled, but the turn has no terminal yet: nothing is released.
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(turnStartedIds(harness.events)).toEqual([turnId]);
+    expect(await hasSettled(staged)).toBe(false);
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    const successor = await staged;
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+    expect(turnTerminalTypes(harness.events)).toEqual(["turn_canceled"]);
+  });
+
+  test("2. holds the replacement until the terminal arrives and the cancellation write settles", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(turnTerminalTypes(harness.events)).toEqual(["turn_canceled"]);
+    expect(harness.events[harness.events.length - 1]).toMatchObject({
+      type: "turn_canceled",
+      turnId,
+    });
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(await hasSettled(staged)).toBe(false);
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+    await flushMicrotasks();
+
+    const successor = await staged;
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+  });
+
+  test("3. releases exactly one successor when the two facts arrive in either order", async () => {
+    for (const order of ["cancel-first", "terminal-first"] as const) {
+      const harness = createStopBoundarySession();
+      const turnId = await startForegroundTurn(harness, "first");
+      const interrupting = harness.session.interrupt();
+      const staged = harness.session.startTurn("replacement");
+
+      if (order === "cancel-first") {
+        harness.cancel.calls[0]?.resolve();
+        await interrupting;
+        await flushMicrotasks();
+        expect(harness.prompt.calls).toHaveLength(1);
+        harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+      } else {
+        harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+        await flushMicrotasks();
+        expect(harness.prompt.calls).toHaveLength(1);
+        harness.cancel.calls[0]?.resolve();
+        await interrupting;
+      }
+      await flushMicrotasks();
+
+      const successor = await staged;
+      expect(harness.prompt.calls).toHaveLength(2);
+      expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+      expect(turnTerminalTypes(harness.events)).toEqual(["turn_canceled"]);
+      expect(harness.internals.admissionState).toBe("running");
+      expect(harness.internals.activeForegroundTurnId).toBe(successor.turnId);
+      expect(harness.internals.stop).toBeNull();
+    }
+  });
+
+  test("4. keeps the session stopping with no successor prompt and no synthetic terminal when the write rejects", async () => {
+    const harness = createStopBoundarySession();
+    await startForegroundTurn(harness, "first");
+
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+
+    harness.cancel.calls[0]?.reject(new Error("cancel failed"));
+    await expect(interrupting).rejects.toThrow("cancel failed");
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.terminalObserved).toBe(true);
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: true, outcome: "rejected" },
+    ]);
+    expect(turnTerminalTypes(harness.events)).toEqual(["turn_canceled"]);
+    expect(await hasSettled(staged)).toBe(false);
+  });
+
+  test("5. releases only after a newer successful write recovers an older rejected one", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+
+    const firstStop = harness.session.interrupt();
+    harness.cancel.calls[0]?.reject(new Error("cancel failed"));
+    await expect(firstStop).rejects.toThrow("cancel failed");
+    const stopId = harness.internals.stop?.stopId;
+
+    const staged = harness.session.startTurn("replacement");
+    const secondStop = harness.session.interrupt();
+    await expect(staged).rejects.toThrow("invalidated (interrupt)");
+    expect(harness.internals.stop?.stopId).toBe(stopId);
+    expect(harness.internals.stop?.stoppedTurnId).toBe(turnId);
+    expect(harness.cancel.calls).toHaveLength(2);
+    expect(harness.internals.stop?.cancelIssuedRevision).toBe(2);
+
+    harness.cancel.calls[1]?.resolve();
+    await secondStop;
+    expect(await hasSettled(staged)).toBe(true);
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: true, outcome: "rejected" },
+      { revision: 2, settled: true, outcome: "success" },
+    ]);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    const successor = await harness.session.startTurn("replacement-2");
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+    expect(harness.internals.admissionState).toBe("running");
+    expect(harness.internals.stop).toBeNull();
+  });
+
+  test("6. stays stopping when the newest write rejects after an older success", async () => {
+    const harness = createStopBoundarySession();
+    await startForegroundTurn(harness, "first");
+
+    const firstStop = harness.session.interrupt();
+    harness.cancel.calls[0]?.resolve();
+    await firstStop;
+
+    const staged = harness.session.startTurn("replacement");
+    const secondStop = harness.session.interrupt();
+    await expect(staged).rejects.toThrow("invalidated (interrupt)");
+
+    harness.cancel.calls[1]?.reject(new Error("cancel failed"));
+    await expect(secondStop).rejects.toThrow("cancel failed");
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: true, outcome: "success" },
+      { revision: 2, settled: true, outcome: "rejected" },
+    ]);
+  });
+
+  test("7. waits for every issued write to settle, requires the newest to succeed, and writes nothing after release", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+
+    const firstStop = harness.session.interrupt();
+    const secondStop = harness.session.interrupt();
+    const thirdStop = harness.session.interrupt();
+    expect(harness.cancel.calls).toHaveLength(3);
+    expect(harness.cancel.inputs).toEqual([
+      { sessionId: "session-1" },
+      { sessionId: "session-1" },
+      { sessionId: "session-1" },
+    ]);
+    expect(harness.internals.stop?.cancelIssuedRevision).toBe(3);
+
+    const staged = harness.session.startTurn("replacement");
+
+    // Settlement order belongs to the connection; only the newest write has to
+    // succeed, and only once nothing is left outstanding.
+    harness.cancel.calls[1]?.resolve();
+    await secondStop;
+    expect(await hasSettled(staged)).toBe(false);
+
+    harness.cancel.calls[0]?.resolve();
+    await firstStop;
+    expect(await hasSettled(staged)).toBe(false);
+
+    harness.cancel.calls[2]?.resolve();
+    await thirdStop;
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    const successor = await staged;
+    expect(harness.cancel.calls).toHaveLength(3);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+    expect(harness.internals.stop).toBeNull();
+  });
+
+  test("8. rejects a start that races a running foreground turn", async () => {
+    const harness = createStopBoundarySession();
+    await startForegroundTurn(harness, "first");
+
+    await expect(harness.session.startTurn("second")).rejects.toThrow(
+      "A foreground turn is already active",
+    );
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.admissionState).toBe("running");
+  });
+
+  test("9. rejects a second start while one successor is staged and keeps the first waiter", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+
+    await expect(harness.session.startTurn("other")).rejects.toThrow(
+      "A foreground turn is already active",
+    );
+    expect(harness.internals.stop?.stagedSuccessor).not.toBeNull();
+    expect(harness.internals.stop?.releasedSuccessorToken).toBeNull();
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    const successor = await staged;
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+  });
+
+  test("10. reserves nothing when the session identity changes before the commit", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+    const stopId = harness.internals.stop?.stopId;
+
+    // A replacement connection while the stop is installed: the stop can no
+    // longer prove anything on the new identity.
+    const replacementPrompt = createDeferredCalls<PromptResponse>();
+    harness.internals.connection = {
+      prompt: replacementPrompt.fn,
+      cancel: harness.cancel.fn,
+    };
+    harness.internals.connectionRevision = 2;
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(replacementPrompt.calls).toHaveLength(0);
+    expect(turnStartedIds(harness.events)).toEqual([turnId]);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(await hasSettled(staged)).toBe(false);
+
+    vi.advanceTimersByTime(ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS);
+    await expect(staged).rejects.toThrow("still being stopped");
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.stopId).toBe(stopId);
+  });
+
+  test("11. commits the successor synchronously once the gates release it", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    // When the awaited admission resolves, the turn id, the turn_started event,
+    // and the prompt write already exist: nothing observable sits between the
+    // reservation and the start.
+    const successor = await staged;
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+    expect(harness.prompt.inputs[1]).toMatchObject({
+      sessionId: "session-1",
+      messageId: expect.any(String),
+    });
+    expect(harness.internals.activeForegroundTurnId).toBe(successor.turnId);
+    expect(harness.internals.admissionState).toBe("running");
+    expect(harness.internals.stop).toBeNull();
+  });
+
+  test("12. rejects the staged waiter at the deadline without sending, echoing, or opening readiness", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+    const stopId = harness.internals.stop?.stopId;
+
+    vi.advanceTimersByTime(ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS - 1);
+    expect(await hasSettled(staged)).toBe(false);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    vi.advanceTimersByTime(1);
+    await expect(staged).rejects.toThrow(
+      `claude-acp replacement turn was not admitted within ${ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS}ms`,
+    );
+
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(turnStartedIds(harness.events)).toEqual([turnId]);
+    expect(userMessageEchoes(harness.events)).toBe(1);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.stagedSuccessor).toBeNull();
+    expect(harness.internals.stop?.stopId).toBe(stopId);
+    void interrupting;
+  });
+
+  test("13. leaves an expired waiter dead and admits a later request on its own facts", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+
+    vi.advanceTimersByTime(ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS);
+    await expect(staged).rejects.toThrow("not admitted");
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    // The expired waiter cannot be resurrected: no prompt appears for it when
+    // the stop's facts complete.
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    const successor = await harness.session.startTurn("replacement-2");
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+    expect(harness.internals.stop).toBeNull();
+  });
+
+  test("14. invalidates a staged successor by token while the stop identity stays put", async () => {
+    const harness = createStopBoundarySession();
+    await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+    const stopId = harness.internals.stop?.stopId;
+
+    harness.session.invalidateStagedReplacement("manager-cancelled");
+    await expect(staged).rejects.toThrow("invalidated (manager-cancelled)");
+    expect(harness.internals.stop?.stopId).toBe(stopId);
+    expect(harness.internals.stop?.stagedSuccessor).toBeNull();
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    // The invalidated deadline is gone with it: the next staged successor gets a
+    // full window instead of expiring on the previous one's clock.
+    const next = harness.session.startTurn("replacement-2");
+    vi.advanceTimersByTime(ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS - 1);
+    expect(await hasSettled(next)).toBe(false);
+    vi.advanceTimersByTime(1);
+    await expect(next).rejects.toThrow("not admitted");
+    void interrupting;
+  });
+
+  test("15. retries the same stop with a new attempt revision and drops the staged successor", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+    const firstStop = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+    const stopId = harness.internals.stop?.stopId;
+
+    const secondStop = harness.session.interrupt();
+    await expect(staged).rejects.toThrow("invalidated (interrupt)");
+    expect(harness.internals.stop?.stopId).toBe(stopId);
+    expect(harness.internals.stop?.stoppedTurnId).toBe(turnId);
+    expect(harness.cancel.calls).toHaveLength(2);
+    expect(harness.internals.stop?.cancelIssuedRevision).toBe(2);
+
+    harness.cancel.calls[1]?.resolve();
+    await secondStop;
+    harness.cancel.calls[0]?.resolve();
+    await firstStop;
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.admissionState).toBe("stopping");
+
+    const successor = await harness.session.startTurn("replacement-2");
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+  });
+
+  test("16. rejects the waiter on close, tears the child down, and ignores late settlements", async () => {
+    const terminator = new FakeTerminator();
+    const harness = createStopBoundarySession(terminator.terminate);
+    const turnId = await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+
+    const child = createTerminalChildStub();
+    harness.internals.child = child;
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+
+    const stagedRejection = expect(staged).rejects.toThrow("invalidated (closed)");
+    const closing = harness.session.close();
+    await flushMicrotasks();
+    // Close issues its own cancellation write on the way out; settle it.
+    expect(harness.cancel.calls).toHaveLength(2);
+    harness.cancel.calls[1]?.resolve();
+    await closing;
+
+    await stagedRejection;
+    expect(terminator.terminated).toContain(child);
+
+    const eventCount = harness.events.length;
+    // The terminal that arrives after close emits nothing: the session is closed
+    // and produces no stale terminal.
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.events).toHaveLength(eventCount);
+    expect(turnStartedIds(harness.events)).toEqual([turnId]);
+    expect(harness.prompt.calls).toHaveLength(1);
+    await expect(harness.session.startTurn("late")).rejects.toThrow("claude-acp session is closed");
+    expect(harness.internals.child).toBeNull();
+  });
+
+  test("17. routes a permission denial through the same boundary before cancelling", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+
+    const permission = harness.session.requestPermission({
+      sessionId: "session-1",
+      toolCall: { toolCallId: "tool-1", title: "Edit file", kind: "edit", status: "pending" },
+      options: [
+        { optionId: "allow-once", name: "Allow", kind: "allow_once" },
+        { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+      ],
+    } satisfies RequestPermissionRequest);
+    await flushMicrotasks();
+
+    const requested = harness.events.find((event) => event.type === "permission_requested");
+    if (requested?.type !== "permission_requested") {
+      throw new Error("Expected a permission request");
+    }
+
+    const denying = harness.session.respondToPermission(requested.request.id, {
+      behavior: "deny",
+      interrupt: true,
+    });
+    await flushMicrotasks();
+
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.stoppedTurnId).toBe(turnId);
+    expect(harness.cancel.calls).toHaveLength(1);
+    expect(harness.cancel.inputs).toEqual([{ sessionId: "session-1" }]);
+    await expect(permission).resolves.toEqual({
+      outcome: { outcome: "selected", optionId: "reject-once" },
+    });
+
+    const staged = harness.session.startTurn("replacement");
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(await hasSettled(staged)).toBe(false);
+
+    harness.cancel.calls[0]?.resolve();
+    await denying;
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    const successor = await staged;
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+  });
+
+  test("18. keeps a duplicate and a late stopped-turn terminal from clearing the successor", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+
+    // The terminal lands while the cancellation write is still outstanding, so
+    // the stop stays installed and proof can be replayed against it.
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(turnTerminalTypes(harness.events)).toEqual(["turn_canceled"]);
+    expect(harness.internals.stop?.terminalObserved).toBe(true);
+    expect(harness.internals.stop?.terminalDelivered).toBe(true);
+    expect(harness.internals.admissionState).toBe("stopping");
+
+    // Same explicit id, same stop: proof is idempotent and the event is not
+    // delivered a second time.
+    harness.internals.finishTurn(turnId, {
+      type: "turn_failed",
+      provider: "claude-acp",
+      error: "duplicate terminal",
+      turnId,
+    });
+    await flushMicrotasks();
+    expect(turnTerminalTypes(harness.events)).toEqual(["turn_canceled"]);
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+    await flushMicrotasks();
+
+    const successor = await staged;
+    expect(harness.prompt.calls).toHaveLength(2);
+
+    // The stopped turn's id again, now that a successor owns the foreground
+    // slot: the late terminal is dropped instead of clearing it.
+    harness.internals.finishTurn(turnId, cancelledTurnEvent(turnId, "late"));
+    await flushMicrotasks();
+
+    expect(harness.internals.activeForegroundTurnId).toBe(successor.turnId);
+    expect(harness.internals.admissionState).toBe("running");
+    expect(turnTerminalTypes(harness.events)).toEqual(["turn_canceled"]);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+  });
+
+  test("19. keeps an old connection's settled cancellation write from opening a replaced session", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+    const stopId = harness.internals.stop?.stopId;
+
+    const replacementPrompt = createDeferredCalls<PromptResponse>();
+    harness.internals.connection = {
+      prompt: replacementPrompt.fn,
+      cancel: harness.cancel.fn,
+    };
+    harness.internals.connectionRevision = 2;
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    // The write settled successfully and the terminal arrived, but neither is
+    // proof on an identity the stop did not capture.
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: true, outcome: "success" },
+    ]);
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(turnStartedIds(harness.events)).toEqual([turnId]);
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(replacementPrompt.calls).toHaveLength(0);
+
+    vi.advanceTimersByTime(ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS);
+    await expect(staged).rejects.toThrow("not admitted");
+    expect(replacementPrompt.calls).toHaveLength(0);
+    expect(harness.internals.stop?.stopId).toBe(stopId);
+  });
+
+  test("exposes the provider-neutral seams a provider subclass builds on", () => {
+    class SeamProbe extends ACPAgentSession {
+      readSeams(name: string): {
+        launchEnvValue: string | undefined;
+        missingLaunchEnvValue: string | undefined;
+        foregroundTurnId: string | null;
+        admissionState: ACPAdmissionState;
+        stopId: string | null;
+      } {
+        return {
+          launchEnvValue: this.getLaunchEnv(name),
+          missingLaunchEnvValue: this.getLaunchEnv("PASEO_MISSING_KEY"),
+          foregroundTurnId: this.getForegroundTurnId(),
+          admissionState: this.getAdmissionState(),
+          stopId: this.getCurrentStop()?.stopId ?? null,
+        };
+      }
+    }
+
+    const session = new SeamProbe(
+      { provider: "claude-acp", cwd: "/tmp/paseo-acp-test" },
+      {
+        provider: "claude-acp",
+        logger: createTestLogger(),
+        defaultCommand: ["claude", "--acp"],
+        defaultModes: [],
+        capabilities: { supportsStreaming: true },
+        launchEnv: { PASEO_ACP_STOP_SCOPE: "adapter-owned" },
+      },
+    );
+
+    expect(session.readSeams("PASEO_ACP_STOP_SCOPE")).toEqual({
+      launchEnvValue: "adapter-owned",
+      missingLaunchEnvValue: undefined,
+      foregroundTurnId: null,
+      admissionState: "idle",
+      stopId: null,
     });
   });
 });
