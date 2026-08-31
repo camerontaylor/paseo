@@ -1927,6 +1927,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       terminal: !stop.terminalObserved,
       cancelWrites: !this.isCancelLedgerSatisfied(stop),
       providerGate: !this.isProviderStopGateSatisfied(stop),
+      providerGateFacts: this.describeProviderStopGate(stop),
     };
     this.takeStagedSuccessor(stop);
     this.logger.info(
@@ -2251,6 +2252,16 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   protected markProviderStopGateSatisfied(stop: ACPStopRecord): void {
     stop.providerGateSatisfied = true;
     this.evaluateStopGate(stop);
+  }
+
+  /**
+   * Names the provider facts a stop is still waiting on, empty once the gate is
+   * satisfied. The generic boundary has one opaque gate; a provider subclass
+   * overrides this so an admission deadline names what it is missing instead of
+   * only reporting a boolean.
+   */
+  protected describeProviderStopGate(stop: ACPStopRecord): string[] {
+    return this.isProviderStopGateSatisfied(stop) ? [] : ["provider_gate"];
   }
 
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
@@ -3568,7 +3579,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
    *
    * After close nothing is emitted and no state moves.
    */
-  private finishTurn(
+  protected finishTurn(
     turnId: string,
     event: Extract<AgentStreamEvent, { type: "turn_completed" | "turn_failed" | "turn_canceled" }>,
   ): void {
