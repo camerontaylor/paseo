@@ -89,7 +89,8 @@ DEEP_LINK="paseo:///h/${SERVER_ID}/workspace/${WORKSPACE_ID}?open=agent%3A${AGEN
 echo "device=${DEVICE} agent=${AGENT_ID} workspace=${WORKSPACE_ID}"
 
 # The flow starts on the parent agent tab. Routing there by deep link keeps the script free of
-# sidebar navigation that has nothing to do with side conversations.
+# sidebar navigation beyond the one menu open/close the flow needs to fetch the workspace
+# directory on a cold entry (see the comment in the .ad script).
 adb -s "${DEVICE}" shell am start -a android.intent.action.VIEW -d "'${DEEP_LINK}'" "${APP_ID}" >/dev/null
 
 # No --device: agent-device names Android targets by AVD, not by adb serial, and the script's
