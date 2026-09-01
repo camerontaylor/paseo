@@ -10339,6 +10339,87 @@ test("listSideConversations returns every thread for a public parent", async () 
   }
 });
 
+test("a provider with no side-question seam still records the thread and answers unavailable", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-no-seam-"));
+  // TestAgentClient's session has no askSideQuestion, which is the shape Codex, Copilot, Pi and
+  // every ACP provider really have. Claude and OpenCode are the only two that implement it.
+  const client = new TestAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const events: AgentManagerEvent[] = [];
+  manager.subscribe((event) => events.push(event), { replayState: false });
+  try {
+    await expect(manager.askSideQuestion(agent.id, "thread", "what changed?")).resolves.toEqual({
+      status: "unavailable",
+    });
+
+    // The question is kept even though nothing could answer it. The app's track row is named by
+    // the first question, so dropping the record here would leave the thread invisible.
+    expect(manager.getSideConversation(agent.id, "thread")).toMatchObject({
+      threadId: "thread",
+      items: [{ type: "user_message", text: "what changed?" }],
+      exchanges: [],
+      pendingQuestion: null,
+      lastAnswer: { status: "unavailable" },
+    });
+    expect(manager.listSideConversations(agent.id).map((record) => record.threadId)).toEqual([
+      "thread",
+    ]);
+    expect(manager.getTimeline(agent.id)).toEqual([]);
+    // Both halves of the exchange are broadcast, so a client that was already subscribed sees the
+    // thread appear and settle without re-listing.
+    expect(
+      events.filter((event) => event.type === "side_conversation").map((event) => event.event),
+    ).toEqual([
+      {
+        type: "update",
+        record: expect.objectContaining({ pendingQuestion: "what changed?", lastAnswer: null }),
+      },
+      {
+        type: "update",
+        record: expect.objectContaining({
+          pendingQuestion: null,
+          lastAnswer: { status: "unavailable" },
+        }),
+      },
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+// `unavailable` is also what a torn-down Claude or OpenCode session returns, so the status alone
+// never says which happened (fork/side-conversations-follow-ups.md, follow-up 5). What separates
+// them here is that the agent is still live and its thread survives: a torn-down session has
+// neither. Assert those, not the status, when you need to tell the two apart.
+test("an unavailable answer from a seam-less provider leaves the agent and its thread live", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-no-seam-live-"));
+  const client = new TestAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await manager.askSideQuestion(agent.id, "thread", "first?");
+    await expect(manager.askSideQuestion(agent.id, "thread", "second?")).resolves.toEqual({
+      status: "unavailable",
+    });
+
+    // A torn-down session has neither of these: the manager drops the agent and wipes its threads.
+    expect(manager.getAgent(agent.id)?.session).toBeDefined();
+    expect(manager.getSideConversation(agent.id, "thread")?.items).toEqual([
+      { type: "user_message", text: "first?" },
+      { type: "user_message", text: "second?" },
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("a timed-out side question aborts the provider instead of leaving it running", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-abort-"));
   const client = new SideQuestionTestClient();

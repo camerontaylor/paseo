@@ -69,6 +69,18 @@ npm run android:production     # Release build
 npm run android:clear          # Remove generated Android project
 ```
 
+A debug build compiles native code for all four ABIs by default (`reactNativeArchitectures` in
+`packages/app/android/gradle.properties`). An emulator only needs one, and Skia, Reanimated,
+Worklets and friends dominate a cold build, so restrict it when you are only targeting the
+emulator:
+
+```bash
+cd packages/app/android && ./gradlew :app:installDebug -PreactNativeArchitectures=x86_64
+```
+
+Use `arm64-v8a` for an Apple Silicon AVD or a physical device. Check `adb shell getprop
+ro.product.cpu.abi` if you are unsure.
+
 For a production-ID release APK that local Android profiling tools can attach to:
 
 ```bash
@@ -106,7 +118,16 @@ REACT_NATIVE_PACKAGER_HOSTNAME=10.0.2.2 \
 ```
 
 - **`REACT_NATIVE_PACKAGER_HOSTNAME=10.0.2.2`** — without it, Expo bakes your Mac's LAN IP into the dev client's Metro URL, which the emulator can't route to, and the app dies with `Failed to connect to /<lan-ip>:8081` before any JS loads.
-- **`EXPO_PUBLIC_LOCAL_DAEMON=10.0.2.2:<port>`** — the client's daemon endpoint (`packages/app/src/runtime/host-runtime.ts`); when unset it defaults to `localhost:6767`, the production daemon. Use `$PASEO_SERVICE_DAEMON_PORT` for a worktree daemon running as a Paseo service, or `6768` for a standalone `npm run dev:server`. It is inlined into the JS bundle at Metro bundle time, so set it on the build command and clear the Metro cache (`npx expo start -c`) if a change doesn't take.
+- **`EXPO_PUBLIC_LOCAL_DAEMON=10.0.2.2:<port>`** — the client's daemon endpoint (`packages/app/src/runtime/host-runtime.ts`); when unset it defaults to `localhost:6767`, the production daemon. Use `$PASEO_SERVICE_DAEMON_PORT` for a worktree daemon running as a Paseo service, or `6768` for a standalone `npm run dev:server`. It is inlined into the JS bundle at Metro bundle time, so set it on the **Metro** command, not just the Gradle build, and start Metro with `--clear` whenever the value changes.
+
+  A warm Metro transform cache keeps the previous value with no warning, so the app connects to
+  whichever daemon that stale value names — by default the production daemon on 6767, not your
+  worktree one. Nothing reports an error: a deep link into a workspace the connected daemon does
+  not have sits on "Loading workspace" indefinitely. Read that screen carefully, because the line
+  under it is the **host name**, not the workspace name, which makes it look like the right
+  workspace is loading. Confirm which daemon the app actually reached before debugging anything
+  else — the target daemon's log reports `activeConnections`, and the app's sidebar names the
+  host's `serverId`.
 
 **Alternative — `adb reverse` + `localhost`** (if `10.0.2.2` misbehaves):
 
