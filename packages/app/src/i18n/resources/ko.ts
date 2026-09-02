@@ -100,6 +100,7 @@ export const ko: TranslationResources = {
     },
     errors: {
       unavailable: "이 에이전트에서는 사이드 대화를 사용할 수 없습니다.",
+      sessionClosed: "질문이 처리되는 동안 이 에이전트가 종료되었습니다.",
       timeout: "사이드 대화 시간이 초과되었습니다.",
       failed: "사이드 대화 실패: {{error}}",
       duplicate: "사이드 질문이 이미 진행 중입니다.",

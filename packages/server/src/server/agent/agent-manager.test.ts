@@ -10353,6 +10353,7 @@ test("a provider with no side-question seam still records the thread and answers
   try {
     await expect(manager.askSideQuestion(agent.id, "thread", "what changed?")).resolves.toEqual({
       status: "unavailable",
+      reason: "unsupported_provider",
     });
 
     // The question is kept even though nothing could answer it. The app's track row is named by
@@ -10362,7 +10363,7 @@ test("a provider with no side-question seam still records the thread and answers
       items: [{ type: "user_message", text: "what changed?" }],
       exchanges: [],
       pendingQuestion: null,
-      lastAnswer: { status: "unavailable" },
+      lastAnswer: { status: "unavailable", reason: "unsupported_provider" },
     });
     expect(manager.listSideConversations(agent.id).map((record) => record.threadId)).toEqual([
       "thread",
@@ -10381,7 +10382,7 @@ test("a provider with no side-question seam still records the thread and answers
         type: "update",
         record: expect.objectContaining({
           pendingQuestion: null,
-          lastAnswer: { status: "unavailable" },
+          lastAnswer: { status: "unavailable", reason: "unsupported_provider" },
         }),
       },
     ]);
@@ -10406,6 +10407,7 @@ test("an unavailable answer from a seam-less provider leaves the agent and its t
     await manager.askSideQuestion(agent.id, "thread", "first?");
     await expect(manager.askSideQuestion(agent.id, "thread", "second?")).resolves.toEqual({
       status: "unavailable",
+      reason: "unsupported_provider",
     });
 
     // A torn-down session has neither of these: the manager drops the agent and wipes its threads.

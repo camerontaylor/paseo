@@ -4461,6 +4461,8 @@ export const ProviderSubagentUpdateMessageSchema = z.object({
 
 export const SideConversationThreadingSchema = z.enum(["threaded", "single_shot"]);
 
+export const SideAnswerUnavailableReasonSchema = z.enum(["unsupported_provider", "session_closed"]);
+
 export const SideAnswerPayloadSchema = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("answered"),
@@ -4468,7 +4470,13 @@ export const SideAnswerPayloadSchema = z.discriminatedUnion("status", [
     synthetic: z.boolean(),
     threading: SideConversationThreadingSchema,
   }),
-  z.object({ status: z.literal("unavailable") }),
+  // `reason` is optional because "unspecified" is a real answer (e.g. an ask that failed
+  // before the manager could classify it), not for version tolerance — pre-fork daemons
+  // never send side-conversation answers at all.
+  z.object({
+    status: z.literal("unavailable"),
+    reason: SideAnswerUnavailableReasonSchema.optional(),
+  }),
   z.object({ status: z.literal("timed_out"), threading: SideConversationThreadingSchema }),
   z.object({
     status: z.literal("failed"),

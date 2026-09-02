@@ -143,7 +143,10 @@ describe("Claude session side questions", () => {
     await session.close();
     releaseVersion?.();
 
-    await expect(answer).resolves.toEqual({ status: "unavailable" });
+    await expect(answer).resolves.toEqual({
+      status: "unavailable",
+      reason: "session_closed",
+    });
     expect(harness.queryFactory).not.toHaveBeenCalled();
   });
 
@@ -154,6 +157,7 @@ describe("Claude session side questions", () => {
 
     await expect(askSideQuestionOf(session)("still there?", [])).resolves.toEqual({
       status: "unavailable",
+      reason: "session_closed",
     });
     expect(harness.resolveVersion).not.toHaveBeenCalled();
     expect(harness.queryFactory).not.toHaveBeenCalled();
@@ -356,7 +360,10 @@ describe("Claude session closed guard", () => {
     await session.close();
     releaseBinary?.("/test/claude/bin");
 
-    await expect(answer).resolves.toEqual({ status: "unavailable" });
+    await expect(answer).resolves.toEqual({
+      status: "unavailable",
+      reason: "session_closed",
+    });
     expect(harness.queryFactory).not.toHaveBeenCalled();
   });
 });

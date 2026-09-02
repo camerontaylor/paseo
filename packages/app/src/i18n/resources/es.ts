@@ -100,6 +100,7 @@ export const es: TranslationResources = {
     },
     errors: {
       unavailable: "Las conversaciones paralelas no están disponibles para este agente.",
+      sessionClosed: "Este agente se cerró mientras la pregunta estaba en curso.",
       timeout: "La conversación paralela agotó el tiempo de espera.",
       failed: "La conversación paralela falló: {{error}}",
       duplicate: "Ya hay una pregunta paralela en curso.",

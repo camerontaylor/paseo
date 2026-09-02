@@ -100,6 +100,7 @@ export const zhCN: TranslationResources = {
     },
     errors: {
       unavailable: "此智能体不支持旁路对话。",
+      sessionClosed: "该智能体在处理问题时已关闭。",
       timeout: "旁路对话已超时。",
       failed: "旁路对话失败：{{error}}",
       duplicate: "已有旁路问题正在进行。",

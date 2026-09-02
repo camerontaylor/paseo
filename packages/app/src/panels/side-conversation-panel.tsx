@@ -29,7 +29,14 @@ const ThemedTextInput = withUnistyles(EditingTextInput, (theme) => ({
 
 function answerNotice(answer: SideAnswerPayload | null | undefined, t: TFunction): string | null {
   if (!answer) return null;
-  if (answer.status === "unavailable") return t("sideConversations.errors.unavailable");
+  // An unavailable answer means one of two things: the provider has no side questions at
+  // all, or the agent closed while this question was in flight. The reason field tells
+  // them apart; absent is treated as the provider case (pre-fork daemons never answer).
+  if (answer.status === "unavailable") {
+    return answer.reason === "session_closed"
+      ? t("sideConversations.errors.sessionClosed")
+      : t("sideConversations.errors.unavailable");
+  }
   if (answer.status === "timed_out") return t("sideConversations.errors.timeout");
   if (answer.status === "failed") {
     return t("sideConversations.errors.failed", { error: answer.error });

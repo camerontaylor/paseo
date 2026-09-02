@@ -640,6 +640,13 @@ export interface SideConversationExchange {
   answer: string;
 }
 
+/**
+ * Why a side answer is unavailable. `unsupported_provider` is a permanent property of the
+ * provider; `session_closed` means the agent tore down while the question was in flight. Absent
+ * when the caller cannot know more than "unavailable".
+ */
+export type SideAnswerUnavailableReason = "unsupported_provider" | "session_closed";
+
 export type SideAnswer =
   | {
       status: "answered";
@@ -647,7 +654,7 @@ export type SideAnswer =
       synthetic: boolean;
       threading: SideConversationThreading;
     }
-  | { status: "unavailable" }
+  | { status: "unavailable"; reason?: SideAnswerUnavailableReason }
   | { status: "timed_out"; threading: SideConversationThreading }
   | { status: "failed"; error: string; threading: SideConversationThreading };
 

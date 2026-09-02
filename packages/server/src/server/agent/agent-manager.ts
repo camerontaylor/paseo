@@ -1178,7 +1178,7 @@ export class AgentManager {
       this.sideConversations.begin(parentAgentId, threadId, question),
     );
     if (!agent.session.askSideQuestion) {
-      const answer = { status: "unavailable" as const };
+      const answer = { status: "unavailable" as const, reason: "unsupported_provider" as const };
       this.completeSideConversation(parentAgentId, threadId, answer);
       return answer;
     }

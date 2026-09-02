@@ -97,6 +97,7 @@ export const en = {
     },
     errors: {
       unavailable: "Side conversations aren't available for this agent.",
+      sessionClosed: "This agent closed while the question was in flight.",
       timeout: "The side conversation timed out.",
       failed: "Side conversation failed: {{error}}",
       duplicate: "A side question is already in progress.",

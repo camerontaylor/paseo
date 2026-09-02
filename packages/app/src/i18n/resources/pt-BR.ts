@@ -100,6 +100,7 @@ export const ptBR: TranslationResources = {
     },
     errors: {
       unavailable: "As conversas paralelas não estão disponíveis para este agente.",
+      sessionClosed: "Este agente foi encerrado enquanto a pergunta estava em andamento.",
       timeout: "A conversa paralela atingiu o limite de tempo.",
       failed: "Falha na conversa paralela: {{error}}",
       duplicate: "Já há uma pergunta paralela em andamento.",

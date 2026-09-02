@@ -3515,7 +3515,7 @@ class OpenCodeAgentSession implements AgentSession {
     history: readonly SideConversationExchange[],
     options?: { signal?: AbortSignal },
   ): Promise<SideAnswer> {
-    if (this.closed) return { status: "unavailable" };
+    if (this.closed) return { status: "unavailable", reason: "session_closed" };
     try {
       return await askOpenCodeSideQuestion({
         client: this.client,

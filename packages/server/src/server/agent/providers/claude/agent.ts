@@ -2323,14 +2323,20 @@ class ClaudeAgentSession implements AgentSession {
     history: readonly SideConversationExchange[],
     options?: { signal?: AbortSignal },
   ): Promise<SideAnswer> {
-    if (this.closed || options?.signal?.aborted) {
+    if (this.closed) {
+      return { status: "unavailable", reason: "session_closed" };
+    }
+    if (options?.signal?.aborted) {
       return { status: "unavailable" };
     }
     const version = await this.resolveVersionOnce();
     // The version probe can burn its full 5s budget, so a close() easily lands inside it.
     // Re-check before ensureQuery(), which would otherwise spawn a fresh Claude CLI process
     // tree for a torn-down session — one nothing tracks and nothing will ever reap.
-    if (this.closed || options?.signal?.aborted) {
+    if (this.closed) {
+      return { status: "unavailable", reason: "session_closed" };
+    }
+    if (options?.signal?.aborted) {
       return { status: "unavailable" };
     }
     const threading = getClaudeSideQuestionThreading(version);
@@ -2342,7 +2348,7 @@ class ClaudeAgentSession implements AgentSession {
         // what we got back is a closed query. close() is null-safe and re-entrant, so re-run
         // it to reap anything still standing.
         await this.close().catch(() => undefined);
-        return { status: "unavailable" };
+        return { status: "unavailable", reason: "session_closed" };
       }
       // The SDK exposes no per-control-request abort (Options.abortController tears down the
       // whole query), so `signal` cannot cancel an in-flight side_question. AgentManager
@@ -2352,7 +2358,7 @@ class ClaudeAgentSession implements AgentSession {
       // ensureQuery() throws for a closed session; a torn-down session is unavailable, not
       // failed. Caller-visible failed answers below are Claude's, not ours.
       if (this.closed) {
-        return { status: "unavailable" };
+        return { status: "unavailable", reason: "session_closed" };
       }
       return {
         status: "failed",
