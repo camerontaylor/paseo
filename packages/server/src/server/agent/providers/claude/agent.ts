@@ -2326,7 +2326,7 @@ class ClaudeAgentSession implements AgentSession {
     if (this.closed || options?.signal?.aborted) {
       return { status: "unavailable" };
     }
-    const version = await this.resolveVersionOnce(options?.signal);
+    const version = await this.resolveVersionOnce();
     // The version probe can burn its full 5s budget, so a close() easily lands inside it.
     // Re-check before ensureQuery(), which would otherwise spawn a fresh Claude CLI process
     // tree for a torn-down session — one nothing tracks and nothing will ever reap.
@@ -2368,9 +2368,15 @@ class ClaudeAgentSession implements AgentSession {
    * version underneath it, so one probe per session is enough. Failures are not cached, so a
    * transient probe error retries on the next ask instead of pinning the session to the
    * single-shot fallback forever.
+   *
+   * Deliberately no caller signal: AgentManager aborts each caller's signal when that caller
+   * settles, and side questions on different threads of one agent share this memo. Binding
+   * the first caller's signal would let it kill a later caller's in-flight probe and silently
+   * drop that thread to single_shot. The probe's own 5s exec timeout bounds it; a caller that
+   * aborts mid-probe is turned away by the closed/aborted checks in askSideQuestion instead.
    */
-  private async resolveVersionOnce(signal?: AbortSignal): Promise<string | undefined> {
-    const pending = (this.claudeCodeVersionPromise ??= this.resolveVersion(signal));
+  private async resolveVersionOnce(): Promise<string | undefined> {
+    const pending = (this.claudeCodeVersionPromise ??= this.resolveVersion());
     try {
       return await pending;
     } catch {
