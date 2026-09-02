@@ -4,7 +4,7 @@ import type {
   SideConversationExchange,
   SideConversationThreading,
 } from "../../agent-sdk-types.js";
-import { parseClaudeCodeVersion } from "./model-manifest.js";
+import { compareVersions } from "./model-manifest.js";
 
 /**
  * First Claude Code release whose `side_question` control request accepts prior
@@ -31,23 +31,12 @@ export function getClaudeSideQuestionThreading(
   version: string | undefined,
 ): SideConversationThreading {
   if (version === undefined) return "single_shot";
-  // parseClaudeCodeVersion is the shared reader for `claude --version` output, so it
-  // tolerates wrapper noise and suffixes. Anything it cannot read at all — including an
-  // unset version — falls back to the shape every CLI understands.
-  const parsed = parseClaudeCodeVersion(version);
-  const floor = parseClaudeCodeVersion(CLAUDE_SIDE_QUESTION_HISTORY_FLOOR);
-  if (!parsed || !floor) return "single_shot";
-  return isAtOrAboveVersion(parsed, floor) ? "threaded" : "single_shot";
-}
-
-function isAtOrAboveVersion(
-  version: readonly [number, number, number],
-  floor: readonly [number, number, number],
-): boolean {
-  for (let index = 0; index < version.length; index += 1) {
-    if (version[index] !== floor[index]) return version[index] > floor[index];
-  }
-  return true;
+  // compareVersions parses both sides with the shared `claude --version` reader — it
+  // tolerates wrapper noise and suffixes — and reports any unreadable side as below, so
+  // everything the parser rejects falls back to the shape every CLI understands.
+  return compareVersions(version, CLAUDE_SIDE_QUESTION_HISTORY_FLOOR) >= 0
+    ? "threaded"
+    : "single_shot";
 }
 
 export async function askClaudeSideQuestion(input: {

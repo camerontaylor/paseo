@@ -237,7 +237,7 @@ function isModelAvailableInClaudeCode(
   return compareVersions(claudeCodeVersion, model.minimumClaudeCodeVersion) >= 0;
 }
 
-function compareVersions(left: string, right: string): number {
+export function compareVersions(left: string, right: string): number {
   const leftParts = parseClaudeCodeVersion(left);
   const rightParts = parseClaudeCodeVersion(right);
   if (!leftParts || !rightParts) {
