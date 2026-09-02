@@ -20,8 +20,6 @@ interface SideConversationState {
     threads: readonly SideConversationRecord[],
   ): void;
   remove(serverId: string, parentAgentId: string, threadId: string): void;
-  /** Archive, reload, and history-clear drop every thread a parent owns in one go. */
-  clearParent(serverId: string, parentAgentId: string): void;
 }
 
 export function sideConversationKey(
@@ -109,13 +107,6 @@ export const useSideConversationStore = create<SideConversationState>((set) => (
       const records = new Map(state.records);
       records.delete(key);
       return { records };
-    });
-  },
-  clearParent(serverId, parentAgentId) {
-    set((state) => {
-      const prefix = sideConversationParentPrefix(serverId, parentAgentId);
-      const records = new Map([...state.records].filter(([key]) => !key.startsWith(prefix)));
-      return records.size === state.records.size ? state : { records };
     });
   },
 }));

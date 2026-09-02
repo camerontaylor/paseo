@@ -90,13 +90,13 @@ describe("side conversation store", () => {
     expect(useSideConversationStore.getState().records).toBe(before);
   });
 
-  it("clears every thread a parent owns without touching other parents", () => {
+  it("clears a parent's threads when the daemon's list comes back empty", () => {
     const store = useSideConversationStore.getState();
     store.applySnapshot("server-a", record("parent", "thread-1"));
     store.applySnapshot("server-a", record("parent", "thread-2"));
     store.applySnapshot("server-a", record("other-parent", "thread-3"));
 
-    store.clearParent("server-a", "parent");
+    store.replaceList("server-a", "parent", []);
 
     expect(threadIds("server-a", "parent")).toEqual([]);
     expect(threadIds("server-a", "other-parent")).toEqual(["thread-3"]);
