@@ -365,4 +365,64 @@ describe("buildWorkspaceTabMenuEntries", () => {
     expect(agentSeparator?.key).toBe("rename-separator");
     expect(terminalSeparator?.key).toBe("rename-separator");
   });
+
+  it("offers a new side conversation only for agent tabs on a host that supports it", () => {
+    const onStartSideConversation = vi.fn();
+    const sharedInput = {
+      surface: "desktop" as const,
+      index: 0,
+      tabCount: 1,
+      menuTestIDBase: "workspace-tab-context-agent_123",
+      onCopyResumeCommand: vi.fn(),
+      onCopyAgentId: vi.fn(),
+      onCopyTerminalId: vi.fn(),
+      onCopyFilePath: vi.fn(),
+      onReloadAgent: vi.fn(),
+      onRenameTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onCloseTabsBefore: vi.fn(),
+      onCloseTabsAfter: vi.fn(),
+      onCloseOtherTabs: vi.fn(),
+    };
+
+    const withSupport = buildWorkspaceTabMenuEntries({
+      ...sharedInput,
+      tab: createAgentTab(),
+      onStartSideConversation,
+    });
+    const entry = withSupport.find(
+      (candidate) => candidate.kind === "item" && candidate.key === "new-side-conversation",
+    );
+    if (!entry || entry.kind !== "item") throw new Error("New side conversation entry missing");
+
+    expect(withSupport.indexOf(entry)).toBe(0);
+    expect(entry.label).toBe("New side conversation");
+    expect(entry.testID).toBe("workspace-tab-context-agent_123-new-side-conversation");
+    entry.onSelect();
+    expect(onStartSideConversation).toHaveBeenCalledWith("agent-123", { parentTabId: "agent_123" });
+
+    const withoutSupport = buildWorkspaceTabMenuEntries({ ...sharedInput, tab: createAgentTab() });
+    expect(
+      withoutSupport.some(
+        (candidate) => candidate.kind === "item" && candidate.key === "new-side-conversation",
+      ),
+    ).toBe(false);
+
+    const terminalTab: WorkspaceTabDescriptor = {
+      key: "terminal_1",
+      tabId: "terminal_1",
+      kind: "terminal",
+      target: { kind: "terminal", terminalId: "terminal-1" },
+    };
+    const terminalEntries = buildWorkspaceTabMenuEntries({
+      ...sharedInput,
+      tab: terminalTab,
+      onStartSideConversation,
+    });
+    expect(
+      terminalEntries.some(
+        (candidate) => candidate.kind === "item" && candidate.key === "new-side-conversation",
+      ),
+    ).toBe(false);
+  });
 });

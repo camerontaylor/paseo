@@ -4,6 +4,12 @@
 
 Agent Device `.ad` scripts are the primary mobile E2E format. An agent discovers a working flow interactively, saves the successful commands, then the replay runner executes the same typed plan locally or in CI.
 
+The runner calls `agent-device` as a bare command; install it globally:
+
+```bash
+npm install -g agent-device
+```
+
 Record a flow while driving the app normally:
 
 ```bash
@@ -36,6 +42,34 @@ PASEO_MOBILE_E2E_METRO_PORT=62093 npm run test:e2e:mobile
 [native-terminal-basic.ios.ad](../packages/app/e2e/mobile/agent-device/native-terminal-basic.ios.ad) and [native-terminal-basic.android.ad](../packages/app/e2e/mobile/agent-device/native-terminal-basic.android.ad) are the smallest examples. Each opens a fresh terminal, types a command at zero delay, submits it, and asserts its distinct output. The app must be connected to a daemon with an active workspace.
 
 When replay diverges, read its ranked selector suggestions. Edit the script deliberately and rerun it from the beginning. `--update` is retained for compatibility but no longer rewrites scripts.
+
+`--device` names Android targets by **AVD name** (`agent-device devices`), not by adb serial. Passing
+`emulator-5554` fails at step 1 with `No device named emulator-5554`. With one target attached, omit
+the flag and let the script's `context platform=android` header bind it.
+
+Select by `id=` wherever the component has a `testID`. Android maps React Native roles
+inconsistently — the workspace menu's rows report as `android.view.View`, so a `role="button"`
+selector that once matched silently stops matching after an unrelated component change, and the
+divergence looks like a missing feature rather than a stale selector.
+
+### Flows that need a seeded agent
+
+A `.ad` script cannot create its own daemon state, so a flow with fixture requirements pairs the
+script with a shell harness that seeds out of band and injects ids as `${VAR}` via `-e`.
+[run-side-conversation-android.sh](../packages/app/e2e/mobile/run-side-conversation-android.sh) is
+the worked example: it seeds a mock parent with `mockSideQuestions`, deep-links the device to that
+agent, runs `side-conversation-basic.android.ad`, and removes the project afterwards. Its header
+lists the daemon and Metro it expects.
+
+Deep-linking is how a flow starts on a specific agent without navigating the sidebar:
+
+```bash
+adb shell am start -a android.intent.action.VIEW \
+  -d "paseo:///h/<serverId>/workspace/<workspaceId>?open=agent%3A<agentId>" sh.paseo.debug
+```
+
+`<serverId>` is the daemon's `$PASEO_HOME/server-id`. The app must already be running with a loaded
+bundle, or the Expo dev launcher consumes the intent instead of routing it.
 
 ## Maestro compatibility
 

@@ -37,27 +37,50 @@ mise install        # java 21 + android-sdk 21.0 command-line tools
 
 > **Pin a real `android-sdk` version, not `latest`.** The mise `android-sdk` plugin's `latest` resolved to the ancient `1.0` bundle, whose `sdkmanager` (3.6.0) predates the `emulator` package and fails with `Failed to find package emulator`. `21.0` ships a current `sdkmanager`. If you bump it, update only the version in `.tool-versions`; `.mise.toml` derives its paths from that tool entry.
 
-`mise install` only lays down the command-line tools. Install the rest and create an emulator. On Apple Silicon:
+`mise install` only lays down the command-line tools. Install the rest and create an emulator. Choose the system-image ABI for your Mac — `arm64-v8a` on Apple Silicon, `x86_64` on Intel:
 
 ```bash
-sdkmanager --licenses
+ABI=arm64-v8a       # Intel Mac: ABI=x86_64
+yes | sdkmanager --licenses
 sdkmanager "platform-tools" "emulator" "platforms;android-35" "build-tools;35.0.0" \
-           "system-images;android-35;google_apis;arm64-v8a"
-avdmanager create avd -n paseo -k "system-images;android-35;google_apis;arm64-v8a" -d pixel_7
-emulator @paseo     # start it; leave running
+           "system-images;android-35;google_apis;$ABI"
+avdmanager create avd -n paseo -k "system-images;android-35;google_apis;$ABI" -d pixel_7
 ```
 
-On an Intel Mac, use the `x86_64` system image:
+Pipe the license acceptance. `sdkmanager --licenses` prompts once per license pack and will hang a non-interactive shell forever.
+
+Gradle auto-fetches the rest once licenses are accepted — newer platform/build-tools if it wants them, plus CMake and two NDK versions (~5 GB). Have that much disk headroom before the first build.
+
+### Point the emulator at the AVD you just created
+
+`avdmanager` honours `XDG_CONFIG_HOME` and writes AVDs to `$XDG_CONFIG_HOME/.android/avd`. The `emulator` binary does not — it searches only `$ANDROID_AVD_HOME`, `$ANDROID_SDK_HOME/avd`, and `$HOME/.android/avd`. So if you set `XDG_CONFIG_HOME`, the two halves of the same SDK disagree: `avdmanager list avd` shows `paseo` while `emulator @paseo` dies with `Unknown AVD name [paseo]`. Export the bridge:
 
 ```bash
-sdkmanager --licenses
-sdkmanager "platform-tools" "emulator" "platforms;android-35" "build-tools;35.0.0" \
-           "system-images;android-35;google_apis;x86_64"
-avdmanager create avd -n paseo -k "system-images;android-35;google_apis;x86_64" -d pixel_7
-emulator @paseo     # start it; leave running
+export ANDROID_AVD_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/.android/avd"
+emulator -list-avds     # must print `paseo` before `emulator @paseo` will work
 ```
 
-Gradle auto-fetches the platform/build-tools it needs once licenses are accepted, so adjust `android-35` only if it asks for a different level.
+`.mise.toml` does not set this, because the right value depends on whether you set `XDG_CONFIG_HOME` at all.
+
+### Boot it and wait for the guest
+
+`emulator @paseo` runs for the life of the VM, so background it. `adb devices` reports `device` well before Android is up; poll the guest instead:
+
+```bash
+emulator @paseo &
+adb wait-for-device
+until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; do sleep 5; done
+```
+
+Do not gate on `init.svc.bootanim`. It flips to `stopped` while `sys.boot_completed` is still unset, so that wait returns before the guest is usable.
+
+On Intel Macs the emulator uses Hypervisor.Framework. HAXM is absent from current macOS and is not needed. Check the accelerator before blaming the AVD:
+
+```bash
+emulator -accel-check   # expect `accel: 0` and a Hypervisor.Framework line
+```
+
+If that check fails, fix the accelerator. A software renderer is too slow to test against and will read as an app bug.
 
 ## Local build + install
 
@@ -68,6 +91,18 @@ npm run android:development    # Debug build
 npm run android:production     # Release build
 npm run android:clear          # Remove generated Android project
 ```
+
+A debug build compiles native code for all four ABIs by default (`reactNativeArchitectures` in
+`packages/app/android/gradle.properties`). An emulator only needs one, and Skia, Reanimated,
+Worklets and friends dominate a cold build, so restrict it when you are only targeting the
+emulator:
+
+```bash
+cd packages/app/android && ./gradlew :app:installDebug -PreactNativeArchitectures=x86_64
+```
+
+Use `arm64-v8a` for an Apple Silicon AVD or a physical device. Check `adb shell getprop
+ro.product.cpu.abi` if you are unsure.
 
 For a production-ID release APK that local Android profiling tools can attach to:
 
@@ -95,6 +130,8 @@ npx cross-env APP_VARIANT=production expo run:android --variant=release
 rm -rf android
 ```
 
+Debug builds compile both 64-bit ABIs (`arm64-v8a` and `x86_64`). Testing against an Intel-hosted x86_64 emulator needs only one of them — `-PreactNativeArchitectures=x86_64`, the property the F-Droid section below uses, halves the native compile once `expo prebuild` has generated `android/`.
+
 ## Running on an emulator against a worktree daemon
 
 `npm run android` builds and installs the dev client, but two connections have to reach your Mac from inside the emulator — Metro (the JS bundle) and the Paseo daemon — and **the emulator does not share the host's loopback**: `localhost` inside the emulator is the emulator itself. Reach the host at `10.0.2.2` (the standard AVD's host alias) for both:
@@ -106,7 +143,16 @@ REACT_NATIVE_PACKAGER_HOSTNAME=10.0.2.2 \
 ```
 
 - **`REACT_NATIVE_PACKAGER_HOSTNAME=10.0.2.2`** — without it, Expo bakes your Mac's LAN IP into the dev client's Metro URL, which the emulator can't route to, and the app dies with `Failed to connect to /<lan-ip>:8081` before any JS loads.
-- **`EXPO_PUBLIC_LOCAL_DAEMON=10.0.2.2:<port>`** — the client's daemon endpoint (`packages/app/src/runtime/host-runtime.ts`); when unset it defaults to `localhost:6767`, the production daemon. Use `$PASEO_SERVICE_DAEMON_PORT` for a worktree daemon running as a Paseo service, or `6768` for a standalone `npm run dev:server`. It is inlined into the JS bundle at Metro bundle time, so set it on the build command and clear the Metro cache (`npx expo start -c`) if a change doesn't take.
+- **`EXPO_PUBLIC_LOCAL_DAEMON=10.0.2.2:<port>`** — the client's daemon endpoint (`packages/app/src/runtime/host-runtime.ts`); when unset it defaults to `localhost:6767`, the production daemon. Use `$PASEO_SERVICE_DAEMON_PORT` for a worktree daemon running as a Paseo service, or `6768` for a standalone `npm run dev:server`. It is inlined into the JS bundle at Metro bundle time, so set it on the **Metro** command, not just the Gradle build, and start Metro with `--clear` whenever the value changes.
+
+  A warm Metro transform cache keeps the previous value with no warning, so the app connects to
+  whichever daemon that stale value names — by default the production daemon on 6767, not your
+  worktree one. Nothing reports an error: a deep link into a workspace the connected daemon does
+  not have sits on "Loading workspace" indefinitely. Read that screen carefully, because the line
+  under it is the **host name**, not the workspace name, which makes it look like the right
+  workspace is loading. Confirm which daemon the app actually reached before debugging anything
+  else — the target daemon's log reports `activeConnections`, and the app's sidebar names the
+  host's `serverId`.
 
 **Alternative — `adb reverse` + `localhost`** (if `10.0.2.2` misbehaves):
 
@@ -119,6 +165,8 @@ REACT_NATIVE_PACKAGER_HOSTNAME=localhost \
 ```
 
 This is the Android counterpart of the iOS local-simulator flow in [development.md](development.md): on iOS the simulator shares the Mac's loopback so `localhost:<port>` works directly; on Android you need `10.0.2.2` or `adb reverse`.
+
+If the app cannot fetch the bundle from `10.0.2.2:8081` while Metro is clearly running, guest→host TCP is broken on the machine — and `ping 10.0.2.2` will not tell you, because the emulator's network stack answers that ICMP itself without touching host sockets. A per-process host firewall produces exactly this. `adb reverse` tunnels over the adb connection and sidesteps the whole path, which is why it is the fallback that always works.
 
 ## F-Droid / source-only Android builds
 
@@ -186,6 +234,13 @@ Keep `react` and `react-dom` pinned to the React version embedded by the current
 
 ```bash
 adb exec-out screencap -p > screenshot.png
+```
+
+A freshly booted emulator has its screen off, and `screencap` happily captures that as an all-black PNG of a few KB. Wake it first:
+
+```bash
+adb shell input keyevent KEYCODE_WAKEUP
+adb shell wm dismiss-keyguard
 ```
 
 ## Cloud build + submit (EAS)

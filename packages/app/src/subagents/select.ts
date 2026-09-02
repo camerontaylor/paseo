@@ -5,6 +5,13 @@ import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 import { refreshProviderSubagents, useProviderSubagentStore } from "./provider-store";
 import type { ProviderSubagentDescriptorPayload } from "@getpaseo/protocol/messages";
+import {
+  refreshSideConversations,
+  sideConversationParentPrefix,
+  sideConversationTitle,
+  type SideConversationRecord,
+  useSideConversationStore,
+} from "@/side-conversations/store";
 
 export interface PaseoSubagentRow {
   kind: "paseo";
@@ -36,10 +43,24 @@ export interface ProviderSubagentRow {
   createdAt: Date;
 }
 
-export type SubagentRow = PaseoSubagentRow | ProviderSubagentRow;
+export interface SideConversationRow {
+  kind: "side_conversation";
+  id: string;
+  parentAgentId: string;
+  provider: Agent["provider"];
+  title: string | null;
+  description: null;
+  subtitle: null;
+  status: "running" | "idle" | "error";
+  requiresAttention: boolean;
+  createdAt: Date;
+}
+
+export type SubagentRow = PaseoSubagentRow | ProviderSubagentRow | SideConversationRow;
 
 type SessionStoreSnapshot = ReturnType<typeof useSessionStore.getState>;
 type ProviderSubagentStoreSnapshot = ReturnType<typeof useProviderSubagentStore.getState>;
+type SideConversationStoreSnapshot = ReturnType<typeof useSideConversationStore.getState>;
 
 interface SelectSubagentsParams {
   serverId: string;
@@ -48,6 +69,13 @@ interface SelectSubagentsParams {
 
 const EMPTY_SUBAGENT_ROWS: SubagentRow[] = [];
 const EMPTY_PROVIDER_SUBAGENT_ROWS: ProviderSubagentRow[] = [];
+const EMPTY_SIDE_CONVERSATION_ROWS: SideConversationRow[] = [];
+
+function sideConversationStatus(record: SideConversationRecord): SideConversationRow["status"] {
+  if (record.pendingQuestion !== null) return "running";
+  if (record.lastAnswer === null || record.lastAnswer.status === "answered") return "idle";
+  return "error";
+}
 
 function toSubagentRow(agent: Agent): SubagentRow {
   return {
@@ -120,6 +148,42 @@ export function selectProviderSubagentsForParent(
   return rows;
 }
 
+export function selectSideConversationsForParent(
+  state: SideConversationStoreSnapshot,
+  params: SelectSubagentsParams,
+  provider: Agent["provider"] | undefined,
+  supported: boolean,
+): SideConversationRow[] {
+  if (!supported || !provider) return EMPTY_SIDE_CONVERSATION_ROWS;
+  const rows: SideConversationRow[] = [];
+  const prefix = sideConversationParentPrefix(params.serverId, params.parentAgentId);
+  for (const [key, record] of state.records) {
+    if (!key.startsWith(prefix)) continue;
+    // A thread is named by its first question. Opening the panel mints the thread before there is
+    // one, and the daemon answers that fetch with an empty snapshot, so listing it here would put
+    // a nameless row in the track for a conversation that has not started.
+    if (record.items.length === 0) continue;
+    const lastAnswer = record.lastAnswer;
+    rows.push({
+      kind: "side_conversation",
+      id: record.threadId,
+      parentAgentId: record.parentAgentId,
+      provider,
+      title: sideConversationTitle(record) || null,
+      description: null,
+      subtitle: null,
+      status: sideConversationStatus(record),
+      requiresAttention:
+        (lastAnswer?.status === "answered" && lastAnswer.synthetic) ||
+        (lastAnswer !== null && lastAnswer.status !== "answered"),
+      // Side-conversation snapshots carry ordered content but no wall-clock timestamp. Preserve
+      // the store's insertion order and append these rows after agent-owned children below.
+      createdAt: new Date(rows.length),
+    });
+  }
+  return rows.length > 0 ? rows : EMPTY_SIDE_CONVERSATION_ROWS;
+}
+
 export function useSubagentsForParent(params: SelectSubagentsParams): SubagentRow[] {
   const pendingArchiveIds = usePendingArchiveAgentIds(params.serverId);
   const paseoRows = useStoreWithEqualityFn(
@@ -130,12 +194,24 @@ export function useSubagentsForParent(params: SelectSubagentsParams): SubagentRo
   const supported = useSessionStore(
     (state) => state.sessions[params.serverId]?.serverInfo?.features?.providerSubagents === true,
   );
+  const sideConversationsSupported = useSessionStore(
+    (state) => state.sessions[params.serverId]?.serverInfo?.features?.sideConversations === true,
+  );
+  const parentProvider = useSessionStore(
+    (state) => state.sessions[params.serverId]?.agents.get(params.parentAgentId)?.provider,
+  );
   const providerRows = useStoreWithEqualityFn(
     useProviderSubagentStore,
     (state) => selectProviderSubagentsForParent(state, params, supported),
     equal,
   );
   const client = useSessionStore((state) => state.sessions[params.serverId]?.client ?? null);
+  const sideConversationRows = useStoreWithEqualityFn(
+    useSideConversationStore,
+    (state) =>
+      selectSideConversationsForParent(state, params, parentProvider, sideConversationsSupported),
+    equal,
+  );
 
   useEffect(() => {
     if (!client || !supported) return;
@@ -144,10 +220,18 @@ export function useSubagentsForParent(params: SelectSubagentsParams): SubagentRo
     );
   }, [client, params.parentAgentId, params.serverId, supported]);
 
+  // COMPAT(sideConversations): added in v0.5.x, remove gate after 2027-02-24.
+  useEffect(() => {
+    if (!client || !sideConversationsSupported) return;
+    void refreshSideConversations(client, params.serverId, params.parentAgentId).catch(
+      () => undefined,
+    );
+  }, [client, params.parentAgentId, params.serverId, sideConversationsSupported]);
+
   return useMemo(() => {
-    if (providerRows.length === 0) return paseoRows;
+    if (providerRows.length === 0 && sideConversationRows.length === 0) return paseoRows;
     const rows = [...paseoRows, ...providerRows];
     rows.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
-    return rows;
-  }, [paseoRows, providerRows]);
+    return [...rows, ...sideConversationRows];
+  }, [paseoRows, providerRows, sideConversationRows]);
 }

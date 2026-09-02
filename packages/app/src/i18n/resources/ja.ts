@@ -85,6 +85,36 @@ export const ja: TranslationResources = {
       settingOff: "オフ",
     },
   },
+  sideConversations: {
+    title: "サイド会話",
+    composer: {
+      placeholder: "サイド質問をする...",
+      send: "質問する",
+      pending: "質問中...",
+    },
+    states: {
+      loading: "サイド会話を読み込み中...",
+      empty: "エージェントのメインタスクを中断せずに質問できます。",
+      pending: "回答を待っています...",
+      removed: "このサイド会話はホスト上にもうありません。",
+    },
+    errors: {
+      unavailable: "このエージェントではサイド会話を利用できません。",
+      timeout: "サイド会話がタイムアウトしました。",
+      failed: "サイド会話に失敗しました: {{error}}",
+      duplicate: "サイド質問はすでに進行中です。",
+    },
+    notices: {
+      singleShot: "このプロバイダーでは一度に1つの質問を送信できます。",
+      degraded:
+        "この回答にはエージェントの会話コンテキストがすべて含まれていない可能性があります。",
+    },
+    actions: {
+      openRow: "サイド会話を開く",
+      open: "開く",
+      new: "新しいサイド会話",
+    },
+  },
   composer: {
     placeholders: {
       desktop: "エージェントにメッセージ、@ファイル、/コマンドや/スキルを入力",

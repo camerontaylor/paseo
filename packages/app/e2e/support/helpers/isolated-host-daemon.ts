@@ -148,10 +148,16 @@ export async function startIsolatedHostDaemon(
     ? path.join(publishedPackageRoot, "node_modules", "@getpaseo", "server")
     : path.resolve(__dirname, "../../../../server");
   const spawnDaemon = async (): Promise<ChildProcess> => {
+    // PASEO_PASSWORD in the caller's environment beats daemon.auth in any home's config
+    // (resolveAuthConfig checks env first), so an agent-launched test run would spawn
+    // "isolated" daemons that demand auth no seed client sends. The isolated home's own
+    // config decides; an explicit options.environment entry can still opt back in.
+    const inheritedEnv: NodeJS.ProcessEnv = { ...process.env };
+    delete inheritedEnv.PASEO_PASSWORD;
     const spawnOptions: SpawnOptions = {
       cwd: serverDir,
       env: withDisabledE2ESpeechEnv({
-        ...process.env,
+        ...inheritedEnv,
         ...options.environment,
         PASEO_HOME: paseoHome,
         PASEO_SERVER_ID: serverId,

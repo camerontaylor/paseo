@@ -77,6 +77,7 @@ import {
 import { renderPromptAttachmentAsText } from "../../prompt-attachments.js";
 import { claudeQuery, type ClaudeOptions, type ClaudeQueryFactory } from "./query.js";
 import { realClaudeRewindSdk, revertClaudeConversation, revertClaudeFiles } from "./rewind.js";
+import { askClaudeSideQuestion, getClaudeSideQuestionThreading } from "./side-question.js";
 import { normalizeProviderReplayTimestamp } from "../../provider-history-timestamps.js";
 import { claudeProjectDirSync } from "./project-dir.js";
 import { THINKING_APPLIES_NEXT_TURN_NOTICE } from "../../provider-notices.js";
@@ -112,6 +113,8 @@ import {
   type AgentSlashCommand,
   type SteerActiveTurnOptions,
   type SteerResult,
+  type SideAnswer,
+  type SideConversationExchange,
   type AgentStreamEvent,
   type AgentTimelineItem,
   type AgentUsage,
@@ -412,6 +415,7 @@ interface ClaudeAgentSessionOptions {
   logger: Logger;
   queryFactory?: ClaudeQueryFactory;
   resolveBinary: () => Promise<string>;
+  resolveVersion: (signal?: AbortSignal) => Promise<string>;
 }
 
 type ClaudeThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -1527,6 +1531,7 @@ export class ClaudeAgentClient implements AgentClient {
       logger: this.logger,
       queryFactory: this.queryFactory,
       resolveBinary: this.resolveBinary,
+      resolveVersion: this.resolveVersion,
     });
   }
 
@@ -1555,6 +1560,7 @@ export class ClaudeAgentClient implements AgentClient {
       logger: this.logger,
       queryFactory: this.queryFactory,
       resolveBinary: this.resolveBinary,
+      resolveVersion: this.resolveVersion,
     });
   }
 
@@ -2030,6 +2036,8 @@ class ClaudeAgentSession implements AgentSession {
   private readonly logger: Logger;
   private readonly queryFactory?: ClaudeQueryFactory;
   private readonly resolveBinary: () => Promise<string>;
+  private readonly resolveVersion: (signal?: AbortSignal) => Promise<string>;
+  private claudeCodeVersionPromise: Promise<string> | null = null;
   private query: Query | null = null;
   private childProcess: ChildProcess | null = null;
   private input: AsyncMessageInput<SDKUserMessage> | null = null;
@@ -2108,6 +2116,7 @@ class ClaudeAgentSession implements AgentSession {
     this.logger = options.logger.child({ agentId: this.agentId });
     this.queryFactory = options.queryFactory;
     this.resolveBinary = options.resolveBinary;
+    this.resolveVersion = options.resolveVersion;
     this.contextUsage = new ClaudeContextUsageState(
       findClaudeModel(this.config.model)?.contextWindowMaxTokens,
     );
@@ -2309,6 +2318,64 @@ class ClaudeAgentSession implements AgentSession {
     }
     this.enqueueSteer(input, message, options.clearPendingPermissions === true);
     return { status: "accepted" };
+  }
+
+  async askSideQuestion(
+    question: string,
+    history: readonly SideConversationExchange[],
+    options?: { signal?: AbortSignal },
+  ): Promise<SideAnswer> {
+    if (this.closed || options?.signal?.aborted) {
+      return { status: "unavailable" };
+    }
+    const version = await this.resolveVersionOnce(options?.signal);
+    // The version probe can burn its full 5s budget, so a close() easily lands inside it.
+    // Re-check before ensureQuery(), which would otherwise spawn a fresh Claude CLI process
+    // tree for a torn-down session — one nothing tracks and nothing will ever reap.
+    if (this.closed || options?.signal?.aborted) {
+      return { status: "unavailable" };
+    }
+    const threading = getClaudeSideQuestionThreading(version);
+    try {
+      const query = await this.ensureQuery();
+      if (this.closed) {
+        // close() ran while ensureQuery() was building options and spawning: it nulled
+        // query/input before ensureQuery() reassigned them, so what we just got back is
+        // orphaned. close() is null-safe and re-entrant, so re-run it to reap the tree.
+        await this.close().catch(() => undefined);
+        return { status: "unavailable" };
+      }
+      // The SDK exposes no per-control-request abort (Options.abortController tears down the
+      // whole query), so `signal` cannot cancel an in-flight side_question. AgentManager
+      // times the caller out instead.
+      return await askClaudeSideQuestion({ query, question, history, threading });
+    } catch (error) {
+      return {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Claude side question failed",
+        threading,
+      };
+    }
+  }
+
+  /**
+   * Memoize `claude --version` for the session's lifetime. ClaudeAgentClient.resolveVersion
+   * spawns a subprocess on every call, and the CLI backing a live session cannot change
+   * version underneath it, so one probe per session is enough. Failures are not cached, so a
+   * transient probe error retries on the next ask instead of pinning the session to the
+   * single-shot fallback forever.
+   */
+  private async resolveVersionOnce(signal?: AbortSignal): Promise<string | undefined> {
+    const pending = (this.claudeCodeVersionPromise ??= this.resolveVersion(signal));
+    try {
+      return await pending;
+    } catch {
+      // Version discovery is advisory; unresolved versions use the safe single-shot shape.
+      if (this.claudeCodeVersionPromise === pending) {
+        this.claudeCodeVersionPromise = null;
+      }
+      return undefined;
+    }
   }
 
   private enqueueSteer(

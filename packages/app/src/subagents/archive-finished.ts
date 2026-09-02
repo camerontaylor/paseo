@@ -36,7 +36,10 @@ export interface ArchiveFinishedSubagents {
 
 export function isFinishedSubagent(row: SubagentRow): boolean {
   if (row.kind === "paseo") return row.status === "idle" || row.status === "error";
-  return row.status === "completed" || row.status === "failed" || row.status === "canceled";
+  if (row.kind === "provider") {
+    return row.status === "completed" || row.status === "failed" || row.status === "canceled";
+  }
+  return false;
 }
 
 function canArchiveManagedSubagent(
@@ -60,7 +63,8 @@ function managedRowIdentity(id: string): string {
 }
 
 function rowIdentity(row: SubagentRow): string {
-  return row.kind === "paseo" ? managedRowIdentity(row.id) : `provider:${row.id}`;
+  if (row.kind === "paseo") return managedRowIdentity(row.id);
+  return row.kind === "provider" ? `provider:${row.id}` : `side_conversation:${row.id}`;
 }
 
 function rowIdentities(rows: readonly SubagentRow[]): Set<string> {

@@ -577,6 +577,18 @@ export type ProviderSubagentTimelinePayload = Extract<
   SessionOutboundMessage,
   { type: "agent.provider_subagents.timeline.get.response" }
 >["payload"];
+export type SideConversationAskPayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.side_conversation.ask.response" }
+>["payload"];
+export type SideConversationTimelinePayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.side_conversation.timeline.get.response" }
+>["payload"];
+export type SideConversationListPayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.side_conversation.list.response" }
+>["payload"];
 export interface FetchProviderSubagentTimelineOptions {
   direction?: ProviderSubagentTimelinePayload["direction"];
   cursor?: FetchAgentTimelineCursor;
@@ -2965,6 +2977,90 @@ export class DaemonClient {
     if (payload.error) {
       throw new Error(payload.error);
     }
+    return payload;
+  }
+
+  async askSideConversation(
+    parentAgentId: string,
+    threadId: string,
+    question: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<SideConversationAskPayload> {
+    this.requireSideConversationSupport();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.side_conversation.ask.request",
+      parentAgentId,
+      threadId,
+      question,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.side_conversation.ask.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async fetchSideConversationTimeline(
+    parentAgentId: string,
+    threadId: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<SideConversationTimelinePayload> {
+    this.requireSideConversationSupport();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.side_conversation.timeline.get.request",
+      parentAgentId,
+      threadId,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.side_conversation.timeline.get.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async listSideConversations(
+    parentAgentId: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<SideConversationListPayload> {
+    this.requireSideConversationSupport();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.side_conversation.list.request",
+      parentAgentId,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.side_conversation.list.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
     return payload;
   }
 
@@ -5576,6 +5672,13 @@ export class DaemonClient {
     }
   }
 
+  private requireSideConversationSupport(): void {
+    // COMPAT(sideConversations): added in v0.5.x, remove gate after 2027-02-24.
+    if (this.lastServerInfoMessage?.features?.sideConversations !== true) {
+      throw new Error("Update the host to use side conversations.");
+    }
+  }
+
   private resolveTransportUrlForAttempt(): string {
     return this.config.url;
   }
@@ -5601,6 +5704,7 @@ export class DaemonClient {
           [CLIENT_CAPS.reasoningMergeEnum]: true,
           [CLIENT_CAPS.terminalReflowableSnapshot]: true,
           [CLIENT_CAPS.providerSubagents]: true,
+          [CLIENT_CAPS.sideConversations]: true,
           [CLIENT_CAPS.projectUpdates]: true,
           [CLIENT_CAPS.compactProviderSnapshots]: true,
           ...this.config.capabilities,

@@ -9,7 +9,7 @@ You are picking up fork work in this checkout. Orient, verify, then act.
 Read, in this order:
 
 - `fork/README.md` — the `fork/` namespace, branch discipline, the PR grab basket.
-- `fork/side-conversations-merge-blocker.md` — the live executable task, below.
+- `fork/side-conversations-follow-ups.md` — the live executable task, below.
 - `fork/handover-2026-08-29.md` — the migration record and the gjc ACP diagnosis.
 - `CLAUDE.local.md` (symlink to `fork/claude-local.md`) — origin/upstream remotes.
 
@@ -49,28 +49,22 @@ automatically by `scripts/worktree-trust-mise.sh`, the first `paseo.json` setup 
 
 ## 3. Work in flight
 
-### A. Land side conversations on `custom` — runnable anywhere
+### A. Side-conversation follow-ups — runnable anywhere
 
-The one task that needs no gjc. `read/side-conversations-phase1-plan` carries a
-finished, test-verified Phase 1 feature that has never landed, because the branch was
-cut before upstream #3826 deleted the API its app layer calls.
+The one track that needs no gjc. Side conversations **landed on `custom`** in merge
+`a7fb6c131`, ported across upstream #3826. The merge blocker doc is gone; what is left
+is `fork/side-conversations-follow-ups.md`, seven follow-ups ordered by what bites
+first. The whole suite has never run on this feature — `CLAUDE.md` forbids it locally,
+so push to CI for that.
 
-**Read `fork/side-conversations-merge-blocker.md` first.** It has the deleted surface
-and its three replacements, all six conflicts with a resolution each, and the two files
-that merge without a git conflict and then fail to build.
+One decision from the port is worth knowing before you touch the follow-ups: side
+conversations route on the `openInSidePane.subagents` preference rather than one of
+their own, because they launch from the subagents track and present as one. If a
+follow-up wants them to route separately, that is a new `OpenInSidePanePreferences`
+key plus a settings row and nine locale files — additive, but not free.
 
-```bash
-git switch -c read/side-conversations-phase1-plan origin/read/side-conversations-phase1-plan
-git switch custom
-git merge --no-ff read/side-conversations-phase1-plan
-```
-
-Do not treat the conflict list as the work list. Grep the whole deleted surface —
-`openSupportingTab`, `openSidePanelView`, `showSidePanel`, `hideSidePanel` — across
-`packages/app/src` before trusting a clean merge.
-
-Verify with `npm run typecheck`, `npm run lint`, and the suites named in the blocker
-doc. Targeted only: `npx vitest run <file> --bail=1`.
+`packages/app/src/workspace-tabs/open-beside.test.ts` pins that routing, including the
+preference-off path. Break it and you have changed the decision, not just the code.
 
 ### B. Three plans, all pending approval, none implemented
 
