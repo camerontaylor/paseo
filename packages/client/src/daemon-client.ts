@@ -5673,7 +5673,7 @@ export class DaemonClient {
   }
 
   private requireSideConversationSupport(): void {
-    // COMPAT(sideConversations): added in v0.5.x, remove gate after 2027-02-24.
+    // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
     if (this.lastServerInfoMessage?.features?.sideConversations !== true) {
       throw new Error("Update the host to use side conversations.");
     }

@@ -4763,6 +4763,10 @@ export class AgentManager {
     this.dispatch({ type: "agent_stream", agentId, event, ...metadata });
   }
 
+  // An event variant with a parent-scoped payload needs a filtering arm here and a membership
+  // arm in eventBelongsToInternalAgent(). Miss the first and an agentId-scoped subscriber
+  // receives every parent's events; miss the second and internal-agent events leak to global
+  // subscribers. provider_subagent and side_conversation carry the whole pattern.
   private dispatch(event: AgentManagerEvent): void {
     for (const subscriber of this.subscribers) {
       if (

@@ -291,6 +291,9 @@ test("side conversation ask leaves the update broadcast to the manager", async (
     agentManager: {
       askSideQuestion,
       getAgent: vi.fn(() => ({ id: agentId })),
+      // Any test reaching ensureUnarchivedAgentLoaded needs this stub: asAgentManager throws
+      // without it, the handler swallows that throw, and the ask answers unavailable — which
+      // reads exactly like a routing bug.
       waitForAgentClose: vi.fn().mockResolvedValue(undefined),
     },
   });

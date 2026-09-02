@@ -86,7 +86,7 @@ function SideConversationPanel() {
   invariant(target.kind === "side_conversation", "SideConversationPanel requires side target");
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const serverInfo = useSessionStore((state) => state.sessions[serverId]?.serverInfo ?? null);
-  // COMPAT(sideConversations): added in v0.5.x, remove gate after 2027-02-24.
+  // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
   const supported = serverInfo?.features?.sideConversations === true;
   const record = useSideConversationStore((state) =>
     state.records.get(sideConversationKey(serverId, target.parentAgentId, target.threadId)),

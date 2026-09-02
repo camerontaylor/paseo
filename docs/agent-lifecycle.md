@@ -148,7 +148,7 @@ Running provider-native subagents contribute `running` to the workspace owned by
 
 The track is a pill at the foot of an agent's pane (`packages/app/src/subagents/track.tsx`): a count you can read at a glance, and a panel behind it — a popover on wide screens, a sheet on compact ones — holding the rows. It floats over the transcript rather than sitting in a band above the composer, so the timeline scrolls underneath it; `packages/app/src/panels/agent-tracks.tsx` owns that placement, and the pill frame is shared with the task list in `packages/app/src/composer/tracks.tsx`.
 
-The rows combine two kinds of children:
+The rows combine two kinds of children and one kind of side thread:
 
 - **Paseo subagents** are full managed agents. Their membership rule (`packages/app/src/subagents/select.ts`) is:
 
@@ -158,7 +158,11 @@ parentAgentId === thisAgent.id  AND  !archivedAt
 
 - **Provider subagents** are child executions owned by Claude, Codex, or OpenCode. They are not inserted into `AgentManager` as managed agents. Providers emit a separate descriptor and timeline stream through `agent.provider_subagents.*`; the client keeps that state outside the normal agent store and merges only the presentation rows into the track.
 
-Clicking either kind opens a workspace tab. A Paseo subagent tab is a normal interactive agent pane. A provider subagent tab is a read-only timeline pane with no composer, archive, detach, rewind, or fork actions. Both panes use `AgentStreamView`, so message, reasoning, tool-call, and layout rendering stay identical.
+- **Side conversations** are Q&A threads on the parent itself, not children at all. The client mints the thread id; the thread exists from its first question and is named by it. Rows come from `agent.side_conversation.*` snapshots held outside the agent store, and a row appears only once its first question does. Archive, reload, and history clear on the parent drop the daemon-side records and the track rows with them. Claude and OpenCode implement the provider seam; elsewhere the `sideConversations` capability gate hides the rows entirely.
+
+Clicking either child kind opens a workspace tab. A Paseo subagent tab is a normal interactive agent pane. A provider subagent tab is a read-only timeline pane with no composer, archive, detach, rewind, or fork actions. Both panes use `AgentStreamView`, so message, reasoning, tool-call, and layout rendering stay identical. A side conversation tab is a light pane of its own — a composer and the thread's messages — with no agent lifecycle actions.
+
+A parent gets its **New side conversation** entry point in the agent tab menu (`packages/app/src/screens/workspace/workspace-tab-menu.ts`), not in the track: the track renders nothing when it has no rows, so a control in its header would be invisible for exactly the agent that has no side conversations yet. The menu drops the entry when the host has no side conversations rather than greying it out.
 
 Provider timelines use the same structural timeline item format but deliberately have a separate lifecycle and transport. A provider thread/session identifier is not a Paseo agent identifier, and closing its tab is always layout-only.
 
