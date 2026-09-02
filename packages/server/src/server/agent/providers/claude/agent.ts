@@ -2208,9 +2208,7 @@ class ClaudeAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
-    if (this.closed) {
-      throw new Error("Claude session is closed");
-    }
+    this.assertSessionOpen();
     if (this.activeForegroundTurnId) {
       throw new Error("A foreground turn is already active");
     }
@@ -2339,9 +2337,10 @@ class ClaudeAgentSession implements AgentSession {
     try {
       const query = await this.ensureQuery();
       if (this.closed) {
-        // close() ran while ensureQuery() was building options and spawning: it nulled
-        // query/input before ensureQuery() reassigned them, so what we just got back is
-        // orphaned. close() is null-safe and re-entrant, so re-run it to reap the tree.
+        // close() ran during ensureQuery()'s post-spawn awaits (applyFlagSettings), after it
+        // had already assigned query/input — so close() tore down that tree on its own, and
+        // what we got back is a closed query. close() is null-safe and re-entrant, so re-run
+        // it to reap anything still standing.
         await this.close().catch(() => undefined);
         return { status: "unavailable" };
       }
@@ -2350,6 +2349,11 @@ class ClaudeAgentSession implements AgentSession {
       // times the caller out instead.
       return await askClaudeSideQuestion({ query, question, history, threading });
     } catch (error) {
+      // ensureQuery() throws for a closed session; a torn-down session is unavailable, not
+      // failed. Caller-visible failed answers below are Claude's, not ours.
+      if (this.closed) {
+        return { status: "unavailable" };
+      }
       return {
         status: "failed",
         error: error instanceof Error ? error.message : "Claude side question failed",
@@ -3149,7 +3153,22 @@ class ClaudeAgentSession implements AgentSession {
     return { kind: "fork", messageId: previousTurn.assistantMessageId };
   }
 
+  private assertSessionOpen(): void {
+    if (this.closed) {
+      throw new Error("Claude session is closed");
+    }
+  }
+
+  /**
+   * The only place a Claude CLI process tree is spawned. Contract: throws
+   * `Error("Claude session is closed")` when the session is closed, at entry and after the
+   * `buildOptions()` await — a torn-down session must never get a fresh query, and a throw is
+   * the one failure mode a call site cannot silently drop. Callers that want a value convert
+   * at the call site: `startTurn` lets the throw surface as a failed turn, `askSideQuestion`
+   * maps it to `{ status: "unavailable" }`.
+   */
   private async ensureQuery(): Promise<Query> {
+    this.assertSessionOpen();
     if (this.query && !this.queryRestartNeeded) {
       return this.query;
     }
@@ -3194,6 +3213,11 @@ class ClaudeAgentSession implements AgentSession {
 
     const input = createAsyncMessageInput<SDKUserMessage>();
     const options = await this.buildOptions();
+    // close() can land inside buildOptions() — the only await between the entry check and the
+    // spawn. It has already nulled query/input/childProcess; assigning them again here would
+    // leak a process tree nothing tracks. This also covers a close() that landed during the
+    // tree-kill await in the restart branch above, since buildOptions() always runs after it.
+    this.assertSessionOpen();
     this.logger.debug({ options: summarizeClaudeOptionsForLog(options) }, "claude query");
     this.input = input;
     this.query = claudeQuery(
@@ -3768,6 +3792,8 @@ class ClaudeAgentSession implements AgentSession {
   private async runQueryPump(): Promise<void> {
     let activeQuery: Query;
     try {
+      // A closed session throws here ("Claude session is closed"); the catch below ends the
+      // pump, and failActiveTurns is a no-op because close() already cleared active turns.
       activeQuery = await this.ensureQuery();
     } catch (error) {
       this.logger.trace(
