@@ -45,6 +45,24 @@ function createClient() {
   return { client, fork, promptAsync, messages, deleteSession };
 }
 
+// A refetch that hangs until the caller's signal aborts, mirroring what the real SDK does
+// with the per-call signal option: with throwOnError unset it settles { error: AbortError }
+// rather than throwing. Only the abort can settle it, so a test that resolves did so
+// because the cancellation worked.
+function hangingRefetch(): OpenCodeSideQuestionClient["session"]["messages"] {
+  const abortError = () =>
+    Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+  return (_input, options) =>
+    new Promise((resolve) => {
+      const settleAborted = () => resolve({ error: abortError() });
+      if (options?.signal?.aborted) {
+        settleAborted();
+        return;
+      }
+      options?.signal?.addEventListener("abort", settleAborted, { once: true });
+    });
+}
+
 describe("OpenCode side questions", () => {
   test("answers on a persisted fork without tools and deletes the fork", async () => {
     const { client, fork, promptAsync, deleteSession } = createClient();
@@ -147,6 +165,39 @@ describe("OpenCode side questions", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("cancels an in-flight refetch when the caller aborts mid-poll", async () => {
+    const { client, messages, deleteSession } = createClient();
+    messages.mockReset();
+    messages.mockImplementation(hangingRefetch());
+    const controller = new AbortController();
+
+    const answer = askOpenCodeSideQuestion({
+      client,
+      parentSessionId: "parent-1",
+      cwd: "/workspace",
+      question: "Why?",
+      history: [],
+      messageId: "question-1",
+      logger: createTestLogger(),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(messages).toHaveBeenCalledTimes(1));
+    // The signal rides the SDK's per-call options, not the query parameters.
+    expect(messages).toHaveBeenCalledWith(
+      { sessionID: "fork-1", directory: "/workspace" },
+      { signal: controller.signal },
+    );
+
+    controller.abort();
+
+    await expect(answer).resolves.toEqual({ status: "timed_out", threading: "threaded" });
+    expect(messages).toHaveBeenCalledTimes(1);
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionID: "fork-1",
+      directory: "/workspace",
+    });
   });
 
   test("does not refetch the conversation when the signal is already aborted", async () => {

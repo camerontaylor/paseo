@@ -56,10 +56,16 @@ export interface OpenCodeSideQuestionClient {
       agent?: string;
       variant?: string;
     }): Promise<{ error?: unknown }>;
-    messages(input: {
-      sessionID: string;
-      directory: string;
-    }): Promise<{ data?: OpenCodeSideQuestionMessage[]; error?: unknown }>;
+    messages(
+      input: {
+        sessionID: string;
+        directory: string;
+      },
+      // Mirrors the SDK's per-call RequestOptions: Config extends RequestInit, so a signal
+      // here binds to the Request the SDK builds and cancels the refetch while it is in
+      // flight. The SDK then settles with { error: AbortError } instead of throwing.
+      options?: { signal?: AbortSignal },
+    ): Promise<{ data?: OpenCodeSideQuestionMessage[]; error?: unknown }>;
     delete(input: { sessionID: string; directory: string }): Promise<{ error?: unknown }>;
   };
 }
@@ -145,13 +151,22 @@ async function waitForAnswer(input: {
 }): Promise<SideAnswer> {
   const deadline = Date.now() + (input.timeoutMs ?? SIDE_QUESTION_WAIT_TIMEOUT_MS);
   for (;;) {
-    // Checked before the request too: each poll refetches the whole forked conversation.
+    // Checked before the request too: each poll refetches the whole forked conversation, so a
+    // doomed poll should not start. The signal passed below cancels one already in flight.
     if (input.signal?.aborted || Date.now() >= deadline) return SIDE_QUESTION_TIMED_OUT;
-    const response = await input.client.session.messages({
-      sessionID: input.sessionId,
-      directory: input.cwd,
-    });
-    if (response.error) throw new Error(toDiagnosticErrorMessage(response.error));
+    const response = await input.client.session.messages(
+      {
+        sessionID: input.sessionId,
+        directory: input.cwd,
+      },
+      input.signal ? { signal: input.signal } : undefined,
+    );
+    if (response.error) {
+      // An aborted refetch is the caller calling the question off, so it settles the same
+      // way the loop-top check does -- not as a failed answer with the SDK's AbortError.
+      if (input.signal?.aborted) return SIDE_QUESTION_TIMED_OUT;
+      throw new Error(toDiagnosticErrorMessage(response.error));
+    }
     const answer = readAnswer(response.data ?? [], input.messageId);
     if (answer) return answer;
     const remainingMs = deadline - Date.now();
