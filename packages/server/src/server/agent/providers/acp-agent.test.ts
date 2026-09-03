@@ -50,6 +50,7 @@ import { transformPiModels } from "./pi/agent.js";
 import type { AgentStreamEvent } from "../agent-sdk-types.js";
 import type { AgentCapabilityFlags, AgentPersistenceHandle } from "../agent-sdk-types.js";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
+import type { Logger } from "pino";
 import { buildStringCommandShellInvocation } from "../../../utils/string-command-shell.js";
 import { asInternals } from "../../test-utils/class-mocks.js";
 import * as spawnUtils from "../../../utils/spawn.js";
@@ -3835,6 +3836,26 @@ function createDeferredCalls<T>(): DeferredCalls<T> {
   return { fn, calls, inputs };
 }
 
+interface StopBoundaryLogEntry {
+  msg: string;
+  data: Record<string, unknown> | undefined;
+}
+
+function createStopBoundaryLogger(): { logger: Logger; logs: StopBoundaryLogEntry[] } {
+  const logger = createTestLogger();
+  const spy = vi.spyOn(logger, "info");
+  const logs: StopBoundaryLogEntry[] = [];
+  spy.mockImplementation((data: unknown, msg?: string) => {
+    logs.push({
+      msg: msg ?? "",
+      data:
+        typeof data === "object" && data !== null ? (data as Record<string, unknown>) : undefined,
+    });
+    return logger;
+  });
+  return { logger, logs };
+}
+
 type ACPStopBoundaryTerminalEvent = Extract<
   AgentStreamEvent,
   { type: "turn_completed" | "turn_failed" | "turn_canceled" }
@@ -3849,6 +3870,7 @@ interface ACPStopBoundaryInternals {
       prompt: unknown;
     }) => Promise<PromptResponse>;
     cancel: (input: { sessionId: string }) => Promise<void>;
+    signal?: AbortSignal;
   } | null;
   connectionRevision: number;
   activeForegroundTurnId: string | null;
@@ -3860,6 +3882,7 @@ interface ACPStopBoundaryInternals {
     terminalObserved: boolean;
     terminalDelivered: boolean;
     cancelIssuedRevision: number;
+    newestCancelSucceeded: boolean;
     cancelAttempts: Array<{
       revision: number;
       settled: boolean;
@@ -3881,6 +3904,13 @@ class StopBoundarySession extends ACPAgentSession {
       this.invalidateStagedSuccessor(stop, reason);
     }
   }
+  /** Exposes the death-signal subscription so the harness can simulate transport death. */
+  bindConnectionDeathSignal(): void {
+    const connection = this.getAcpConnection();
+    if (connection) {
+      this.observeConnectionDeath(connection);
+    }
+  }
 }
 
 interface ACPStopBoundaryHarness {
@@ -3888,15 +3918,18 @@ interface ACPStopBoundaryHarness {
   internals: ACPStopBoundaryInternals;
   prompt: DeferredCalls<PromptResponse>;
   cancel: DeferredCalls<void>;
+  connectionDeath: AbortController;
   events: AgentStreamEvent[];
+  logs: StopBoundaryLogEntry[];
 }
 
 function createStopBoundarySession(terminateProcess?: ProcessTerminator): ACPStopBoundaryHarness {
+  const { logger, logs } = createStopBoundaryLogger();
   const session = new StopBoundarySession(
     { provider: "claude-acp", cwd: "/tmp/paseo-acp-test" },
     {
       provider: "claude-acp",
-      logger: createTestLogger(),
+      logger,
       defaultCommand: ["claude", "--acp"],
       defaultModes: [],
       capabilities: {
@@ -3913,15 +3946,23 @@ function createStopBoundarySession(terminateProcess?: ProcessTerminator): ACPSto
 
   const prompt = createDeferredCalls<PromptResponse>();
   const cancel = createDeferredCalls<void>();
+  const connectionDeath = new AbortController();
   const internals = asInternals<ACPStopBoundaryInternals>(session);
   internals.sessionId = "session-1";
-  internals.connection = { prompt: prompt.fn, cancel: cancel.fn };
+  internals.connection = {
+    prompt: prompt.fn,
+    cancel: cancel.fn,
+    // Death is simulated by aborting the connection's close signal, matching
+    // the SDK's ClientSideConnection#signal behavior.
+    signal: connectionDeath.signal,
+  };
   internals.connectionRevision = 1;
+  session.bindConnectionDeathSignal();
 
   const events: AgentStreamEvent[] = [];
   session.subscribe((event) => events.push(event));
 
-  return { session, internals, prompt, cancel, events };
+  return { session, internals, prompt, cancel, connectionDeath, events, logs };
 }
 
 /** Drains promise microtasks without touching the fake clock. */
@@ -4395,6 +4436,7 @@ describe("ACPAgentSession stop boundary", () => {
     const turnId = await startForegroundTurn(harness, "first");
     const interrupting = harness.session.interrupt();
     const staged = harness.session.startTurn("replacement");
+    const stopId = harness.internals.stop?.stopId;
 
     const child = createTerminalChildStub();
     harness.internals.child = child;
@@ -4411,6 +4453,10 @@ describe("ACPAgentSession stop boundary", () => {
     await closing;
 
     await stagedRejection;
+    // The dropped stop settled through the one death path: its write, which
+    // had resolved as the SDK's swallowed-write "success", is now rejected.
+    const deathSettled = harness.logs.find((log) => log.msg === "provider.acp.stop_death_settled");
+    expect(deathSettled?.data).toMatchObject({ stopId, attempts: 1, reason: "closed" });
     expect(terminator.terminated).toContain(child);
 
     const eventCount = harness.events.length;
@@ -4552,6 +4598,129 @@ describe("ACPAgentSession stop boundary", () => {
     await expect(staged).rejects.toThrow("not admitted");
     expect(replacementPrompt.calls).toHaveLength(0);
     expect(harness.internals.stop?.stopId).toBe(stopId);
+  });
+
+  test("20. rolls back only the failed successor's reservation when its prompt send rejects", async () => {
+    const harness = createStopBoundarySession();
+    const turnId = await startForegroundTurn(harness, "first");
+    const interrupting = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+
+    harness.cancel.calls[0]?.resolve();
+    await interrupting;
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    // The successor is admitted through the released gates and its prompt is
+    // sent; the send then fails.
+    const successor = await staged;
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId]);
+
+    harness.prompt.calls[1]?.reject(new Error("prompt send failed"));
+    await flushMicrotasks();
+
+    // The failed send rolls back only the successor's own reservation: the
+    // turn_failed is delivered for the successor alone, and the resolved stop
+    // is not re-fenced over the session.
+    expect(turnTerminalTypes(harness.events)).toEqual(["turn_canceled", "turn_failed"]);
+    expect(harness.events[harness.events.length - 1]).toMatchObject({
+      type: "turn_failed",
+      turnId: successor.turnId,
+    });
+    expect(harness.internals.stop).toBeNull();
+    expect(harness.internals.admissionState).toBe("idle");
+    expect(harness.internals.activeForegroundTurnId).toBeNull();
+
+    // A later start is evaluated on its own facts, not blocked by the old stop.
+    const next = await harness.session.startTurn("next");
+    expect(harness.prompt.calls).toHaveLength(3);
+    expect(turnStartedIds(harness.events)).toEqual([turnId, successor.turnId, next.turnId]);
+    expect(harness.internals.admissionState).toBe("running");
+  });
+
+  test("21. settles the ledger rejected and rejects the staged successor immediately on observed death", async () => {
+    // An in-flight (pending) cancel write: death settles it rejected, and the
+    // staged successor is rejected without burning the admission deadline.
+    {
+      const harness = createStopBoundarySession();
+      const turnId = await startForegroundTurn(harness, "first");
+      const interrupting = harness.session.interrupt();
+      const staged = harness.session.startTurn("replacement");
+      const stopId = harness.internals.stop?.stopId;
+
+      // Observed death over the connection's close signal, with the write and
+      // the admission deadline both still pending.
+      harness.connectionDeath.abort();
+      await flushMicrotasks();
+
+      // Immediate rejection: asserted before any fake time has advanced.
+      await expect(staged).rejects.toThrow("invalidated (connection-aborted)");
+      expect(harness.internals.stop?.stopId).toBe(stopId);
+      expect(harness.internals.stop?.cancelAttempts).toEqual([
+        { revision: 1, settled: true, outcome: "rejected" },
+      ]);
+      expect(harness.internals.stop?.newestCancelSucceeded).toBe(false);
+      expect(harness.internals.stop?.stagedSuccessor).toBeNull();
+      expect(harness.internals.stop?.terminalObserved).toBe(false);
+      expect(harness.prompt.calls).toHaveLength(1);
+      expect(turnStartedIds(harness.events)).toEqual([turnId]);
+      expect(turnTerminalTypes(harness.events)).toEqual([]);
+
+      // The write resolves after death, mimicking the SDK's swallowed write
+      // error on a dead pipe: the real settlement path must not reopen the
+      // ledger death closed.
+      harness.cancel.calls[0]?.resolve();
+      await interrupting;
+      await flushMicrotasks();
+      expect(harness.internals.stop?.cancelAttempts).toEqual([
+        { revision: 1, settled: true, outcome: "rejected" },
+      ]);
+      expect(harness.internals.stop?.newestCancelSucceeded).toBe(false);
+
+      // The cleared deadline stays quiet when the clock runs out.
+      vi.advanceTimersByTime(ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS);
+      await flushMicrotasks();
+      expect(harness.prompt.calls).toHaveLength(1);
+      expect(turnStartedIds(harness.events)).toEqual([turnId]);
+
+      const deathSettled = harness.logs.find(
+        (log) => log.msg === "provider.acp.stop_death_settled",
+      );
+      expect(deathSettled?.data).toMatchObject({
+        stopId,
+        attempts: 1,
+        reason: "connection-aborted",
+      });
+    }
+
+    // The inverted mode: the cancel write RESOLVED — the SDK swallows write
+    // errors on a dead pipe, so an undelivered cancel recorded a settled
+    // success. Death must override the false success.
+    {
+      const harness = createStopBoundarySession();
+      const turnId = await startForegroundTurn(harness, "first");
+      const interrupting = harness.session.interrupt();
+      harness.cancel.calls[0]?.resolve();
+      await interrupting;
+      const staged = harness.session.startTurn("replacement");
+
+      expect(harness.internals.stop?.cancelAttempts).toEqual([
+        { revision: 1, settled: true, outcome: "success" },
+      ]);
+      expect(harness.internals.stop?.newestCancelSucceeded).toBe(true);
+
+      harness.connectionDeath.abort();
+      await flushMicrotasks();
+
+      await expect(staged).rejects.toThrow("invalidated (connection-aborted)");
+      expect(harness.internals.stop?.cancelAttempts).toEqual([
+        { revision: 1, settled: true, outcome: "rejected" },
+      ]);
+      expect(harness.internals.stop?.newestCancelSucceeded).toBe(false);
+      expect(harness.prompt.calls).toHaveLength(1);
+      expect(turnStartedIds(harness.events)).toEqual([turnId]);
+    }
   });
 
   test("exposes the provider-neutral seams a provider subclass builds on", () => {

@@ -413,6 +413,30 @@ export class GjcACPAgentSession extends ACPAgentSession {
   protected override describeProviderStopGate(stop: ACPStopRecord): string[] {
     return this.unresolvedGjcStopFacts(stop);
   }
+  /**
+   * One death path proof: the ownerless abort attempt still awaiting its
+   * response can never be answered by a dead transport, so it is settled as a
+   * reject through the ordinary result path. Newest-wins keeps a late reply
+   * for the same attempt from overwriting the death verdict.
+   */
+  protected override recordProviderStopDeath(stop: ACPStopRecord, reason: string): void {
+    const state = this.ownerlessStop;
+    if (!state || state.stop !== stop || state.attemptRevision === 0) {
+      return;
+    }
+    if (state.result && state.result.revision >= state.attemptRevision) {
+      // The newest attempt already settled with a real verdict.
+      return;
+    }
+    this.recordAbortResult(state, {
+      revision: state.attemptRevision,
+      verdict: {
+        kind: "reject",
+        disposition: "transport_death",
+        reason: `terminal abort response never arrived; observed death (${reason})`,
+      },
+    });
+  }
 
   /**
    * Two facts, either order: a validated terminal-safe abort result and a
@@ -426,8 +450,15 @@ export class GjcACPAgentSession extends ACPAgentSession {
       return super.isProviderStopGateSatisfied(stop) ? [] : ["provider_gate"];
     }
     const unresolved: string[] = [];
-    if (!(state.result !== null && isGjcAbortFactSatisfied(state.result.verdict))) {
-      unresolved.push("gjc.abort_result");
+    const result = state.result;
+    if (!(result !== null && isGjcAbortFactSatisfied(result.verdict))) {
+      // A recorded reject names itself, so a deadline reports why the fact is
+      // closed instead of a bare fact name.
+      unresolved.push(
+        result && result.verdict.kind === "reject"
+          ? `gjc.abort_result (${result.verdict.disposition}: ${result.verdict.reason})`
+          : "gjc.abort_result",
+      );
     }
     if (state.idlePhaseRevision === null) {
       unresolved.push("gjc.idle");
@@ -572,9 +603,10 @@ export class GjcACPAgentSession extends ACPAgentSession {
   }
 
   private recordAbortResult(state: GjcOwnerlessStop, result: GjcAbortResult): void {
-    // Newest attempt wins; a late reply for a superseded attempt never
-    // overwrites a newer verdict.
-    if (state.result && state.result.revision > result.revision) {
+    // Newest attempt wins; a late reply for a superseded attempt — or for the
+    // attempt a death verdict already settled — never overwrites the recorded
+    // result.
+    if (state.result && state.result.revision >= result.revision) {
       return;
     }
     state.result = result;

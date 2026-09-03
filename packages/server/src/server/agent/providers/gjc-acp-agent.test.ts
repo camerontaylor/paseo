@@ -118,6 +118,7 @@ interface GjcSessionInternals {
       method: string,
       params: Record<string, unknown>,
     ) => Promise<Record<string, unknown>>;
+    signal?: AbortSignal;
   } | null;
   connectionRevision: number;
   activeForegroundTurnId: string | null;
@@ -132,18 +133,36 @@ interface GjcSessionInternals {
     releasedSuccessorToken: string | null;
   } | null;
   finishTurn(turnId: string, event: GjcTerminalEvent): void;
+  ownerlessStop: {
+    attemptRevision: number;
+    result: {
+      revision: number;
+      verdict: { kind: string; disposition: string; reason?: string };
+    } | null;
+  } | null;
 }
 
 interface GjcHarness {
-  session: GjcACPAgentSession;
+  session: TestableGjcSession;
   internals: GjcSessionInternals;
   prompt: DeferredCalls<PromptResponse>;
   cancel: DeferredCalls<void>;
   control: DeferredCalls<Record<string, unknown>>;
   controlRequests: GjcControlRequest[];
   events: AgentStreamEvent[];
+  connectionDeath: AbortController;
   logs: GjcLogEntry[];
   sessionId: string;
+}
+
+/** Exposes the death-signal subscription so the harness can simulate transport death. */
+class TestableGjcSession extends GjcACPAgentSession {
+  bindConnectionDeathSignal(): void {
+    const connection = this.getAcpConnection();
+    if (connection) {
+      this.observeConnectionDeath(connection);
+    }
+  }
 }
 
 function createHarnessLogger(): { logger: Logger; logs: GjcLogEntry[] } {
@@ -165,7 +184,7 @@ function createGjcHarness(
   options: { abortScope?: string; terminateProcess?: ProcessTerminator } = {},
 ): GjcHarness {
   const { logger, logs } = createHarnessLogger();
-  const session = new GjcACPAgentSession(
+  const session = new TestableGjcSession(
     { provider: "gjc", cwd: "/tmp/paseo-gjc-test" },
     {
       provider: "gjc",
@@ -190,6 +209,7 @@ function createGjcHarness(
   const prompt = createDeferredCalls<PromptResponse>();
   const cancel = createDeferredCalls<void>();
   const control = createDeferredCalls<Record<string, unknown>>();
+  const connectionDeath = new AbortController();
   const controlRequests: GjcControlRequest[] = [];
   const internals = asInternals<GjcSessionInternals>(session);
   internals.sessionId = "session-1";
@@ -200,8 +220,10 @@ function createGjcHarness(
       controlRequests.push({ method, params });
       return control.fn(params);
     },
+    signal: connectionDeath.signal,
   };
   internals.connectionRevision = 1;
+  session.bindConnectionDeathSignal();
 
   const events: AgentStreamEvent[] = [];
   session.subscribe((event) => events.push(event));
@@ -213,6 +235,7 @@ function createGjcHarness(
     cancel,
     control,
     controlRequests,
+    connectionDeath,
     events,
     logs,
     sessionId: "session-1",
@@ -1176,6 +1199,63 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     expect(harness.cancel.calls).toHaveLength(0);
     expect(harness.prompt.calls).toHaveLength(0);
     expect(mirrorIds(harness.events)).toEqual([mirrorId]);
+  });
+
+  // Plan P5 death settlement — unnumbered: 24, 32, and 33 are reserved by later units.
+  test("observed death settles the ownerless abort as a transport_death reject that a late reply cannot overwrite", async () => {
+    const harness = createGjcHarness();
+    await sendPhase(harness, "working");
+    const stopping = harness.session.interrupt();
+    const staged = harness.session.startTurn("replacement");
+    await sendPhase(harness, "idle");
+    expect(abortRequests(harness)).toHaveLength(1);
+
+    // Death is observed while the control response is still pending. The SDK
+    // never rejects a pending request when the read loop ends, so without
+    // settlement the staged successor would burn the whole admission deadline.
+    harness.connectionDeath.abort();
+    await flushMicrotasks();
+
+    // The staged successor is rejected immediately, before any fake time has
+    // advanced, and the ownerless stop never touched ACP cancel.
+    await expect(staged).rejects.toThrow("invalidated (connection-aborted)");
+    expect(harness.cancel.calls).toHaveLength(0);
+
+    // The death verdict is recorded through the ordinary result path.
+    const abortResults = harness.logs.filter((log) => log.msg === "provider.gjc.abort_result");
+    expect(abortResults).toHaveLength(1);
+    expect(abortResults[0]?.data).toMatchObject({
+      disposition: "transport_death",
+      verdict: "reject",
+    });
+    expect(abortResults[0]?.data?.reason).toContain("connection-aborted");
+
+    // A late real reply for the settled attempt cannot overwrite the death
+    // verdict and cannot release the stop over a dead transport.
+    harness.control.calls[0]?.resolve(turnScopeSafeResult("turn"));
+    await stopping;
+    await flushMicrotasks();
+    expect(harness.logs.filter((log) => log.msg === "provider.gjc.abort_result")).toHaveLength(1);
+    expect(harness.internals.ownerlessStop?.result?.verdict).toMatchObject({
+      disposition: "transport_death",
+    });
+    expect(turnTerminalEvents(harness.events)).toEqual([]);
+    expect(harness.prompt.calls).toHaveLength(0);
+
+    // The gate descriptor names the real reason at the deadline instead of the
+    // bare fact.
+    const restaged = harness.session.startTurn("replacement-2");
+    vi.advanceTimersByTime(ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS);
+    await expect(restaged).rejects.toThrow("not admitted");
+    const deadline = harness.logs.find((log) => log.msg === "provider.acp.admission_deadline");
+    expect(deadline?.data?.unresolved).toMatchObject({
+      terminal: true,
+      cancelWrites: false,
+      providerGate: true,
+      providerGateFacts: [expect.stringContaining("gjc.abort_result (transport_death")],
+    });
+
+    await harness.session.close();
   });
 });
 

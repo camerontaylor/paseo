@@ -1482,6 +1482,8 @@ export interface ACPStopRecord {
   cancelIssuedRevision: number;
   cancelSettledRevision: number;
   newestCancelSucceeded: boolean;
+  /** Set once by the one death path; a death-settled ledger is final. */
+  deathSettled: boolean;
   /** At most one queued successor. `releasedSuccessorToken` names the one that may commit. */
   stagedSuccessor: ACPStagedSuccessor | null;
   releasedSuccessorToken: string | null;
@@ -1586,6 +1588,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private admissionState: ACPAdmissionState = "idle";
   private stop: ACPStopRecord | null = null;
   private connectionRevision = 0;
+  private connectionDeathSignal: AbortSignal | null = null;
   private fallbackAssistantMessageId: string | null = null;
   private closed = false;
   private historyPending = false;
@@ -1979,6 +1982,44 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   /**
+   * The one death path for the stop boundary, invoked by every way the session
+   * observes its process or transport died: the child exit handler, the
+   * connection close signal, and close. The SDK delivers `cancel()` as a
+   * notification whose write errors are swallowed, so on a dead pipe an
+   * undelivered cancel resolves as a settled success — death therefore settles
+   * EVERY attempt, including recorded successes, as rejected, records provider
+   * death proof, and rejects the staged successor immediately instead of
+   * leaving it to the admission deadline. Idempotent: the first observation
+   * wins and later ones (a signal abort after the exit handler, or close) are
+   * no-ops. Gated on the stop's captured identity, so a stop captured on an
+   * older connection stays untouched.
+   */
+  private settleStopOnObservedDeath(reason: string): void {
+    const stop = this.stop;
+    if (!stop || stop.deathSettled || !this.stopIdentityMatches(stop)) {
+      return;
+    }
+    stop.deathSettled = true;
+    for (const attempt of stop.cancelAttempts) {
+      attempt.settled = true;
+      attempt.outcome = "rejected";
+    }
+    stop.cancelSettledRevision = Math.max(stop.cancelSettledRevision, stop.cancelIssuedRevision);
+    stop.newestCancelSucceeded = false;
+    this.logger.info(
+      {
+        stopId: stop.stopId,
+        stoppedTurnId: stop.stoppedTurnId,
+        attempts: stop.cancelAttempts.length,
+        reason,
+      },
+      "provider.acp.stop_death_settled",
+    );
+    this.recordProviderStopDeath(stop, reason);
+    this.invalidateStagedSuccessor(stop, reason);
+  }
+
+  /**
    * Opens the staged successor only when every fact the stop owes is present:
    * the session identity it captured, terminal proof for the turn it stopped, a
    * fully settled and successful cancellation ledger, and provider proof. Any
@@ -2126,6 +2167,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       cancelIssuedRevision: 0,
       cancelSettledRevision: 0,
       newestCancelSucceeded: false,
+      deathSettled: false,
       stagedSuccessor: null,
       releasedSuccessorToken: null,
       providerGateSatisfied: true,
@@ -2229,6 +2271,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     attempt: ACPStopCancelAttempt,
     outcome: "success" | "rejected",
   ): void {
+    if (stop.deathSettled) {
+      // Death closed this ledger; a resolution that lands after the transport
+      // died is not delivery proof and cannot reopen the boundary.
+      return;
+    }
     attempt.settled = true;
     attempt.outcome = outcome;
     stop.cancelSettledRevision = Math.max(stop.cancelSettledRevision, attempt.revision);
@@ -2262,6 +2309,17 @@ export class ACPAgentSession implements AgentSession, ACPClient {
    */
   protected describeProviderStopGate(stop: ACPStopRecord): string[] {
     return this.isProviderStopGateSatisfied(stop) ? [] : ["provider_gate"];
+  }
+  /**
+   * Provider-specific proof for a stop settled by the death path, recorded
+   * after the ledger is closed and before the staged successor is rejected.
+   * The generic boundary records none; a subclass records what its own stop
+   * gate still owes (a GJC ownerless abort settles its pending attempt as a
+   * reject so the gate names the real reason).
+   */
+  protected recordProviderStopDeath(stop: ACPStopRecord, reason: string): void {
+    void stop;
+    void reason;
   }
 
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
@@ -2804,13 +2862,14 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.closed = true;
 
     const stop = this.stop;
+    if (stop) {
+      // One death path: the record being dropped settles exactly like an
+      // observed death. The staged successor keeps its "closed" rejection, and
+      // the closed ledger can no longer be reopened by a late settlement.
+      this.settleStopOnObservedDeath("closed");
+    }
     this.stop = null;
     this.admissionState = "idle";
-    if (stop) {
-      // Rejects the queued replacement and clears its deadline; the stop record
-      // itself is dropped, not mutated.
-      this.invalidateStagedSuccessor(stop, "closed");
-    }
 
     this.deliverTranslatedEvents(this.flushPendingUserMessage());
     this.settleCommandsReady();
@@ -3096,6 +3155,31 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     return {};
   }
 
+  /**
+   * Subscribes the one death path to the connection's close signal, covering
+   * transport death that no process exit event reports. The SDK aborts
+   * `signal` when the connection's stream ends; test connections without one,
+   * and already-subscribed signals, are skipped.
+   */
+  protected observeConnectionDeath(connection: ClientSideConnection): void {
+    const signal = connection.signal;
+    if (!(signal instanceof AbortSignal) || this.connectionDeathSignal === signal) {
+      return;
+    }
+    this.connectionDeathSignal = signal;
+    signal.addEventListener(
+      "abort",
+      () => {
+        // A replaced connection's signal says nothing about the live one.
+        if (this.closed || this.connection !== connection) {
+          return;
+        }
+        this.settleStopOnObservedDeath("connection-aborted");
+      },
+      { once: true },
+    );
+  }
+
   private async spawnProcess(): Promise<SpawnedACPProcess> {
     const prefix = await resolveProviderLaunch({
       commandConfig: this.runtimeSettings?.command,
@@ -3137,6 +3221,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
           turnId: foregroundTurnId,
         });
       }
+      // Terminal first, then settlement: the death path runs after the
+      // synthesized foreground terminal, and also runs when there is none (an
+      // ownerless stop has no foreground turn to terminalize).
+      this.settleStopOnObservedDeath("agent-exited");
     });
 
     const stream = createLoggedNdJsonStream(
@@ -3152,6 +3240,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.child = child;
     this.connection = connection;
     this.connectionRevision += 1;
+    this.observeConnectionDeath(connection);
     const initialize = await this.runACPRequest(() =>
       connection.initialize({
         protocolVersion: PROTOCOL_VERSION,
