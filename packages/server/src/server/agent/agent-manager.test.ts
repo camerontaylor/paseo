@@ -10460,7 +10460,7 @@ test("a timed-out side question aborts the provider instead of leaving it runnin
     await manager.closeAgent(agent.id).catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });
   }
-||||||| parent of 6d9d68590 (fix(server): manager-owned cancellation logs and replace-race fixtures)
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Manager integration coverage for the ACP cancellation boundary.
