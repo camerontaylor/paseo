@@ -47,7 +47,14 @@ arrives or the run was still waiting for its provider turn id, and the captured 
 an older cancellation from settling a newer turn. The provider's turn can outlive that settlement,
 so a replacement staged afterwards waits behind the adapter's stop fence, which opens only when the
 provider proves the old prompt terminal and every session-scoped cancellation write for the stop has
-settled. [`docs/providers.md`](./providers.md) states what each provider owes that fence.
+settled. The wait behind that fence is bounded by a ten-second admission deadline that starts when the
+replacement is staged behind the stop, not when the stop is installed — staging is when your wait
+begins. The fork-local GJC provider is why the value is ten seconds: its own abort budget is the same
+10 seconds (`fork/plans/ralplan-gjc-acp-cancellation-boundary.md` has the specifics), so a
+slow-but-healthy abort can consume the whole window. That expiry is the documented fail-closed
+outcome: the deadline bounds your wait and never manufactures readiness. Recovery is
+a later request, or closing and recreating the agent. [`docs/providers.md`](./providers.md) states
+what each provider owes that fence and names the deadline constant with its expiry semantics.
 
 If interruption is rejected or times out, the agent keeps its active foreground turn and
 replacement, reload, rewind, and Stop report the failure. Accepting new work after an ambiguous
