@@ -167,16 +167,17 @@ class TestableGjcSession extends GjcACPAgentSession {
 
 function createHarnessLogger(): { logger: Logger; logs: GjcLogEntry[] } {
   const logger = createTestLogger();
-  const spy = vi.spyOn(logger, "info");
   const logs: GjcLogEntry[] = [];
-  spy.mockImplementation((data: unknown, msg?: string) => {
+  const record = (data: unknown, msg?: string) => {
     logs.push({
       msg: msg ?? "",
       data:
         typeof data === "object" && data !== null ? (data as Record<string, unknown>) : undefined,
     });
     return logger;
-  });
+  };
+  vi.spyOn(logger, "info").mockImplementation(record);
+  vi.spyOn(logger, "warn").mockImplementation(record);
   return { logger, logs };
 }
 
@@ -715,13 +716,14 @@ describe("GjcACPAgentSession ownerless boundary", () => {
       await harness.session.close();
     }
 
-    // Transport rejection behaves like any other rejected write: recorded,
-    // reported to the caller, and the boundary stays closed.
+    // A transport rejection is recorded like any other rejected result: the
+    // interrupt caller is not failed (the write was already dispatched), the
+    // rejection is logged, and the boundary stays closed.
     const harness = createGjcHarness();
     await sendPhase(harness, "working");
     const stopping = harness.session.interrupt();
     harness.control.calls[0]?.reject(new Error("connection closed"));
-    await expect(stopping).rejects.toThrow("connection closed");
+    await stopping;
     await sendPhase(harness, "idle");
     await flushMicrotasks();
     expect(turnTerminalEvents(harness.events), "transport rejection").toEqual([]);
@@ -1131,8 +1133,99 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     expect(turnTerminalEvents(harness.events)).toHaveLength(1);
   });
 
-  // Plan GJC test 31 — steering sends one turn.steer with a fresh client ref.
-  test("31. a text steer sends one turn.steer with a fresh client ref and returns accepted", async () => {
+  // Plan GJC test 32 — issue-and-return: interrupt() returns once the abort
+  // write is dispatched, before the control response settles.
+  test("32. interrupt resolves before the control response, the response validates later, and a late rejection never terminalizes", async () => {
+    const harness = createGjcHarness();
+    await sendPhase(harness, "working");
+    const mirrorId = turnStartedIds(harness.events)[0] as string;
+
+    // The write is issued synchronously and interrupt() resolves while the
+    // control response is still pending.
+    const stopping = harness.session.interrupt();
+    expect(abortRequests(harness)).toHaveLength(1);
+    expect(await hasSettled(stopping)).toBe(true);
+    const control = harness.control.calls[0];
+    if (!control) {
+      throw new Error("the abort control request was not issued");
+    }
+    expect(await hasSettled(control.promise)).toBe(false);
+
+    // The response validates whenever it arrives; the release still waits for
+    // an eligible idle, on the stop's own facts.
+    control.resolve(turnScopeSafeResult("turn"));
+    await flushMicrotasks();
+    expect(
+      harness.logs.some(
+        (log) =>
+          log.msg === "provider.gjc.abort_result" &&
+          log.data?.disposition === "stopped_left_running" &&
+          log.data?.verdict === "safe",
+      ),
+    ).toBe(true);
+    expect(turnTerminalEvents(harness.events)).toEqual([]);
+
+    await sendPhase(harness, "idle");
+    await flushMicrotasks();
+    expect(turnTerminalEvents(harness.events)).toEqual([
+      { type: "turn_canceled", provider: "gjc", reason: "Interrupted", turnId: mirrorId },
+    ]);
+    expect(harness.logs.some((log) => log.msg === "provider.gjc.ownerless_stop_released")).toBe(
+      true,
+    );
+
+    // A later attempt's rejection arrives after its interrupt() returned: it is
+    // recorded as transport_rejected and logged, and no terminal is emitted for
+    // the mirror from the rejection path.
+    await sendPhase(harness, "working");
+    const retryMirrorId = mirrorIds(harness.events).at(-1) as string;
+    expect(retryMirrorId).not.toBe(mirrorId);
+
+    const retry = harness.session.interrupt();
+    expect(abortRequests(harness)).toHaveLength(2);
+    expect(await hasSettled(retry)).toBe(true);
+    const rejectedControl = harness.control.calls[1];
+    if (!rejectedControl) {
+      throw new Error("the retry control request was not issued");
+    }
+    rejectedControl.reject(new Error("connection closed"));
+    await flushMicrotasks();
+
+    expect(turnTerminalEvents(harness.events)).toEqual([
+      { type: "turn_canceled", provider: "gjc", reason: "Interrupted", turnId: mirrorId },
+    ]);
+    expect(mirrorIds(harness.events)).toEqual([mirrorId, retryMirrorId]);
+    expect(harness.prompt.calls).toHaveLength(0);
+    expect(harness.internals.stop?.stoppedTurnId).toBe(retryMirrorId);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(
+      harness.logs.some(
+        (log) =>
+          log.msg === "provider.gjc.abort_result" &&
+          log.data?.disposition === "transport_rejected" &&
+          log.data?.verdict === "reject",
+      ),
+    ).toBe(true);
+    const lateRejections = harness.logs.filter(
+      (log) => log.msg === "provider.gjc.abort_transport_rejected",
+    );
+    expect(lateRejections).toHaveLength(1);
+    const lateRejection = lateRejections[0];
+    if (!lateRejection?.data) {
+      throw new Error("the late rejection was not logged");
+    }
+    expect(lateRejection.data).toMatchObject({
+      stopId: harness.internals.stop?.stopId,
+      sessionId: "session-1",
+      turnId: retryMirrorId,
+      revision: 1,
+      scope: "turn",
+    });
+    expect((lateRejection.data.err as Error).message).toBe("connection closed");
+  });
+
+  // Plan GJC test 34 — steering sends one turn.steer with a fresh client ref.
+  test("34. a text steer sends one turn.steer with a fresh client ref and returns accepted", async () => {
     const harness = createGjcHarness();
     await sendPhase(harness, "working");
     const mirrorId = turnStartedIds(harness.events)[0] as string;
@@ -1163,8 +1256,8 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     expect(abortRequests(harness)).toHaveLength(0);
   });
 
-  // Plan GJC test 32 — non-text, wrong-target, and failed steers back off.
-  test("32. error and non-text paths return unavailable and never interrupt, retry, or prompt", async () => {
+  // Plan GJC test 35 — non-text, wrong-target, and failed steers back off.
+  test("35. error and non-text paths return unavailable and never interrupt, retry, or prompt", async () => {
     const harness = createGjcHarness();
     await sendPhase(harness, "working");
     const mirrorId = turnStartedIds(harness.events)[0] as string;
@@ -1201,7 +1294,8 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     expect(mirrorIds(harness.events)).toEqual([mirrorId]);
   });
 
-  // Plan P5 death settlement — unnumbered: 24, 32, and 33 are reserved by later units.
+  // Plan P5 death settlement — unnumbered: 24 and 33 are reserved by later units
+  // (P3, P4), and 32 belongs to P2's issue-and-return test.
   test("observed death settles the ownerless abort as a transport_death reject that a late reply cannot overwrite", async () => {
     const harness = createGjcHarness();
     await sendPhase(harness, "working");

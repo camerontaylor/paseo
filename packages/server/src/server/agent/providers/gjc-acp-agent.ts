@@ -326,7 +326,7 @@ export class GjcACPAgentSession extends ACPAgentSession {
       // Repeated Stop: same stop identity and stopped turn, a fresh attempt
       // revision, and the staged successor invalidated through its own token.
       this.invalidateStagedSuccessor(existing.stop, "interrupt");
-      await this.issueTerminalAbort(existing);
+      this.issueTerminalAbort(existing);
       return;
     }
 
@@ -358,7 +358,7 @@ export class GjcACPAgentSession extends ACPAgentSession {
       released: false,
     };
     this.ownerlessStop = state;
-    await this.issueTerminalAbort(state);
+    this.issueTerminalAbort(state);
   }
 
   override async close(): Promise<void> {
@@ -558,7 +558,21 @@ export class GjcACPAgentSession extends ACPAgentSession {
     this.pushEvent({ type: "turn_completed", provider: this.provider, turnId: mirror.turnId });
   }
 
-  private async issueTerminalAbort(state: GjcOwnerlessStop): Promise<void> {
+  /**
+   * Issue-and-return: the synchronous prefix (identity check, attempt
+   * revision, idempotency key, attempt log) runs before this returns, and the
+   * control request is dispatched without awaiting its response. gjc's own
+   * abort budget and the admission deadline are both 10 s while the manager
+   * waits only 2 s around `interrupt()`, so awaiting the response reports
+   * every healthy slow abort as a refused Stop. Both settlements attach here
+   * and record through `recordAbortResult`, which keeps newest-wins,
+   * validation, and release on one path: a resolution records its validated
+   * verdict; a rejection records `transport_rejected` and is logged. A late
+   * rejection is a recorded fact, not a user-visible failure — interrupt()
+   * has already returned — so it is never rethrown and never terminalizes the
+   * mirror turn.
+   */
+  private issueTerminalAbort(state: GjcOwnerlessStop): void {
     const stop = state.stop;
     if (!this.gjcStopIdentityMatches(stop)) {
       throw new Error(
@@ -574,32 +588,44 @@ export class GjcACPAgentSession extends ACPAgentSession {
       "provider.gjc.abort_attempt",
     );
 
-    let payload: unknown;
-    try {
-      payload = await stop.connection.extMethod(GJC_CONTROL_METHOD, {
+    void stop.connection
+      .extMethod(GJC_CONTROL_METHOD, {
         sessionId: stop.sessionId,
         operation: GJC_ABORT_OPERATION,
         input: { mode: "terminal", scope: this.abortScope, idempotencyKey },
+      })
+      .then((payload) => {
+        this.recordAbortResult(state, {
+          revision,
+          verdict: validateGjcTerminalAbortResult(payload, this.abortScope),
+        });
+        return;
+      })
+      .catch((error: unknown) => {
+        // A rejected write is recorded like a rejected cancel write: the stop
+        // stays closed and only a newer successful attempt can satisfy the
+        // result fact. No caller sees the rejection — interrupt() has already
+        // returned — so it is logged instead of thrown.
+        this.recordAbortResult(state, {
+          revision,
+          verdict: {
+            kind: "reject",
+            disposition: "transport_rejected",
+            reason: "control request rejected",
+          },
+        });
+        this.logger.warn(
+          {
+            stopId: stop.stopId,
+            sessionId: stop.sessionId,
+            turnId: stop.stoppedTurnId,
+            revision,
+            scope: this.abortScope,
+            err: error,
+          },
+          "provider.gjc.abort_transport_rejected",
+        );
       });
-    } catch (error) {
-      // A rejected write is recorded like a rejected cancel write: the stop
-      // stays closed, only a newer successful attempt can satisfy the result
-      // fact, and the error still reaches the caller.
-      this.recordAbortResult(state, {
-        revision,
-        verdict: {
-          kind: "reject",
-          disposition: "transport_rejected",
-          reason: "control request rejected",
-        },
-      });
-      throw error;
-    }
-
-    this.recordAbortResult(state, {
-      revision,
-      verdict: validateGjcTerminalAbortResult(payload, this.abortScope),
-    });
   }
 
   private recordAbortResult(state: GjcOwnerlessStop, result: GjcAbortResult): void {
