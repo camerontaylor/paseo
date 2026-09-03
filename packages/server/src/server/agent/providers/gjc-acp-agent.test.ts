@@ -251,6 +251,28 @@ function sendPhase(harness: GjcHarness, phase: string): Promise<void> {
   return harness.session.sessionUpdate(update);
 }
 
+/**
+ * Raises one permission request against the GJC session and returns its
+ * request id with the still-pending reply promise — the pair a deny+interrupt
+ * routes by.
+ */
+async function requestGjcPermission(harness: GjcHarness) {
+  const promise = harness.session.requestPermission({
+    sessionId: harness.sessionId,
+    toolCall: { toolCallId: "tool-1", title: "Run command", kind: "execute", status: "pending" },
+    options: [
+      { optionId: "allow-once", name: "Allow", kind: "allow_once" },
+      { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+    ],
+  });
+  await flushMicrotasks();
+  const requested = harness.events.find((event) => event.type === "permission_requested");
+  if (requested?.type !== "permission_requested") {
+    throw new Error("Expected a permission request");
+  }
+  return { id: requested.request.id, promise };
+}
+
 function turnStartedIds(events: AgentStreamEvent[]): string[] {
   return events.flatMap((event) => (event.type === "turn_started" ? [event.turnId] : []));
 }
@@ -1311,6 +1333,122 @@ describe("GjcACPAgentSession ownerless boundary", () => {
       scope: "turn",
     });
     expect((lateRejection.data.err as Error).message).toBe("connection closed");
+  });
+
+  // Plan GJC test 33 — the §7 deny router on the GJC session: an open ownerless
+  // mirror routes to the ownerless stop (control abort only, two-fact release,
+  // exact-id terminal); no stop-able turn — including a mirror already closed by
+  // its own completion — suppresses the cancel write and logs the suppression.
+  test("33. deny+interrupt stops an open mirror ownerlessly and suppresses observably with no stop-able turn", async () => {
+    // (a) Denial with an open mirror: the ownerless stop installs, the control
+    // abort is the only write, and the two facts release the exact-id terminal.
+    {
+      const harness = createGjcHarness();
+      await sendPhase(harness, "working");
+      const mirrorId = turnStartedIds(harness.events)[0] as string;
+      const permission = await requestGjcPermission(harness);
+      const denying = harness.session.respondToPermission(permission.id, {
+        behavior: "deny",
+        interrupt: true,
+      });
+
+      expect(abortRequests(harness)).toHaveLength(1);
+      expect(firstControlRequest(harness)).toMatchObject({
+        sessionId: "session-1",
+        operation: "turn.abort",
+        input: { mode: "terminal", scope: "turn", idempotencyKey: expect.any(String) },
+      });
+      expect(harness.cancel.calls).toHaveLength(0);
+      expect(harness.internals.stop?.kind).toBe("provider-owned");
+      expect(harness.internals.stop?.stoppedTurnId).toBe(mirrorId);
+      expect(harness.internals.stop?.cancelAttempts).toEqual([]);
+
+      // Issue-and-return is inherited: the denial resolves while the control
+      // response is still pending, and the user's reply still lands.
+      expect(await hasSettled(denying)).toBe(true);
+      const control = harness.control.calls[0];
+      if (!control) {
+        throw new Error("the abort control request was not issued");
+      }
+      expect(await hasSettled(control.promise)).toBe(false);
+      await expect(permission.promise).resolves.toEqual({
+        outcome: { outcome: "selected", optionId: "reject-once" },
+      });
+
+      // Two-fact gate: safe result, then an eligible idle, releases the staged
+      // successor with the exact-id turn_canceled.
+      const staged = harness.session.startTurn("replacement");
+      control.resolve(turnScopeSafeResult("turn"));
+      await flushMicrotasks();
+      expect(turnTerminalEvents(harness.events)).toEqual([]);
+      expect(harness.prompt.calls).toHaveLength(0);
+
+      await sendPhase(harness, "idle");
+      await flushMicrotasks();
+      expect(turnTerminalEvents(harness.events)).toEqual([
+        { type: "turn_canceled", provider: "gjc", reason: "Interrupted", turnId: mirrorId },
+      ]);
+      expect(harness.logs.some((log) => log.msg === "provider.gjc.ownerless_stop_released")).toBe(
+        true,
+      );
+      expect(harness.prompt.calls).toHaveLength(1);
+      const stagedTurnId = (await staged).turnId;
+      expect(turnStartedIds(harness.events)).toEqual([mirrorId, stagedTurnId]);
+      expect(harness.cancel.calls).toHaveLength(0);
+      expect(harness.internals.admissionState).toBe("running");
+      expect(harness.internals.stop).toBeNull();
+      expect(
+        harness.logs.filter((log) => log.msg === "provider.acp.deny_cancel_suppressed"),
+      ).toEqual([]);
+    }
+
+    // (b) Denial with no stop-able turn: never a mirror, and a mirror already
+    // closed by its own completion. Zero cancel, zero control writes, no stop,
+    // nothing left stopping — and the suppression is logged with correlation.
+    for (const completeMirrorFirst of [false, true] as const) {
+      const harness = createGjcHarness();
+      if (completeMirrorFirst) {
+        await sendPhase(harness, "working");
+      }
+      const permission = await requestGjcPermission(harness);
+      if (completeMirrorFirst) {
+        await sendPhase(harness, "idle");
+        expect(turnTerminalEvents(harness.events)).toEqual([
+          { type: "turn_completed", provider: "gjc", turnId: expect.any(String) },
+        ]);
+      }
+
+      await harness.session.respondToPermission(permission.id, {
+        behavior: "deny",
+        interrupt: true,
+      });
+
+      expect(harness.cancel.calls).toHaveLength(0);
+      expect(harness.controlRequests).toHaveLength(0);
+      expect(harness.internals.stop).toBeNull();
+      expect(harness.internals.admissionState).toBe("idle");
+      await expect(permission.promise).resolves.toEqual({
+        outcome: { outcome: "selected", optionId: "reject-once" },
+      });
+      const suppressed = harness.logs.filter(
+        (log) => log.msg === "provider.acp.deny_cancel_suppressed",
+      );
+      expect(suppressed).toHaveLength(1);
+      expect(suppressed[0]?.data).toMatchObject({
+        permissionRequestId: permission.id,
+        sessionId: "session-1",
+        reason: "no_active_turn",
+      });
+
+      // Nothing was fenced: the next mirror still opens and completes.
+      await sendPhase(harness, "working");
+      const nextMirrorId = mirrorIds(harness.events).at(-1) as string;
+      await sendPhase(harness, "idle");
+      expect(turnTerminalEvents(harness.events).at(-1)).toMatchObject({
+        type: "turn_completed",
+        turnId: nextMirrorId,
+      });
+    }
   });
 
   // Plan GJC test 34 — steering sends one turn.steer with a fresh client ref.

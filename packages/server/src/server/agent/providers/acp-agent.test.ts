@@ -3976,6 +3976,31 @@ async function startForegroundTurn(harness: ACPStopBoundaryHarness, text: string
   const { turnId } = await harness.session.startTurn(text);
   return turnId;
 }
+/**
+ * Raises one permission request through the session and returns its request id
+ * with the still-pending reply promise — the pair a deny+interrupt routes by.
+ */
+async function requestBoundaryPermission(harness: ACPStopBoundaryHarness) {
+  const promise = harness.session.requestPermission({
+    sessionId: "session-1",
+    toolCall: { toolCallId: "tool-1", title: "Edit file", kind: "edit", status: "pending" },
+    options: [
+      { optionId: "allow-once", name: "Allow", kind: "allow_once" },
+      { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+    ],
+  } satisfies RequestPermissionRequest);
+  await flushMicrotasks();
+  const requested = harness.events.find((event) => event.type === "permission_requested");
+  if (requested?.type !== "permission_requested") {
+    throw new Error("Expected a permission request");
+  }
+  return { id: requested.request.id, promise };
+}
+
+/** Every suppression log the deny router emitted for this harness. */
+function denySuppressedLogs(harness: ACPStopBoundaryHarness): StopBoundaryLogEntry[] {
+  return harness.logs.filter((log) => log.msg === "provider.acp.deny_cancel_suppressed");
+}
 
 /**
  * True once `promise` settles inside a fixed window of resolved microtasks. The
@@ -4720,6 +4745,112 @@ describe("ACPAgentSession stop boundary", () => {
       expect(harness.internals.stop?.newestCancelSucceeded).toBe(false);
       expect(harness.prompt.calls).toHaveLength(1);
       expect(turnStartedIds(harness.events)).toEqual([turnId]);
+    }
+  });
+
+  // Plan generic test 22 — the §7 no-stop-able-turn deny branch: the cancel
+  // write is suppressed without becoming silent, the permission resolution
+  // still emits, admission stays untouched, and the log's reason separates an
+  // uninitialized session from a session with nothing to stop.
+  test("22. suppresses the denial cancellation observably when no stop-able turn exists", async () => {
+    // An initialized session with no turn at all.
+    {
+      const harness = createStopBoundarySession();
+      const permission = await requestBoundaryPermission(harness);
+      const denying = harness.session.respondToPermission(permission.id, {
+        behavior: "deny",
+        interrupt: true,
+      });
+      await flushMicrotasks();
+
+      expect(harness.cancel.calls).toHaveLength(0);
+      expect(harness.internals.stop).toBeNull();
+      expect(harness.internals.admissionState).toBe("idle");
+      await expect(denying).resolves.toBeUndefined();
+      await expect(permission.promise).resolves.toEqual({
+        outcome: { outcome: "selected", optionId: "reject-once" },
+      });
+      expect(harness.events).toContainEqual(
+        expect.objectContaining({ type: "permission_resolved", requestId: permission.id }),
+      );
+      expect(denySuppressedLogs(harness)).toEqual([
+        {
+          msg: "provider.acp.deny_cancel_suppressed",
+          data: {
+            permissionRequestId: permission.id,
+            sessionId: "session-1",
+            reason: "no_active_turn",
+          },
+        },
+      ]);
+
+      // Nothing was fenced: the next turn starts immediately.
+      await harness.session.startTurn("after");
+      expect(harness.prompt.calls).toHaveLength(1);
+    }
+
+    // Deny after the permission's own turn already terminalized: the same
+    // branch, and the correlation still names the turn the request was raised on.
+    {
+      const harness = createStopBoundarySession();
+      const turnId = await startForegroundTurn(harness, "first");
+      const permission = await requestBoundaryPermission(harness);
+
+      harness.prompt.calls[0]?.resolve({ stopReason: "end_turn" });
+      await flushMicrotasks();
+      expect(harness.internals.admissionState).toBe("idle");
+
+      const denying = harness.session.respondToPermission(permission.id, {
+        behavior: "deny",
+        interrupt: true,
+      });
+      await denying;
+
+      expect(harness.cancel.calls).toHaveLength(0);
+      expect(harness.internals.stop).toBeNull();
+      expect(harness.internals.admissionState).toBe("idle");
+      await expect(permission.promise).resolves.toEqual({
+        outcome: { outcome: "selected", optionId: "reject-once" },
+      });
+      expect(denySuppressedLogs(harness)).toEqual([
+        {
+          msg: "provider.acp.deny_cancel_suppressed",
+          data: {
+            permissionRequestId: permission.id,
+            turnId,
+            sessionId: "session-1",
+            reason: "no_active_turn",
+          },
+        },
+      ]);
+    }
+
+    // The not-initialized variant is a distinguishable fact, not the same
+    // silent early return: a different reason, and no session id to correlate.
+    {
+      const harness = createStopBoundarySession();
+      harness.internals.connection = null;
+      harness.internals.sessionId = null;
+      const permission = await requestBoundaryPermission(harness);
+      const denying = harness.session.respondToPermission(permission.id, {
+        behavior: "deny",
+        interrupt: true,
+      });
+      await denying;
+
+      expect(harness.cancel.calls).toHaveLength(0);
+      expect(harness.internals.stop).toBeNull();
+      expect(harness.internals.admissionState).toBe("idle");
+      await expect(permission.promise).resolves.toEqual({
+        outcome: { outcome: "selected", optionId: "reject-once" },
+      });
+      const suppressed = denySuppressedLogs(harness);
+      expect(suppressed).toHaveLength(1);
+      expect(suppressed[0]?.data).toMatchObject({
+        permissionRequestId: permission.id,
+        reason: "session_not_initialized",
+      });
+      expect(suppressed[0]?.data).not.toHaveProperty("sessionId");
     }
   });
 

@@ -9,7 +9,12 @@ import type {
   SteerActiveTurnOptions,
   SteerResult,
 } from "../agent-sdk-types.js";
-import { ACPAgentSession, type ACPAgentSessionOptions, type ACPStopRecord } from "./acp-agent.js";
+import {
+  ACPAgentSession,
+  type ACPAgentSessionOptions,
+  type ACPStopCorrelation,
+  type ACPStopRecord,
+} from "./acp-agent.js";
 import { GenericACPAgentClient } from "./generic-acp-agent.js";
 
 /**
@@ -330,6 +335,64 @@ export class GjcACPAgentSession extends ACPAgentSession {
       return;
     }
 
+    // Deliberately deferred: a GJC-raised permission pending when this ownerless
+    // stop runs is not resolved here (the base sweep mutates private state and
+    // the public reply API would fabricate a user-facing response); close()
+    // settles it. The deny router has no gap of the same shape: it resolves the
+    // permission it was asked about before it routes, and the stop's release
+    // never consults pending permissions.
+    this.installOwnerlessStopAndAbort(mirror.turnId, "interrupt");
+  }
+
+  /**
+   * The deny half of the §7 stop-kind router. The guards mirror `interrupt()`:
+   * a foreground turn keeps the generic boundary, an open ownerless mirror gets
+   * the ownerless stop (reusing it when the denial lands on an already-stopped
+   * mirror), and no stop-able turn falls through to the base router, which
+   * suppresses the cancellation write with the deny correlation attached.
+   */
+  protected override async stopTurnOnPermissionDenial(
+    correlation: ACPStopCorrelation,
+  ): Promise<void> {
+    if (this.ownClosed) {
+      return;
+    }
+
+    // A foreground turn keeps the generic boundary and ACP session/cancel.
+    if (this.getForegroundTurnId() !== null) {
+      await super.stopTurnOnPermissionDenial(correlation);
+      return;
+    }
+
+    const mirror = this.mirror;
+    if (!mirror) {
+      await super.stopTurnOnPermissionDenial(correlation);
+      return;
+    }
+
+    const existing = this.ownerlessStop;
+    if (
+      existing &&
+      existing.stop.stoppedTurnId === mirror.turnId &&
+      this.getCurrentStop() === existing.stop
+    ) {
+      // Repeated Stop: same stop identity and stopped turn, a fresh attempt
+      // revision, and the staged successor invalidated through its own token.
+      this.invalidateStagedSuccessor(existing.stop, "permission-denied");
+      this.issueTerminalAbort(existing);
+      return;
+    }
+
+    this.installOwnerlessStopAndAbort(mirror.turnId, "permission-denied");
+  }
+
+  /**
+   * The one ownerless stop operation, shared by `interrupt()` and the deny
+   * router: invalidates a displaced stop's staged successor, installs the
+   * provider-owned boundary synchronously, and issues the terminal abort
+   * without awaiting its response (issue-and-return).
+   */
+  private installOwnerlessStopAndAbort(stoppedTurnId: string, reason: string): void {
     // A stop this one displaces may still hold a staged successor with a live
     // deadline. Invalidate it here so its waiter is rejected by the stop that
     // replaces it rather than stranded until the admission timeout.
@@ -338,16 +401,11 @@ export class GjcACPAgentSession extends ACPAgentSession {
       this.invalidateStagedSuccessor(displaced, "superseded");
     }
 
-    // Deliberately deferred: a GJC-raised permission pending when this ownerless
-    // stop runs is not resolved here (the base sweep mutates private state and
-    // the public reply API would fabricate a user-facing response); close()
-    // settles it.
-    //
     // Installed synchronously, before the first control write it is followed by.
     const stop = this.installStop({
       kind: "provider-owned",
-      stoppedTurnId: mirror.turnId,
-      reason: "interrupt",
+      stoppedTurnId,
+      reason,
     });
     const state: GjcOwnerlessStop = {
       stop,

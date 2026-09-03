@@ -1441,6 +1441,17 @@ export type ACPAdmissionState = "idle" | "reserved" | "running" | "stopping";
  */
 export type ACPStopKind = "foreground" | "provider-owned";
 
+/**
+ * Correlation a permission denial carries into the stop router: the request id
+ * it resolves and the turn the request was raised on, when it carried one. A
+ * suppressed cancellation write logs these so the suppression stays observable
+ * and attributable.
+ */
+export interface ACPStopCorrelation {
+  readonly permissionRequestId: string;
+  readonly turnId?: string;
+}
+
 interface ACPStopCancelAttempt {
   readonly revision: number;
   settled: boolean;
@@ -2194,8 +2205,17 @@ export class ACPAgentSession implements AgentSession, ACPClient {
    * installed, and returns when the cancellation write it issued settles.
    * Settling a write proves transport completion only — the stop stays installed
    * until terminal proof and a fully settled ledger arrive.
+   *
+   * With no stop-able turn the cancellation write is suppressed entirely (AC13):
+   * no stop is installed and admission state is untouched. A denial caller
+   * passes `correlation`, and the suppression logs
+   * `provider.acp.deny_cancel_suppressed` with a `reason` that separates the
+   * not-initialized session from the no-active-turn case — review finding 3.
    */
-  protected async stopForegroundTurn(input: { reason: string }): Promise<void> {
+  protected async stopForegroundTurn(input: {
+    reason: string;
+    correlation?: ACPStopCorrelation;
+  }): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -2213,7 +2233,22 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       // Deliberate delta from pre-stop-boundary behavior (AC13): a permission
       // denial arriving with no foreground turn and no installed stop sends no
       // cancellation. An untracked session-scoped cancel write is exactly what
-      // the ledger exists to prevent.
+      // the ledger exists to prevent. The suppressed write is still a fact
+      // worth seeing: one event, with the deny correlation and a reason that
+      // distinguishes an uninitialized session from a session with no
+      // stop-able turn.
+      if (input.correlation) {
+        this.logger.info(
+          {
+            permissionRequestId: input.correlation.permissionRequestId,
+            ...(input.correlation.turnId ? { turnId: input.correlation.turnId } : {}),
+            ...(this.sessionId ? { sessionId: this.sessionId } : {}),
+            reason:
+              this.connection && this.sessionId ? "no_active_turn" : "session_not_initialized",
+          },
+          "provider.acp.deny_cancel_suppressed",
+        );
+      }
       return;
     }
     const stop = this.installStop({
@@ -2818,8 +2853,22 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     // closes admission before the cancellation write, so no replacement can
     // cross the denied turn before its terminal and cancellation are settled.
     if (response.behavior === "deny" && response.interrupt) {
-      await this.stopForegroundTurn({ reason: "permission-denied" });
+      await this.stopTurnOnPermissionDenial({
+        permissionRequestId: requestId,
+        ...(pending.turnId ? { turnId: pending.turnId } : {}),
+      });
     }
+  }
+
+  /**
+   * Routes a deny+interrupt by stop kind. The generic router knows two kinds: a
+   * foreground turn gets the ordinary foreground stop plus its cancellation
+   * ledger, and no stop-able turn suppresses the write with an observable log.
+   * A subclass with another stop kind overrides this; the base deliberately
+   * carries no subclass-specific stop identity or routing knowledge.
+   */
+  protected async stopTurnOnPermissionDenial(correlation: ACPStopCorrelation): Promise<void> {
+    await this.stopForegroundTurn({ reason: "permission-denied", correlation });
   }
 
   describePersistence(): AgentPersistenceHandle | null {
