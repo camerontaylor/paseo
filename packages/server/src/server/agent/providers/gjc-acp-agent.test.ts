@@ -657,8 +657,10 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     await sendPhase(harness, "idle");
     await flushMicrotasks();
 
+    // Terminal-reason precedence: no_active_turn + terminal_no_effect stopped
+    // nothing, so the eligible idle releases the mirror as turn_completed.
     expect(turnTerminalEvents(harness.events).map((event) => event.type)).toEqual([
-      "turn_canceled",
+      "turn_completed",
     ]);
     expect(harness.prompt.calls).toHaveLength(1);
     await staged;
@@ -940,8 +942,95 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     expect(harness.internals.admissionState).toBe("idle");
   });
 
-  // Plan GJC test 24 — repeated Stop keeps identity, moves the attempt revision.
-  test("24. repeated ownerless Stop keeps stop and turn id, bumps the idempotency key, and invalidates the staged successor separately", async () => {
+  // Plan GJC test 24 — natural completion racing an installed stop: the
+  // validated abort disposition picks the terminal kind (§11 precedence).
+  test("24. natural completion racing an installed stop: the validated disposition picks the terminal kind", async () => {
+    // (a) A safe verdict cancels the mirror even when the eligible idle was
+    // observed before the abort result validated. Both terminal-safe shapes:
+    // the configured-scope default ("turn") and the explicit "owned" scope.
+    const safeEpisodes: Array<{
+      name: string;
+      options: { abortScope?: string };
+      payload: Record<string, unknown>;
+      disposition: string;
+    }> = [
+      {
+        name: "stopped_left_running under the default turn scope",
+        options: {},
+        payload: turnScopeSafeResult("turn"),
+        disposition: "stopped_left_running",
+      },
+      {
+        name: "stopped_stopped under the explicit owned scope",
+        options: { abortScope: "owned" },
+        payload: ownedScopeSafeResult("owned"),
+        disposition: "stopped_stopped",
+      },
+    ];
+    for (const episode of safeEpisodes) {
+      const harness = createGjcHarness(episode.options);
+      await sendPhase(harness, "working");
+      const mirrorId = turnStartedIds(harness.events)[0] as string;
+      const stopping = harness.session.interrupt();
+
+      // The idle arrives while the control response is still pending.
+      await sendPhase(harness, "idle");
+      expect(turnTerminalEvents(harness.events), episode.name).toEqual([]);
+      harness.control.calls[0]?.resolve(episode.payload);
+      await stopping;
+      await flushMicrotasks();
+
+      expect(turnTerminalEvents(harness.events), episode.name).toEqual([
+        { type: "turn_canceled", provider: "gjc", reason: "Interrupted", turnId: mirrorId },
+      ]);
+      const released = harness.logs.find(
+        (log) => log.msg === "provider.gjc.ownerless_stop_released",
+      );
+      expect(released?.data, episode.name).toMatchObject({
+        turnId: mirrorId,
+        resultRevision: 1,
+        resultDisposition: episode.disposition,
+        idlePhaseRevision: expect.any(Number),
+      });
+      await harness.session.close();
+    }
+
+    // (b) A conditional verdict (no_active_turn + terminal_no_effect) stopped
+    // nothing, so the post-stop idle is the mirror's natural completion edge.
+    const harness = createGjcHarness();
+    await sendPhase(harness, "working");
+    const mirrorId = turnStartedIds(harness.events)[0] as string;
+    const stopping = harness.session.interrupt();
+
+    await sendPhase(harness, "idle");
+    harness.control.calls[0]?.resolve(noActiveTurnResult("turn"));
+    await stopping;
+    await flushMicrotasks();
+
+    expect(turnTerminalEvents(harness.events)).toEqual([
+      { type: "turn_completed", provider: "gjc", turnId: mirrorId },
+    ]);
+    const released = harness.logs.find((log) => log.msg === "provider.gjc.ownerless_stop_released");
+    expect(released?.data).toMatchObject({
+      turnId: mirrorId,
+      resultRevision: 1,
+      resultDisposition: "no_active_turn",
+      idlePhaseRevision: expect.any(Number),
+    });
+    // The eligible idle edge carried the mirror id into the phase log.
+    expect(
+      harness.logs.some(
+        (log) =>
+          log.msg === "provider.gjc.phase_edge" &&
+          log.data?.phase === "idle" &&
+          log.data?.mirrorTurnId === mirrorId,
+      ),
+    ).toBe(true);
+    await harness.session.close();
+  });
+
+  // Plan GJC test 25 — repeated Stop keeps identity, moves the attempt revision.
+  test("25. repeated ownerless Stop keeps stop and turn id, bumps the idempotency key, and invalidates the staged successor separately", async () => {
     const harness = createGjcHarness();
     await sendPhase(harness, "working");
     const mirrorId = turnStartedIds(harness.events)[0] as string;
@@ -984,8 +1073,8 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     expect(harness.prompt.calls).toHaveLength(0);
   });
 
-  // Plan GJC test 25 — a retry's success still needs a current idle.
-  test("25. success on retry still requires a current eligible idle", async () => {
+  // Plan GJC test 26 — a retry's success still needs a current idle.
+  test("26. success on retry still requires a current eligible idle", async () => {
     const harness = createGjcHarness();
     await sendPhase(harness, "working");
     const first = harness.session.interrupt();
@@ -1010,8 +1099,8 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     expect(turnTerminalEvents(harness.events)).toHaveLength(1);
   });
 
-  // Plan GJC test 26 — a staged replacement is invalidated, never prompted.
-  test("26. a Stop while a replacement is staged sends no replacement prompt", async () => {
+  // Plan GJC test 27 — a staged replacement is invalidated, never prompted.
+  test("27. a Stop while a replacement is staged sends no replacement prompt", async () => {
     const harness = createGjcHarness();
     await sendPhase(harness, "working");
     const stopping = harness.session.interrupt();
@@ -1036,8 +1125,8 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     expect(next.turnId).not.toBe("");
   });
 
-  // Plan GJC test 27 — the deadline rejects with the response fact missing.
-  test("27. ownerless admission deadline rejects with an unresolved response fact", async () => {
+  // Plan GJC test 28 — the deadline rejects with the response fact missing.
+  test("28. ownerless admission deadline rejects with an unresolved response fact", async () => {
     const harness = createGjcHarness();
     await sendPhase(harness, "working");
     const stopping = harness.session.interrupt();
@@ -1065,8 +1154,8 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     await harness.session.close();
   });
 
-  // Plan GJC test 28 — the deadline rejects with the idle fact missing.
-  test("28. ownerless admission deadline rejects with an unresolved idle fact", async () => {
+  // Plan GJC test 29 — the deadline rejects with the idle fact missing.
+  test("29. ownerless admission deadline rejects with an unresolved idle fact", async () => {
     const harness = createGjcHarness();
     await sendPhase(harness, "working");
     const stopping = harness.session.interrupt();
@@ -1093,8 +1182,8 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     });
   });
 
-  // Plan GJC test 29 — foreground stops use ACP cancel only.
-  test("29. a foreground GJC stop calls ACP cancel and never terminal control", async () => {
+  // Plan GJC test 30 — foreground stops use ACP cancel only.
+  test("30. a foreground GJC stop calls ACP cancel and never terminal control", async () => {
     const harness = createGjcHarness();
     await harness.session.startTurn("foreground");
     const stopping = harness.session.interrupt();
@@ -1112,8 +1201,8 @@ describe("GjcACPAgentSession ownerless boundary", () => {
     expect(harness.internals.admissionState).toBe("stopping");
   });
 
-  // Plan GJC test 30 — an ownerless stop uses terminal control only.
-  test("30. an ownerless GJC stop calls terminal control and never a synthetic ACP cancel", async () => {
+  // Plan GJC test 31 — an ownerless stop uses terminal control only.
+  test("31. an ownerless GJC stop calls terminal control and never a synthetic ACP cancel", async () => {
     const harness = createGjcHarness();
     await sendPhase(harness, "working");
     const stopping = harness.session.interrupt();

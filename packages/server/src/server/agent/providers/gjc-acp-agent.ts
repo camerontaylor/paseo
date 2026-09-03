@@ -668,13 +668,26 @@ export class GjcACPAgentSession extends ACPAgentSession {
 
     // Both facts are present: one terminal, with the mirror's explicit id,
     // delivered through the base boundary so terminal proof, exactly-once
-    // delivery, and successor admission all happen there.
-    this.finishTurn(stop.stoppedTurnId, {
-      type: "turn_canceled",
-      provider: this.provider,
-      reason: "Interrupted",
-      turnId: stop.stoppedTurnId,
-    });
+    // delivery, and successor admission all happen there. The validated
+    // disposition picks the kind (terminal-reason precedence): a safe stop
+    // genuinely stopped the turn → turn_canceled, even when the eligible idle
+    // arrived first; no_active_turn + terminal_no_effect stopped nothing, so
+    // that idle is the mirror's natural completion edge → turn_completed.
+    this.finishTurn(
+      stop.stoppedTurnId,
+      result.verdict.kind === "conditional"
+        ? {
+            type: "turn_completed",
+            provider: this.provider,
+            turnId: stop.stoppedTurnId,
+          }
+        : {
+            type: "turn_canceled",
+            provider: this.provider,
+            reason: "Interrupted",
+            turnId: stop.stoppedTurnId,
+          },
+    );
     if (!stop.terminalObserved) {
       // Close or an identity change landed first; the stop stays installed and
       // a later attempt may try again.
