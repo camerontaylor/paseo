@@ -1,7 +1,7 @@
-diff --git a/node_modules/react-native-markdown-display/src/lib/AstRenderer.js b/node_modules/react-native-markdown-display/src/lib/AstRenderer.js
+diff --git a/src/lib/AstRenderer.js b/src/lib/AstRenderer.js
 index 608e945..edafe12 100644
---- a/node_modules/react-native-markdown-display/src/lib/AstRenderer.js
-+++ b/node_modules/react-native-markdown-display/src/lib/AstRenderer.js
+--- a/src/lib/AstRenderer.js
++++ b/src/lib/AstRenderer.js
 @@ -1,6 +1,5 @@
  import {StyleSheet} from 'react-native';
  
@@ -18,10 +18,10 @@ index 608e945..edafe12 100644
      return this.renderNode(root, [], true);
    };
  }
-diff --git a/node_modules/react-native-markdown-display/src/lib/util/tokensToAST.js b/node_modules/react-native-markdown-display/src/lib/util/tokensToAST.js
+diff --git a/src/lib/util/tokensToAST.js b/src/lib/util/tokensToAST.js
 index b0ed265..68e2150 100644
---- a/node_modules/react-native-markdown-display/src/lib/util/tokensToAST.js
-+++ b/node_modules/react-native-markdown-display/src/lib/util/tokensToAST.js
+--- a/src/lib/util/tokensToAST.js
++++ b/src/lib/util/tokensToAST.js
 @@ -1,4 +1,3 @@
 -import getUniqueID from './getUniqueID';
  import getTokenTypeByToken from './getTokenTypeByToken';

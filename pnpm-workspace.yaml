@@ -1,0 +1,90 @@
+packages:
+  - packages/expo-two-way-audio
+  - packages/highlight
+  - packages/plugin
+  - packages/protocol
+  - packages/client
+  - packages/server
+  - packages/app
+  - packages/relay
+  - packages/website
+  - packages/desktop
+  - packages/cli
+  # Not a shipped package: the example plugins are typechecked by
+  # packages/plugin's `tsconfig.examples.json`. Under npm they resolved
+  # @getpaseo/plugin, react, zod, vitest etc. from the hoisted root
+  # node_modules; pnpm gives them no root to hoist into, so they now declare
+  # the dependencies they always actually had.
+  - plugin-examples
+
+# npm workspaces resolve internal deps declared as "*" to the local package.
+# pnpm 10+ defaults linkWorkspacePackages to false, which sends "*" to the
+# registry (404 for the private/unpublished workspace packages). Turning it back
+# on reproduces npm's behaviour exactly and keeps every package.json's published
+# dependency ranges untouched (no `workspace:*` leaking into npm-packed tarballs).
+linkWorkspacePackages: true
+
+# linkWorkspacePackages alone is NOT enough. With a "*" specifier pnpm still
+# picks the HIGHEST matching version, and these packages are published: the app
+# and desktop silently linked @getpaseo/{protocol,client,highlight,plugin,cli,
+# server} 0.7.2 from the npm registry instead of this checkout's 0.7.0-beta.1,
+# so they typechecked against a different codebase. preferWorkspacePackages
+# makes a local workspace package always win over a newer registry release,
+# which is what npm workspaces did.
+preferWorkspacePackages: true
+
+# Mirrors the former npm `overrides` block in package.json. pnpm does not read
+# npm's top-level `overrides` field.
+overrides:
+  "@codemirror/language": 6.12.4
+  "@codemirror/view": 6.43.6
+  lightningcss: 1.30.1
+  react: 19.1.0
+  react-dom: 19.1.0
+  react-native-reanimated: 4.3.1
+  react-native-worklets: 0.8.3
+
+# Replaces patch-package (`scripts/postinstall-patches.mjs`). pnpm applies these
+# while extracting into the content-addressed store, so the patched copy is a
+# distinct store entry. Running patch-package against a pnpm node_modules would
+# instead write through the store links and corrupt every other project on the
+# machine that shares those packages.
+patchedDependencies:
+  "@mattermost/react-native-paste-input@2.0.1": patches/@mattermost__react-native-paste-input@2.0.1.patch
+  "@opencode-ai/sdk@1.14.46": patches/@opencode-ai__sdk@1.14.46.patch
+  react-native-draggable-flatlist@4.0.3: patches/react-native-draggable-flatlist@4.0.3.patch
+  react-native-gesture-handler@2.28.0: patches/react-native-gesture-handler@2.28.0.patch
+  react-native-markdown-display@7.0.2: patches/react-native-markdown-display@7.0.2.patch
+  react-native-svg@15.15.3: patches/react-native-svg@15.15.3.patch
+
+# npm always runs `pre<script>`/`post<script>` for arbitrary script names; pnpm
+# only does so for npm's own lifecycle events unless this is enabled. Without it
+# `packages/protocol`'s `prebuild` / `pretypecheck` / `pretest` hooks (which run
+# `generate:validators` to emit the gitignored src/generated/validation/*.aot.ts)
+# are silently skipped and the build uses stale or missing generated code.
+enablePrePostScripts: true
+
+# pnpm blocks dependency build scripts by default (supply-chain hardening); npm
+# ran all of these. pnpm 11 spells this `allowBuilds` (name -> bool); the older
+# `onlyBuiltDependencies` list is silently inert on 11.x. Explicit allowlist
+# rather than approving everything, so a new package that wants to run code at
+# install time shows up as a failure
+# and has to be reviewed. What each one needs its script for:
+#   electron           downloads the Electron binary (packages/desktop is dead without it)
+#   node-pty           native build; the server's terminal/pty layer
+#   esbuild / workerd  fetch the platform-specific binary (vite, expo, wrangler)
+#   sharp              native libvips bindings
+#   unrs-resolver      native resolver binary used by the lint toolchain
+#   lefthook           downloads the git-hook binary the root `prepare` invokes
+#   dtrace-provider    optional bunyan dep; kept because npm attempted it too
+#   electron-winstaller Windows installer tooling for the desktop release
+allowBuilds:
+  dtrace-provider: true
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  lefthook: true
+  node-pty: true
+  sharp: true
+  unrs-resolver: true
+  workerd: true

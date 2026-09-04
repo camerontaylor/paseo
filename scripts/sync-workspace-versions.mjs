@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { load } from "js-yaml";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -8,7 +9,13 @@ const rootPackagePath = path.join(rootDir, "package.json");
 
 const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8"));
 const rootVersion = rootPackage.version;
-const workspacePaths = Array.isArray(rootPackage.workspaces) ? rootPackage.workspaces : [];
+// The workspace package list lives in pnpm-workspace.yaml, not in
+// package.json's "workspaces" field (pnpm ignores that field entirely).
+const pnpmWorkspace = load(readFileSync(path.join(rootDir, "pnpm-workspace.yaml"), "utf8"));
+const workspacePaths = Array.isArray(pnpmWorkspace?.packages) ? pnpmWorkspace.packages : [];
+if (workspacePaths.length === 0) {
+  throw new Error('pnpm-workspace.yaml must list at least one entry under "packages"');
+}
 const sharedMetadata = {
   homepage: rootPackage.homepage,
   repository: rootPackage.repository,
@@ -54,7 +61,7 @@ for (const workspacePath of workspacePaths) {
     }
   }
 
-  // Private workspaces (app, desktop) keep "*" for internal deps so npm always
+  // Private workspaces (app, desktop) keep "*" for internal deps so pnpm always
   // resolves the local sibling, never a registry artifact. Publishable workspaces
   // get the root version so their published tarballs reference real npm versions.
   const internalDepRange = pkg.private === true ? "*" : rootVersion;

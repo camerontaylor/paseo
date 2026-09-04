@@ -1,7 +1,7 @@
-diff --git a/node_modules/react-native-svg/lib/commonjs/lib/extract/extractTransform.js b/node_modules/react-native-svg/lib/commonjs/lib/extract/extractTransform.js
+diff --git a/lib/commonjs/lib/extract/extractTransform.js b/lib/commonjs/lib/extract/extractTransform.js
 index f22cca3..0a73681 100644
---- a/node_modules/react-native-svg/lib/commonjs/lib/extract/extractTransform.js
-+++ b/node_modules/react-native-svg/lib/commonjs/lib/extract/extractTransform.js
+--- a/lib/commonjs/lib/extract/extractTransform.js
++++ b/lib/commonjs/lib/extract/extractTransform.js
 @@ -152,7 +152,12 @@ function extractTransform(props) {
  }
  function extractTransformSvgView(props) {
@@ -16,10 +16,10 @@ index f22cca3..0a73681 100644
    }
    return props.transform;
  }
-diff --git a/node_modules/react-native-svg/lib/module/lib/extract/extractTransform.js b/node_modules/react-native-svg/lib/module/lib/extract/extractTransform.js
+diff --git a/lib/module/lib/extract/extractTransform.js b/lib/module/lib/extract/extractTransform.js
 index c9d3d6a..085586c 100644
---- a/node_modules/react-native-svg/lib/module/lib/extract/extractTransform.js
-+++ b/node_modules/react-native-svg/lib/module/lib/extract/extractTransform.js
+--- a/lib/module/lib/extract/extractTransform.js
++++ b/lib/module/lib/extract/extractTransform.js
 @@ -142,7 +142,12 @@ export default function extractTransform(props) {
  }
  export function extractTransformSvgView(props) {
@@ -34,10 +34,10 @@ index c9d3d6a..085586c 100644
    }
    return props.transform;
  }
-diff --git a/node_modules/react-native-svg/src/lib/extract/extractTransform.ts b/node_modules/react-native-svg/src/lib/extract/extractTransform.ts
+diff --git a/src/lib/extract/extractTransform.ts b/src/lib/extract/extractTransform.ts
 index 0c854d6..7dc2828 100644
---- a/node_modules/react-native-svg/src/lib/extract/extractTransform.ts
-+++ b/node_modules/react-native-svg/src/lib/extract/extractTransform.ts
+--- a/src/lib/extract/extractTransform.ts
++++ b/src/lib/extract/extractTransform.ts
 @@ -216,7 +216,19 @@ export function extractTransformSvgView(
    props: TransformsStyle
  ): TransformsStyle['transform'] {

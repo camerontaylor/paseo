@@ -116,15 +116,15 @@ test("focused contracts stay inside existing required checks", () => {
   const desktop = jobs.get("desktop-tests-ubuntu")?.join("\n") ?? "";
 
   assert.match(changes, /scripts\/daemon-launch-contract\.test\.mjs/);
-  assert.doesNotMatch(changes, /Install dependencies|npm run build/);
+  assert.doesNotMatch(changes, /Install dependencies|pnpm run build/);
 
   assert.match(server, /test:hub-cli-contract/);
-  assert.match(server, /npm run test --workspace=@getpaseo\/server/);
+  assert.match(server, /pnpm --filter @getpaseo\/server run test/);
   assert.ok(!jobs.has("hub-cli-contract"));
 
   assert.match(desktop, /test:e2e:renderer/);
   assert.match(desktop, /test:e2e:browser-tabs/);
-  assert.match(desktop, /npm run test --workspace=@getpaseo\/desktop/);
+  assert.match(desktop, /pnpm --filter @getpaseo\/desktop run test/);
   assert.ok(!jobs.has("desktop-browser-bridge"));
   assert.ok(!jobs.has("playwright-desktop"));
 });
@@ -143,7 +143,8 @@ test("PR routing declares stable behavior ownership", () => {
       ".mise.toml",
       ".tool-versions",
       "package.json",
-      "package-lock.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
       "patches/**",
       "scripts/**",
       "tsconfig.json",

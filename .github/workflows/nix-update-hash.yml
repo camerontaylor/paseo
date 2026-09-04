@@ -8,7 +8,8 @@ on:
       - "flake.nix"
       - "flake.lock"
       - "package.json"
-      - "package-lock.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - "packages/highlight/**"
       - "packages/plugin/**"
       - "packages/server/**"
@@ -36,10 +37,13 @@ jobs:
           ref: ${{ github.ref }}
           token: ${{ steps.app-token.outputs.token }}
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
+          cache: "pnpm"
 
       - uses: cachix/install-nix-action@v31
         with:

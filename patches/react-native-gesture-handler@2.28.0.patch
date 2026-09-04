@@ -1,7 +1,7 @@
-diff --git a/node_modules/react-native-gesture-handler/android/src/main/java/com/swmansion/gesturehandler/core/GestureHandlerOrchestrator.kt b/node_modules/react-native-gesture-handler/android/src/main/java/com/swmansion/gesturehandler/core/GestureHandlerOrchestrator.kt
+diff --git a/android/src/main/java/com/swmansion/gesturehandler/core/GestureHandlerOrchestrator.kt b/android/src/main/java/com/swmansion/gesturehandler/core/GestureHandlerOrchestrator.kt
 index a532cf6..7b66222 100644
---- a/node_modules/react-native-gesture-handler/android/src/main/java/com/swmansion/gesturehandler/core/GestureHandlerOrchestrator.kt
-+++ b/node_modules/react-native-gesture-handler/android/src/main/java/com/swmansion/gesturehandler/core/GestureHandlerOrchestrator.kt
+--- a/android/src/main/java/com/swmansion/gesturehandler/core/GestureHandlerOrchestrator.kt
++++ b/android/src/main/java/com/swmansion/gesturehandler/core/GestureHandlerOrchestrator.kt
 @@ -2,6 +2,7 @@ package com.swmansion.gesturehandler.core
  
  import android.graphics.Matrix
@@ -137,10 +137,10 @@ index a532cf6..7b66222 100644
    private fun extractGestureHandlers(
      viewGroup: ViewGroup,
      coords: FloatArray,
-diff --git a/node_modules/react-native-gesture-handler/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt b/node_modules/react-native-gesture-handler/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt
+diff --git a/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt b/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt
 index d8f8fd6..ed101b9 100644
---- a/node_modules/react-native-gesture-handler/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt
-+++ b/node_modules/react-native-gesture-handler/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt
+--- a/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt
++++ b/android/src/main/java/com/swmansion/gesturehandler/react/RNGestureHandlerRootHelper.kt
 @@ -19,6 +19,7 @@ class RNGestureHandlerRootHelper(private val context: ReactContext, wrappedView:
    private val jsGestureHandler: GestureHandler?
    val rootView: ViewGroup
@@ -164,10 +164,10 @@ index d8f8fd6..ed101b9 100644
      return shouldIntercept
    }
  
-diff --git a/node_modules/react-native-gesture-handler/lib/commonjs/web/tools/PointerEventManager.js b/node_modules/react-native-gesture-handler/lib/commonjs/web/tools/PointerEventManager.js
+diff --git a/lib/commonjs/web/tools/PointerEventManager.js b/lib/commonjs/web/tools/PointerEventManager.js
 index 76eb808..7c40526 100644
---- a/node_modules/react-native-gesture-handler/lib/commonjs/web/tools/PointerEventManager.js
-+++ b/node_modules/react-native-gesture-handler/lib/commonjs/web/tools/PointerEventManager.js
+--- a/lib/commonjs/web/tools/PointerEventManager.js
++++ b/lib/commonjs/web/tools/PointerEventManager.js
 @@ -58,7 +58,14 @@ class PointerEventManager extends _EventManager.default {
      const adaptedEvent = this.mapEvent(event, _interfaces.EventTypes.UP);
      const target = event.target;
@@ -184,10 +184,10 @@ index 76eb808..7c40526 100644
      }
      this.markAsOutOfBounds(adaptedEvent.pointerId);
      this.trackedPointers.delete(adaptedEvent.pointerId);
-diff --git a/node_modules/react-native-gesture-handler/lib/module/web/tools/PointerEventManager.js b/node_modules/react-native-gesture-handler/lib/module/web/tools/PointerEventManager.js
+diff --git a/lib/module/web/tools/PointerEventManager.js b/lib/module/web/tools/PointerEventManager.js
 index 6ce3b8f..8fe28bc 100644
---- a/node_modules/react-native-gesture-handler/lib/module/web/tools/PointerEventManager.js
-+++ b/node_modules/react-native-gesture-handler/lib/module/web/tools/PointerEventManager.js
+--- a/lib/module/web/tools/PointerEventManager.js
++++ b/lib/module/web/tools/PointerEventManager.js
 @@ -53,7 +53,14 @@ export default class PointerEventManager extends EventManager {
      const adaptedEvent = this.mapEvent(event, EventTypes.UP);
      const target = event.target;
@@ -204,10 +204,10 @@ index 6ce3b8f..8fe28bc 100644
      }
      this.markAsOutOfBounds(adaptedEvent.pointerId);
      this.trackedPointers.delete(adaptedEvent.pointerId);
-diff --git a/node_modules/react-native-gesture-handler/src/web/tools/PointerEventManager.ts b/node_modules/react-native-gesture-handler/src/web/tools/PointerEventManager.ts
+diff --git a/src/web/tools/PointerEventManager.ts b/src/web/tools/PointerEventManager.ts
 index 18d3627..769b0fe 100644
---- a/node_modules/react-native-gesture-handler/src/web/tools/PointerEventManager.ts
-+++ b/node_modules/react-native-gesture-handler/src/web/tools/PointerEventManager.ts
+--- a/src/web/tools/PointerEventManager.ts
++++ b/src/web/tools/PointerEventManager.ts
 @@ -67,7 +67,14 @@ export default class PointerEventManager extends EventManager<HTMLElement> {
      const target = event.target as HTMLElement;
  

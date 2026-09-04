@@ -12,16 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci --workspace=@getpaseo/relay --include-workspace-root
+        run: node scripts/pm-retry.mjs pnpm install --frozen-lockfile --workspace=@getpaseo/relay --include-workspace-root
 
       - name: Typecheck
-        run: npm run typecheck --workspace=@getpaseo/relay
+        run: pnpm --filter @getpaseo/relay run typecheck
 
       - name: Deploy worker
         run: cd packages/relay && npx wrangler deploy

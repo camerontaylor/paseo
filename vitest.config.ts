@@ -42,7 +42,10 @@ export default defineConfig({
       { find: "@server", replacement: path.resolve(__dirname, "packages/server/src") },
       {
         find: "react-native",
-        replacement: path.resolve(rootNodeModules, "react-native-web/dist/index.js"),
+        // react-native-web is a dependency of @getpaseo/app, not of the root. npm
+        // hoisted it to the root node_modules; pnpm does not, so resolve it the
+        // same app-first way as react/react-dom below instead of assuming a hoist.
+        replacement: path.resolve(resolvePackageEntry("react-native-web"), "dist/index.js"),
       },
       { find: "react", replacement: resolvePackageEntry("react") },
       { find: "react-dom", replacement: resolvePackageEntry("react-dom") },
