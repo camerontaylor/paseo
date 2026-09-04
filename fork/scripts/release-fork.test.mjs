@@ -85,7 +85,7 @@ test("rewrites sibling workspace references in staged package scripts", () => {
       version: "0.7.0-beta.2",
       scripts: {
         build:
-          "npm run build --workspace=@getpaseo/protocol && tsc -p tsconfig.json --incremental false",
+          "pnpm --filter @getpaseo/protocol run build && tsc -p tsconfig.json --incremental false",
       },
     },
     CTX,
@@ -93,7 +93,7 @@ test("rewrites sibling workspace references in staged package scripts", () => {
 
   assert.equal(
     out.scripts.build,
-    "npm run build --workspace=@paseo-fork/paseo-protocol && tsc -p tsconfig.json --incremental false",
+    "pnpm --filter @paseo-fork/paseo-protocol run build && tsc -p tsconfig.json --incremental false",
   );
 });
 
@@ -199,11 +199,19 @@ test("every pack and publish invocation disables lifecycle scripts (prepack pari
   for (const argv of argvs) {
     assert.ok(argv.includes("--ignore-scripts"), `missing --ignore-scripts: ${argv.join(" ")}`);
   }
+  // every invocation targets the fork package via pnpm's --filter (npm's
+  // --workspace=<name> has no pnpm equivalent), so assert the flag/value pair
+  // rather than a fixed argv position
+  for (const argv of argvs) {
+    assert.equal(argv[argv.indexOf("--filter") + 1], forkName, `bad --filter: ${argv.join(" ")}`);
+  }
   // the gate stays a dry-run json pack; the tarball pack targets a destination;
   // the publish keeps the fork dist-tag
-  assert.deepEqual(gatePackArgs(forkName).slice(1, 3), ["--dry-run", "--json"]);
+  assert.ok(gatePackArgs(forkName).includes("--dry-run"));
+  assert.ok(gatePackArgs(forkName).includes("--json"));
   assert.ok(tarballPackArgs(forkName, "dest-dir").includes("--pack-destination"));
-  assert.deepEqual(publishArgs(forkName).slice(-2), ["--tag", "fork"]);
+  const publish = publishArgs(forkName);
+  assert.equal(publish[publish.indexOf("--tag") + 1], "fork");
 });
 
 test("server pack list must include the daemon web-ui assets or the gate fails", () => {
@@ -224,7 +232,7 @@ test("leaves non-release workspace tokens in scripts untouched", () => {
     {
       scripts: {
         "build:app-deps":
-          "npm run build:highlight && npm run build:client && npm run build --workspace=@getpaseo/expo-two-way-audio",
+          "pnpm run build:highlight && pnpm run build:client && pnpm --filter @getpaseo/expo-two-way-audio run build",
       },
     },
     { forkScope: "@paseo-fork" },
@@ -234,7 +242,7 @@ test("leaves non-release workspace tokens in scripts untouched", () => {
   // while nested root-script refs (build:highlight etc.) are separate scripts
   assert.equal(
     rootOut.scripts["build:app-deps"],
-    "npm run build:highlight && npm run build:client && npm run build --workspace=@getpaseo/expo-two-way-audio",
+    "pnpm run build:highlight && pnpm run build:client && pnpm --filter @getpaseo/expo-two-way-audio run build",
   );
 });
 
@@ -301,7 +309,7 @@ test("publishConfig.access=public must survive the rewrite in every staged packa
   );
 });
 
-test("parses npm pack --dry-run --json output in array and single-object shapes", () => {
+test("parses pnpm pack --dry-run --json output in array and single-object shapes", () => {
   const asArray = JSON.stringify([
     { files: [{ path: "dist/index.js" }, { path: "package.json" }] },
   ]);
@@ -345,17 +353,17 @@ test("rewrites workspace references in the staged root manifest scripts", () => 
       name: "paseo",
       private: true,
       scripts: {
-        "build:server": "npm run build --workspace=@getpaseo/server",
-        "typecheck:server": "npm run typecheck --workspace=@getpaseo/cli",
+        "build:server": "pnpm --filter @getpaseo/server run build",
+        "typecheck:server": "pnpm --filter @getpaseo/cli run typecheck",
       },
     },
     { forkScope: "@paseo-fork" },
   );
 
-  assert.equal(out.scripts["build:server"], "npm run build --workspace=@paseo-fork/paseo-server");
+  assert.equal(out.scripts["build:server"], "pnpm --filter @paseo-fork/paseo-server run build");
   assert.equal(
     out.scripts["typecheck:server"],
-    "npm run typecheck --workspace=@paseo-fork/paseo-cli",
+    "pnpm --filter @paseo-fork/paseo-cli run typecheck",
   );
   assert.equal(out.name, "paseo");
 });

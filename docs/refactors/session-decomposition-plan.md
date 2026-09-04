@@ -121,7 +121,7 @@ Parameterize the 4 setter envelopes `handleSetAgentMode/Model/Feature/Thinking` 
 
 ## Cross-cutting invariants (every slice)
 
-- **Always** run `npm run typecheck` and `npm run lint` after each slice; run `npm run build:server` before diagnosing cross-package type errors.
+- **Always** run `pnpm run typecheck` and `pnpm run lint` after each slice; run `pnpm run build:server` before diagnosing cross-package type errors.
 - Controller `dispatch` is **NON-async**, guarded by an owned-type `ReadonlySet` check returning `undefined` synchronously on miss. Never `async dispatch`.
 - Controllers add **no** try/catch inside `dispatch` — error handling stays in `handleMessage`.
 - `cleanup()` stays the single ordered teardown orchestrator on the shell.

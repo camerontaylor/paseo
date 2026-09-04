@@ -136,19 +136,19 @@ Monorepo 包结构速览：
 
 ```bash
 # 运行所有本地开发服务
-npm run dev
+pnpm run dev
 
 # 单独运行某个界面
-npm run dev:server
-npm run dev:app
-npm run dev:desktop
-npm run dev:website
+pnpm run dev:server
+pnpm run dev:app
+pnpm run dev:desktop
+pnpm run dev:website
 
 # 构建 server stack
-npm run build:server
+pnpm run build:server
 
 # 全仓库检查
-npm run typecheck
+pnpm run typecheck
 ```
 
 ## 相关项目

@@ -90,18 +90,18 @@ Do not:
 ## Quick start
 
 ```bash
-npm run dev                          # Start the dev daemon
-npm run dev:app                      # Start Expo against the dev daemon
-npm run dev:desktop                  # Start Electron desktop dev
-npm run cli -- ls -a -g              # List all agents
-npm run cli -- daemon status         # Check daemon status
-npm run typecheck                    # Always run after changes
-npm run lint                         # Always run after changes
-npm run format                       # Auto-format with Biome
-npm run format:check                 # Check formatting without writing
+pnpm run dev                          # Start the dev daemon
+pnpm run dev:app                      # Start Expo against the dev daemon
+pnpm run dev:desktop                  # Start Electron desktop dev
+pnpm run cli -- ls -a -g              # List all agents
+pnpm run cli -- daemon status         # Check daemon status
+pnpm run typecheck                    # Always run after changes
+pnpm run lint                         # Always run after changes
+pnpm run format                       # Auto-format with Biome
+pnpm run format:check                 # Check formatting without writing
 ```
 
-Repo dev commands use checkout-local state by default. In this checkout, `PASEO_HOME` resolves to `.dev/paseo-home`, and `npm run cli -- ...` targets that same dev home automatically. The packaged desktop app and production-style daemon keep using `~/.paseo` on port `6767`.
+Repo dev commands use checkout-local state by default. In this checkout, `PASEO_HOME` resolves to `.dev/paseo-home`, and `pnpm run cli -- ...` targets that same dev home automatically. The packaged desktop app and production-style daemon keep using `~/.paseo` on port `6767`.
 
 See [docs/development.md](docs/development.md) for full setup, build sync requirements, and debugging.
 
@@ -113,19 +113,19 @@ See [docs/development.md](docs/development.md) for full setup, build sync requir
 - **Before changing app routes, startup routing, remembered workspace restore, or active workspace selection, read [docs/expo-router.md](docs/expo-router.md).**
 - **NEVER run the full test suite locally.** The test suites are heavy and will freeze the machine, especially if multiple agents run them in parallel. Rules:
   - Run only the specific test file you changed: `npx vitest run <file> --bail=1`
-  - Never run `npm run test` for an entire workspace unless explicitly asked.
+  - Never run `pnpm run test` for an entire workspace unless explicitly asked.
   - If you must run a broad suite, pipe output to a file and read it afterward: `npx vitest run <file> --bail=1 > /tmp/test-output.txt 2>&1` then read the file.
   - Never re-run a test suite that another agent already ran and reported green — trust the result.
   - For full suite verification, push to CI and check GitHub Actions instead.
 - **Always run typecheck and lint after every change.**
 - **Build workspace packages before diagnosing cross-package type errors.** This repo consumes generated declarations across workspaces. If typecheck fails in a package that depends on another workspace, rebuild the owning stack first so `dist` declarations are current:
-  - `npm run build:client` — rebuild protocol and client declarations.
-  - `npm run build:server` — rebuild highlight, relay, protocol, client, server, and CLI when server/CLI types may be stale.
+  - `pnpm run build:client` — rebuild protocol and client declarations.
+  - `pnpm run build:server` — rebuild highlight, relay, protocol, client, server, and CLI when server/CLI types may be stale.
   - Do not patch inferred callback parameters or add local duplicate types just to silence stale declaration errors.
-- **Run `npm run format` before committing.** This repo uses Biome for formatting. Do not manually fix formatting — let the formatter handle it.
+- **Run `pnpm run format` before committing.** This repo uses Biome for formatting. Do not manually fix formatting — let the formatter handle it.
 - **Always use npm scripts for linting and formatting.** Do not run tools directly with `npx eslint`, `npx oxfmt`, `npx oxlint`, or package-local binaries. For targeted checks, pass file paths through the npm script:
-  - `npm run lint -- packages/app/src/components/message.tsx`
-  - `npm run format:files -- CLAUDE.md packages/app/src/components/message.tsx`
+  - `pnpm run lint -- packages/app/src/components/message.tsx`
+  - `pnpm run format:files -- CLAUDE.md packages/app/src/components/message.tsx`
 - **The protocol stays backward-compatible. Features don't have to.** Read [docs/protocol-compatibility.md](docs/protocol-compatibility.md) before touching `packages/protocol`. The short version:
   - **Protocol contract (always):** an old client parses messages from a new daemon, and a new daemon parses messages from an old client. New fields are optional; never narrow, never remove, never require. Wire schemas stay pure — no `.transform()`, `.catch()`, or `.preprocess()`.
   - **Feature contract (per-feature):** gate the capability once on `server_info.features.*`, then run the feature or tell the user to update the host. No fallback paths, no defensive branches.

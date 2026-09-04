@@ -146,19 +146,19 @@ npx skills add getpaseo/paseo
 
 ```bash
 # 모든 로컬 개발 서비스 실행
-npm run dev
+pnpm run dev
 
 # 개별 환경 실행
-npm run dev:server
-npm run dev:app
-npm run dev:desktop
-npm run dev:website
+pnpm run dev:server
+pnpm run dev:app
+pnpm run dev:desktop
+pnpm run dev:website
 
 # 서버 스택 빌드
-npm run build:server
+pnpm run build:server
 
 # 레포 전체 검사 실행
-npm run typecheck
+pnpm run typecheck
 ```
 
 ## 관련 프로젝트

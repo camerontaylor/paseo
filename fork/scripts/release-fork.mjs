@@ -7,8 +7,8 @@
 // artifacts (the daemon web UI export into the server dist), rewrites
 // compiled dist specifiers and shipped docs/bin that name the upstream scope,
 // then runs the pack-list gate (zero `"@getpaseo/` occurrences across the
-// files npm pack would ship, plus a web-ui presence assertion for the server
-// package) and npm pack --dry-run for all 7. Every pack/publish invocation
+// files pnpm pack would ship, plus a web-ui presence assertion for the server
+// package) and pnpm pack --dry-run for all 7. Every pack/publish invocation
 // runs with --ignore-scripts so no prepack can rebuild dist from unrewritten
 // source after the gate passed.
 //
@@ -50,21 +50,15 @@ const DEP_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "opti
 export const SCRIPTS_DISABLED = ["--ignore-scripts"];
 
 export function gatePackArgs(forkName) {
-  return ["pack", "--dry-run", "--json", ...SCRIPTS_DISABLED, `--workspace=${forkName}`];
+  return ["--filter", forkName, ...SCRIPTS_DISABLED, "pack", "--dry-run", "--json"];
 }
 
 export function tarballPackArgs(forkName, destination) {
-  return [
-    "pack",
-    ...SCRIPTS_DISABLED,
-    `--workspace=${forkName}`,
-    "--pack-destination",
-    destination,
-  ];
+  return ["--filter", forkName, ...SCRIPTS_DISABLED, "pack", "--pack-destination", destination];
 }
 
 export function publishArgs(forkName) {
-  return ["publish", ...SCRIPTS_DISABLED, `--workspace=${forkName}`, "--tag", "fork"];
+  return ["--filter", forkName, ...SCRIPTS_DISABLED, "publish", "--tag", "fork", "--no-git-checks"];
 }
 
 export function resolveForkScope(env = process.env) {
@@ -104,8 +98,8 @@ export function rewritePackageJsonDoc(doc, { forkScope, baseVersion, forkVersion
 }
 
 // Package and root scripts reference sibling workspaces by name (e.g. the
-// client build runs `npm run build --workspace=@getpaseo/protocol`); npm
-// resolves --workspace against the renamed staged manifests, so rewrite the
+// client build runs `pnpm --filter @getpaseo/protocol run build`); pnpm
+// resolves --filter against the renamed staged manifests, so rewrite the
 // tokens of the renamed packages only — non-release workspaces (app, desktop,
 // website, expo-two-way-audio) keep their names and must stay resolvable (the
 // daemon web UI export runs `build:app-deps`, which needs expo-two-way-audio).
@@ -201,14 +195,14 @@ export function parsePackFilePaths(stdout) {
   // stdout to be pure JSON.
   const start = stdout.search(/[[{]/);
   if (start === -1) {
-    throw new Error("npm pack produced no JSON output");
+    throw new Error("pnpm pack produced no JSON output");
   }
   const parsed = JSON.parse(stdout.slice(start));
   const entries = Array.isArray(parsed) ? parsed : [parsed];
   return entries.flatMap((entry) => (entry.files ?? []).map((file) => file.path));
 }
 
-// The gate scans the CONTENT of every file npm pack would ship — pack-list
+// The gate scans the CONTENT of every file pnpm pack would ship — pack-list
 // scoping, not merely dist/, because the server package also ships skills/,
 // shell-integration, README.md and .env.example.
 export function scanPackListFiles({ packageDir, paths, needle = QUOTED_SPECIFIER_NEEDLE }) {
@@ -304,7 +298,9 @@ function parseArgs(argv) {
 
 function publishCommands({ forkScope, forkVersion, branch, notesPath, tarballDir }) {
   return [
-    ...RELEASE_PACKAGES.map((name) => `npm ${publishArgs(`${forkScope}/paseo-${name}`).join(" ")}`),
+    ...RELEASE_PACKAGES.map(
+      (name) => `pnpm ${publishArgs(`${forkScope}/paseo-${name}`).join(" ")}`,
+    ),
     `git tag fork/v${forkVersion}`,
     `git push origin ${branch} fork/v${forkVersion}`,
     `gh release create fork/v${forkVersion} --title "${forkScope} ${forkVersion}" --notes-file ${notesPath} ${tarballDir}/*.tgz`,
@@ -325,7 +321,7 @@ function printRefusal(forkScope, forkVersion, branch) {
   }
 }
 
-// npm links workspace packages with symlinks into the real checkout (here:
+// pnpm links workspace packages with symlinks into the real checkout (here:
 // absolute paths). A staged copy must resolve them within the staged tree —
 // otherwise builds and Metro silently read the REAL worktree, mixing both and
 // resurrecting upstream specifiers past the gate.
@@ -354,9 +350,9 @@ function stageReleaseCopy(repoRoot, stage) {
   cpSync(path.join(repoRoot, "node_modules"), path.join(stage, "node_modules"), {
     recursive: true,
   });
-  // npm also installs per-workspace node_modules when hoisting is impossible
-  // (e.g. packages/server/node_modules carries the typed lru-cache and
-  // @opencode-ai/sdk); the staged build resolves modules through them.
+  // pnpm gives every workspace its own node_modules (a symlink farm into
+  // ../../node_modules/.pnpm); the staged build resolves modules through them.
+  // NOTE: unverified under pnpm — a fork release must be dry-run before use.
   const copiedNodeModules = [path.join(stage, "node_modules")];
   for (const entry of readdirSync(path.join(stage, "packages"), { withFileTypes: true })) {
     const realNodeModules = path.join(repoRoot, "packages", entry.name, "node_modules");
@@ -383,9 +379,9 @@ function rewriteStagedManifests(stage, rootDoc, rewriteContext) {
 
 function buildAndTypecheckStagedTree(stage) {
   console.log("building staged tree (build:server:clean)...");
-  run("npm", ["run", "build:server:clean"], { cwd: stage });
+  run("pnpm", ["run", "build:server:clean"], { cwd: stage });
   console.log("typechecking staged tree (typecheck:server)...");
-  run("npm", ["run", "typecheck:server"], { cwd: stage });
+  run("pnpm", ["run", "typecheck:server"], { cwd: stage });
 }
 // Reproduces the server package's prepack artifacts inside the staged tree so
 // the packed tarball is exactly what ships: the prepack `build:clean` half
@@ -393,7 +389,7 @@ function buildAndTypecheckStagedTree(stage) {
 // adds the daemon web UI export that stock ships via dist/server/web-ui.
 function buildDaemonWebUiAssets(stage) {
   console.log("exporting daemon web UI (build:daemon-web-ui)...");
-  run("npm", ["run", "build:daemon-web-ui"], { cwd: stage });
+  run("pnpm", ["run", "build:daemon-web-ui"], { cwd: stage });
 }
 
 function rewriteStagedOutput(stage, forkScope) {
@@ -414,12 +410,12 @@ function rewriteStagedOutput(stage, forkScope) {
 }
 
 function runPackListGate(stage, forkScope) {
-  console.log("pack-list gate: npm pack --dry-run --json per staged package...");
+  console.log("pack-list gate: pnpm pack --dry-run --json per staged package...");
   let gateFailures = 0;
   for (const name of RELEASE_PACKAGES) {
     const forkName = `${forkScope}/paseo-${name}`;
     const packageDir = path.join(stage, "packages", name);
-    const packOutput = capture("npm", gatePackArgs(forkName), stage);
+    const packOutput = capture("pnpm", gatePackArgs(forkName), stage);
     const packPaths = parsePackFilePaths(packOutput);
     if (name === "server") {
       const webUiFiles = packPaths.filter((packPath) =>
@@ -467,10 +463,10 @@ function writeReleaseNotes(stage, repoRoot, forkScope, forkVersion) {
 function publishStagedRelease(stage, repoRoot, { forkScope, forkVersion, branch }) {
   const tarballs = [];
   for (const name of RELEASE_PACKAGES) {
-    run("npm", publishArgs(`${forkScope}/paseo-${name}`), {
+    run("pnpm", publishArgs(`${forkScope}/paseo-${name}`), {
       cwd: stage,
     });
-    const out = capture("npm", tarballPackArgs(`${forkScope}/paseo-${name}`, stage), stage);
+    const out = capture("pnpm", tarballPackArgs(`${forkScope}/paseo-${name}`, stage), stage);
     tarballs.push(path.join(stage, out.trim().split("\n").at(-1)));
   }
   run("git", ["tag", `fork/v${forkVersion}`], { cwd: repoRoot });

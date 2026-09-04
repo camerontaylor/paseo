@@ -64,9 +64,15 @@ importers:
       playwright:
         specifier: ^1.56.1
         version: 1.58.2
+      tsx:
+        specifier: ^4.6.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.2)(jsdom@20.0.3(supports-color@10.2.2))(vite@7.3.3(@types/node@24.12.2)(jiti@2.7.0)(lightningcss@1.30.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.4))
       ws:
         specifier: ^8.20.0
         version: 8.21.0
@@ -486,9 +492,15 @@ importers:
       '@types/mime-types':
         specifier: ^3.0.1
         version: 3.0.1
+      '@types/react':
+        specifier: ~19.2.14
+        version: 19.2.14
       '@types/ws':
         specifier: ^8.5.8
         version: 8.18.1
+      react-native:
+        specifier: 0.81.5
+        version: 0.81.5(@babel/core@7.29.0(supports-color@10.2.2))(@react-native/metro-config@0.85.3(@babel/core@7.29.0(supports-color@10.2.2))(supports-color@10.2.2))(@types/react@19.2.14)(react@19.1.0)(supports-color@10.2.2)
       tsx:
         specifier: ^4.6.0
         version: 4.21.0
@@ -708,6 +720,9 @@ importers:
       '@types/node':
         specifier: ^20.9.0
         version: 20.19.37
+      jiti:
+        specifier: ^2.7.0
+        version: 2.7.0
       typescript:
         specifier: ^5.2.2
         version: 5.9.3
@@ -742,6 +757,9 @@ importers:
       vitest:
         specifier: ^4.1.6
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@20.19.37)(@vitest/ui@4.1.6)(jsdom@20.0.3(supports-color@10.2.2))(vite@7.3.3(@types/node@20.19.37)(jiti@2.7.0)(lightningcss@1.30.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.4))
+      wrangler:
+        specifier: ^4.105.0
+        version: 4.105.0(@cloudflare/workers-types@4.20260627.1)
 
   packages/server:
     dependencies:
@@ -966,6 +984,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^4.5.1
         version: 4.7.0(supports-color@10.2.2)(vite@7.3.3(@types/node@22.19.21)(jiti@2.7.0)(lightningcss@1.30.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.4))
+      tailwindcss:
+        specifier: ^4.2.1
+        version: 4.2.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

@@ -1,3 +1,31 @@
+# ============================================================================
+# NOT YET MIGRATED TO pnpm — THIS DERIVATION IS CURRENTLY BROKEN.
+#
+# `buildNpmPackage` / `fetchNpmDeps` build their fixed-output dependency
+# derivation from `package-lock.json`, which the pnpm migration removed. Until
+# this is ported the Nix package, the NixOS module's default package, the
+# desktop derivation that inherits `npmDeps`, and the nix.yml /
+# nix-update-hash.yml workflows will all fail.
+#
+# The port is a rewrite, not a find-and-replace:
+#   - stdenv.mkDerivation + pnpm.configHook, with
+#     pnpmDeps = pnpm.fetchDeps { inherit pname version src; fetcherVersion = 2;
+#     hash = <FOD hash>; }
+#   - nix/npm-deps.hash becomes nix/pnpm-deps.hash; nix-update-hash.yml updates it
+#   - nix/desktop-package.nix: `inherit (paseo) npmDeps` -> `pnpmDeps`
+#   - `npmRebuildFlags = [ "--ignore-scripts" ]` has no pnpm analogue; the
+#     equivalent is the `allowBuilds` map in pnpm-workspace.yaml, so the
+#     onnxruntime-node concern it guards needs re-checking
+#   - scripts/trace-daemon.mjs (@vercel/nft) emits paths that are now symlinks
+#     into node_modules/.pnpm; the installPhase `cp -a` loop must follow them or
+#     the daemon closure ships dangling links
+#   - scripts/fix-lockfile.mjs exists only to repair package-lock.json for this
+#     fetcher and becomes dead once the port lands
+#
+# The FOD hash cannot be produced without running `nix build`, so this was left
+# untouched rather than committed unverified. See the migration report.
+# ============================================================================
+
 {
   lib,
   stdenv,

@@ -113,7 +113,10 @@ export default defineConfig({
       // Vite alias resolution).
       {
         find: "react-native",
-        replacement: path.resolve(rootNodeModules, "react-native-web/dist/index.js"),
+        // react-native-web is this package's own dependency. npm hoisted it to the
+        // repo-root node_modules, which pnpm does not do, so resolve it app-first
+        // like react/react-dom below rather than assuming the hoist.
+        replacement: path.resolve(resolvePackageEntry("react-native-web"), "dist/index.js"),
       },
       { find: "react", replacement: resolvePackageEntry("react") },
       {

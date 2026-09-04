@@ -14,7 +14,7 @@ the daemon. `init` only writes the project files; it does not run the package ma
 paseo plugin init /absolute/path/to/my-plugin
 cd /absolute/path/to/my-plugin
 npm install
-npm run typecheck
+pnpm run typecheck
 paseo plugin install /absolute/path/to/my-plugin
 paseo plugin install /absolute/path/to/my-plugin --id another-runtime-id
 paseo plugin ls

@@ -33,12 +33,25 @@ function packageNameOf(specifier: string): string {
   return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
 }
 
-function resolvePackageDir(name: string): string | null {
-  for (const base of [packageRoot, repoRoot]) {
-    const dir = path.join(base, "node_modules", name);
-    if (fs.existsSync(path.join(dir, "package.json"))) return dir;
+// Node's own directory walk: from `fromDir`, try `<dir>/node_modules/<name>`
+// at every ancestor. This is layout-agnostic on purpose. Under npm's hoisting a
+// transitive dep sat in the repo-root node_modules; under pnpm it lives beside
+// its dependent inside node_modules/.pnpm/<dependent>/node_modules/, which only
+// an upward walk from the dependent finds. Hard-coding [packageRoot, repoRoot]
+// made this test report pnpm's correct tree as a missing dependency.
+function resolvePackageDir(name: string, fromDir: string): string | null {
+  // realpath first: under pnpm every entry in a package's node_modules is a
+  // symlink into node_modules/.pnpm/<dependent>/node_modules/. Node walks up from
+  // the *real* location, so a dependent's own dependencies are only visible from
+  // the resolved path, never from the symlink path.
+  let dir = fs.realpathSync(fromDir);
+  for (;;) {
+    const candidate = path.join(dir, "node_modules", name);
+    if (fs.existsSync(path.join(candidate, "package.json"))) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
   }
-  return null;
 }
 
 function readManifest(dir: string): Manifest {
@@ -47,15 +60,25 @@ function readManifest(dir: string): Manifest {
 
 function collectClosure(): Map<string, string> {
   const closure = new Map<string, string>();
-  const queue = Object.keys(readManifest(packageRoot).dependencies ?? {});
+  // Each entry carries the directory whose node_modules must satisfy it, so a
+  // transitive dep is resolved from its own dependent rather than from the root.
+  const queue = Object.keys(readManifest(packageRoot).dependencies ?? {}).map((name) => ({
+    name,
+    from: packageRoot,
+  }));
 
   while (queue.length > 0) {
-    const name = queue.shift() as string;
+    const { name, from } = queue.shift() as { name: string; from: string };
     if (closure.has(name)) continue;
-    const dir = resolvePackageDir(name);
+    const dir = resolvePackageDir(name, from);
     expect(dir, `${name} is declared as a dependency but is not installed`).not.toBeNull();
     closure.set(name, dir as string);
-    queue.push(...Object.keys(readManifest(dir as string).dependencies ?? {}));
+    queue.push(
+      ...Object.keys(readManifest(dir as string).dependencies ?? {}).map((child) => ({
+        name: child,
+        from: dir as string,
+      })),
+    );
   }
 
   return closure;

@@ -31,7 +31,8 @@ export PASEO_DAEMON_ENDPOINT="$DAEMON_ENDPOINT"
 
 export PASEO_CORS_ORIGINS="${PASEO_CORS_ORIGINS:-*}"
 
-npm --prefix "$DESKTOP_DIR" run build:main
+# pnpm has no --prefix; -C is the equivalent "run in this directory" flag.
+pnpm -C "$DESKTOP_DIR" run build:main
 
 echo "══════════════════════════════════════════════════════"
 echo "  Paseo Desktop Dev"
