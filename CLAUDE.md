@@ -6,7 +6,7 @@ Paseo is a mobile app for monitoring and controlling your local AI coding agents
 
 ## Repository map
 
-This is an npm workspace monorepo:
+This is a pnpm workspace monorepo (`pnpm-workspace.yaml`):
 
 - `packages/server` — Daemon: agent lifecycle, WebSocket API, MCP server
 - `packages/app` — Mobile + web client (Expo)
@@ -123,7 +123,7 @@ See [docs/development.md](docs/development.md) for full setup, build sync requir
   - `pnpm run build:server` — rebuild highlight, relay, protocol, client, server, and CLI when server/CLI types may be stale.
   - Do not patch inferred callback parameters or add local duplicate types just to silence stale declaration errors.
 - **Run `pnpm run format` before committing.** This repo uses Biome for formatting. Do not manually fix formatting — let the formatter handle it.
-- **Always use npm scripts for linting and formatting.** Do not run tools directly with `npx eslint`, `npx oxfmt`, `npx oxlint`, or package-local binaries. For targeted checks, pass file paths through the npm script:
+- **Always use pnpm scripts for linting and formatting.** Do not run tools directly with `pnpm exec eslint`, `pnpm exec oxfmt`, `pnpm exec oxlint`, or package-local binaries. For targeted checks, pass file paths through the pnpm script:
   - `pnpm run lint -- packages/app/src/components/message.tsx`
   - `pnpm run format:files -- CLAUDE.md packages/app/src/components/message.tsx`
 - **The protocol stays backward-compatible. Features don't have to.** Read [docs/protocol-compatibility.md](docs/protocol-compatibility.md) before touching `packages/protocol`. The short version:

@@ -3,7 +3,35 @@
 ## Prerequisites
 
 - Node.js (see `.tool-versions` for exact version)
-- npm workspaces (comes with Node)
+- pnpm (see the `packageManager` field in `package.json`; `corepack enable pnpm` picks up the pinned version)
+
+## Package manager
+
+pnpm, pinned by the `packageManager` field in `package.json`. `pnpm-workspace.yaml`
+is the source of truth for the package list — pnpm ignores package.json's
+`workspaces` field entirely, so nothing reads it and it is not present.
+
+Four settings in `pnpm-workspace.yaml` exist to restore behaviour npm had and
+pnpm does not default to. Removing any of them breaks the build in a way that
+is quiet rather than loud:
+
+| Setting                   | Without it                                                                                                                                                                                                                                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `preferWorkspacePackages` | Internal deps declared `"*"` resolve to the **published** `@getpaseo/*` packages on npm instead of this checkout, because pnpm takes the highest matching version. Everything installs and typechecks against a different codebase.                                                                                 |
+| `linkWorkspacePackages`   | pnpm 10+ sends `"*"` straight to the registry; the unpublished workspace packages 404.                                                                                                                                                                                                                              |
+| `enablePrePostScripts`    | pnpm only runs `pre`/`post` hooks for npm's own lifecycle events. `packages/protocol`'s `prebuild`/`pretypecheck`/`pretest` — which generate the gitignored `src/generated/validation/*.aot.ts` — are skipped silently.                                                                                             |
+| `allowBuilds`             | pnpm blocks dependency install scripts. `electron` never downloads its binary, `node-pty` is never compiled, `esbuild`/`workerd`/`sharp` never fetch their platform binaries. Add a package here (pnpm 11 spells it `allowBuilds`, not the older `onlyBuiltDependencies`) only after checking what its script does. |
+
+Dependencies must be declared by the package that imports them. pnpm builds a
+non-flat `node_modules`, so an undeclared import that npm's hoisting used to
+satisfy now fails at build or test time — that is the point, not a bug to route
+around with `shamefully-hoist`.
+
+`node_modules` is a symlink farm into a machine-wide content-addressed store
+(`pnpm store path`). On APFS the files are copy-on-write clones of the store, so
+a full install costs tens of megabytes of real disk rather than gigabytes. Never
+write into `node_modules` by hand: those writes go through to shared store
+content. Use `pnpm patch` (see Dependency patches below).
 
 ## Running the dev server
 
@@ -406,8 +434,8 @@ that reads what it needs from `process.env` and invoke it as
 ```json
 {
   "worktree": {
-    "setup": "pnpm install --frozen-lockfile\ncp \"$PASEO_SOURCE_CHECKOUT_PATH/.env\" .env\nnpm run db:migrate",
-    "teardown": "pnpm run db:drop || true"
+    "setup": "npm ci\ncp \"$PASEO_SOURCE_CHECKOUT_PATH/.env\" .env\nnpm run db:migrate",
+    "teardown": "npm run db:drop || true"
   }
 }
 ```
