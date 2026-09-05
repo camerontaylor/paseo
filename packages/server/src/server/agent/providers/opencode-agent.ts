@@ -1881,6 +1881,13 @@ export interface OpenCodeEventTranslationState {
   subAgentsByCallId?: Map<string, OpenCodeSubAgentActivityState>;
   subAgentCallIdByChildSessionId?: Map<string, string>;
   knownChildSessionIds?: Set<string>;
+  /**
+   * Forks created to answer a side question. OpenCode marks a fork as a child of the session it
+   * was forked from, which is otherwise the signal that a subagent started — so without this the
+   * side conversation is translated onto the parent's subagents track, the one place this seam
+   * exists to keep it out of.
+   */
+  sideQuestionSessionIds?: Set<string>;
   subagentPresentationByChildId?: Map<string, OpenCodeSubagentPresentationState>;
   modelContextWindowsByModelKey?: ReadonlyMap<string, number>;
   onAssistantModelContextWindowResolved?: (contextWindowMaxTokens: number) => void;
@@ -2339,6 +2346,7 @@ function isOpenCodeSessionTrackedByParent(
   sessionId: string,
   state: OpenCodeEventTranslationState,
 ): boolean {
+  if (state.sideQuestionSessionIds?.has(sessionId) === true) return false;
   return (
     sessionId === state.sessionId ||
     state.knownChildSessionIds?.has(sessionId) === true ||
@@ -2563,6 +2571,10 @@ function appendOpenCodeSessionCreatedOrUpdated(
       sessionId: state.sessionId,
       provider: "opencode",
     });
+    return;
+  }
+
+  if (state.sideQuestionSessionIds?.has(event.properties.info.id) === true) {
     return;
   }
 
@@ -3299,6 +3311,7 @@ class OpenCodeAgentSession implements AgentSession {
   private subAgentsByCallId = new Map<string, OpenCodeSubAgentActivityState>();
   private subAgentCallIdByChildSessionId = new Map<string, string>();
   private knownChildSessionIds = new Set<string>();
+  private readonly sideQuestionSessionIds = new Set<string>();
   private readonly subagentPresentationByChildId = new Map<
     string,
     OpenCodeSubagentPresentationState
@@ -3526,6 +3539,8 @@ class OpenCodeAgentSession implements AgentSession {
         messageId: createOpenCodeMessageId(),
         logger: this.logger,
         signal: options?.signal,
+        onForkCreated: (forkSessionId) => this.registerSideQuestionFork(forkSessionId),
+        onForkReleased: (forkSessionId) => this.sideQuestionSessionIds.delete(forkSessionId),
         model: this.parseModel(this.config.model),
         agent: resolveOpenCodeRuntimeAgentId(this.currentMode) ?? undefined,
         variant: this.config.thinkingOptionId,
@@ -4683,6 +4698,28 @@ class OpenCodeAgentSession implements AgentSession {
     this.runningToolCalls.clear();
   }
 
+  /**
+   * The fork id only exists once session.fork resolves, so its session.created event can land
+   * first and be translated into a subagent row. Registering reaps that row, which is why this
+   * removes as well as records.
+   */
+  private registerSideQuestionFork(forkSessionId: string): void {
+    this.sideQuestionSessionIds.add(forkSessionId);
+    // Both deletes must run: || would skip the second whenever the first succeeded.
+    const wasKnownChild = this.knownChildSessionIds.delete(forkSessionId);
+    const hadSubAgentCall = this.subAgentCallIdByChildSessionId.delete(forkSessionId);
+    const raced = wasKnownChild || hadSubAgentCall;
+    this.subagentPresentationByChildId.delete(forkSessionId);
+    this.childStatuses.delete(forkSessionId);
+    if (raced) {
+      this.notifySubscribers({
+        type: "provider_subagent",
+        provider: "opencode",
+        event: { type: "remove", id: forkSessionId },
+      });
+    }
+  }
+
   private notifySubscribers(event: AgentStreamEvent, turnIdOverride?: string | null): void {
     if (this.closed) {
       return;
@@ -5043,6 +5080,7 @@ class OpenCodeAgentSession implements AgentSession {
       subAgentsByCallId: this.subAgentsByCallId,
       subAgentCallIdByChildSessionId: this.subAgentCallIdByChildSessionId,
       knownChildSessionIds: this.knownChildSessionIds,
+      sideQuestionSessionIds: this.sideQuestionSessionIds,
       subagentPresentationByChildId: this.subagentPresentationByChildId,
       modelContextWindowsByModelKey: this.modelContextWindowsByModelKey,
       onMaterializationMismatch: (diagnostic) => {

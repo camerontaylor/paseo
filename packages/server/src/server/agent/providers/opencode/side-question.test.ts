@@ -255,3 +255,56 @@ describe("OpenCode side questions", () => {
     });
   });
 });
+
+describe("OpenCode side-question fork visibility", () => {
+  test("announces the fork id before prompting and releases it after cleanup", async () => {
+    // OpenCode marks a fork as a child of the session it came from, which is the same signal a
+    // real subagent raises. The caller uses these hooks to keep the side conversation off the
+    // parent's subagents track, so the id has to be announced before any event can reference it
+    // and released only after the fork is gone.
+    const { client, deleteSession } = createClient();
+    const order: string[] = [];
+
+    await askOpenCodeSideQuestion({
+      client,
+      parentSessionId: "parent-1",
+      cwd: "/workspace",
+      question: "why?",
+      history: [],
+      messageId: "question-1",
+      logger: createTestLogger(),
+      timeoutMs: 1_000,
+      onForkCreated: (id) => order.push(`created:${id}`),
+      onForkReleased: (id) => order.push(`released:${id}`),
+    });
+
+    expect(order).toEqual(["created:fork-1", "released:fork-1"]);
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionID: "fork-1",
+      directory: "/workspace",
+    });
+  });
+
+  test("announces the fork even when the question fails, so no phantom row survives", async () => {
+    const { client, promptAsync } = createClient();
+    promptAsync.mockResolvedValueOnce({ error: "boom" });
+    const order: string[] = [];
+
+    await expect(
+      askOpenCodeSideQuestion({
+        client,
+        parentSessionId: "parent-1",
+        cwd: "/workspace",
+        question: "why?",
+        history: [],
+        messageId: "question-1",
+        logger: createTestLogger(),
+        timeoutMs: 1_000,
+        onForkCreated: (id) => order.push(`created:${id}`),
+        onForkReleased: (id) => order.push(`released:${id}`),
+      }),
+    ).rejects.toThrow();
+
+    expect(order).toEqual(["created:fork-1", "released:fork-1"]);
+  });
+});

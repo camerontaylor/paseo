@@ -173,6 +173,9 @@ export async function askOpenCodeSideQuestion(input: {
   variant?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Called as soon as the fork id exists, so the caller can keep it off the subagents track. */
+  onForkCreated?: (forkSessionId: string) => void;
+  onForkReleased?: (forkSessionId: string) => void;
 }): Promise<SideAnswer> {
   const forkResponse = await input.client.session.fork({
     sessionID: input.parentSessionId,
@@ -183,6 +186,7 @@ export async function askOpenCodeSideQuestion(input: {
   }
 
   const forkSessionId = forkResponse.data.id;
+  input.onForkCreated?.(forkSessionId);
   input.logger.debug(
     { forkSessionId, parentSessionId: input.parentSessionId },
     "Created persisted OpenCode side-question fork; daemon exit before cleanup may leave it behind",
@@ -222,6 +226,9 @@ export async function askOpenCodeSideQuestion(input: {
     } catch (error) {
       cleanupError = error;
     }
+    // Released after the delete: events for the fork can still arrive while it is being torn
+    // down, and they must stay off the parent's track too.
+    input.onForkReleased?.(forkSessionId);
     if (cleanupError !== undefined) {
       input.logger.warn(
         {
