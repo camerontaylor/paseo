@@ -272,6 +272,90 @@ describe("Claude runtime exit", () => {
     }
   });
 
+  test("refuses a side question rather than tree-killing the CLI mid-turn", async () => {
+    // setThinkingOption() arms queryRestartNeeded during a live turn on purpose and defers it to
+    // the next one. ensureQuery() acts on that flag by tree-killing the running process, and it
+    // nulls this.query first so the old pump skips failActiveTurns — so a side question taking
+    // that branch would kill the turn and leave it un-terminalized, spinning forever.
+    // startTurn() can never reach it (it refuses while a turn is active); this is the one caller
+    // that can.
+    const child = createChildProcessStub();
+    const queryFactory = vi.fn(() =>
+      createQueryMock([COMPLETED_TURN_EVENTS[0]], {
+        tail: new Promise<never>(() => undefined),
+        onReturn: () => child.emit("exit", 0, null),
+      }),
+    );
+    vi.spyOn(spawnUtils, "spawnProcess").mockReturnValue(child);
+    const client = new ClaudeAgentClient({
+      logger: createTestLogger(),
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+      resolveVersion: async () => "2.1.227",
+    });
+    const session = await client.createSession({ provider: "claude", cwd: process.cwd() });
+
+    try {
+      await session.startTurn("a long running turn");
+      await session.setThinkingOption(null);
+
+      const events: AgentStreamEvent[] = [];
+      session.subscribe((event) => events.push(event));
+
+      const ask = session.askSideQuestion;
+      if (!ask) throw new Error("Claude sessions must expose askSideQuestion");
+      await expect(ask.call(session, "quick question?", [])).resolves.toEqual({
+        status: "unavailable",
+      });
+
+      // No second query means ensureQuery() never took the restart branch.
+      expect(queryFactory).toHaveBeenCalledTimes(1);
+      expect(child.killSignals).toEqual([]);
+      expect(events.some((event) => event.type === "turn_failed")).toBe(false);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("still answers a side question once no turn is running", async () => {
+    // The guard is about an armed restart during a live turn, not about side questions in
+    // general — an idle session with the same flag set may restart freely.
+    const child = createChildProcessStub();
+    // The control-request method the side-question seam casts to, hoisted out of the factory so
+    // the callbacks stay within the nesting limit.
+    const sideQuestionRequest = vi.fn(async () => ({ response: "side answer", synthetic: false }));
+    const queryFactory = vi.fn(() => {
+      const query = createQueryMock([...COMPLETED_TURN_EVENTS], {
+        tail: new Promise<never>(() => undefined),
+        onReturn: () => child.emit("exit", 0, null),
+      }) as Query & { request: unknown };
+      query.request = sideQuestionRequest;
+      return query;
+    });
+    vi.spyOn(spawnUtils, "spawnProcess").mockReturnValue(child);
+    const client = new ClaudeAgentClient({
+      logger: createTestLogger(),
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+      resolveVersion: async () => "2.1.227",
+    });
+    const session = await client.createSession({ provider: "claude", cwd: process.cwd() });
+
+    try {
+      await session.run("first turn");
+      await session.setThinkingOption(null);
+
+      const ask = session.askSideQuestion;
+      if (!ask) throw new Error("Claude sessions must expose askSideQuestion");
+      const answer = await ask.call(session, "quick question?", []);
+
+      expect(answer).toMatchObject({ status: "answered" });
+      expect(queryFactory).toHaveBeenCalledTimes(2);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("tree-kills the retired process when the resumed conversation is gone", async () => {
     let capturedOptions: Options | undefined;
     let deliverMissingConversation: ((event: unknown) => void) | undefined;

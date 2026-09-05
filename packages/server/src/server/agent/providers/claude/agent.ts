@@ -2336,6 +2336,15 @@ class ClaudeAgentSession implements AgentSession {
       return { status: "unavailable" };
     }
     const threading = getClaudeSideQuestionThreading(version);
+    // A pending restart turns ensureQuery() into a tree-kill of the running CLI. startTurn()
+    // refuses to run at all while a turn is active, so it can never reach that branch; this is
+    // the one caller that can. setThinkingOption()/setModel() set the flag mid-turn on purpose
+    // and defer it to the next turn, so honouring it here would kill the turn they just
+    // promised to leave alone — and the restart nulls this.query first, which is exactly what
+    // stops the old pump from ever terminalizing that turn.
+    if (this.queryRestartNeeded && (this.activeForegroundTurnId || this.autonomousTurn)) {
+      return { status: "unavailable" };
+    }
     try {
       const query = await this.ensureQuery();
       if (this.closed) {
@@ -2345,10 +2354,16 @@ class ClaudeAgentSession implements AgentSession {
         await this.close().catch(() => undefined);
         return { status: "unavailable" };
       }
-      // The SDK exposes no per-control-request abort (Options.abortController tears down the
-      // whole query), so `signal` cannot cancel an in-flight side_question. AgentManager
-      // times the caller out instead.
-      return await askClaudeSideQuestion({ query, question, history, threading });
+      // Query.request takes a per-request signal, so an abandoned side question is cancelled
+      // at the CLI rather than left to finish into a caller nobody is waiting on. This is not
+      // Options.abortController, which would tear down the whole query.
+      return await askClaudeSideQuestion({
+        query,
+        question,
+        history,
+        threading,
+        signal: options?.signal,
+      });
     } catch (error) {
       return {
         status: "failed",
