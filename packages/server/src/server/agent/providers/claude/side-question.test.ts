@@ -222,3 +222,77 @@ describe("Claude session side questions", () => {
     expect(harness.resolveVersion).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("Claude side question control-request contract", () => {
+  it("treats a missing synthetic flag as false rather than passing undefined on", async () => {
+    // The SDK's own wrapper reads this as `synthetic ?? false`, so a CLI that omits the field is
+    // answering correctly. The protocol schema requires a boolean and the generated validator
+    // drops the whole message when one is missing, which would strand the panel on its pending
+    // question while the daemon holds the answer.
+    const request = vi.fn(async () => ({ response: "answer" }));
+    const query = { request } as unknown as Query;
+
+    const answer = await askClaudeSideQuestion({
+      query,
+      question: "why?",
+      history: [],
+      threading: "single_shot",
+    });
+
+    expect(answer).toEqual({
+      status: "answered",
+      content: "answer",
+      synthetic: false,
+      threading: "single_shot",
+    });
+  });
+
+  it("forwards an abort signal so the CLI stops generating an abandoned answer", async () => {
+    const request = vi.fn(async () => ({ response: "answer", synthetic: false }));
+    const query = { request } as unknown as Query;
+    const controller = new AbortController();
+
+    await askClaudeSideQuestion({
+      query,
+      question: "why?",
+      history: [],
+      threading: "single_shot",
+      signal: controller.signal,
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      { subtype: "side_question", question: "why?" },
+      { signal: controller.signal },
+    );
+  });
+
+  it("reports an aborted question as timed_out instead of a raw abort error", async () => {
+    const controller = new AbortController();
+    const request = vi.fn(async () => {
+      controller.abort();
+      throw new Error("Control request aborted");
+    });
+    const query = { request } as unknown as Query;
+
+    await expect(
+      askClaudeSideQuestion({
+        query,
+        question: "why?",
+        history: [],
+        threading: "threaded",
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual({ status: "timed_out", threading: "threaded" });
+  });
+
+  it("still surfaces a genuine failure when nothing aborted", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("control request exploded");
+    });
+    const query = { request } as unknown as Query;
+
+    await expect(
+      askClaudeSideQuestion({ query, question: "why?", history: [], threading: "single_shot" }),
+    ).rejects.toThrow("control request exploded");
+  });
+});
