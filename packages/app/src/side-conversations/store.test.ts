@@ -22,6 +22,11 @@ function record(
   };
 }
 
+function unaskedRecord(parentAgentId: string, threadId: string): SideConversationRecord {
+  // What the daemon answers for a thread id it has never seen: an empty snapshot, not an error.
+  return { parentAgentId, threadId, items: [], pendingQuestion: null, lastAnswer: null };
+}
+
 function threadIds(serverId: string, parentAgentId: string): string[] {
   const prefix = `${serverId}\0${parentAgentId}\0`;
   return [...useSideConversationStore.getState().records]
@@ -120,6 +125,43 @@ describe("side conversation store", () => {
         .getState()
         .records.get(sideConversationKey("server-a", "parent", "kept"))?.items,
     ).toEqual([{ type: "user_message", text: "New question" }]);
+  });
+
+  it("keeps a thread the daemon has never held when a list omits it", () => {
+    // A thread id is minted client-side and stays unknown to the daemon until its first
+    // question, so no list response mentions it. Sweeping it out makes a brand-new side
+    // conversation report itself as removed under the user's open panel.
+    const store = useSideConversationStore.getState();
+    store.applySnapshot("server-a", unaskedRecord("parent", "just-opened"));
+    store.applySnapshot("server-a", record("parent", "asked"));
+
+    store.replaceList("server-a", "parent", [record("parent", "asked")]);
+
+    expect(threadIds("server-a", "parent")).toContain("just-opened");
+  });
+
+  it("still drops a thread that had content and is gone from the daemon's list", () => {
+    // The sweep is what makes a genuinely removed thread disappear; the exemption above must
+    // not weaken it.
+    const store = useSideConversationStore.getState();
+    store.applySnapshot("server-a", record("parent", "removed-upstream"));
+
+    store.replaceList("server-a", "parent", []);
+
+    expect(threadIds("server-a", "parent")).toEqual([]);
+  });
+
+  it("drops a placeholder once the daemon reports the thread with content", () => {
+    const store = useSideConversationStore.getState();
+    store.applySnapshot("server-a", unaskedRecord("parent", "thread-1"));
+
+    store.replaceList("server-a", "parent", [record("parent", "thread-1", "Now asked")]);
+
+    expect(
+      useSideConversationStore
+        .getState()
+        .records.get(sideConversationKey("server-a", "parent", "thread-1"))?.items,
+    ).toEqual([{ type: "user_message", text: "Now asked" }]);
   });
 
   it("hydrates a parent from one list request and shares an in-flight one", async () => {
