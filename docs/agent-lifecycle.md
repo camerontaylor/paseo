@@ -35,16 +35,30 @@ be in flight.
 
 ### Cancellation
 
-Provider interruption is idempotent at the `AgentSession` boundary. It resolves when the prior
-foreground turn can no longer run, including when the provider reports that it is already idle. It
-rejects only when the provider may still own the turn. Provider adapters translate native errors
-into that contract; lifecycle callers do not interpret provider-specific errors.
+Provider interruption is idempotent at the `AgentSession` boundary. It resolves when the provider
+completes the cancellation request, including when the provider reports that it is already idle;
+completing the request does not by itself prove the old turn stopped. It rejects when the request
+fails, in which case the provider may still own the turn. Provider adapters translate native
+errors into that contract; lifecycle callers do not interpret provider-specific errors.
 
-After an acknowledged interrupt, the manager settles the captured run even when no terminal event
-arrives or the run was still waiting for its provider turn id. The captured run token prevents an
-older cancellation from settling a newer turn. If interruption is rejected or times out, the agent
-keeps its active foreground turn and replacement, reload, rewind, and Stop report the failure.
-Accepting new work after an ambiguous interruption would create a split-brain session.
+Manager settlement and provider readiness are independent facts with different owners. The manager
+force-settles its captured run two seconds after an accepted interrupt, even when no terminal event
+arrives or the run was still waiting for its provider turn id, and the captured run token prevents
+an older cancellation from settling a newer turn. The provider's turn can outlive that settlement,
+so a replacement staged afterwards waits behind the adapter's stop fence, which opens only when the
+provider proves the old prompt terminal and every session-scoped cancellation write for the stop has
+settled. The wait behind that fence is bounded by a ten-second admission deadline that starts when the
+replacement is staged behind the stop, not when the stop is installed — staging is when your wait
+begins. The fork-local GJC provider is why the value is ten seconds: its own abort budget is the same
+10 seconds (`fork/plans/ralplan-gjc-acp-cancellation-boundary.md` has the specifics), so a
+slow-but-healthy abort can consume the whole window. That expiry is the documented fail-closed
+outcome: the deadline bounds your wait and never manufactures readiness. Recovery is
+a later request, or closing and recreating the agent. [`docs/providers.md`](./providers.md) states
+what each provider owes that fence and names the deadline constant with its expiry semantics.
+
+If interruption is rejected or times out, the agent keeps its active foreground turn and
+replacement, reload, rewind, and Stop report the failure. Accepting new work after an ambiguous
+interruption would create a split-brain session.
 
 ## Relationships
 
