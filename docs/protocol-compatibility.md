@@ -50,6 +50,7 @@ A shim that exists for old-app or old-daemon support carries a comment naming it
 
 - One tag per shim, at the site that has to be deleted.
 - Give it a name, a version, and a removal condition or date. Six months out is the usual default.
+- A fork-only capability has no upstream version to pin. Tag it with the fork release that first ships it, and state the real removal condition: if stock peers can never gain the capability, the gate lasts as long as stock peers are supported, and a date would claim a removal that cannot arrive.
 - Never bury compatibility in an untagged `??` fallback or an optional-chain tunnel. Untagged back-compat never gets removed, because nobody can find it.
 
 When a tag's condition is met, delete the shim and the tag in the same change.

@@ -56,6 +56,13 @@ const mockState = vi.hoisted(() => {
         label?: string;
         providerParams?: unknown;
       }>,
+      gjc: [] as Array<{
+        command: string[];
+        env?: Record<string, string>;
+        providerId?: string;
+        label?: string;
+        providerParams?: unknown;
+      }>,
     },
     isCommandAvailable: vi.fn(async (_command: string) => false),
     runtimeModels: new Map<string, AgentModelDefinition[]>(),
@@ -69,6 +76,7 @@ const mockState = vi.hoisted(() => {
       this.constructorArgs.kimi = [];
       this.constructorArgs.pi = [];
       this.constructorArgs.genericAcp = [];
+      this.constructorArgs.gjc = [];
       this.isCommandAvailable.mockReset();
       this.isCommandAvailable.mockImplementation(async (_command: string) => false);
       this.runtimeModels.clear();
@@ -327,6 +335,63 @@ vi.mock("./providers/generic-acp-agent.js", () => ({
         env: options.env,
       };
       mockState.constructorArgs.genericAcp.push({
+        command: options.command,
+        env: options.env,
+        providerId: options.providerId,
+        label: options.label,
+        providerParams: options.providerParams,
+      });
+    }
+
+    async createSession(): Promise<never> {
+      throw new Error("not implemented");
+    }
+
+    async resumeSession(): Promise<never> {
+      throw new Error("not implemented");
+    }
+
+    async fetchCatalog(): Promise<ProviderCatalog> {
+      return {
+        models: mockState.runtimeModels.get(this.provider) ?? [],
+        modes: [],
+      };
+    }
+
+    async isAvailable(): Promise<boolean> {
+      return true;
+    }
+  },
+}));
+
+vi.mock("./providers/gjc-acp-agent.js", () => ({
+  GjcACPAgentClient: class GjcACPAgentClient {
+    capabilities = {
+      supportsStreaming: true,
+      supportsSessionPersistence: true,
+      supportsDynamicModes: true,
+      supportsMcpServers: true,
+      supportsReasoningStream: true,
+      supportsToolInvocations: true,
+    };
+    readonly provider = "acp";
+    readonly runtimeSettings?: unknown;
+
+    constructor(options: {
+      command: string[];
+      env?: Record<string, string>;
+      providerId?: string;
+      label?: string;
+      providerParams?: unknown;
+    }) {
+      this.runtimeSettings = {
+        command: {
+          mode: "replace",
+          argv: options.command,
+        },
+        env: options.env,
+      };
+      mockState.constructorArgs.gjc.push({
         command: options.command,
         env: options.env,
         providerId: options.providerId,
@@ -714,6 +779,66 @@ test("new provider extending acp uses GenericACPAgentClient", () => {
       providerParams: undefined,
     },
   ]);
+});
+
+// Plan "Provider registry tests" 1: providerId "gjc" plus extends "acp"
+// constructs the fork-only GjcACPAgentClient instead of the generic fallback.
+test("gjc provider extending acp uses GjcACPAgentClient", () => {
+  const registry = buildProviderRegistry(logger, {
+    providerOverrides: {
+      gjc: {
+        extends: "acp",
+        label: "GJC",
+        command: ["gjc", "acp"],
+        env: {
+          GJC_ACP_ABORT_SCOPE: "owned",
+        },
+      },
+    },
+  });
+
+  expect(registry.gjc.createClient(logger).provider).toBe("gjc");
+  expect(mockState.constructorArgs.gjc).toHaveLength(2);
+  for (const entry of mockState.constructorArgs.gjc) {
+    expect(entry).toEqual({
+      command: ["gjc", "acp"],
+      env: {
+        GJC_ACP_ABORT_SCOPE: "owned",
+      },
+      providerId: "gjc",
+      label: "GJC",
+      providerParams: undefined,
+    });
+  }
+  expect(mockState.constructorArgs.genericAcp).toEqual([]);
+});
+
+// Plan "Provider registry tests" 2: every other custom ACP provider still goes
+// through GenericACPAgentClient, including when a gjc provider is registered
+// alongside it.
+test("other custom acp providers keep using GenericACPAgentClient next to gjc", () => {
+  const registry = buildProviderRegistry(logger, {
+    providerOverrides: {
+      gjc: {
+        extends: "acp",
+        label: "GJC",
+        command: ["gjc", "acp"],
+      },
+      "my-agent": {
+        extends: "acp",
+        label: "My Agent",
+        command: ["my-agent", "--acp"],
+      },
+    },
+  });
+
+  expect(registry["my-agent"].createClient(logger).provider).toBe("my-agent");
+  expect(registry.gjc.createClient(logger).provider).toBe("gjc");
+  expect(mockState.constructorArgs.genericAcp.map((entry) => entry.providerId)).toEqual([
+    "my-agent",
+    "my-agent",
+  ]);
+  expect(mockState.constructorArgs.gjc.map((entry) => entry.providerId)).toEqual(["gjc", "gjc"]);
 });
 
 test("Hub E2E ACP provider applies exact grants for its injected MCP server", () => {

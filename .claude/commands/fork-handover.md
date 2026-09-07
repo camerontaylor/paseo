@@ -9,7 +9,6 @@ You are picking up fork work in this checkout. Orient, verify, then act.
 Read, in this order:
 
 - `fork/README.md` — the `fork/` namespace, branch discipline, the PR grab basket.
-- `fork/side-conversations-follow-ups.md` — the live executable task, below.
 - `fork/handover-2026-08-29.md` — the migration record and the gjc ACP diagnosis.
 - `CLAUDE.local.md` (symlink to `fork/claude-local.md`) — origin/upstream remotes.
 
@@ -49,22 +48,21 @@ automatically by `scripts/worktree-trust-mise.sh`, the first `paseo.json` setup 
 
 ## 3. Work in flight
 
-### A. Side-conversation follow-ups — runnable anywhere
+### A. Side conversations — follow-ups closed
 
-The one track that needs no gjc. Side conversations **landed on `custom`** in merge
-`a7fb6c131`, ported across upstream #3826. The merge blocker doc is gone; what is left
-is `fork/side-conversations-follow-ups.md`, seven follow-ups ordered by what bites
-first. The whole suite has never run on this feature — `CLAUDE.md` forbids it locally,
-so push to CI for that.
+All seven follow-ups are done on branch `fork-handover/side-conversations-merge`
+(tip `25c089317`): the closed-session spawn guard, the version-compare dedupe, the
+`reason` field on unavailable answers, the unshared version-probe signal, OpenCode
+in-flight refetch cancellation, the `clearParent` deletion, and the docs pass that let
+the follow-ups doc be deleted per its README contract.
 
-One decision from the port is worth knowing before you touch the follow-ups: side
-conversations route on the `openInSidePane.subagents` preference rather than one of
-their own, because they launch from the subagents track and present as one. If a
-follow-up wants them to route separately, that is a new `OpenInSidePanePreferences`
-key plus a settings row and nine locale files — additive, but not free.
-
-`packages/app/src/workspace-tabs/open-beside.test.ts` pins that routing, including the
-preference-off path. Break it and you have changed the decision, not just the code.
+One durable decision from the port: side conversations route on the
+`openInSidePane.subagents` preference rather than one of their own, because they
+launch from the subagents track and present as one. Separating them means a new
+`OpenInSidePanePreferences` key plus a settings row and nine locale files — additive,
+but not free. `packages/app/src/workspace-tabs/open-beside.test.ts` pins that routing,
+including the preference-off path. Break it and you have changed the decision, not
+just the code.
 
 ### B. Three plans, all pending approval, none implemented
 

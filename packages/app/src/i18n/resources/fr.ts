@@ -102,6 +102,7 @@ export const fr: TranslationResources = {
     },
     errors: {
       unavailable: "Les conversations parallèles ne sont pas disponibles pour cet agent.",
+      sessionClosed: "Cet agent s'est fermé pendant que la question était en cours.",
       timeout: "La conversation parallèle a expiré.",
       failed: "Échec de la conversation parallèle : {{error}}",
       duplicate: "Une question parallèle est déjà en cours.",

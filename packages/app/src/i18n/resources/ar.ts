@@ -100,6 +100,7 @@ export const ar: TranslationResources = {
     },
     errors: {
       unavailable: "المحادثات الجانبية غير متاحة لهذا الوكيل.",
+      sessionClosed: "أُغلق هذا الوكيل أثناء معالجة السؤال.",
       timeout: "انتهت مهلة المحادثة الجانبية.",
       failed: "فشلت المحادثة الجانبية: {{error}}",
       duplicate: "هناك سؤال جانبي قيد التنفيذ بالفعل.",

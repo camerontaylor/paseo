@@ -29,7 +29,14 @@ const ThemedTextInput = withUnistyles(EditingTextInput, (theme) => ({
 
 function answerNotice(answer: SideAnswerPayload | null | undefined, t: TFunction): string | null {
   if (!answer) return null;
-  if (answer.status === "unavailable") return t("sideConversations.errors.unavailable");
+  // An unavailable answer means one of two things: the provider has no side questions at
+  // all, or the agent closed while this question was in flight. The reason field tells
+  // them apart; absent is treated as the provider case (pre-fork daemons never answer).
+  if (answer.status === "unavailable") {
+    return answer.reason === "session_closed"
+      ? t("sideConversations.errors.sessionClosed")
+      : t("sideConversations.errors.unavailable");
+  }
   if (answer.status === "timed_out") return t("sideConversations.errors.timeout");
   if (answer.status === "failed") {
     return t("sideConversations.errors.failed", { error: answer.error });
@@ -79,7 +86,7 @@ function SideConversationPanel() {
   invariant(target.kind === "side_conversation", "SideConversationPanel requires side target");
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const serverInfo = useSessionStore((state) => state.sessions[serverId]?.serverInfo ?? null);
-  // COMPAT(sideConversations): added in v0.5.x, remove gate after 2027-02-24.
+  // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
   const supported = serverInfo?.features?.sideConversations === true;
   const record = useSideConversationStore((state) =>
     state.records.get(sideConversationKey(serverId, target.parentAgentId, target.threadId)),

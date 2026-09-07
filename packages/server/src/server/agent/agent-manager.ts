@@ -1178,7 +1178,7 @@ export class AgentManager {
       this.sideConversations.begin(parentAgentId, threadId, question),
     );
     if (!agent.session.askSideQuestion) {
-      const answer = { status: "unavailable" as const };
+      const answer = { status: "unavailable" as const, reason: "unsupported_provider" as const };
       this.completeSideConversation(parentAgentId, threadId, answer);
       return answer;
     }
@@ -2262,13 +2262,36 @@ export class AgentManager {
     options?: AgentRunOptions;
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
+    // Correlation for the replace race: these are the manager's own facts about
+    // the call it made. Whether the provider admitted or staged the turn is the
+    // adapter's to log (provider.acp.successor_staged / admission_released).
+    const replacement = agent.pendingReplacement;
+    const sessionId = agent.persistence?.sessionId ?? undefined;
+    if (replacement) {
+      this.logger.info(
+        { agentId, provider: agent.provider, sessionId },
+        "agent.replace.start_turn_invoked",
+      );
+    }
     try {
       const result = await agent.session.startTurn(prompt, options);
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
       }
+      if (replacement) {
+        this.logger.info(
+          { agentId, provider: agent.provider, sessionId, turnId: result.turnId },
+          "agent.replace.start_turn_resolved",
+        );
+      }
       return result.turnId;
     } catch (error) {
+      if (replacement) {
+        this.logger.warn(
+          { agentId, provider: agent.provider, sessionId, err: error },
+          "agent.replace.start_turn_rejected",
+        );
+      }
       if (pendingRun.settled) {
         throw error;
       }
@@ -2839,23 +2862,34 @@ export class AgentManager {
       return { status: "not_running" };
     }
 
-    const interruptAcknowledged = await this.interruptSession(agent.session, agentId);
+    // Correlation ids the manager owns: the run it is settling and the ACP
+    // session that run belongs to. Whether the provider is ready or still
+    // gated is the adapter's to log, never the manager's.
+    const sessionId = agent.persistence?.sessionId ?? undefined;
+    const interruptReturned = await this.interruptSession(agent.session, agentId);
     const settlement = await this.waitWithTimeout({
       operation: run.settledPromise,
-      timeoutMs: interruptAcknowledged
+      timeoutMs: interruptReturned
         ? INTERRUPT_SESSION_TIMEOUT_MS
         : this.rescueTimeouts.interruptSessionMs,
     });
 
-    if (!interruptAcknowledged) {
+    if (!interruptReturned) {
       return { status: settlement === "completed" ? "settled" : "refused" };
     }
 
     const runTurnId = this.runs.getTurnId(agentId);
     if (settlement === "timed_out" && runTurnId) {
+      // Manager-owned facts only. The adapter may still hold its stop boundary,
+      // so this line must never read as the provider being ready or idle.
       this.logger.warn(
-        { agentId, turnId: runTurnId, kind: run.kind },
-        "cancelAgentRun: acknowledged turn still active after timeout, force-canceling",
+        {
+          agentId,
+          turnId: runTurnId,
+          kind: run.kind,
+          sessionId,
+        },
+        "cancelAgentRun: manager settlement wait timed out; force-settling the manager-owned run",
       );
       await this.dispatchSessionEvent(agent, {
         type: "turn_canceled",
@@ -2866,8 +2900,8 @@ export class AgentManager {
       await run.settledPromise;
     } else if (settlement === "timed_out" && run.kind === "foreground") {
       this.logger.warn(
-        { agentId, kind: run.kind },
-        "cancelAgentRun: acknowledged pending turn still active after timeout, clearing it",
+        { agentId, kind: run.kind, sessionId },
+        "cancelAgentRun: manager settlement wait timed out; force-settling the manager-owned pending run",
       );
       this.runs.settleForegroundRun(agentId, run.token);
       if (!agent.pendingReplacement) {
@@ -2877,8 +2911,8 @@ export class AgentManager {
       }
     } else if (settlement === "timed_out" && run.kind === "autonomous") {
       this.logger.warn(
-        { agentId, kind: run.kind },
-        "cancelAgentRun: acknowledged turn still active after timeout, force-canceling",
+        { agentId, kind: run.kind, sessionId },
+        "cancelAgentRun: manager settlement wait timed out; force-settling the manager-owned autonomous run",
       );
       await this.dispatchSessionEvent(agent, {
         type: "turn_canceled",
@@ -2906,28 +2940,37 @@ export class AgentManager {
   }
 
   private async interruptSession(session: AgentSession, agentId: string): Promise<boolean> {
+    // The manager owns the interrupt call and the wait around it, and nothing
+    // else. It cannot see a provider stop boundary or prompt state, so its logs
+    // record that the call was issued, that it returned or rejected, and when
+    // the manager's own wait ended — never that the provider settled or is idle.
+    const sessionId = session.describePersistence()?.sessionId ?? undefined;
     try {
       const result = await this.waitWithTimeout({
         operation: session.interrupt(),
         timeoutMs: this.rescueTimeouts.interruptSessionMs,
         onLateError: (error) => {
           this.logger.warn(
-            { err: error, agentId },
-            "Session interrupt failed after timeout during cancel",
+            { err: error, agentId, sessionId },
+            "interruptSession: provider rejected the interrupt after the manager stopped waiting",
           );
         },
       });
 
       if (result === "timed_out") {
         this.logger.warn(
-          { agentId, timeoutMs: this.rescueTimeouts.interruptSessionMs },
-          "Timed out interrupting session during cancel",
+          { agentId, sessionId, timeoutMs: this.rescueTimeouts.interruptSessionMs },
+          "interruptSession: manager interrupt wait timed out",
         );
         return false;
       }
+      this.logger.info({ agentId, sessionId }, "interruptSession: interrupt call returned");
       return true;
     } catch (error) {
-      this.logger.error({ err: error, agentId }, "Failed to interrupt session");
+      this.logger.error(
+        { err: error, agentId, sessionId },
+        "interruptSession: provider rejected the interrupt",
+      );
       return false;
     }
   }
@@ -4772,6 +4815,10 @@ export class AgentManager {
     this.dispatch({ type: "agent_stream", agentId, event, ...metadata });
   }
 
+  // An event variant with a parent-scoped payload needs a filtering arm here and a membership
+  // arm in eventBelongsToInternalAgent(). Miss the first and an agentId-scoped subscriber
+  // receives every parent's events; miss the second and internal-agent events leak to global
+  // subscribers. provider_subagent and side_conversation carry the whole pattern.
   private dispatch(event: AgentManagerEvent): void {
     for (const subscriber of this.subscribers) {
       if (

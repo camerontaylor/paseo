@@ -18,7 +18,7 @@ export const CLIENT_CAPS = {
   // COMPAT(providerSubagents): added in v0.1.107. The daemon emits provider-owned
   // child descriptors and timelines only to clients that understand the new messages.
   providerSubagents: "provider_subagents",
-  // COMPAT(sideConversations): added in v0.5.x, remove gate after 2027-02-24.
+  // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
   sideConversations: "side_conversations",
   // COMPAT(projectUpdates): added in v0.1.109, remove gate after 2027-01-15.
   projectUpdates: "project_updates",

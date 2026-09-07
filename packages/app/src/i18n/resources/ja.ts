@@ -100,6 +100,7 @@ export const ja: TranslationResources = {
     },
     errors: {
       unavailable: "このエージェントではサイド会話を利用できません。",
+      sessionClosed: "このエージェントは質問の処理中に終了しました。",
       timeout: "サイド会話がタイムアウトしました。",
       failed: "サイド会話に失敗しました: {{error}}",
       duplicate: "サイド質問はすでに進行中です。",
