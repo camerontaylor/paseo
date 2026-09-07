@@ -94,13 +94,16 @@ interface SideQuestionHarness {
   createSession: () => Promise<AgentSession>;
 }
 
-function createHarness(resolveVersion: () => Promise<string>): SideQuestionHarness {
+function createHarness(
+  resolveVersion: () => Promise<string>,
+  options?: { resolveBinary?: () => Promise<string> },
+): SideQuestionHarness {
   const queryFactory = vi.fn(() => createSideQuestionQueryMock("side answer"));
   const resolveVersionMock = vi.fn(resolveVersion);
   const client = new ClaudeAgentClient({
     logger: createTestLogger(),
     queryFactory,
-    resolveBinary: async () => "/test/claude/bin",
+    resolveBinary: options?.resolveBinary ?? (async () => "/test/claude/bin"),
     resolveVersion: resolveVersionMock,
   });
   return {
@@ -140,7 +143,10 @@ describe("Claude session side questions", () => {
     await session.close();
     releaseVersion?.();
 
-    await expect(answer).resolves.toEqual({ status: "unavailable" });
+    await expect(answer).resolves.toEqual({
+      status: "unavailable",
+      reason: "session_closed",
+    });
     expect(harness.queryFactory).not.toHaveBeenCalled();
   });
 
@@ -151,6 +157,7 @@ describe("Claude session side questions", () => {
 
     await expect(askSideQuestionOf(session)("still there?", [])).resolves.toEqual({
       status: "unavailable",
+      reason: "session_closed",
     });
     expect(harness.resolveVersion).not.toHaveBeenCalled();
     expect(harness.queryFactory).not.toHaveBeenCalled();
@@ -167,7 +174,7 @@ describe("Claude session side questions", () => {
     expect(harness.queryFactory).not.toHaveBeenCalled();
   });
 
-  it("forwards the caller's signal to the version probe", async () => {
+  it("does not bind the caller's signal to the shared version probe", async () => {
     const controller = new AbortController();
     let seenSignal: AbortSignal | undefined;
     const queryFactory = vi.fn(() => createSideQuestionQueryMock("side answer"));
@@ -183,8 +190,39 @@ describe("Claude session side questions", () => {
     const session = await client.createSession({ provider: "claude", cwd: process.cwd() });
     openSessions.push(session);
 
-    await askSideQuestionOf(session)("hello?", [], { signal: controller.signal });
-    expect(seenSignal).toBe(controller.signal);
+    const answer = await askSideQuestionOf(session)("hello?", [], { signal: controller.signal });
+    // The probe is memoized across every thread's side questions, so it must not carry any
+    // one caller's signal: AgentManager aborts each caller's signal when that caller settles.
+    expect(seenSignal).toBeUndefined();
+    expect(answer).toMatchObject({ status: "answered", threading: "threaded" });
+  });
+
+  it("keeps the shared probe alive when one concurrent caller aborts", async () => {
+    let releaseVersion: ((version: string) => void) | undefined;
+    const harness = createHarness(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseVersion = resolve;
+        }),
+    );
+    const session = await openSession(harness);
+    const ask = askSideQuestionOf(session);
+
+    const firstController = new AbortController();
+    const first = ask("from thread one?", [], { signal: firstController.signal });
+    await vi.waitFor(() => expect(releaseVersion).toBeDefined());
+    const second = ask("from thread two?", []);
+    firstController.abort();
+    releaseVersion?.("2.1.227");
+
+    // The aborted caller is turned away by its own aborted check; the other thread keeps the
+    // memoized probe's result instead of re-probing (or falling back to single_shot).
+    await expect(first).resolves.toEqual({ status: "unavailable" });
+    await expect(second).resolves.toMatchObject({
+      status: "answered",
+      threading: "threaded",
+    });
+    expect(harness.resolveVersion).toHaveBeenCalledTimes(1);
   });
 
   it("probes `claude --version` once per session", async () => {
@@ -294,5 +332,112 @@ describe("Claude side question control-request contract", () => {
     await expect(
       askClaudeSideQuestion({ query, question: "why?", history: [], threading: "single_shot" }),
     ).rejects.toThrow("control request exploded");
+  });
+});
+
+describe("Claude session closed guard", () => {
+  const openSessions: AgentSession[] = [];
+
+  afterEach(async () => {
+    while (openSessions.length > 0) {
+      await openSessions.pop()?.close();
+    }
+  });
+
+  async function openSession(harness: SideQuestionHarness): Promise<AgentSession> {
+    const session = await harness.createSession();
+    openSessions.push(session);
+    return session;
+  }
+
+  // The five public ensureQuery() entry points that predate the guard. Each must refuse a
+  // closed session instead of spawning an untracked Claude CLI process tree for it.
+  const closedSessionRefusals: Array<
+    [name: string, call: (session: AgentSession) => Promise<unknown>]
+  > = [
+    ["setMode", (session) => session.setMode("default")],
+    ["setModel", (session) => session.setModel!(null)],
+    ["listCommands", (session) => session.listCommands!()],
+    ["revertFiles", (session) => session.revertFiles!({ messageId: "msg_1" })],
+  ];
+
+  it.each(closedSessionRefusals)(
+    "%s refuses a closed session without spawning",
+    async (_name, call) => {
+      const harness = createHarness(async () => "2.1.227");
+      const session = await openSession(harness);
+      await session.close();
+
+      await expect(call(session)).rejects.toThrow("Claude session is closed");
+      expect(harness.queryFactory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not spawn when close() lands while query options are being built", async () => {
+    let releaseBinary: ((binary: string) => void) | undefined;
+    const harness = createHarness(async () => "2.1.227", {
+      resolveBinary: () =>
+        new Promise<string>((resolve) => {
+          releaseBinary = resolve;
+        }),
+    });
+    const session = await openSession(harness);
+
+    const pending = session.listCommands!();
+    await vi.waitFor(() => expect(releaseBinary).toBeDefined());
+    await session.close();
+    releaseBinary?.("/test/claude/bin");
+
+    await expect(pending).rejects.toThrow("Claude session is closed");
+    expect(harness.queryFactory).not.toHaveBeenCalled();
+  });
+
+  it("fails a turn instead of spawning when close() lands mid-options during startTurn", async () => {
+    let releaseBinary: ((binary: string) => void) | undefined;
+    const harness = createHarness(async () => "2.1.227", {
+      resolveBinary: () =>
+        new Promise<string>((resolve) => {
+          releaseBinary = resolve;
+        }),
+    });
+    const session = await openSession(harness);
+    const events: string[] = [];
+    session.subscribe((event) => {
+      events.push(event.type);
+    });
+
+    const started = session.startTurn("hello");
+    await vi.waitFor(() => expect(releaseBinary).toBeDefined());
+    await session.close();
+    releaseBinary?.("/test/claude/bin");
+
+    await expect(started).resolves.toEqual({ turnId: expect.any(String) });
+    // close() cancels the active turn before ensureQuery() can throw, so the turn settles as
+    // canceled rather than failed — the ensureQuery throw only fails turns close() cannot cancel.
+    await vi.waitFor(() => expect(events).toContain("turn_canceled"));
+    expect(events).not.toContain("turn_failed");
+    expect(harness.queryFactory).not.toHaveBeenCalled();
+  });
+
+  it("maps a mid-options close during askSideQuestion to unavailable", async () => {
+    let releaseBinary: ((binary: string) => void) | undefined;
+    const harness = createHarness(async () => "2.1.227", {
+      resolveBinary: () =>
+        new Promise<string>((resolve) => {
+          releaseBinary = resolve;
+        }),
+    });
+    const session = await openSession(harness);
+
+    const answer = askSideQuestionOf(session)("still there?", []);
+    await vi.waitFor(() => expect(releaseBinary).toBeDefined());
+    await session.close();
+    releaseBinary?.("/test/claude/bin");
+
+    await expect(answer).resolves.toEqual({
+      status: "unavailable",
+      reason: "session_closed",
+    });
+    expect(harness.queryFactory).not.toHaveBeenCalled();
   });
 });
