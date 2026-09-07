@@ -39,16 +39,30 @@ be in flight.
 
 ### Cancellation
 
-Provider interruption is idempotent at the `AgentSession` boundary. It resolves when the prior
-foreground turn can no longer run, including when the provider reports that it is already idle. It
-rejects only when the provider may still own the turn. Provider adapters translate native errors
-into that contract; lifecycle callers do not interpret provider-specific errors.
+Provider interruption is idempotent at the `AgentSession` boundary. It resolves when the provider
+completes the cancellation request, including when the provider reports that it is already idle;
+completing the request does not by itself prove the old turn stopped. It rejects when the request
+fails, in which case the provider may still own the turn. Provider adapters translate native
+errors into that contract; lifecycle callers do not interpret provider-specific errors.
 
-After an acknowledged interrupt, the manager settles the captured run even when no terminal event
-arrives or the run was still waiting for its provider turn id. The captured run token prevents an
-older cancellation from settling a newer turn. If interruption is rejected or times out, the agent
-keeps its active foreground turn and replacement, reload, rewind, and Stop report the failure.
-Accepting new work after an ambiguous interruption would create a split-brain session.
+Manager settlement and provider readiness are independent facts with different owners. The manager
+force-settles its captured run two seconds after an accepted interrupt, even when no terminal event
+arrives or the run was still waiting for its provider turn id, and the captured run token prevents
+an older cancellation from settling a newer turn. The provider's turn can outlive that settlement,
+so a replacement staged afterwards waits behind the adapter's stop fence, which opens only when the
+provider proves the old prompt terminal and every session-scoped cancellation write for the stop has
+settled. The wait behind that fence is bounded by a ten-second admission deadline that starts when the
+replacement is staged behind the stop, not when the stop is installed — staging is when your wait
+begins. The fork-local GJC provider is why the value is ten seconds: its own abort budget is the same
+10 seconds (`fork/plans/ralplan-gjc-acp-cancellation-boundary.md` has the specifics), so a
+slow-but-healthy abort can consume the whole window. That expiry is the documented fail-closed
+outcome: the deadline bounds your wait and never manufactures readiness. Recovery is
+a later request, or closing and recreating the agent. [`docs/providers.md`](./providers.md) states
+what each provider owes that fence and names the deadline constant with its expiry semantics.
+
+If interruption is rejected or times out, the agent keeps its active foreground turn and
+replacement, reload, rewind, and Stop report the failure. Accepting new work after an ambiguous
+interruption would create a split-brain session.
 
 ## Relationships
 
@@ -156,7 +170,7 @@ notification. Opening the workspace clears that attention through the normal foc
 
 The track is a pill at the foot of an agent's pane (`packages/app/src/subagents/track.tsx`): a count you can read at a glance, and a panel behind it — a popover on wide screens, a sheet on compact ones — holding the rows. It floats over the transcript rather than sitting in a band above the composer, so the timeline scrolls underneath it; `packages/app/src/panels/agent-tracks.tsx` owns that placement, and the pill frame is shared with the task list in `packages/app/src/composer/tracks.tsx`.
 
-The rows combine two kinds of children:
+The rows combine two kinds of children and one kind of side thread:
 
 - **Paseo subagents** are full managed agents. Their membership rule (`packages/app/src/subagents/select.ts`) is:
 
@@ -166,7 +180,11 @@ parentAgentId === thisAgent.id  AND  !archivedAt
 
 - **Provider subagents** are child executions owned by Claude, Codex, or OpenCode. They are not inserted into `AgentManager` as managed agents. Providers emit a separate descriptor and timeline stream through `agent.provider_subagents.*`; the client keeps that state outside the normal agent store and merges only the presentation rows into the track. A descriptor's optional `parentSubagentId` identifies its direct provider-subagent parent; an absent value identifies a direct child of the managed agent.
 
-Clicking either kind opens a workspace tab. A Paseo subagent tab is a normal interactive agent pane. A provider subagent tab is a read-only timeline pane with no composer, archive, detach, rewind, or fork actions. It shows its own direct children in a subagents track. Both panes use `AgentStreamView`, so message, reasoning, tool-call, and layout rendering stay identical.
+- **Side conversations** are Q&A threads on the parent itself, not children at all. The client mints the thread id; the thread exists from its first question and is named by it. Rows come from `agent.side_conversation.*` snapshots held outside the agent store, and a row appears only once its first question does. Archive, reload, and history clear on the parent drop the daemon-side records and the track rows with them. Claude and OpenCode implement the provider seam; elsewhere the `sideConversations` capability gate hides the rows entirely.
+
+Clicking either child kind opens a workspace tab. A Paseo subagent tab is a normal interactive agent pane. A provider subagent tab is a read-only timeline pane with no composer, archive, detach, rewind, or fork actions. It shows its own direct children in a subagents track. Both panes use `AgentStreamView`, so message, reasoning, tool-call, and layout rendering stay identical. A side conversation tab is a light pane of its own — a composer and the thread's messages — with no agent lifecycle actions.
+
+A parent gets its **New side conversation** entry point in the agent tab menu (`packages/app/src/screens/workspace/workspace-tab-menu.ts`), not in the track: the track renders nothing when it has no rows, so a control in its header would be invisible for exactly the agent that has no side conversations yet. The menu drops the entry when the host has no side conversations rather than greying it out.
 
 Provider timelines use the same structural timeline item format but deliberately have a separate lifecycle and transport. A provider thread/session identifier is not a Paseo agent identifier, and closing its tab is always layout-only.
 

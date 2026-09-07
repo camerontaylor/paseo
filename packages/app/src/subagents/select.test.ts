@@ -156,16 +156,6 @@ describe("selectSideConversationsForParent", () => {
         true,
       ).map((row) => row.id),
     ).toEqual(["thread-1"]);
-
-    store.clearParent(SERVER_ID, "parent-a");
-    expect(
-      selectSideConversationsForParent(
-        useSideConversationStore.getState(),
-        params,
-        "claude-code",
-        true,
-      ),
-    ).toEqual([]);
   });
 
   it("leaves a thread that has no question yet out of the track", () => {

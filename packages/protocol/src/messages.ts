@@ -3558,7 +3558,7 @@ export const ServerInfoStatusPayloadSchema = z
         providerSubagents: z.boolean().optional(),
         // COMPAT(providerSubagentNesting): added in v0.7, remove gate after 2027-03-04.
         providerSubagentNesting: z.boolean().optional(),
-        // COMPAT(sideConversations): added in v0.5.x, remove gate after 2027-02-24.
+        // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
         sideConversations: z.boolean().optional(),
         // COMPAT(workspacePinning): added in v0.1.107, remove gate after 2027-01-12.
         workspacePinning: z.boolean().optional(),
@@ -4621,6 +4621,8 @@ export const ProviderSubagentUpdateMessageSchema = z.object({
 
 export const SideConversationThreadingSchema = z.enum(["threaded", "single_shot"]);
 
+export const SideAnswerUnavailableReasonSchema = z.enum(["unsupported_provider", "session_closed"]);
+
 export const SideAnswerPayloadSchema = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("answered"),
@@ -4628,7 +4630,13 @@ export const SideAnswerPayloadSchema = z.discriminatedUnion("status", [
     synthetic: z.boolean(),
     threading: SideConversationThreadingSchema,
   }),
-  z.object({ status: z.literal("unavailable") }),
+  // `reason` is optional because "unspecified" is a real answer (e.g. an ask that failed
+  // before the manager could classify it), not for version tolerance — pre-fork daemons
+  // never send side-conversation answers at all.
+  z.object({
+    status: z.literal("unavailable"),
+    reason: SideAnswerUnavailableReasonSchema.optional(),
+  }),
   z.object({ status: z.literal("timed_out"), threading: SideConversationThreadingSchema }),
   z.object({
     status: z.literal("failed"),
