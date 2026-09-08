@@ -45,6 +45,7 @@ Two-branch discipline, borrowed from `UnbrokenHunter/paseo`'s `docs/fork-workflo
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `main`   | **Mirrors upstream 1:1. Never commit here.** Tracks `origin/main`, which follows `getpaseo/paseo`. Sync with `git fetch upstream && git switch main && git merge --ff-only upstream/main && git push origin main`. |
 | `custom` | Everything of ours, including this directory. Rebase or merge `main` into it when upstream moves.                                                                                                                  |
+| `chore/pnpm-migration` | **Reference only — pushed, never carried.** Complete, locally verified npm→pnpm migration (workspace settings, CI, patches, docs); the nix port was deliberately left broken — headers in `nix/*.nix` describe the rewrite. Shelved 2026-09-07: upstream stays npm, so the per-sync lockfile tax outweighs pnpm's convenience. Revive only if upstream migrates. |
 
 Why it matters: a mirror branch stays a fast-forward only while it has no local
 commits. Put `fork/` on `main` and every sync becomes a merge — and the first
