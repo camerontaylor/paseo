@@ -6,7 +6,6 @@ namespace exists. Keep fork-only files here rather than in `docs/`.
 
 The lesson comes from the fork survey in
 [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md): the most
-| [upstream-prs-2026-09-07.md](upstream-prs-2026-09-07.md)               | Evaluation of the 430 upstream PRs opened in the last month — corrections to the basket, the grab-now pass with a ready-to-paste manifest block, grab-next clusters, watch triggers, and sync hazards. Point-in-time. |
 repeated commit message across the entire fork corpus is some variant of
 _"restore X dropped during upstream merge"_, and `yooztech` invented a
 `packages/app/src/fork/` namespace for exactly this reason.
@@ -107,7 +106,6 @@ desvio build             # ~1 min warm; several minutes if the lockfile moved
 
 Full setup, the intake rule, the current carries, and the four Linux portability
 fixes are in [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md)
-| [upstream-prs-2026-09-07.md](upstream-prs-2026-09-07.md)               | Evaluation of the 430 upstream PRs opened in the last month — corrections to the basket, the grab-now pass with a ready-to-paste manifest block, grab-next clusters, watch triggers, and sync hazards. Point-in-time. |
 §4. The short version:
 
 - **Carry** fixes, and features adding a capability upstream has no answer for.
