@@ -187,14 +187,20 @@ Runs on makemake, verified green 2026-09-09:
 | protocol / client / highlight / relay | 16s / 8s / 3s / 7s |
 | `@getpaseo/server` (5,451 tests) | 362s |
 
-Plus `npm ci` at 145s, so about 11 minutes end to end.
+Live runs on the runner itself come in under 10 minutes:
 
-First live run (`34396878560`) failed two PTY tests on timeout —
-`worker-terminal-manager`'s default-shell case and `worktree-bootstrap.posix`'s
-terminal-backed services — and passed clean on retry. Both spawn a shell and
-wait; `SHELL=/bin/bash` was added to cut the spawn cost. **Treat this tier as
-green but not yet proven stable**: it has one clean run out of two, on hardware
-slower than anything upstream tests on.
+| Run | Result | |
+| --- | --- | --- |
+| `34396878560` attempt 1 | failure | Two PTY tests timed out: `worker-terminal-manager`'s default-shell case and `worktree-bootstrap.posix`'s terminal-backed services |
+| `34396878560` attempt 2 | success | Same commit, no changes — so those two are flaky under contention, not broken |
+| `34399960394` | success, 9m50s | First run carrying `SHELL=/bin/bash` |
+
+Both flaky tests spawn a shell and wait on a 10s budget, which is why the
+`SHELL` pin went in. **Two clean runs out of three is not proof of stability**
+on hardware slower than anything upstream tests on. If the PTY tests reappear,
+the next lever is worker count: `packages/server/vitest.config.ts:24` already
+caps `maxWorkers` at 2 on Windows for exactly this reason — subprocess-heavy
+tests starving at default parallelism — and makemake is the same kind of host.
 
 No credentials are needed — the provider suites skip themselves through
 `canRunRealProvider()` when `OPENROUTER_API_KEY` is absent
