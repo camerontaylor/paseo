@@ -192,14 +192,47 @@ the packaged smoke, the three CLI shards, and everything `windows-latest`.
 Routing them here would turn a 24-minute GitHub-hosted matrix into a multi-hour
 serial queue on one 4-core box, for no cost saving — see the benchmark above.
 
-### Still open
+### The full matrix
 
-Pull requests targeting `custom` get the makemake tier only. The full
-GitHub-hosted matrix in `ci.yml` still fires on `main` alone, so Playwright,
-desktop, CLI and Windows do not run on fork pull requests. Closing that is the
-Tier 1 change: add `workflow_call:` to `ci.yml` and call it from `fork-ci.yml`.
-The `on:` block of `ci.yml` has never been modified in repo history, so the edit
-is near-zero rebase risk.
+`fork-ci.yml` also calls `ci.yml` as a reusable workflow, so a pull request into
+`custom` gets the whole 18-job GitHub-hosted matrix — Playwright, desktop E2E,
+the CLI shards and Windows — alongside the makemake tier. That needed one line
+in `ci.yml`:
+
+```yaml
+on:
+  ...
+  workflow_call:
+```
+
+**This is the only fork edit inside an upstream file.** It is tagged
+`FORK-LOCAL` in place. The `on:` block has never been modified in repo history,
+so the rebase risk is low, but if it is ever dropped during a merge the fork
+loses its full CI silently — `fork-ci.yml` would fail to resolve the callee.
+
+Two things follow from calling `ci.yml` rather than copying it:
+
+- `permissions` in the caller is a **ceiling**, not a default. `ci.yml`'s
+  `changes` job asks for `pull-requests: read` for `dorny/paths-filter`, so
+  `fork-ci.yml` has to grant it or the job fails.
+- The gate is duplicated across both jobs, so it is written once as a YAML
+  anchor (`&fork_owner_only` / `*fork_owner_only`). Two copies of a security
+  check drift; one does not. `secrets: inherit` is why the gate stays on the
+  GitHub-hosted job too, even though GitHub-hosted runners are not themselves
+  at risk from a fork pull request.
+
+### Known redundancy
+
+The makemake tier and the full matrix both run format, lint, typecheck and the
+server suite. They run concurrently so there is no wall-clock cost, but makemake
+spends ~11 minutes per pull request duplicating work GitHub is doing for free —
+and because `ci.yml` path-filters through `.github/ci-paths.yml` while the
+makemake job does not, a docs-only pull request runs *more* on makemake than on
+GitHub.
+
+If that becomes annoying, trim the makemake job to `format:check`, `lint` and
+`typecheck` for fast-fail feedback (~90s after install) and let the matrix own
+the tests.
 
 ## Ruled out
 
