@@ -6,6 +6,7 @@ namespace exists. Keep fork-only files here rather than in `docs/`.
 
 The lesson comes from the fork survey in
 [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md): the most
+| [upstream-prs-2026-09-07.md](upstream-prs-2026-09-07.md)               | Evaluation of the 430 upstream PRs opened in the last month — corrections to the basket, the grab-now pass with a ready-to-paste manifest block, grab-next clusters, watch triggers, and sync hazards. Point-in-time. |
 repeated commit message across the entire fork corpus is some variant of
 _"restore X dropped during upstream merge"_, and `yooztech` invented a
 `packages/app/src/fork/` namespace for exactly this reason.
@@ -15,6 +16,7 @@ _"restore X dropped during upstream merge"_, and `yooztech` invented a
 | File                                                                                           |                                                                                                                                                                                                                                                      |
 | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md)                             | Research into upstream, its 1,546 forks, 490 open PRs and 467 open issues — features built, pain points, and the PR grab basket setup. Point-in-time; upstream merges ~30 community PRs a week.                                                      |
+| [upstream-prs-2026-09-07.md](upstream-prs-2026-09-07.md)               | Evaluation of the 430 upstream PRs opened in the last month — corrections to the basket, the grab-now pass with a ready-to-paste manifest block, grab-next clusters, watch triggers, and sync hazards. Point-in-time. |
 | [upstream-candidates.md](upstream-candidates.md)                                               | Changes we could write that fit upstream's code and philosophy. Bug-shaped, layer-correct, one concern each. Offered upstream, carried either way.                                                                                                   |
 | [local-fork-candidates.md](local-fork-candidates.md)                                           | Changes we would build and keep. Upstream has declined them or would build them differently. Permanent carries, with their maintenance cost stated.                                                                                                  |
 | [side-conversations-2026-08-23.md](side-conversations-2026-08-23.md)                           | Research into the `/btw` side-question mechanism — what it is in Claude Code, the Codex and OpenCode equivalents, why upstream #2056 was closed unevaluated, and what building it here would cost. Backs the Side conversations candidate.           |
@@ -22,6 +24,8 @@ _"restore X dropped during upstream merge"_, and `yooztech` invented a
 | [handover-2026-08-29.md](handover-2026-08-29.md)                                               | Handover written before migrating this checkout to neptune — repo state after the upstream rebase, what breaks on the move (five worktrees, an unpushed branch, gitignored files), and the work left in flight.                                      |
 | [upstream-sync.md](upstream-sync.md)                                                           | What breaks when `custom` moves to a newer upstream tag — why a clean merge proves nothing, the exhaustive-map joints that rot without conflicting, and the per-sync record.                                                                         |
 | [handover-2026-09-04.md](handover-2026-09-04.md)                                               | Handover for the gjc ACP cancellation-boundary branch after its verification review — the rebase blocker in the manager tests, the finalized-plan gaps that postdate the implementation, and the ordered fix list with anchors.                      |
+| [handover-upstream-reconcile-2026-09-07.md](handover-upstream-reconcile-2026-09-07.md) | Integration plans for upstream PRs that re-derive our own ACP busy-turn/cancellation work — what to mine from each, what to reject, the #4321 re-seating steps for the next sync, and the order to do it in. |
+| [ci.md](ci.md)                                                         | What fork CI needs, measured — the trigger gap that stops it running on `custom`, the 150 job-minute load, the fleet benchmark, and why only a narrow nightly tier is worth self-hosting. |
 | [plans/plan-cancellation-boundary-fix-pass.md](plans/plan-cancellation-boundary-fix-pass.md)   | Verified, resequenced fix list for the ACP cancellation boundary — what the 2026-09-04 handover got right, the two SDK-level corrections it got wrong, and the eight plan units in dependency order. Delete when the pass lands.                     |
 | [plans/review-gjc-acp-cancellation-boundary.md](plans/review-gjc-acp-cancellation-boundary.md) | Verification review of the landed cancellation-boundary work against the finalized plan — the acceptance rollup the fix pass closes (AC 6, 11, 12, 15, 17) and the evidence behind every verdict. Record; the fix-pass plan supersedes its ordering. |
 | [plans/](plans/)                                                                               | Dispatch briefs and ralplan output for fork work. `brief-*.md` are ready-to-paste gjc dispatches; `ralplan-*.md` are the plans they produce.                                                                                                         |
@@ -103,6 +107,7 @@ desvio build             # ~1 min warm; several minutes if the lockfile moved
 
 Full setup, the intake rule, the current carries, and the four Linux portability
 fixes are in [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md)
+| [upstream-prs-2026-09-07.md](upstream-prs-2026-09-07.md)               | Evaluation of the 430 upstream PRs opened in the last month — corrections to the basket, the grab-now pass with a ready-to-paste manifest block, grab-next clusters, watch triggers, and sync hazards. Point-in-time. |
 §4. The short version:
 
 - **Carry** fixes, and features adding a capability upstream has no answer for.
