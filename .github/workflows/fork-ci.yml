@@ -37,6 +37,16 @@ env:
   PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
   PASEO_DICTATION_ENABLED: "0"
   PASEO_VOICE_MODE_ENABLED: "0"
+  # packages/server/src/terminal/terminal.ts:245 resolves the default shell from
+  # $SHELL. On makemake that is the owner's zsh, which loads powerlevel10k's
+  # instant prompt, mise activation and a secrets loader before it will accept
+  # typed input — and tests like worker-terminal-manager's "starts the default
+  # shell through the worker" allow 10s for a PTY spawn plus a round trip. Run 1
+  # of 34396878560 timed out on exactly those two tests; run 2 passed. A
+  # GitHub-hosted runner gets a dotfile-free /bin/bash, so give this one the
+  # same and take the variance out. Tests that specifically exercise zsh spawn
+  # it explicitly and are unaffected.
+  SHELL: /bin/bash
 
 jobs:
   fork-checks:

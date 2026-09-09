@@ -9,8 +9,17 @@ What the fork needs from CI, what it costs, and where it should run. Measured
 `custom` matches neither, so nothing runs automatically on this fork. Every fork
 CI run since 2026-08-24 was a hand-kicked `workflow_dispatch`.
 
-The fork is **public**, so GitHub-hosted runners are free and unmetered. Nothing
-about cost pushes the fork off them.
+The fork is **public**, so GitHub-hosted runners are normally free and
+unmetered, and nothing about cost should push the fork off them.
+
+> **As of 2026-09-09 that is not true in practice.** Every GitHub-hosted job in
+> run `34396878560` failed in two seconds with *"The job was not started because
+> your account is locked due to a billing issue."* An account-level billing lock
+> stops **all** Actions usage, including free public-repository minutes, whatever
+> the balance came from. The self-hosted job in the same run was unaffected —
+> self-hosted runners consume no Actions minutes and are not gated on billing.
+> Until the lock clears at <https://github.com/settings/billing>, makemake is the
+> only CI this fork has.
 
 ## Load
 
@@ -159,6 +168,7 @@ broke the suite in ways that reproduce nowhere else:
 | --- | --- |
 | `~/.gitconfig` with `diff.mnemonicprefix` and `diff.algorithm=histogram` | Rewrites diff prefixes from `a/` `b/` to `i/` `w/` and changes hunk output. `packages/server/src/utils/checkout-git.test.ts` parses real git output and fails 3 of its 160 tests. `fork-ci.yml` points `GIT_CONFIG_GLOBAL` at an empty file in `$RUNNER_TEMP` before checkout, which is what a GitHub-hosted runner effectively has. |
 | `mise` installed globally, plus the repo's `.mise.toml` | mise aborts `npm` on an untrusted config. Handled by `MISE_TRUSTED_CONFIG_PATHS` in the service drop-in. |
+| `$SHELL` pointing at the owner's zsh | `packages/server/src/terminal/terminal.ts:245` resolves the default shell from `$SHELL`, so PTY tests spawn a zsh carrying powerlevel10k's instant prompt, mise activation and a secrets loader before it accepts input. Tests that allow 10s for a spawn plus a round trip sit close to that budget. `fork-ci.yml` pins `SHELL=/bin/bash`, which is what a hosted runner has. |
 
 The general lesson: a GitHub-hosted runner is a clean image, and any test that
 shells out to a real tool is reading that tool's *host* configuration. Expect
@@ -178,6 +188,13 @@ Runs on makemake, verified green 2026-09-09:
 | `@getpaseo/server` (5,451 tests) | 362s |
 
 Plus `npm ci` at 145s, so about 11 minutes end to end.
+
+First live run (`34396878560`) failed two PTY tests on timeout —
+`worker-terminal-manager`'s default-shell case and `worktree-bootstrap.posix`'s
+terminal-backed services — and passed clean on retry. Both spawn a shell and
+wait; `SHELL=/bin/bash` was added to cut the spawn cost. **Treat this tier as
+green but not yet proven stable**: it has one clean run out of two, on hardware
+slower than anything upstream tests on.
 
 No credentials are needed — the provider suites skip themselves through
 `canRunRealProvider()` when `OPENROUTER_API_KEY` is absent
