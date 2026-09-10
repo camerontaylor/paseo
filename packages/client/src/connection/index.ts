@@ -10,6 +10,12 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   [CLIENT_CAPS.customModeIcons]: true,
   [CLIENT_CAPS.terminalReflowableSnapshot]: true,
   [CLIENT_CAPS.providerSubagents]: true,
+  // Fork-only capability, so this entry is fork-only too. The map is
+  // exhaustive over ClientCapability and the fork adds sideConversations to
+  // CLIENT_CAPS, so omitting it is a TS1360 the moment the fork merges.
+  // Nothing conflicts here: the file is upstream-new (#4470), the fork never
+  // edits it, and git never asks. Carried as a branch, not a resolution.
+  [CLIENT_CAPS.sideConversations]: true,
   [CLIENT_CAPS.projectUpdates]: true,
   [CLIENT_CAPS.compactProviderSnapshots]: true,
   [CLIENT_CAPS.providerSnapshotReferences]: true,
