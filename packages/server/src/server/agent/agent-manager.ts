@@ -1625,12 +1625,7 @@ export class AgentManager {
         // Wipe the in-memory timeline so registerSession mints a new epoch and
         // hydrateTimelineFromProvider re-streams the freshly read provider history.
         this.timelineStore.delete(agentId);
-        for (const event of this.sideConversations.deleteParent(agentId)) {
-          this.dispatch({ type: "side_conversation", event });
-        }
-        for (const event of this.providerSubagents.deleteParent(agentId)) {
-          this.dispatch({ type: "provider_subagent", event });
-        }
+        this.discardReloadedChildren(agentId);
       }
 
       // Preserve existing labels and timeline during reload.
@@ -1667,6 +1662,20 @@ export class AgentManager {
           await this.closeUnregisteredSession(session);
         }
       }
+    }
+  }
+
+  // Both child registries are dropped on rehydrate for the same reason: the timeline is
+  // about to be re-streamed from the provider, so anything hanging off the old epoch is
+  // stale. Extracted from reloadAgentSessionInternal because the fork's side-conversation
+  // loop is the branch that takes that method to complexity 21 against oxlint's max of 20 —
+  // upstream sits exactly at the limit, so the fork has to pay its own branch back.
+  private discardReloadedChildren(agentId: string): void {
+    for (const event of this.sideConversations.deleteParent(agentId)) {
+      this.dispatch({ type: "side_conversation", event });
+    }
+    for (const event of this.providerSubagents.deleteParent(agentId)) {
+      this.dispatch({ type: "provider_subagent", event });
     }
   }
 
