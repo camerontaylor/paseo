@@ -556,6 +556,8 @@ export interface AgentCreatedDelayControl {
   release(): void;
   waitForCreateRequest(): Promise<void>;
   waitForDelayedCreatedStatus(): Promise<void>;
+  expectSingleWorkspaceIntent(): void;
+  fail(error: string): void;
 }
 
 export async function delayBrowserAgentCreatedStatus(
@@ -563,8 +565,10 @@ export async function delayBrowserAgentCreatedStatus(
 ): Promise<AgentCreatedDelayControl> {
   const daemonPortPattern = daemonWsRoutePattern();
   const createRequestIds = new Set<string>();
+  const creationRequests: Record<string, unknown>[] = [];
   const delayedForwards: Array<() => void> = [];
   let releaseRequested = false;
+  let responseError: string | null = null;
   let resolveCreateRequest: (() => void) | null = null;
   let resolveDelayedCreatedStatus: (() => void) | null = null;
   const createRequestSeen = new Promise<void>((resolve) => {
@@ -579,7 +583,14 @@ export async function delayBrowserAgentCreatedStatus(
 
     ws.onMessage((message) => {
       const sessionMessage = getSessionMessage(message);
-      if (sessionMessage?.type === "create_agent_request") {
+      if (sessionMessage?.type === "send_agent_message_request")
+        creationRequests.push(sessionMessage);
+      if (
+        sessionMessage?.type === "create_agent_request" ||
+        sessionMessage?.type === "agent.create.request" ||
+        sessionMessage?.type === "workspace.create.request"
+      ) {
+        creationRequests.push(sessionMessage);
         const requestId = getStringField(sessionMessage, "requestId");
         if (requestId) {
           createRequestIds.add(requestId);
@@ -592,18 +603,34 @@ export async function delayBrowserAgentCreatedStatus(
     server.onMessage((message) => {
       const sessionMessage = getSessionMessage(message);
       const payload =
-        sessionMessage?.type === "status" && typeof sessionMessage.payload === "object"
+        sessionMessage && typeof sessionMessage.payload === "object"
           ? (sessionMessage.payload as Record<string, unknown>)
           : null;
       const requestId = payload ? getStringField(payload, "requestId") : null;
 
-      if (payload?.status === "agent_created" && requestId && createRequestIds.has(requestId)) {
+      if (
+        (payload?.status === "agent_created" ||
+          sessionMessage?.type === "agent.create.response" ||
+          sessionMessage?.type === "workspace.create.response") &&
+        requestId &&
+        createRequestIds.has(requestId)
+      ) {
         resolveDelayedCreatedStatus?.();
         if (releaseRequested) {
           ws.send(message);
           return;
         }
-        delayedForwards.push(() => ws.send(message));
+        delayedForwards.push(() => {
+          if (!responseError) {
+            ws.send(message);
+            return;
+          }
+          const envelope = JSON.parse(message.toString());
+          const response = envelope.message ?? envelope;
+          response.payload.error = responseError;
+          delete response.payload.creation;
+          ws.send(JSON.stringify(envelope));
+        });
         return;
       }
 
@@ -617,6 +644,19 @@ export async function delayBrowserAgentCreatedStatus(
       for (const forward of delayedForwards.splice(0)) {
         forward();
       }
+    },
+    fail(error: string) {
+      responseError = error;
+      releaseRequested = true;
+      for (const forward of delayedForwards.splice(0)) forward();
+      responseError = null;
+    },
+    expectSingleWorkspaceIntent() {
+      expect(creationRequests).toHaveLength(1);
+      expect(creationRequests[0]).toMatchObject({
+        type: "workspace.create.request",
+        agent: { initialPrompt: expect.any(String) },
+      });
     },
     waitForCreateRequest: () => createRequestSeen,
     waitForDelayedCreatedStatus: () => delayedCreatedStatusSeen,

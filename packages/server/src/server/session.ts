@@ -1,3 +1,7 @@
+import { relative } from "node:path";
+import { isAbsolute } from "node:path";
+import { CreationService } from "./creation/index.js";
+import type { CreationSnapshot, AgentCreateRequest } from "@getpaseo/protocol/messages";
 import type { RequestReceipts } from "./request-receipts/index.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
@@ -464,6 +468,7 @@ export interface SessionOptions {
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   requestReceipts: Pick<RequestReceipts, "createAgent" | "createWorkspace" | "sendMessage">;
+  creationService: Pick<CreationService, "create" | "subscribe">;
   projectRegistry: ProjectRegistry;
   workspaceRegistry: WorkspaceRegistry;
   directorySync?: DirectorySyncService;
@@ -642,6 +647,16 @@ function resolveWorkspaceLabelService(
   return service ?? null;
 }
 
+function hasInitialCreationPrompt(
+  request?: Pick<AgentCreateRequest, "initialPrompt" | "images" | "attachments">,
+): boolean {
+  return Boolean(
+    request &&
+    buildAgentPrompt(request.initialPrompt?.trim() ?? "", request.images, request.attachments)
+      .length,
+  );
+}
+
 function workspaceLabelErrorCode(error: unknown): string {
   if (
     error instanceof WorkspaceLabelError ||
@@ -756,6 +771,9 @@ export class Session {
     "createAgent" | "createWorkspace" | "sendMessage"
   >;
   private readonly createAgentLifecycleDispatch: CreateAgentLifecycleDispatch;
+  private readonly creationService: Pick<CreationService, "create" | "subscribe">;
+  private readonly defaultCreationSource = {};
+  private readonly creationSubscriptions = new Map<object, Map<string, () => void>>();
 
   constructor(options: SessionOptions) {
     const {
@@ -829,6 +847,7 @@ export class Session {
     this.pushNotifications = pushNotifications;
     this.paseoHome = paseoHome;
     this.requestReceipts = options.requestReceipts;
+    this.creationService = options.creationService;
     this.projectIcons = new ProjectIconReader(paseoHome);
     this.worktreesRoot = worktreesRoot;
     this.pluginRuntime = pluginRuntime;
@@ -1149,6 +1168,8 @@ export class Session {
 
   clearAgentTimelineSubscription(source: object): void {
     this.clientCapabilitiesBySource.delete(source);
+    for (const unsubscribe of this.creationSubscriptions.get(source)?.values() ?? []) unsubscribe();
+    this.creationSubscriptions.delete(source);
     if (this.viewedTimelineAgentIdsBySource.delete(source)) {
       this.rebuildViewedTimelineAgentIds();
     }
@@ -2005,6 +2026,7 @@ export class Session {
       this.dispatchAgentRelationshipMessage(msg) ??
       this.dispatchAgentTimelineMessage(msg, source) ??
       this.dispatchHubExecutionMessage(msg) ??
+      this.dispatchCreationMessage(msg, source) ??
       this.dispatchAgentLifecycleMessage(msg) ??
       this.dispatchAgentConfigMessage(msg) ??
       this.dispatchCheckoutMessage(msg) ??
@@ -2372,6 +2394,24 @@ export class Session {
       return this.hubExecutionController?.controlExecution(msg);
     }
     return undefined;
+  }
+
+  private dispatchCreationMessage(
+    msg: SessionInboundMessage,
+    source?: object,
+  ): Promise<void> | undefined {
+    switch (msg.type) {
+      case "agent.create.request":
+        return this.handleAgentCreation(msg, source);
+      case "creation.subscribe.request":
+        return this.handleCreationSubscription(msg, source);
+      case "workspace.create.request":
+        if (msg.subscribe || msg.agent || msg.workspaceId)
+          return this.handleWorkspaceCreation(msg, source);
+        return undefined;
+      default:
+        return undefined;
+    }
   }
 
   private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
@@ -3555,6 +3595,201 @@ export class Session {
   /**
    * Handle create agent request
    */
+  private creationObserver(snapshot: CreationSnapshot, source?: object): void {
+    if (this.isCleanedUp) return;
+    const message: SessionOutboundMessage = {
+      type: snapshot.kind === "workspace" ? "workspace.create.update" : "agent.create.update",
+      payload: snapshot,
+    };
+    this.emitForSource(message, source);
+  }
+
+  private async handleCreationSubscription(
+    request: Extract<SessionInboundMessage, { type: "creation.subscribe.request" }>,
+    source?: object,
+  ): Promise<void> {
+    const key = JSON.stringify([request.kind, request.idempotencyKey]);
+    const owner = source ?? this.defaultCreationSource;
+    const subscriptions = this.creationSubscriptions.get(owner) ?? new Map<string, () => void>();
+    subscriptions.get(key)?.();
+    subscriptions.delete(key);
+    this.creationSubscriptions.set(owner, subscriptions);
+    const observation = await this.creationService.subscribe(
+      request.kind,
+      request.idempotencyKey,
+      (snapshot) => this.creationObserver(snapshot, source),
+    );
+    if (request.subscribe === false || this.isCleanedUp) observation.unsubscribe();
+    else subscriptions.set(key, observation.unsubscribe);
+    this.emitForSource(
+      {
+        type: "creation.subscribe.response",
+        payload: { requestId: request.requestId, snapshot: observation.snapshot, error: null },
+      },
+      source,
+    );
+  }
+
+  private creationResourceExists = async (
+    kind: "workspace" | "agent",
+    id: string,
+  ): Promise<boolean> =>
+    kind === "workspace"
+      ? (await this.workspaceRegistry.get(id)) !== null
+      : this.agentManager.getAgent(id) != null || (await this.agentStorage.get(id)) !== null;
+
+  private async handleAgentCreation(request: AgentCreateRequest, source?: object): Promise<void> {
+    const { requestId, subscribe, type: _type, idempotencyKey, ...intent } = request;
+    try {
+      const creation = await this.creationService.create(
+        {
+          kind: "agent",
+          key: idempotencyKey ?? requestId,
+          request: intent,
+          workspaceId: request.workspaceId,
+          agentId: request.agentId,
+          hasAgent: true,
+          hasPrompt: hasInitialCreationPrompt(request),
+          exists: this.creationResourceExists,
+          createAgent: (id, _workspace, onReady) =>
+            this.createSessionAgent({ ...request, type: "create_agent_request" }, id, onReady),
+        },
+        subscribe ? (snapshot) => this.creationObserver(snapshot, source) : undefined,
+      );
+      this.emitForSource(
+        {
+          type: "agent.create.response",
+          payload: { requestId, agent: creation.agent ?? null, error: creation.error, creation },
+        },
+        source,
+      );
+    } catch (error) {
+      this.emitForSource(
+        {
+          type: "agent.create.response",
+          payload: {
+            requestId,
+            agent: null,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        },
+        source,
+      );
+    }
+  }
+
+  private async handleWorkspaceCreation(
+    request: Extract<SessionInboundMessage, { type: "workspace.create.request" }>,
+    source?: object,
+  ): Promise<void> {
+    const { requestId, subscribe, type: _type, idempotencyKey, ...intent } = request;
+    try {
+      if (
+        request.agent &&
+        !this.authorization.allowsPermission("workspace.write") &&
+        !this.authorization.allowsPermission("hub.execute")
+      ) {
+        throw new Error("Session is not authorized to create an agent");
+      }
+      const agentInput = request.agent;
+      const creation = await this.creationService.create(
+        {
+          kind: "workspace",
+          key: idempotencyKey ?? requestId,
+          request: intent,
+          workspaceId: request.workspaceId,
+          agentId: agentInput?.agentId,
+          hasAgent: Boolean(agentInput),
+          hasPrompt: hasInitialCreationPrompt(agentInput),
+          exists: this.creationResourceExists,
+          provision: async (id) => {
+            const descriptor = await this.createRequestedWorkspace(
+              {
+                ...request,
+                firstAgentContext: agentInput
+                  ? { prompt: agentInput.initialPrompt, attachments: agentInput.attachments }
+                  : request.firstAgentContext,
+              },
+              id,
+            );
+            const workspace = await this.workspaceRegistry.get(descriptor.id);
+            return {
+              workspace: descriptor,
+              setupSkippedReason: workspace?.untrustedSource
+                ? formatWorkspaceAutomationBlockedMessage(workspace.untrustedSource)
+                : undefined,
+            };
+          },
+          createAgent: agentInput
+            ? async (id, workspace, onReady) => {
+                if (!workspace?.workspaceDirectory)
+                  throw new Error("Created workspace has no directory");
+                const sourceCwd =
+                  request.source.kind === "directory"
+                    ? request.source.path
+                    : await resolveWorktreeSourceCwd(request.source, this.projectRegistry);
+                const relativeCwd = relative(resolve(sourceCwd), resolve(agentInput.config.cwd));
+                if (
+                  relativeCwd === ".." ||
+                  relativeCwd.startsWith(`..${sep}`) ||
+                  isAbsolute(relativeCwd)
+                )
+                  throw new Error("Agent directory must be inside the workspace source");
+                return this.createSessionAgent(
+                  {
+                    ...agentInput,
+                    type: "create_agent_request",
+                    requestId,
+                    config: {
+                      ...agentInput.config,
+                      cwd: resolve(workspace.workspaceDirectory, relativeCwd),
+                    },
+                    workspaceId: workspace.id,
+                  },
+                  id,
+                  onReady,
+                );
+              }
+            : undefined,
+        },
+        subscribe ? (snapshot) => this.creationObserver(snapshot, source) : undefined,
+      );
+      this.emitForSource(
+        {
+          type: "workspace.create.response",
+          payload: {
+            requestId,
+            workspace: creation.workspace ?? null,
+            agent: creation.agent,
+            creation,
+            setupSkippedReason: creation.setupSkippedReason,
+            error: creation.error,
+            errorCode: creation.errorCode,
+            setupTerminalId: null,
+          },
+        },
+        source,
+      );
+    } catch (error) {
+      this.emitForSource(
+        {
+          type: "workspace.create.response",
+          payload: {
+            requestId,
+            workspace: null,
+            error: error instanceof Error ? error.message : String(error),
+            errorCode:
+              error instanceof Error && "code" in error && typeof error.code === "string"
+                ? error.code
+                : undefined,
+            setupTerminalId: null,
+          },
+        },
+        source,
+      );
+    }
+  }
+
   private async handleCreateAgentRequest(msg: CreateAgentRequestMessage): Promise<void> {
     try {
       let agent: AgentSnapshotPayload;
@@ -3615,6 +3850,7 @@ export class Session {
   private async createSessionAgent(
     msg: CreateAgentRequestMessage,
     agentId?: string,
+    onAgentReady?: (agent: AgentSnapshotPayload) => Promise<void>,
   ): Promise<AgentSnapshotPayload> {
     const {
       config,
@@ -3684,6 +3920,10 @@ export class Session {
         },
         {
           kind: "session",
+          onAgentReady: async (agent) => {
+            createdAgentId = agent.id;
+            await onAgentReady?.(await this.buildAgentPayload(agent));
+          },
           agentId,
           config: resolvedIntent.config,
           workspaceId: resolvedIntent.intent.workspaceId,
@@ -7820,6 +8060,9 @@ export class Session {
   public async cleanup(): Promise<void> {
     this.sessionLogger.trace({}, "agent.session.lifecycle.cleanup");
     this.isCleanedUp = true;
+    for (const subscriptions of this.creationSubscriptions.values())
+      for (const unsubscribe of subscriptions.values()) unsubscribe();
+    this.creationSubscriptions.clear();
 
     if (this.unsubscribeAgentEvents) {
       this.unsubscribeAgentEvents();
