@@ -20,6 +20,7 @@ import {
   type FirstAgentContext,
   type SessionInboundMessage,
   type SessionOutboundMessage,
+  type SideConversationSnapshotPayload,
   type GitSetupOptions,
   type StartWorkspaceScriptRequest,
   type WorkspaceScriptListRequest,
@@ -101,6 +102,7 @@ import type {
   AgentTimelineFetchResult,
   ManagedAgent,
 } from "./agent/agent-manager.js";
+import type { SideConversationRecord } from "./agent/side-conversations/store.js";
 import { createAgentCommand } from "./agent/create-agent/create.js";
 import { resolveCreateAgentIntent, type CreateAgentIntent } from "./agent/create-agent/intent.js";
 import {
@@ -673,6 +675,23 @@ function workspaceLabelErrorCode(error: unknown): string {
     return error.code;
   }
   return "workspace_label_failed";
+}
+
+function sideConversationSnapshot(record: SideConversationRecord): SideConversationSnapshotPayload {
+  return {
+    parentAgentId: record.parentAgentId,
+    threadId: record.threadId,
+    items: record.items,
+    pendingQuestion: record.pendingQuestion,
+    lastAnswer: record.lastAnswer,
+  };
+}
+
+function emptySideConversationSnapshot(
+  parentAgentId: string,
+  threadId: string,
+): SideConversationSnapshotPayload {
+  return { parentAgentId, threadId, items: [], pendingQuestion: null, lastAnswer: null };
 }
 
 export class Session {
@@ -1767,6 +1786,25 @@ export class Session {
           return;
         }
 
+        if (event.type === "side_conversation") {
+          if (!this.supports(CLIENT_CAPS.sideConversations)) {
+            return;
+          }
+          const update = event.event;
+          if (update.type === "update") {
+            this.emit({
+              type: "agent.side_conversation.update",
+              payload: sideConversationSnapshot(update.record),
+            });
+          } else {
+            this.emit({
+              type: "agent.side_conversation.removed",
+              payload: { parentAgentId: update.parentAgentId, threadId: update.threadId },
+            });
+          }
+          return;
+        }
+
         if (
           this.voiceSession.isActiveForAgent(event.agentId) &&
           event.event.type === "permission_requested" &&
@@ -2365,6 +2403,12 @@ export class Session {
         return this.handleProviderSubagentListRequest(msg);
       case "agent.provider_subagents.timeline.get.request":
         return this.handleProviderSubagentTimelineRequest(msg, source);
+      case "agent.side_conversation.ask.request":
+        return this.handleSideConversationAskRequest(msg);
+      case "agent.side_conversation.timeline.get.request":
+        return this.handleSideConversationTimelineGetRequest(msg);
+      case "agent.side_conversation.list.request":
+        return this.handleSideConversationListRequest(msg);
       case "session.events.set_subscription.request": {
         this.eventSubscriptions.set(
           source ?? this.defaultEventSubscriptionSource,
@@ -7832,6 +7876,116 @@ export class Session {
         },
         source,
       );
+    }
+  }
+
+  private async handleSideConversationAskRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.side_conversation.ask.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      // The manager broadcasts `agent.side_conversation.update` on begin and on complete, so this
+      // handler only owns the response.
+      const answer = await this.agentManager.askSideQuestion(
+        msg.parentAgentId,
+        msg.threadId,
+        msg.question,
+      );
+      this.emit({
+        type: "agent.side_conversation.ask.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threadId: msg.threadId,
+          answer,
+          error: null,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit({
+        type: "agent.side_conversation.ask.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threadId: msg.threadId,
+          answer: { status: "unavailable" },
+          error: message.startsWith("Agent is archived:") ? null : message,
+        },
+      });
+    }
+  }
+
+  private async handleSideConversationTimelineGetRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.side_conversation.timeline.get.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      const record = this.agentManager.getSideConversation(msg.parentAgentId, msg.threadId);
+      this.emit({
+        type: "agent.side_conversation.timeline.get.response",
+        payload: {
+          requestId: msg.requestId,
+          ...(record
+            ? sideConversationSnapshot(record)
+            : emptySideConversationSnapshot(msg.parentAgentId, msg.threadId)),
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.side_conversation.timeline.get.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threadId: msg.threadId,
+          items: [],
+          pendingQuestion: null,
+          lastAnswer: null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  private async handleSideConversationListRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.side_conversation.list.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      this.emit({
+        type: "agent.side_conversation.list.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threads: this.agentManager
+            .listSideConversations(msg.parentAgentId)
+            .map(sideConversationSnapshot),
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.side_conversation.list.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threads: [],
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
     }
   }
 

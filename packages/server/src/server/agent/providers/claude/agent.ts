@@ -77,6 +77,7 @@ import {
 import { renderPromptAttachmentAsText } from "../../prompt-attachments.js";
 import { claudeQuery, type ClaudeOptions, type ClaudeQueryFactory } from "./query.js";
 import { realClaudeRewindSdk, revertClaudeConversation, revertClaudeFiles } from "./rewind.js";
+import { askClaudeSideQuestion, getClaudeSideQuestionThreading } from "./side-question.js";
 import { normalizeProviderReplayTimestamp } from "../../provider-history-timestamps.js";
 import { claudeProjectDirSync } from "./project-dir.js";
 import { THINKING_APPLIES_NEXT_TURN_NOTICE } from "../../provider-notices.js";
@@ -112,6 +113,8 @@ import {
   type AgentSlashCommand,
   type SteerActiveTurnOptions,
   type SteerResult,
+  type SideAnswer,
+  type SideConversationExchange,
   type AgentStreamEvent,
   type AgentTimelineItem,
   type AgentUsage,
@@ -417,6 +420,7 @@ interface ClaudeAgentSessionOptions {
   logger: Logger;
   queryFactory?: ClaudeQueryFactory;
   resolveBinary: () => Promise<string>;
+  resolveVersion: (signal?: AbortSignal) => Promise<string>;
 }
 
 type ClaudeThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -1532,6 +1536,7 @@ export class ClaudeAgentClient implements AgentClient {
       logger: this.logger,
       queryFactory: this.queryFactory,
       resolveBinary: this.resolveBinary,
+      resolveVersion: this.resolveVersion,
     });
   }
 
@@ -1560,6 +1565,7 @@ export class ClaudeAgentClient implements AgentClient {
       logger: this.logger,
       queryFactory: this.queryFactory,
       resolveBinary: this.resolveBinary,
+      resolveVersion: this.resolveVersion,
     });
   }
 
@@ -2041,6 +2047,8 @@ class ClaudeAgentSession implements AgentSession {
   private readonly logger: Logger;
   private readonly queryFactory?: ClaudeQueryFactory;
   private readonly resolveBinary: () => Promise<string>;
+  private readonly resolveVersion: (signal?: AbortSignal) => Promise<string>;
+  private claudeCodeVersionPromise: Promise<string> | null = null;
   private query: Query | null = null;
   private childProcess: ChildProcess | null = null;
   private input: AsyncMessageInput<SDKUserMessage> | null = null;
@@ -2120,6 +2128,7 @@ class ClaudeAgentSession implements AgentSession {
     this.logger = options.logger.child({ agentId: this.agentId });
     this.queryFactory = options.queryFactory;
     this.resolveBinary = options.resolveBinary;
+    this.resolveVersion = options.resolveVersion;
     this.contextUsage = new ClaudeContextUsageState(
       findClaudeModel(this.config.model)?.contextWindowMaxTokens,
     );
@@ -2211,9 +2220,7 @@ class ClaudeAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
-    if (this.closed) {
-      throw new Error("Claude session is closed");
-    }
+    this.assertSessionOpen();
     if (this.activeForegroundTurnId) {
       throw new Error("A foreground turn is already active");
     }
@@ -2321,6 +2328,97 @@ class ClaudeAgentSession implements AgentSession {
     }
     this.enqueueSteer(input, message, options.clearPendingPermissions === true);
     return { status: "accepted" };
+  }
+
+  async askSideQuestion(
+    question: string,
+    history: readonly SideConversationExchange[],
+    options?: { signal?: AbortSignal },
+  ): Promise<SideAnswer> {
+    if (this.closed) {
+      return { status: "unavailable", reason: "session_closed" };
+    }
+    if (options?.signal?.aborted) {
+      return { status: "unavailable" };
+    }
+    const version = await this.resolveVersionOnce();
+    // The version probe can burn its full 5s budget, so a close() easily lands inside it.
+    // Re-check before ensureQuery(), which would otherwise spawn a fresh Claude CLI process
+    // tree for a torn-down session — one nothing tracks and nothing will ever reap.
+    if (this.closed) {
+      return { status: "unavailable", reason: "session_closed" };
+    }
+    if (options?.signal?.aborted) {
+      return { status: "unavailable" };
+    }
+    const threading = getClaudeSideQuestionThreading(version);
+    // A pending restart turns ensureQuery() into a tree-kill of the running CLI. startTurn()
+    // refuses to run at all while a turn is active, so it can never reach that branch; this is
+    // the one caller that can. setThinkingOption()/setModel() set the flag mid-turn on purpose
+    // and defer it to the next turn, so honouring it here would kill the turn they just
+    // promised to leave alone — and the restart nulls this.query first, which is exactly what
+    // stops the old pump from ever terminalizing that turn.
+    if (this.queryRestartNeeded && (this.activeForegroundTurnId || this.autonomousTurn)) {
+      return { status: "unavailable" };
+    }
+    try {
+      const query = await this.ensureQuery();
+      if (this.closed) {
+        // close() ran during ensureQuery()'s post-spawn awaits (applyFlagSettings), after it
+        // had already assigned query/input — so close() tore down that tree on its own, and
+        // what we got back is a closed query. close() is null-safe and re-entrant, so re-run
+        // it to reap anything still standing.
+        await this.close().catch(() => undefined);
+        return { status: "unavailable", reason: "session_closed" };
+      }
+      // Query.request takes a per-request signal, so an abandoned side question is cancelled
+      // at the CLI rather than left to finish into a caller nobody is waiting on. This is not
+      // Options.abortController, which would tear down the whole query.
+      return await askClaudeSideQuestion({
+        query,
+        question,
+        history,
+        threading,
+        signal: options?.signal,
+      });
+    } catch (error) {
+      // ensureQuery() throws for a closed session; a torn-down session is unavailable, not
+      // failed. Caller-visible failed answers below are Claude's, not ours.
+      if (this.closed) {
+        return { status: "unavailable", reason: "session_closed" };
+      }
+      return {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Claude side question failed",
+        threading,
+      };
+    }
+  }
+
+  /**
+   * Memoize `claude --version` for the session's lifetime. ClaudeAgentClient.resolveVersion
+   * spawns a subprocess on every call, and the CLI backing a live session cannot change
+   * version underneath it, so one probe per session is enough. Failures are not cached, so a
+   * transient probe error retries on the next ask instead of pinning the session to the
+   * single-shot fallback forever.
+   *
+   * Deliberately no caller signal: AgentManager aborts each caller's signal when that caller
+   * settles, and side questions on different threads of one agent share this memo. Binding
+   * the first caller's signal would let it kill a later caller's in-flight probe and silently
+   * drop that thread to single_shot. The probe's own 5s exec timeout bounds it; a caller that
+   * aborts mid-probe is turned away by the closed/aborted checks in askSideQuestion instead.
+   */
+  private async resolveVersionOnce(): Promise<string | undefined> {
+    const pending = (this.claudeCodeVersionPromise ??= this.resolveVersion());
+    try {
+      return await pending;
+    } catch {
+      // Version discovery is advisory; unresolved versions use the safe single-shot shape.
+      if (this.claudeCodeVersionPromise === pending) {
+        this.claudeCodeVersionPromise = null;
+      }
+      return undefined;
+    }
   }
 
   private enqueueSteer(
@@ -3094,7 +3192,22 @@ class ClaudeAgentSession implements AgentSession {
     return { kind: "fork", messageId: previousTurn.assistantMessageId };
   }
 
+  private assertSessionOpen(): void {
+    if (this.closed) {
+      throw new Error("Claude session is closed");
+    }
+  }
+
+  /**
+   * The only place a Claude CLI process tree is spawned. Contract: throws
+   * `Error("Claude session is closed")` when the session is closed, at entry and after the
+   * `buildOptions()` await — a torn-down session must never get a fresh query, and a throw is
+   * the one failure mode a call site cannot silently drop. Callers that want a value convert
+   * at the call site: `startTurn` lets the throw surface as a failed turn, `askSideQuestion`
+   * maps it to `{ status: "unavailable" }`.
+   */
   private async ensureQuery(): Promise<Query> {
+    this.assertSessionOpen();
     if (this.query && !this.queryRestartNeeded) {
       return this.query;
     }
@@ -3139,6 +3252,11 @@ class ClaudeAgentSession implements AgentSession {
 
     const input = createAsyncMessageInput<SDKUserMessage>();
     const options = await this.buildOptions();
+    // close() can land inside buildOptions() — the only await between the entry check and the
+    // spawn. It has already nulled query/input/childProcess; assigning them again here would
+    // leak a process tree nothing tracks. This also covers a close() that landed during the
+    // tree-kill await in the restart branch above, since buildOptions() always runs after it.
+    this.assertSessionOpen();
     this.logger.debug({ options: summarizeClaudeOptionsForLog(options) }, "claude query");
     this.input = input;
     this.query = claudeQuery(
@@ -3724,6 +3842,8 @@ class ClaudeAgentSession implements AgentSession {
   private async runQueryPump(): Promise<void> {
     let activeQuery: Query;
     try {
+      // A closed session throws here ("Claude session is closed"); the catch below ends the
+      // pump, and failActiveTurns is a no-op because close() already cleared active turns.
       activeQuery = await this.ensureQuery();
     } catch (error) {
       this.logger.trace(

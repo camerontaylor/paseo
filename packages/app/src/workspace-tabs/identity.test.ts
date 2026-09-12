@@ -56,6 +56,55 @@ describe("provider subagent tab identity", () => {
   });
 });
 
+describe("side conversation tab identity", () => {
+  test("normalizes and compares the parent and thread as one tab identity", () => {
+    const target = normalizeWorkspaceTabTarget({
+      kind: "side_conversation",
+      parentAgentId: " parent-a ",
+      threadId: " thread-a ",
+    });
+
+    expect(target).toEqual({
+      kind: "side_conversation",
+      parentAgentId: "parent-a",
+      threadId: "thread-a",
+    });
+    expect(
+      target &&
+        workspaceTabTargetsEqual(target, {
+          kind: "side_conversation",
+          parentAgentId: "parent-a",
+          threadId: "thread-a",
+        }),
+    ).toBe(true);
+  });
+
+  test("rejects incomplete targets", () => {
+    expect(
+      normalizeWorkspaceTabTarget({
+        kind: "side_conversation",
+        parentAgentId: "parent-a",
+        threadId: " ",
+      }),
+    ).toBeNull();
+  });
+
+  test("does not collide when parent and thread ids contain separators", () => {
+    const first = buildDeterministicWorkspaceTabId({
+      kind: "side_conversation",
+      parentAgentId: "a_b",
+      threadId: "c",
+    });
+    const second = buildDeterministicWorkspaceTabId({
+      kind: "side_conversation",
+      parentAgentId: "a",
+      threadId: "b_c",
+    });
+
+    expect(first).not.toBe(second);
+  });
+});
+
 describe("working diff tab identity", () => {
   const target = {
     kind: "working_diff" as const,

@@ -88,6 +88,7 @@ import type {
 } from "@/keyboard/keyboard-action-dispatcher";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { normalizeWorkspaceTabTarget, workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
+import { useStartSideConversation } from "@/side-conversations/start";
 import { useVisibleAgentIds } from "./visible-agent-ids";
 import {
   getHostRuntimeStore,
@@ -385,6 +386,9 @@ function getFallbackTabOptionDescription(
   if (tab.target.kind === "provider_subagent") {
     return labels.agent;
   }
+  if (tab.target.kind === "side_conversation") {
+    return labels.agent;
+  }
   if (tab.target.kind === "commit_diff") {
     return tab.target.sha.slice(0, 7);
   }
@@ -550,6 +554,10 @@ function MobileWorkspaceTabOption({
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
 }) {
   const { t } = useTranslation();
+  const startSideConversation = useStartSideConversation({
+    serverId: normalizedServerId,
+    workspaceId: normalizedWorkspaceId,
+  });
   const tabMenuLabels = useMemo<WorkspaceTabMenuLabels>(
     () => ({
       copyResumeCommand: t("workspace.tabs.menu.copyResumeCommand"),
@@ -564,6 +572,7 @@ function MobileWorkspaceTabOption({
       closeOthers: t("workspace.tabs.menu.closeOthers"),
       reloadAgent: t("workspace.tabs.menu.reloadAgent"),
       reloadAgentTooltip: t("workspace.tabs.menu.reloadAgentTooltip"),
+      newSideConversation: t("sideConversations.actions.new"),
       close: t("workspace.tabs.menu.close"),
     }),
     [t],
@@ -580,6 +589,7 @@ function MobileWorkspaceTabOption({
     onCopyTerminalId,
     onCopyFilePath,
     onReloadAgent,
+    onStartSideConversation: startSideConversation ?? undefined,
     onRenameTab,
     onCloseTab,
     onCloseTabsBefore: onCloseTabsAbove,

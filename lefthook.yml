@@ -6,6 +6,9 @@ pre-commit:
       exclude:
         - "package-lock.json"
         - "**/package-lock.json"
+        # .oxfmtrc.json ignores fork/**/*.md; a fork-only commit otherwise makes
+        # `oxfmt --check <file>` fail with "no target files" (exit 2).
+        - "fork/**"
       run: npm run format:check:files -- {staged_files}
     - name: lint
       glob: "*.{js,jsx,ts,tsx}"

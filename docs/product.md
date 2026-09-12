@@ -28,6 +28,10 @@ Keeping this starting point approachable is an ongoing responsibility. A technic
 
 The same product should also work for someone running agents on a home server, using their own network, or building an automated workflow.
 
+Consider Paseo-managed shell command history for terminals. It should let users recall and search
+commands across reconnects and devices instead of relying only on the shell receiving Up and Down
+key presses.
+
 The daemon can run independently of the desktop app. Clients connect to it locally or remotely, and multiple clients can use the same daemon. This separation lets you choose where the work runs and how you interact with it.
 
 For example, someone can use the relay to connect their phone with minimal setup. Someone else can run a daemon on their own infrastructure and connect through SSH or a VPN. Both use the same underlying system.
