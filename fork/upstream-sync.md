@@ -28,9 +28,15 @@ conflict. Confirm that is all it was — `git diff package-lock.json`, strip the
 The fork carries new protocol message types. Upstream keeps adding exhaustive maps
 and switches over _all_ message types. Neither side conflicts; the build fails.
 
-| Sync       | What broke                                                                                                                                                                                                                                               |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| → `v0.7.2` | `packages/server/src/server/authorization/operation-permissions.ts` — new file, `satisfies Record<InboundOperation \| OutboundOperation, …>` over every message type. The eight `agent.side_conversation.*` types were absent, so `TS1360` on both maps. |
+The same shape catches any contract the fork widens and upstream keeps calling: a
+required prop added to a shared component, a widened union, a new argument. Upstream
+adds a call site in a file the fork never touched, so there is nothing to conflict.
+Grep for new callers of anything the fork made stricter.
+
+| Sync               | What broke                                                                                                                                                                                                                                               |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| → `v0.7.2`         | `packages/server/src/server/authorization/operation-permissions.ts` — new file, `satisfies Record<InboundOperation \| OutboundOperation, …>` over every message type. The eight `agent.side_conversation.*` types were absent, so `TS1360` on both maps. |
+| → `v0.8.0-beta.1`  | `packages/app/src/panels/provider-subagent-panel.tsx` — new upstream file rendering `SubagentsTrack`, whose `onOpenSideConversation` the fork made required. `TS2741` at the new call site. Wire it for real: `selectSideConversationsForParent` ignores `providerParentSubagentId`, so the parent's side conversations reach that nested track and a no-op would drop the press. |
 
 **Every message type the fork adds needs an entry in both maps.** Requests that
 mutate get `workspace.write`; queries get `workspace.read`; a response takes the
