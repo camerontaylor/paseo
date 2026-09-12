@@ -1,4 +1,7 @@
-import { AgentRequests } from "./agent/requests/index.js";
+import { stat } from "node:fs/promises";
+import type { CreationSnapshot } from "@getpaseo/protocol/messages";
+import { CreationService } from "./creation/index.js";
+import { RequestReceipts } from "./request-receipts/index.js";
 import { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage, Server as HTTPServer } from "http";
 import { join } from "path";
@@ -551,7 +554,8 @@ export class VoiceAssistantWebSocketServer {
   private readonly daemonRuntimeConfig: DaemonRuntimeConfig | undefined;
   private readonly agentManager: AgentManager;
   private readonly agentStorage: AgentStorage;
-  private readonly agentRequests: AgentRequests;
+  private readonly requestReceipts: RequestReceipts;
+  private readonly creationService: CreationService;
   private readonly projectRegistry: ProjectRegistry;
   private readonly workspaceRegistry: WorkspaceRegistry;
   private readonly workspaceLabelService: WorkspaceLabelService | null;
@@ -607,6 +611,25 @@ export class VoiceAssistantWebSocketServer {
   private readonly directorySync = new DirectorySyncService();
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
+
+  private async validateCompletedCreation(snapshot: CreationSnapshot): Promise<void> {
+    if (snapshot.workspace && snapshot.kind === "workspace") {
+      const workspace = await this.workspaceRegistry.get(snapshot.workspace.id);
+      if (!workspace) throw new Error("Previously created workspace no longer exists");
+      const directory = await stat(workspace.cwd).catch(() => null);
+      if (!directory?.isDirectory())
+        throw Object.assign(new Error(`Directory not found: ${workspace.cwd}`), {
+          code: "directory_not_found",
+        });
+    }
+    if (
+      snapshot.agentId &&
+      !this.agentManager.getAgent(snapshot.agentId) &&
+      !(await this.agentStorage.get(snapshot.agentId))
+    ) {
+      throw new Error("Previously created agent no longer exists");
+    }
+  }
 
   constructor(
     server: HTTPServer,
@@ -673,7 +696,10 @@ export class VoiceAssistantWebSocketServer {
     this.orchestrationSkills = orchestrationSkills;
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
-    this.agentRequests = new AgentRequests(join(paseoHome, "agent-requests"));
+    this.requestReceipts = new RequestReceipts(join(paseoHome, "agent-requests"));
+    this.creationService = new CreationService(join(paseoHome, "creations"), (snapshot) =>
+      this.validateCompletedCreation(snapshot),
+    );
     this.projectRegistry = projectRegistry ?? createNoopProjectRegistry();
     this.workspaceRegistry = workspaceRegistry ?? createNoopWorkspaceRegistry();
     this.workspaceLabelService = workspaceLabelService ?? null;
@@ -1422,7 +1448,8 @@ export class VoiceAssistantWebSocketServer {
       worktreesRoot: this.worktreesRoot,
       agentManager: this.agentManager,
       agentStorage: this.agentStorage,
-      agentRequests: this.agentRequests,
+      requestReceipts: this.requestReceipts,
+      creationService: this.creationService,
       projectRegistry: this.projectRegistry,
       workspaceRegistry: this.workspaceRegistry,
       workspaceLabelService: this.workspaceLabelService ?? undefined,
@@ -1643,6 +1670,8 @@ export class VoiceAssistantWebSocketServer {
       ...(this.serverCapabilities ? { capabilities: this.serverCapabilities } : {}),
       features: {
         agentRequestReceipts: true,
+        workspaceRequestReceipts: true,
+        creationLifecycle: true,
         hubAgentRpc: true,
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
         directorySync: true,

@@ -289,14 +289,18 @@ export function createProviderSnapshotManagerStub(): {
   };
 }
 
-export function createAgentRequestsStub(): SessionOptions["agentRequests"] {
+export function createRequestReceiptsStub(): SessionOptions["requestReceipts"] {
   return {
-    async create(input) {
+    async createAgent(input) {
       const agentId = randomUUID();
       await input.create(agentId);
       return agentId;
     },
-    send: (input) => input.send(),
+    async createWorkspace(input) {
+      await input.create(input.workspaceId);
+      return input.workspaceId;
+    },
+    sendMessage: (input) => input.send(),
   };
 }
 
@@ -310,5 +314,16 @@ export function createProviderSnapshot(
       const { fetchedAt: _fetchedAt, ...content } = entry;
       return { entry, contentHash: JSON.stringify(content) };
     }),
+  };
+}
+
+export function createCreationServiceStub(): SessionOptions["creationService"] {
+  return {
+    create: async () => {
+      throw new Error("Unexpected creation in legacy session fixture");
+    },
+    subscribe: async () => {
+      throw new Error("Unexpected creation subscription in legacy session fixture");
+    },
   };
 }
