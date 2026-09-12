@@ -97,14 +97,24 @@ jobs:
       # Bootstrap only. Trusted publishing cannot create a package, so the
       # first version of each of the 7 packages is published with a granular
       # token stored as BOOTSTRAP_NPM_TOKEN for one run. When the secret is
-      # absent (every run after that) this step is skipped and npm falls
-      # through to OIDC. Never leave the secret in place: a token present
-      # takes precedence over OIDC and silently forfeits provenance.
+      # absent (every run after that) the emptiness check below skips the
+      # npm config and npm falls through to OIDC. Never leave the secret in
+      # place: a token present takes precedence over OIDC and silently
+      # forfeits provenance.
+      #
+      # The emptiness check lives in bash, not the step `if`: the `secrets`
+      # context is not available in a step-level `if`, and referencing it
+      # there makes GitHub reject the whole workflow at run creation — every
+      # run of the previous shape died in 0s with no jobs started.
       - name: Configure bootstrap token (first publish only)
-        if: ${{ !inputs.dry_run && secrets.BOOTSTRAP_NPM_TOKEN != '' }}
+        if: ${{ !inputs.dry_run }}
         env:
           BOOTSTRAP_NPM_TOKEN: ${{ secrets.BOOTSTRAP_NPM_TOKEN }}
         run: |
+          if [ -z "$BOOTSTRAP_NPM_TOKEN" ]; then
+            echo "no bootstrap token — npm will use trusted publishing (OIDC)"
+            exit 0
+          fi
           npm config set //registry.npmjs.org/:_authToken "$BOOTSTRAP_NPM_TOKEN"
           echo "::warning::publishing with BOOTSTRAP_NPM_TOKEN — delete the secret and attach trusted publishers after this run"
 
