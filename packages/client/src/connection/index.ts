@@ -10,6 +10,7 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   [CLIENT_CAPS.customModeIcons]: true,
   [CLIENT_CAPS.terminalReflowableSnapshot]: true,
   [CLIENT_CAPS.providerSubagents]: true,
+  [CLIENT_CAPS.sideConversations]: true,
   [CLIENT_CAPS.projectUpdates]: true,
   [CLIENT_CAPS.compactProviderSnapshots]: true,
   [CLIENT_CAPS.providerSnapshotReferences]: true,
