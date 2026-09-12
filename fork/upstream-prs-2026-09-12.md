@@ -10,6 +10,9 @@ The event this sweep is about: **v0.8.0 stable (2026-09-10)**, the next sync
 target. Everything below is what the release and the last five days do to the
 fork's carries.
 
+Addendum, same evening: the sync landed on `custom` while this doc was being
+written — final section.
+
 ## The release
 
 - Plugin SDK breaks: #4347 split client/server entries, #4577 new composer
@@ -106,15 +109,50 @@ log):
 
 ## Housekeeping
 
-- `fork/reseat-side-conversations-0.8` is a scaffold, not a port: `92504cd52`
-  plus two pre-positioned fixes (the capability-map declaration and the
-  nested-track NOOP handler — both handover-checklist items). No fork content
-  on the branch. Its base is now 25 commits behind tip, and `custom` has grown
-  two commits past the point the fixes were written against. The worktree at
-  `/private/tmp/paseo-companion-yaj6` is prunable.
+- The reseat-scaffold note first written here was overtaken the same evening —
+  see the addendum.
 - The 09-07 sweep and the reconcile handover live on branch
   `docs/upstream-prs-2026-09-07` (origin PR #2), not on `custom` — but
   `custom`'s README already references both files. Merge #2 or move the files
   before the references rot further. This doc sits on
   `docs/upstream-prs-2026-09-12`, stacked on that branch, so its
-  cross-references resolve.
+  cross-references resolve. Both docs branches fork off pre-sync `custom`; the
+  sync rebase happened underneath them, so merging them into the new `custom`
+  is a real merge, not a fast-forward.
+
+## While this sweep was being written (addendum, 2026-09-12 evening)
+
+The v0.8.0 sync landed on `custom` while this doc was being written: a
+concurrent session rebased `custom` onto the stable tag (`b8e24677e`) between
+14:48 and 18:25, left `backup/custom-pre-v0.8.0`, pruned the companion
+worktree, and recorded the sync in [upstream-sync.md](upstream-sync.md) — a
+new `→ v0.8.0` row and a widened lesson: the rot is not only exhaustive maps,
+it is any contract the fork widened that upstream keeps calling (new call
+sites in files the fork never touched).
+
+What this changes in the sections above:
+
+- The reseat scaffold was overtaken, and the first version of this bullet was
+  wrong. The branch's two fixes landed on `custom` byte-identical — merging
+  the branch into the new `custom` is a no-op: same tree OID — NOOP included.
+  The NOOP was right: `useSubagentsForParent` returns `providerRows` alone
+  once `providerParentSubagentId` is set, so no side-conversation row ever
+  reaches a nested provider track. The trap is real, though:
+  `selectSideConversationsForParent` ignores that param, which makes the
+  opposite conclusion easy to reach. The sync record first said "wire it for
+  real"; the same evening's correction flipped it — check the hook's return,
+  not the selector ([upstream-sync.md](upstream-sync.md) → `v0.8.0` row).
+  The branch is superseded; its manifest line is deleted per its own delete
+  condition.
+- The Basket section's `custom` line is rewritten too: merging `custom` into
+  the basket build is no longer a sync event. The manifest's other 2026-09-12
+  changes (BASE → v0.8.0, the #4113/#4633 annotation, the severe-bug status)
+  stand.
+
+What does not change: the sync is onto the stable tag and upstream main is
+already 16 commits past it, boudra-heavy as ever. The open-PR list, the
+reconcile verdicts, and the #4633/#4719 items all stand. The verification bar
+from [upstream-sync.md](upstream-sync.md) — build, then
+`server/authorization/index.test.ts` — applies to what landed today, and that
+session's post-sync edits were still in flight in this checkout when this
+addendum was committed, so treat "green" as unproven until it reports.
