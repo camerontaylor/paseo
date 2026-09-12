@@ -80,8 +80,29 @@ export function forkPackageName(name, forkScope) {
   return `${forkScope}/paseo-${name.slice(UPSTREAM_SCOPE.length)}`;
 }
 
+// Prerelease base (0.7.0-beta.2) -> 0.7.0-beta.2.fork.N: sorts strictly between
+// the base and the next upstream beta. Stable base (0.8.0) -> 0.8.0-fork.N: the
+// only npm-hostable shape, and it sorts BELOW stock 0.8.0 as a prerelease of it
+// (the ADR's pre-committed continuation; the never-older property then rests on
+// the base-floor rule in the runbook). `0.8.0.fork.N` is not semver and npm
+// rejects it at pack time, so the two shapes are distinguished here, once.
 export function computeForkVersion(baseVersion, forkNumber) {
-  return `${baseVersion}.fork.${forkNumber}`;
+  const separator = baseVersion.includes("-") ? "." : "-";
+  return `${baseVersion}${separator}fork.${forkNumber}`;
+}
+
+// Fork versions already published for this base, so a CI publish can pick the
+// next N without a hand-maintained counter. Any other version (another base,
+// a non-fork prerelease) is ignored.
+export function nextForkNumber(baseVersion, publishedVersions) {
+  const prefix = `${baseVersion}${baseVersion.includes("-") ? "." : "-"}fork.`;
+  let max = 0;
+  for (const version of publishedVersions) {
+    if (typeof version !== "string" || !version.startsWith(prefix)) continue;
+    const n = Number(version.slice(prefix.length));
+    if (Number.isInteger(n) && n > max) max = n;
+  }
+  return max + 1;
 }
 
 export function rewritePackageJsonDoc(doc, { forkScope, baseVersion, forkVersion }) {
@@ -275,8 +296,11 @@ function parseArgs(argv) {
     publish: false,
     yesIAmPublishing: false,
     keepStaging: false,
-    forkNumber: Number(process.env.FORK_NUMBER ?? 1),
+    // "auto" asks the registry for the next free N (the CI path); a number is
+    // the hand-picked N (the bootstrap and local paths).
+    forkNumber: process.env.FORK_NUMBER ?? "1",
     stagingDir: null,
+    githubRelease: true,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -288,7 +312,9 @@ function parseArgs(argv) {
       args.keepStaging = true;
     } else if (arg === "--fork-number") {
       i += 1;
-      args.forkNumber = Number(argv[i]);
+      args.forkNumber = argv[i];
+    } else if (arg === "--no-github-release") {
+      args.githubRelease = false;
     } else if (arg === "--staging-dir") {
       i += 1;
       args.stagingDir = argv[i];
@@ -296,28 +322,50 @@ function parseArgs(argv) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
-  if (!Number.isInteger(args.forkNumber) || args.forkNumber < 1) {
-    throw new Error(`--fork-number must be a positive integer, got ${args.forkNumber}`);
+  if (args.forkNumber !== "auto") {
+    args.forkNumber = Number(args.forkNumber);
+    if (!Number.isInteger(args.forkNumber) || args.forkNumber < 1) {
+      throw new Error(`--fork-number must be a positive integer or "auto", got ${args.forkNumber}`);
+    }
   }
   return args;
 }
 
-function publishCommands({ forkScope, forkVersion, branch, notesPath, tarballDir }) {
+// `npm view <pkg> versions --json` on the cli package — the LAST one published,
+// so a half-finished release never under-counts. A 404 means the scope has
+// nothing yet: fork.1. Any other failure is fatal — guessing N and colliding
+// with a published version fails the publish anyway, only later and noisier.
+export function publishedVersions(forkScope, cwd) {
+  const result = spawnSync("npm", ["view", `${forkScope}/paseo-cli`, "versions", "--json"], {
+    cwd,
+    encoding: "utf8",
+  });
+  if (result.status === 0) {
+    const parsed = JSON.parse(result.stdout);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  }
+  if (/E404|404 Not Found/.test(`${result.stdout}${result.stderr}`)) return [];
+  process.stderr.write(result.stderr ?? "");
+  throw new Error(
+    `npm view ${forkScope}/paseo-cli versions failed with exit code ${result.status}`,
+  );
+}
+
+function publishCommands({ forkScope, forkVersion, notesPath, tarballDir }) {
   return [
     ...RELEASE_PACKAGES.map((name) => `npm ${publishArgs(`${forkScope}/paseo-${name}`).join(" ")}`),
     `git tag fork/v${forkVersion}`,
-    `git push origin ${branch} fork/v${forkVersion}`,
+    `git push origin refs/tags/fork/v${forkVersion}`,
     `gh release create fork/v${forkVersion} --title "${forkScope} ${forkVersion}" --notes-file ${notesPath} ${tarballDir}/*.tgz`,
   ];
 }
 
-function printRefusal(forkScope, forkVersion, branch) {
+function printRefusal(forkScope, forkVersion) {
   console.log("\nRefusing to publish: --publish requires --yes-i-am-publishing.");
   console.log("Commands that publish mode would run after a green dry-run:");
   for (const line of publishCommands({
     forkScope,
     forkVersion,
-    branch,
     notesPath: "<staging-dir>/release-notes.md",
     tarballDir: "<staging-dir>",
   })) {
@@ -358,7 +406,9 @@ function stageReleaseCopy(repoRoot, stage) {
   // (e.g. packages/server/node_modules carries the typed lru-cache and
   // @opencode-ai/sdk); the staged build resolves modules through them.
   const copiedNodeModules = [path.join(stage, "node_modules")];
-  for (const entry of readdirSync(path.join(stage, "packages"), { withFileTypes: true })) {
+  for (const entry of readdirSync(path.join(stage, "packages"), {
+    withFileTypes: true,
+  })) {
     const realNodeModules = path.join(repoRoot, "packages", entry.name, "node_modules");
     if (entry.isDirectory() && existsSync(realNodeModules)) {
       const stagedNodeModules = path.join(stage, "packages", entry.name, "node_modules");
@@ -464,7 +514,7 @@ function writeReleaseNotes(stage, repoRoot, forkScope, forkVersion) {
   }
 }
 
-function publishStagedRelease(stage, repoRoot, { forkScope, forkVersion, branch }) {
+function publishStagedRelease(stage, repoRoot, { forkScope, forkVersion, githubRelease }) {
   const tarballs = [];
   for (const name of RELEASE_PACKAGES) {
     run("npm", publishArgs(`${forkScope}/paseo-${name}`), {
@@ -473,8 +523,18 @@ function publishStagedRelease(stage, repoRoot, { forkScope, forkVersion, branch 
     const out = capture("npm", tarballPackArgs(`${forkScope}/paseo-${name}`, stage), stage);
     tarballs.push(path.join(stage, out.trim().split("\n").at(-1)));
   }
+  // Only the tag is pushed. Pushing the branch too was a non-fast-forward
+  // hazard in CI: a newer push to the branch during the build would be
+  // rejected AFTER the packages were live. The release commit is expected to
+  // be on origin already — a release is cut from what CI (or a human) saw.
   run("git", ["tag", `fork/v${forkVersion}`], { cwd: repoRoot });
-  run("git", ["push", "origin", branch, `fork/v${forkVersion}`], { cwd: repoRoot });
+  run("git", ["push", "origin", `refs/tags/fork/v${forkVersion}`], {
+    cwd: repoRoot,
+  });
+  if (!githubRelease) {
+    console.log(`skipping GitHub Release (--no-github-release); tag fork/v${forkVersion} pushed.`);
+    return;
+  }
   run(
     "gh",
     [
@@ -497,13 +557,17 @@ function main() {
   const repoRoot = repoRootFromScript();
   const rootDoc = readJson(path.join(repoRoot, "package.json"));
   const baseVersion = rootDoc.version;
-  const forkVersion = computeForkVersion(baseVersion, args.forkNumber);
+  const forkNumber =
+    args.forkNumber === "auto"
+      ? nextForkNumber(baseVersion, publishedVersions(forkScope, repoRoot))
+      : args.forkNumber;
+  const forkVersion = computeForkVersion(baseVersion, forkNumber);
   const branch = capture("git", ["rev-parse", "--abbrev-ref", "HEAD"], repoRoot).trim();
 
   console.log(`fork release: scope=${forkScope} base=${baseVersion} version=${forkVersion}`);
 
   if (args.publish && !args.yesIAmPublishing) {
-    printRefusal(forkScope, forkVersion, branch);
+    printRefusal(forkScope, forkVersion);
     process.exitCode = 1;
     return;
   }
@@ -514,7 +578,11 @@ function main() {
   let completed = false;
   try {
     stageReleaseCopy(repoRoot, stage);
-    rewriteStagedManifests(stage, rootDoc, { forkScope, baseVersion, forkVersion });
+    rewriteStagedManifests(stage, rootDoc, {
+      forkScope,
+      baseVersion,
+      forkVersion,
+    });
     buildAndTypecheckStagedTree(stage);
     buildDaemonWebUiAssets(stage);
     rewriteStagedOutput(stage, forkScope);
@@ -523,7 +591,11 @@ function main() {
     writeReleaseNotes(stage, repoRoot, forkScope, forkVersion);
 
     if (args.publish && args.yesIAmPublishing) {
-      publishStagedRelease(stage, repoRoot, { forkScope, forkVersion, branch });
+      publishStagedRelease(stage, repoRoot, {
+        forkScope,
+        forkVersion,
+        githubRelease: args.githubRelease,
+      });
     } else {
       console.log("\ndry-run complete: no publish, no tag, no push (default mode).");
       console.log("Publish mode requires: --publish --yes-i-am-publishing");

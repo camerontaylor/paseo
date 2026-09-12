@@ -1,0 +1,123 @@
+# Fork npm publish. Upstream has no file by this name, so it cannot land in a
+# rebase conflict — see fork/README.md for the namespace convention.
+#
+# Every push to `mine` (the desvio-assembled build branch) cuts a fork release:
+# fork/scripts/release-fork.mjs stages a clean copy of HEAD, renames the 7
+# publishable workspaces to @camerontaylor/paseo-*, stamps <base>-fork.N with N
+# read from the registry, rebuilds, runs the pack-list gate, publishes under
+# dist-tag `fork`, pushes the fork/v<version> tag and creates a GitHub Release
+# with the tarballs. Nothing here decides what goes into a release — that is
+# desvio's manifest and the `mine` merge; this only ships what landed.
+#
+# Authentication is npm trusted publishing (OIDC), not a token: the job's
+# `id-token: write` lets npm mint a short-lived credential from the workflow
+# identity, and npmjs.com checks it against a trusted-publisher entry on EACH
+# package (owner camerontaylor, repo paseo, workflow fork-npm-publish.yml —
+# this filename is part of the credential, rename it and every publish 401s).
+# Provenance attestations come for free on the same path.
+#
+# Two constraints dictate the shape of this file:
+#   - Trusted publishing works only on GitHub-hosted runners, so this cannot
+#     run on makemake like fork-ci.yml does. If the account's Actions billing
+#     lock (fork/ci.md) is back, publishes stop until it clears.
+#   - A package must already exist on npm before a trusted publisher can be
+#     attached to it (npm/cli#8544, still open). The first release of each of
+#     the 7 packages therefore goes out with a token: see the bootstrap
+#     section of ~/.local/agents/docs/paseo.md. `BOOTSTRAP_NPM_TOKEN` exists
+#     only for that run and is deleted afterwards.
+name: Fork npm publish
+
+on:
+  push:
+    branches: [mine]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build, rename and gate only — no publish, tag or release"
+        type: boolean
+        default: false
+      fork_number:
+        description: "Fork number N for <base>-fork.N; `auto` reads the registry"
+        type: string
+        default: auto
+
+# Releases serialise and never cancel each other: a cancelled job could have
+# published 3 of 7 packages, and the next run's `auto` numbering would step
+# past the hole. Let the older run finish; the newer one then publishes N+1.
+concurrency:
+  group: fork-npm-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the fork/v<version> tag, create the GitHub Release
+  id-token: write # npm trusted publishing (OIDC)
+
+env:
+  FORK_SCOPE: "@camerontaylor"
+  # Matches .github/workflows/ci.yml and fork-ci.yml: the onnxruntime-node
+  # postinstall pulls a large CUDA payload from NuGet that makes npm ci flaky,
+  # and the Electron binary is never needed to build the daemon packages.
+  ONNXRUNTIME_NODE_INSTALL: skip
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
+
+jobs:
+  publish:
+    name: publish @camerontaylor/paseo-* (${{ inputs.dry_run && 'dry-run' || 'publish' }})
+    # Only this repository, only its owner. A push to `mine` already implies
+    # write access, but a fork-of-the-fork running this file would otherwise
+    # burn its minutes failing at the registry; workflow_dispatch by anyone
+    # else is refused for the same reason.
+    if: github.repository == 'camerontaylor/paseo' && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # release-fork.mjs archives HEAD and pushes one tag; it never
+          # pushes the branch, so a shallow checkout is enough. Credentials
+          # stay in place for the tag push (contents: write above).
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      # Node 22 bundles npm 10.x; trusted publishing needs npm >= 11.5.1.
+      # Upgraded AFTER npm ci so the install matches ci.yml exactly.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # Bootstrap only. Trusted publishing cannot create a package, so the
+      # first version of each of the 7 packages is published with a granular
+      # token stored as BOOTSTRAP_NPM_TOKEN for one run. When the secret is
+      # absent (every run after that) this step is skipped and npm falls
+      # through to OIDC. Never leave the secret in place: a token present
+      # takes precedence over OIDC and silently forfeits provenance.
+      - name: Configure bootstrap token (first publish only)
+        if: ${{ !inputs.dry_run && secrets.BOOTSTRAP_NPM_TOKEN != '' }}
+        env:
+          BOOTSTRAP_NPM_TOKEN: ${{ secrets.BOOTSTRAP_NPM_TOKEN }}
+        run: |
+          npm config set //registry.npmjs.org/:_authToken "$BOOTSTRAP_NPM_TOKEN"
+          echo "::warning::publishing with BOOTSTRAP_NPM_TOKEN — delete the secret and attach trusted publishers after this run"
+
+      - name: Stage, rename, build, gate, publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORK_NUMBER: ${{ inputs.fork_number || 'auto' }}
+        run: |
+          set -euo pipefail
+          args=(--fork-number "$FORK_NUMBER" --keep-staging --staging-dir "$RUNNER_TEMP/fork-release")
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            args+=(--dry-run)
+          else
+            args+=(--publish --yes-i-am-publishing)
+          fi
+          node fork/scripts/release-fork.mjs "${args[@]}"

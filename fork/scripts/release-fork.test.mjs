@@ -15,6 +15,7 @@ import {
   assertPublishAccess,
   assertWebUiAssetsInPackList,
   computeForkVersion,
+  nextForkNumber,
   forkPackageName,
   gatePackArgs,
   parsePackFilePaths,
@@ -70,7 +71,9 @@ test("rewrites internal pins in devDependencies and peerDependencies and leaves 
   };
   const out = rewritePackageJsonDoc(doc, CTX);
 
-  assert.deepEqual(out.devDependencies, { "@paseo-fork/paseo-protocol": "0.7.0-beta.2.fork.1" });
+  assert.deepEqual(out.devDependencies, {
+    "@paseo-fork/paseo-protocol": "0.7.0-beta.2.fork.1",
+  });
   assert.deepEqual(out.peerDependencies, {
     "@paseo-fork/paseo-client": "0.7.0-beta.2.fork.1",
     react: "^19.0.0",
@@ -147,7 +150,11 @@ test("dist rewrite leaves files without quoted specifiers untouched and reports 
     );
     const stats = rewriteDistSpecifiers(dist, CTX);
 
-    assert.deepEqual(stats, { filesScanned: 1, filesRewritten: 0, occurrences: 0 });
+    assert.deepEqual(stats, {
+      filesScanned: 1,
+      filesRewritten: 0,
+      occurrences: 0,
+    });
     // unquoted prose (error message) is not a module specifier and stays untouched
     assert.equal(
       readFileSync(clean, "utf8"),
@@ -243,7 +250,9 @@ test("rewrites workspace symlinks copied from the real checkout to resolve insid
   try {
     const repoRoot = path.join(base, "repo");
     const stage = path.join(base, "stage");
-    mkdirSync(path.join(repoRoot, "packages/highlight/dist"), { recursive: true });
+    mkdirSync(path.join(repoRoot, "packages/highlight/dist"), {
+      recursive: true,
+    });
     mkdirSync(path.join(stage, "packages/highlight/dist"), { recursive: true });
     writeFileSync(path.join(repoRoot, "packages/highlight/dist/index.js"), "real\n");
     writeFileSync(path.join(stage, "packages/highlight/dist/index.js"), "staged\n");
@@ -272,6 +281,19 @@ test("rewrites workspace symlinks copied from the real checkout to resolve insid
 test("appends the fork build number to the upstream base version", () => {
   assert.equal(computeForkVersion("0.7.0-beta.2", 1), "0.7.0-beta.2.fork.1");
   assert.equal(computeForkVersion("0.7.0-beta.2", 2), "0.7.0-beta.2.fork.2");
+  // Stable base: `-fork.N`, the only semver-valid shape (`0.8.0.fork.1` is not).
+  assert.equal(computeForkVersion("0.8.0", 1), "0.8.0-fork.1");
+  assert.equal(computeForkVersion("0.8.0", 12), "0.8.0-fork.12");
+});
+
+test("derives the next fork number from what the registry already holds", () => {
+  assert.equal(nextForkNumber("0.8.0", []), 1);
+  assert.equal(nextForkNumber("0.8.0", ["0.8.0-fork.1", "0.8.0-fork.3", "0.8.0-fork.2"]), 4);
+  // Other bases and non-fork prereleases never count.
+  assert.equal(nextForkNumber("0.8.0", ["0.7.0-beta.2.fork.9", "0.8.0-beta.1", "0.8.1-fork.2"]), 1);
+  assert.equal(nextForkNumber("0.7.0-beta.2", ["0.7.0-beta.2.fork.9", "0.7.0-fork.20"]), 10);
+  // Garbage after the prefix is ignored rather than parsed as NaN.
+  assert.equal(nextForkNumber("0.8.0", ["0.8.0-fork.x", "0.8.0-fork.2.1"]), 1);
 });
 
 test("resolves the fork scope from the environment with a default", () => {
@@ -287,7 +309,11 @@ test("forkPackageName renames only upstream-scoped names", () => {
 
 test("publishConfig.access=public must survive the rewrite in every staged package", () => {
   const good = rewritePackageJsonDoc(
-    { name: "@getpaseo/cli", version: "0.7.0-beta.2", publishConfig: { access: "public" } },
+    {
+      name: "@getpaseo/cli",
+      version: "0.7.0-beta.2",
+      publishConfig: { access: "public" },
+    },
     CTX,
   );
   assertPublishAccess(good, "packages/cli");
