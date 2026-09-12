@@ -46,6 +46,18 @@ export const CLAUDE_MODEL_MANIFEST = [
     supportsFastMode: true,
   },
   {
+    // The suffixed spelling selects the 1M-context runtime in Claude Code, so it stays a
+    // selectable entry of its own rather than a compatibility alias of the plain id.
+    id: "claude-opus-5[1m]",
+    label: "Opus 5 1M",
+    description: "Opus 5 with 1M context window",
+    minimumClaudeCodeVersion: "2.1.219",
+    contextWindowMaxTokens: 1_000_000,
+    effortLevels: CLAUDE_EFFORT_LEVELS.xhigh,
+    supportsThinkingDisabled: true,
+    supportsFastMode: true,
+  },
+  {
     id: "claude-fable-5-1",
     label: "Fable 5.1",
     description: "Fable 5.1 · Most powerful model",

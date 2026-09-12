@@ -431,6 +431,7 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
 
       expect(models.map((m) => m.id)).toEqual([
         "claude-opus-5",
+        "claude-opus-5[1m]",
         "claude-fable-5-1",
         "claude-fable-5",
         "claude-fable-5[1m]",
@@ -447,6 +448,9 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
         "claude-haiku-4-5",
       ]);
       expect(models.find((model) => model.id === "claude-fable-5[1m]")?.isSelectable).toBe(false);
+      expect(
+        models.find((model) => model.id === "claude-opus-5[1m]")?.isSelectable,
+      ).toBeUndefined();
 
       for (const model of models) {
         expect(model.provider).toBe("claude");
