@@ -46,12 +46,10 @@ function ProviderSubagentChildTrack({
   serverId,
   rows,
   onOpenProviderSubagent,
-  onOpenSideConversation,
 }: {
   serverId: string;
   rows: ReturnType<typeof useSubagentsForParent>;
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
-  onOpenSideConversation: (parentAgentId: string, threadId: string) => void;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -61,7 +59,12 @@ function ProviderSubagentChildTrack({
         rows={rows}
         onOpenSubagent={NOOP_SUBAGENT}
         onOpenProviderSubagent={onOpenProviderSubagent}
-        onOpenSideConversation={onOpenSideConversation}
+        // Unreachable, and deliberately so: this track is the nested provider view,
+        // and select.ts returns providerRows alone when providerParentSubagentId is
+        // set, so no side_conversation row can arrive here. Side conversations belong
+        // to the managed agent, not to a provider subagent. Same reasoning as the two
+        // NOOP_SUBAGENT props either side of this one.
+        onOpenSideConversation={NOOP_SUBAGENT}
         onArchiveSubagent={NOOP_SUBAGENT}
       />
     </ComposerTrackBar>
@@ -142,14 +145,6 @@ function ProviderSubagentPanel() {
   const openProviderChild = useCallback(
     (parentAgentId: string, subagentId: string) => {
       openTab({ kind: "provider_subagent", parentAgentId, subagentId });
-    },
-    [openTab],
-  );
-  // Side conversations hang off the parent agent, not the provider subagent, so they surface in
-  // this nested track too — selectSideConversationsForParent ignores providerParentSubagentId.
-  const openSideConversationChild = useCallback(
-    (parentAgentId: string, threadId: string) => {
-      openTab({ kind: "side_conversation", parentAgentId, threadId });
     },
     [openTab],
   );
@@ -278,7 +273,6 @@ function ProviderSubagentPanel() {
         serverId={serverId}
         rows={childRows}
         onOpenProviderSubagent={openProviderChild}
-        onOpenSideConversation={openSideConversationChild}
       />
     </View>
   );
