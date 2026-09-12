@@ -94,10 +94,10 @@ export function computeForkVersion(baseVersion, forkNumber) {
 // Fork versions already published for this base, so a CI publish can pick the
 // next N without a hand-maintained counter. Any other version (another base,
 // a non-fork prerelease) is ignored.
-export function nextForkNumber(baseVersion, publishedVersions) {
+export function nextForkNumber(baseVersion, versions) {
   const prefix = `${baseVersion}${baseVersion.includes("-") ? "." : "-"}fork.`;
   let max = 0;
-  for (const version of publishedVersions) {
+  for (const version of versions) {
     if (typeof version !== "string" || !version.startsWith(prefix)) continue;
     const n = Number(version.slice(prefix.length));
     if (Number.isInteger(n) && n > max) max = n;
