@@ -80,10 +80,15 @@ jobs:
           # stay in place for the tag push (contents: write above).
           fetch-depth: 1
 
+      # No registry-url here on purpose: with it, setup-node exports a
+      # placeholder NODE_AUTH_TOKEN ("XXXXX-...") and writes it into the
+      # runner .npmrc when no token is configured, and npm then sends that
+      # placeholder instead of attempting the OIDC exchange — every publish
+      # 404s. Trusted publishing wants NO configured credential (2026-09-13,
+      # run 34759073080).
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
