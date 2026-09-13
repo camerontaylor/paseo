@@ -6,7 +6,11 @@ import {
   type TimelineSubscription,
 } from "./connection/index.js";
 import type { z } from "zod";
-import { CLIENT_CAPS, type ClientCapability } from "@getpaseo/protocol/client-capabilities";
+// Split value/type imports: the desvio basket drops the value import once no
+// basket-side code uses CLIENT_CAPS, which orphans the fork's sideConversations
+// declaration at merge time. A separate value-import line survives that merge.
+import type { ClientCapability } from "@getpaseo/protocol/client-capabilities";
+import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import type { AgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
 import { parsePluginSourceReference } from "@getpaseo/protocol/plugin-source-reference";
 import {
