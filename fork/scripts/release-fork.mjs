@@ -216,6 +216,29 @@ export function rewriteDistSpecifiers(distDir, context) {
   return { filesScanned, filesRewritten, occurrences };
 }
 
+function packEntries(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  // npm <= 11 prints an array of pack entries; npm >= 12 prints an object
+  // keyed by package name whose values are those same entries. A bare entry
+  // object (single-package output on old npm) must not be split by its own
+  // fields — its `files` value is an array, the map values never are.
+  if (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    Object.values(parsed).length > 0 &&
+    Object.values(parsed).every(
+      (value) =>
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        ("files" in value || "filename" in value),
+    )
+  ) {
+    return Object.values(parsed);
+  }
+  return [parsed];
+}
+
 export function parsePackFilePaths(stdout) {
   // lifecycle scripts (e.g. a prepack generate step) can print to stdout before
   // the --json payload; parse from the first JSON value instead of trusting
@@ -224,9 +247,18 @@ export function parsePackFilePaths(stdout) {
   if (start === -1) {
     throw new Error("npm pack produced no JSON output");
   }
-  const parsed = JSON.parse(stdout.slice(start));
-  const entries = Array.isArray(parsed) ? parsed : [parsed];
-  return entries.flatMap((entry) => (entry.files ?? []).map((file) => file.path));
+  const entries = packEntries(JSON.parse(stdout.slice(start)));
+  const paths = entries.flatMap((entry) => (entry.files ?? []).map((file) => file.path));
+  // package.json always ships, so an empty list means the output shape was
+  // not understood — never a clean pack. Failing here beats a vacuous
+  // zero-occurrence GATE PASS (which is how an npm 12 shape change first
+  // surfaced; only the server web-ui assertion caught it).
+  if (paths.length === 0) {
+    throw new Error(
+      "npm pack file list parsed empty — unrecognized --json shape (did npm change output again?)",
+    );
+  }
+  return paths;
 }
 
 // The gate scans the CONTENT of every file npm pack would ship — pack-list

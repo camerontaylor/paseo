@@ -337,6 +337,22 @@ test("parses npm pack --dry-run --json output in array and single-object shapes"
   // a prepack lifecycle script can print to stdout before the JSON payload
   const withPrepackNoise = `generated src/generated/validation/ws-outbound.aot.ts\n${asArray}`;
   assert.deepEqual(parsePackFilePaths(withPrepackNoise), ["dist/index.js", "package.json"]);
+  // npm >= 12 keys pack entries by package name instead of using an array;
+  // CI runs npm@latest (trusted publishing needs >= 11.5.1), so this is the
+  // shape the gate actually sees there.
+  const asNpm12Map = JSON.stringify({
+    "@scope/paseo-cli": {
+      id: "@scope/paseo-cli@1.0.0",
+      filename: "scope-paseo-cli-1.0.0.tgz",
+      files: [{ path: "dist/cli.js", size: 5, mode: 420 }],
+    },
+  });
+  assert.deepEqual(parsePackFilePaths(asNpm12Map), ["dist/cli.js"]);
+  // a parsed-empty list is never a clean pack (package.json always ships);
+  // it means npm changed the shape again — fail loud, not with a vacuous
+  // zero-occurrence GATE PASS.
+  assert.throws(() => parsePackFilePaths(JSON.stringify({ "@scope/paseo-cli": {} })), /empty/);
+  assert.throws(() => parsePackFilePaths("[{}]"), /empty/);
 });
 
 test("gate scans pack file list contents and flags only quoted upstream specifiers", () => {
