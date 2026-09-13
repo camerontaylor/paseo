@@ -6021,6 +6021,14 @@ export class Session {
         ? await this.readWorkspaceDirectorySync(request)
         : await this.listFetchWorkspacesEntries(request);
 
+      // A one-shot inventory read must stay read-only. Registering Git observers
+      // for every returned workspace can fan out thousands of Git commands on
+      // long-lived hosts even though the caller will disconnect after this
+      // response. Only a client that requested workspace updates owns that
+      // background observation cost.
+      if (subscriptionId) {
+        this.workspaceGitObserver.syncObservers(payload.entries);
+      }
       this.sessionLogger.debug(
         {
           requestId: request.requestId,
