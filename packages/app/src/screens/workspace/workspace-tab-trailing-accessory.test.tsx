@@ -27,6 +27,8 @@ const { mockTheme } = vi.hoisted(() => ({
   },
 }));
 
+// Explicit allowlist: a menu entry whose icon is not named here fails the whole suite at import,
+// so add new menu icons to this list.
 vi.mock("lucide-react-native", () => {
   const StubIcon = () => null;
   return {
@@ -35,6 +37,7 @@ vi.mock("lucide-react-native", () => {
     Copy: StubIcon,
     CopyX: StubIcon,
     Ellipsis: StubIcon,
+    MessageCirclePlus: StubIcon,
     Pencil: StubIcon,
     RotateCw: StubIcon,
     X: StubIcon,
