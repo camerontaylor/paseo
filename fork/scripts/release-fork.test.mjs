@@ -15,6 +15,7 @@ import {
   assertPublishAccess,
   assertWebUiAssetsInPackList,
   computeForkVersion,
+  distTagArgs,
   nextForkNumber,
   forkPackageName,
   gatePackArgs,
@@ -207,10 +208,17 @@ test("every pack and publish invocation disables lifecycle scripts (prepack pari
     assert.ok(argv.includes("--ignore-scripts"), `missing --ignore-scripts: ${argv.join(" ")}`);
   }
   // the gate stays a dry-run json pack; the tarball pack targets a destination;
-  // the publish keeps the fork dist-tag
+  // the publish carries `latest` and a follow-up dist-tag write re-points `fork`
+  // (both track the newest build — policy changed 2026-09-13)
   assert.deepEqual(gatePackArgs(forkName).slice(1, 3), ["--dry-run", "--json"]);
   assert.ok(tarballPackArgs(forkName, "dest-dir").includes("--pack-destination"));
-  assert.deepEqual(publishArgs(forkName).slice(-2), ["--tag", "fork"]);
+  assert.deepEqual(publishArgs(forkName).slice(-2), ["--tag", "latest"]);
+  assert.deepEqual(distTagArgs(forkName, "0.8.0-fork.1"), [
+    "dist-tag",
+    "add",
+    "@paseo-fork/paseo-cli@0.8.0-fork.1",
+    "fork",
+  ]);
 });
 
 test("server pack list must include the daemon web-ui assets or the gate fails", () => {

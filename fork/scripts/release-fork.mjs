@@ -63,8 +63,17 @@ export function tarballPackArgs(forkName, destination) {
   ];
 }
 
+// Publishes carry both dist-tags: `latest` is set by the publish itself (the
+// tag a bare `npm install` resolves — the newest build wins), and `fork` is
+// re-pointed right after as the channel marker. Publishing under `latest`
+// rather than adding it afterwards keeps the guarantee on the tag users
+// install by default, even where a follow-up dist-tag write would fail.
 export function publishArgs(forkName) {
-  return ["publish", ...SCRIPTS_DISABLED, `--workspace=${forkName}`, "--tag", "fork"];
+  return ["publish", ...SCRIPTS_DISABLED, `--workspace=${forkName}`, "--tag", "latest"];
+}
+
+export function distTagArgs(forkName, forkVersion) {
+  return ["dist-tag", "add", `${forkName}@${forkVersion}`, "fork"];
 }
 
 export function resolveForkScope(env = process.env) {
@@ -549,7 +558,11 @@ function writeReleaseNotes(stage, repoRoot, forkScope, forkVersion) {
 function publishStagedRelease(stage, repoRoot, { forkScope, forkVersion, githubRelease }) {
   const tarballs = [];
   for (const name of RELEASE_PACKAGES) {
-    run("npm", publishArgs(`${forkScope}/paseo-${name}`), {
+    const forkName = `${forkScope}/paseo-${name}`;
+    run("npm", publishArgs(forkName), {
+      cwd: stage,
+    });
+    run("npm", distTagArgs(forkName, forkVersion), {
       cwd: stage,
     });
     const out = capture("npm", tarballPackArgs(`${forkScope}/paseo-${name}`, stage), stage);
