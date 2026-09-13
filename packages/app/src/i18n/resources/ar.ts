@@ -12,6 +12,7 @@ export const ar: TranslationResources = {
       copy: "ينسخ",
       copyLine: "نسخ السطر",
       dismiss: "رفض",
+      reload: "إعادة التحميل",
       retry: "أعد المحاولة",
       search: "يبحث",
       select: "يختار",
@@ -153,7 +154,7 @@ export const ar: TranslationResources = {
       initialPromptRequired: "مطلوب موجه الأولي",
       alreadyLoading: "جارٍ التحميل بالفعل",
       uploadFailed: "Failed to upload file",
-      noClipboardImage: "لا توجد صورة في الحافظة",
+      noClipboardImage: "لا توجد صورة في الحافظة الحالية. جرّب اللصق من لوحة المفاتيح.",
       pasteImageFailed: "تعذر لصق الصورة",
       fileTooLarge: "{{fileName}} is too large (max {{size}})",
     },
@@ -208,6 +209,10 @@ export const ar: TranslationResources = {
     historyLoadFailed: "تعذر تحميل سجل الوكيل",
     messageCapped: "تم اقتطاع هذه الرسالة ({{bytes}} بايت).",
     permission: {
+      rejectedPlan: "خطة مرفوضة",
+      approvedPlan: "خطة معتمدة",
+      canceledPlan: "خطة ملغاة",
+
       plan: "يخطط",
       required: "الإذن مطلوب",
       deny: "ينكر",
@@ -1273,6 +1278,7 @@ export const ar: TranslationResources = {
       detail: "إيقاف البرنامج الخفي المحلي.",
     },
     daemon: {
+      lifecycle: en.desktop.daemon.lifecycle,
       title: "Daemon",
       status: {
         title: "حالة",
@@ -2524,8 +2530,48 @@ export const ar: TranslationResources = {
       updateErrorTitle: "غير قادر على تحديث الموفر",
       actions: {
         menu: "{{name}} actions",
+        addAccount: "إضافة حساب",
+        editAccount: "تعديل الحساب",
         remove: "Remove provider",
         removing: "Removing...",
+      },
+      account: {
+        title: "إضافة حساب {{provider}}",
+        editTitle: "تعديل حساب {{provider}}",
+        errorTitle: "تعذر حفظ الحساب",
+        submit: "إضافة حساب",
+        save: "حفظ التغييرات",
+        fields: {
+          label: "الاسم",
+          providerId: "معرّف المزود",
+          description: "الوصف",
+          env: "متغيرات البيئة",
+          envKey: "اسم المتغير",
+          envValue: "قيمة المتغير",
+        },
+        placeholders: {
+          label: "{{provider}} (العمل)",
+          providerId: "claude-work",
+          description: "اختياري",
+          envKey: "الاسم",
+          envValue: "القيمة",
+        },
+        actions: {
+          addVariable: "إضافة متغير",
+          removeVariable: "إزالة المتغير",
+        },
+        warnings: {
+          renameUnsupported:
+            "لا يستطيع هذا المضيف نقل المحادثات الحالية إلى المعرّف الجديد. ستصبح المحادثات التي تستخدم هذا الحساب غير متاحة حتى تحدّث المضيف أو تستعيد المعرّف السابق.",
+        },
+        errors: {
+          labelRequired: "أدخل اسمًا.",
+          idRequired: "أدخل معرّف المزود.",
+          idInvalid: "استخدم أحرفًا صغيرة وأرقامًا وشرطات، بدءًا بحرف.",
+          idTaken: "معرّف المزود هذا مستخدم بالفعل.",
+          envKeyRequired: "أدخل اسم المتغير.",
+          envDuplicate: "هذا المتغير معيّن بالفعل.",
+        },
       },
       remove: {
         confirmTitle: "Remove {{name}}?",
