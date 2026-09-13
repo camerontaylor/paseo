@@ -12,6 +12,7 @@ export const ptBR: TranslationResources = {
       copy: "Copiar",
       copyLine: "Copiar linha",
       dismiss: "Dispensar",
+      reload: "Recarregar",
       retry: "Tentar novamente",
       search: "Buscar",
       select: "Selecionar",
@@ -153,7 +154,7 @@ export const ptBR: TranslationResources = {
       initialPromptRequired: "O prompt inicial é obrigatório",
       alreadyLoading: "Já está carregando",
       uploadFailed: "Falha ao enviar arquivo",
-      noClipboardImage: "Não há imagem na área de transferência",
+      noClipboardImage: "Não há imagem na área de transferência atual. Tente colar pelo teclado.",
       pasteImageFailed: "Falha ao colar a imagem",
       fileTooLarge: "{{fileName}} é grande demais (máximo {{size}})",
     },
@@ -208,6 +209,10 @@ export const ptBR: TranslationResources = {
     historyLoadFailed: "Não foi possível carregar o histórico do agente",
     messageCapped: "Esta mensagem foi truncada ({{bytes}} bytes).",
     permission: {
+      rejectedPlan: "Plano rejeitado",
+      approvedPlan: "Plano aprovado",
+      canceledPlan: "Plano cancelado",
+
       plan: "Plano",
       required: "Permissão necessária",
       deny: "Negar",
@@ -1298,6 +1303,7 @@ export const ptBR: TranslationResources = {
       detail: "Parando o daemon local.",
     },
     daemon: {
+      lifecycle: en.desktop.daemon.lifecycle,
       title: "Daemon",
       status: {
         title: "Status",
@@ -2565,8 +2571,48 @@ export const ptBR: TranslationResources = {
       updateErrorTitle: "Não foi possível atualizar provedor",
       actions: {
         menu: "{{name}} actions",
+        addAccount: "Adicionar conta",
+        editAccount: "Editar conta",
         remove: "Remove provider",
         removing: "Removing...",
+      },
+      account: {
+        title: "Adicionar conta do {{provider}}",
+        editTitle: "Editar conta do {{provider}}",
+        errorTitle: "Não foi possível salvar a conta",
+        submit: "Adicionar conta",
+        save: "Salvar alterações",
+        fields: {
+          label: "Nome",
+          providerId: "ID do provedor",
+          description: "Descrição",
+          env: "Variáveis de ambiente",
+          envKey: "Nome da variável",
+          envValue: "Valor da variável",
+        },
+        placeholders: {
+          label: "{{provider}} (Trabalho)",
+          providerId: "claude-work",
+          description: "Opcional",
+          envKey: "NOME",
+          envValue: "Valor",
+        },
+        actions: {
+          addVariable: "Adicionar variável",
+          removeVariable: "Remover variável",
+        },
+        warnings: {
+          renameUnsupported:
+            "Este host não consegue mover as conversas existentes para o novo ID. As conversas que usam esta conta ficarão indisponíveis até você atualizar o host ou restaurar o ID anterior.",
+        },
+        errors: {
+          labelRequired: "Digite um nome.",
+          idRequired: "Digite um ID de provedor.",
+          idInvalid: "Use letras minúsculas, números e hifens, começando por uma letra.",
+          idTaken: "Este ID de provedor já está em uso.",
+          envKeyRequired: "Digite o nome da variável.",
+          envDuplicate: "Esta variável já está definida.",
+        },
       },
       remove: {
         confirmTitle: "Remove {{name}}?",

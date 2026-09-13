@@ -9,6 +9,7 @@ export const en = {
       copy: "Copy",
       copyLine: "Copy line",
       dismiss: "Dismiss",
+      reload: "Reload",
       retry: "Retry",
       search: "Search",
       select: "Select",
@@ -150,7 +151,7 @@ export const en = {
       initialPromptRequired: "Initial prompt is required",
       alreadyLoading: "Already loading",
       uploadFailed: "Failed to upload file",
-      noClipboardImage: "No image in clipboard",
+      noClipboardImage: "No image in the current clipboard. Try pasting from your keyboard.",
       pasteImageFailed: "Failed to paste image",
       fileTooLarge: "{{fileName}} is too large (max {{size}})",
     },
@@ -205,6 +206,10 @@ export const en = {
     historyLoadFailed: "Couldn't load agent history",
     messageCapped: "This message was capped ({{bytes}} bytes).",
     permission: {
+      rejectedPlan: "Rejected plan",
+      approvedPlan: "Approved plan",
+      canceledPlan: "Canceled plan",
+
       plan: "Plan",
       required: "Permission Required",
       deny: "Deny",
@@ -1283,6 +1288,23 @@ export const en = {
     },
     daemon: {
       title: "Daemon",
+      lifecycle: {
+        owned: "Launched by this Desktop session",
+        attached: "Attached to an existing daemon",
+        ownedMessage: "This daemon was launched by this Desktop session.",
+        attachedMessage: "This daemon was not launched by this Desktop session.",
+        stopTitle: "Stop local daemon?",
+        stopMessage:
+          "{{ownership}}\nHome: {{home}}\nSupervisor PID: {{pid}}\nRunning agent work will be interrupted.",
+        stop: "Stop daemon",
+        stopping: "Stopping…",
+        stopFailed: "Unable to stop daemon",
+        pauseAttached: "Pause automatic daemon management? The attached daemon will keep running.",
+        pause: "Pause management",
+        workerUpdated: "Worker updated to {{version}}",
+        supervisorRefresh:
+          "The running supervisor retains its original code. Its launcher must stop and start it to refresh the supervisor.",
+      },
       status: {
         title: "Status",
         builtInOnly: "Only the built-in desktop daemon is shown here",
@@ -2633,8 +2655,48 @@ export const en = {
       updateErrorTitle: "Unable to update provider",
       actions: {
         menu: "{{name}} actions",
+        addAccount: "Add account",
+        editAccount: "Edit account",
         remove: "Remove provider",
         removing: "Removing...",
+      },
+      account: {
+        title: "Add {{provider}} account",
+        editTitle: "Edit {{provider}} account",
+        errorTitle: "Unable to save account",
+        submit: "Add account",
+        save: "Save changes",
+        fields: {
+          label: "Name",
+          providerId: "Provider ID",
+          description: "Description",
+          env: "Environment variables",
+          envKey: "Variable name",
+          envValue: "Variable value",
+        },
+        placeholders: {
+          label: "{{provider}} (Work)",
+          providerId: "claude-work",
+          description: "Optional",
+          envKey: "NAME",
+          envValue: "Value",
+        },
+        actions: {
+          addVariable: "Add variable",
+          removeVariable: "Remove variable",
+        },
+        warnings: {
+          renameUnsupported:
+            "This host can't move existing chats to the new ID. Chats using this account will be unavailable until you update the host or restore the old ID.",
+        },
+        errors: {
+          labelRequired: "Enter a name.",
+          idRequired: "Enter a provider ID.",
+          idInvalid: "Use lowercase letters, numbers, and dashes, starting with a letter.",
+          idTaken: "This provider ID is already taken.",
+          envKeyRequired: "Enter a variable name.",
+          envDuplicate: "This variable is already set.",
+        },
       },
       remove: {
         confirmTitle: "Remove {{name}}?",

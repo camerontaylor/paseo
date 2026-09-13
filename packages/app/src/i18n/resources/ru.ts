@@ -12,6 +12,7 @@ export const ru: TranslationResources = {
       copy: "Копировать",
       copyLine: "Копировать строку",
       dismiss: "Отклонить",
+      reload: "Перезагрузить",
       retry: "Повторить",
       search: "Поиск",
       select: "Выбрать",
@@ -153,7 +154,8 @@ export const ru: TranslationResources = {
       initialPromptRequired: "Необходим инициализирующий промпт",
       alreadyLoading: "Уже загружается",
       uploadFailed: "Ошибка загрузки файла",
-      noClipboardImage: "В буфере обмена нет изображения",
+      noClipboardImage:
+        "В текущем буфере обмена нет изображения. Попробуйте вставить его с клавиатуры.",
       pasteImageFailed: "Не удалось вставить изображение",
       fileTooLarge: "Файл {{fileName}} слишком большой (максимальный размер: {{size}})",
     },
@@ -208,6 +210,10 @@ export const ru: TranslationResources = {
     historyLoadFailed: "Не удалось загрузить историю агента",
     messageCapped: "Это сообщение было обрезано ({{bytes}} байт).",
     permission: {
+      rejectedPlan: "Отклонённый план",
+      approvedPlan: "Одобренный план",
+      canceledPlan: "Отменённый план",
+
       plan: "План",
       required: "Требуется разрешение",
       deny: "Отклонить",
@@ -1290,6 +1296,7 @@ export const ru: TranslationResources = {
       detail: "Остановка локального демона.",
     },
     daemon: {
+      lifecycle: en.desktop.daemon.lifecycle,
       title: "Демон",
       status: {
         title: "Статус",
@@ -2571,8 +2578,48 @@ export const ru: TranslationResources = {
       updateErrorTitle: "Не удалось обновить провайдера",
       actions: {
         menu: "Действия с {{name}}",
+        addAccount: "Добавить аккаунт",
+        editAccount: "Изменить аккаунт",
         remove: "Удалить провайдера",
         removing: "Удаление...",
+      },
+      account: {
+        title: "Добавить аккаунт {{provider}}",
+        editTitle: "Изменить аккаунт {{provider}}",
+        errorTitle: "Не удалось сохранить аккаунт",
+        submit: "Добавить аккаунт",
+        save: "Сохранить изменения",
+        fields: {
+          label: "Название",
+          providerId: "ID провайдера",
+          description: "Описание",
+          env: "Переменные окружения",
+          envKey: "Имя переменной",
+          envValue: "Значение переменной",
+        },
+        placeholders: {
+          label: "{{provider}} (Работа)",
+          providerId: "claude-work",
+          description: "Необязательно",
+          envKey: "ИМЯ",
+          envValue: "Значение",
+        },
+        actions: {
+          addVariable: "Добавить переменную",
+          removeVariable: "Удалить переменную",
+        },
+        warnings: {
+          renameUnsupported:
+            "Этот хост не может перенести существующие чаты на новый ID. Чаты, использующие эту учётную запись, будут недоступны, пока вы не обновите хост или не вернёте прежний ID.",
+        },
+        errors: {
+          labelRequired: "Введите название.",
+          idRequired: "Введите ID провайдера.",
+          idInvalid: "Используйте строчные буквы, цифры и дефисы, начиная с буквы.",
+          idTaken: "Этот ID провайдера уже занят.",
+          envKeyRequired: "Введите имя переменной.",
+          envDuplicate: "Эта переменная уже задана.",
+        },
       },
       remove: {
         confirmTitle: "Удалить {{name}}?",
