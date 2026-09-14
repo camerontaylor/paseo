@@ -84,6 +84,21 @@ export function resolveForkScope(env = process.env) {
   return scope;
 }
 
+// The registry rejects a trusted-publishing PUT whose manifest
+// repository.url does not match the repository in the OIDC provenance
+// bundle — E422 "Failed to validate repository information" (run
+// 34760257682, 2026-09-14). Workspace manifests carry no repository field,
+// so the staging rewrite stamps one from this resolver.
+const DEFAULT_FORK_REPOSITORY = "camerontaylor/paseo";
+
+export function resolveForkRepository(env = process.env) {
+  const repository = env.FORK_REPOSITORY ?? DEFAULT_FORK_REPOSITORY;
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error(`Invalid fork repository: ${repository}`);
+  }
+  return repository;
+}
+
 export function forkPackageName(name, forkScope) {
   if (typeof name !== "string" || !name.startsWith(UPSTREAM_SCOPE)) return name;
   return `${forkScope}/paseo-${name.slice(UPSTREAM_SCOPE.length)}`;
@@ -114,12 +129,18 @@ export function nextForkNumber(baseVersion, versions) {
   return max + 1;
 }
 
-export function rewritePackageJsonDoc(doc, { forkScope, baseVersion, forkVersion }) {
+export function rewritePackageJsonDoc(
+  doc,
+  { forkScope, forkRepository, baseVersion, forkVersion },
+) {
   const out = structuredClone(doc);
   out.name = forkPackageName(out.name, forkScope);
   if (out.version === baseVersion) {
     out.version = forkVersion;
   }
+  // Overwrite unconditionally: an upstream repository field would point at
+  // getpaseo/paseo and fail the provenance match on the fork's publishes.
+  out.repository = { type: "git", url: `https://github.com/${forkRepository}` };
   rewriteWorkspaceScripts(out, { forkScope });
   for (const field of DEP_FIELDS) {
     const deps = out[field];
@@ -625,6 +646,7 @@ function main() {
     stageReleaseCopy(repoRoot, stage);
     rewriteStagedManifests(stage, rootDoc, {
       forkScope,
+      forkRepository: resolveForkRepository(),
       baseVersion,
       forkVersion,
     });

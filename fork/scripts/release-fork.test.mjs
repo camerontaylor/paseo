@@ -33,6 +33,7 @@ import {
 
 const CTX = {
   forkScope: "@paseo-fork",
+  forkRepository: "camerontaylor/paseo",
   baseVersion: "0.7.0-beta.2",
   forkVersion: "0.7.0-beta.2.fork.1",
 };
@@ -52,6 +53,10 @@ test("rewrites package names and stamps the fork version across dependency pins"
 
   assert.equal(out.name, "@paseo-fork/paseo-server");
   assert.equal(out.version, "0.7.0-beta.2.fork.1");
+  assert.deepEqual(out.repository, {
+    type: "git",
+    url: "https://github.com/camerontaylor/paseo",
+  });
   assert.deepEqual(out.dependencies, {
     "@paseo-fork/paseo-client": "0.7.0-beta.2.fork.1",
     "@paseo-fork/paseo-protocol": "0.7.0-beta.2.fork.1",
