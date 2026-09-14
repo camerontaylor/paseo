@@ -149,6 +149,24 @@ describe("translation resources", () => {
     expect(findInterpolationMismatches(zhCN)).toEqual([]);
   });
 
+  it("includes localized side conversation copy in every supported language", () => {
+    expect(en.sideConversations.errors.failed).toContain("{{error}}");
+    for (const resource of [ar, es, fr, ja, ko, ptBR, ru, zhCN]) {
+      expect(resource.sideConversations.title).not.toBe(en.sideConversations.title);
+      expect(resource.sideConversations.composer.placeholder).not.toBe(
+        en.sideConversations.composer.placeholder,
+      );
+      expect(resource.sideConversations.notices.degraded).not.toBe(
+        en.sideConversations.notices.degraded,
+      );
+      expect(resource.sideConversations.states.removed).not.toBe(
+        en.sideConversations.states.removed,
+      );
+      expect(resource.sideConversations.actions.new).not.toBe(en.sideConversations.actions.new);
+      expect(resource.sideConversations.errors.failed).toContain("{{error}}");
+    }
+  });
+
   it("keeps reported Spanish settings and scripts labels clean", () => {
     expect(es.workspace.scripts.title).toBe("Scripts");
     expect(es.settings.general.terminalScrollback.label).toBe("Historial de terminal");

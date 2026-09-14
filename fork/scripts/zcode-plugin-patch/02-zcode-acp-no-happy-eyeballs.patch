@@ -1,0 +1,31 @@
+Add the Happy Eyeballs kill switch to the zcode launch argv.
+
+Node's autoSelectFamily (default since 20.13) gives each connect attempt a
+250ms budget. On the home LAN (no IPv6 route, z.ai edge ~270ms RTT) every
+undici connect is aborted and zcode fails all model requests with the
+empty-message "Cannot connect to API:" error. Upstream PR:
+william0wang/zcode-acp#182 — this patch is the fleet stopgap until the
+plugin manifest bumps a zcode-acp-server release that includes it.
+
+--- a/node_modules/zcode-acp-server/dist/backend/resolve.js
++++ b/node_modules/zcode-acp-server/dist/backend/resolve.js
+@@ -140,7 +140,18 @@
+                 // keep "?"
+             }
+             log(`resolve: launching zcode with node ${nodeBin} (${ver})`);
+-            return [nodeBin, zcodeBin, "app-server", "--stdio"];
++            // Disable Happy Eyeballs: on networks with no IPv6 route where the
++            // provider edge answers in >250ms, Node's autoSelectFamily
++            // per-attempt budget aborts every connect with a bogus ETIMEDOUT
++            // AggregateError (surfaced as "Cannot connect to API:"), while a
++            // plain sequential connect succeeds. Pre-20.13 default behavior.
++            return [
++                nodeBin,
++                "--no-network-family-autoselection",
++                zcodeBin,
++                "app-server",
++                "--stdio",
++            ];
+         }
+     }
+     log("resolve: no sqlite-capable node found; falling back to PATH-resolved zcode shebang " +
