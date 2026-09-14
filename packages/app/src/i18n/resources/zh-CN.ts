@@ -12,6 +12,7 @@ export const zhCN: TranslationResources = {
       copy: "复制",
       copyLine: "复制行",
       dismiss: "关闭",
+      reload: "重新加载",
       retry: "重试",
       search: "搜索",
       select: "选择",
@@ -153,7 +154,7 @@ export const zhCN: TranslationResources = {
       initialPromptRequired: "初始 prompt 必填",
       alreadyLoading: "正在加载",
       uploadFailed: "Failed to upload file",
-      noClipboardImage: "剪贴板中没有图片",
+      noClipboardImage: "当前剪贴板中没有图片。请尝试通过键盘粘贴。",
       pasteImageFailed: "无法粘贴图片",
       fileTooLarge: "{{fileName}} is too large (max {{size}})",
     },
@@ -208,6 +209,10 @@ export const zhCN: TranslationResources = {
     historyLoadFailed: "无法加载智能体历史记录",
     messageCapped: "此消息已被截断（{{bytes}} 字节）。",
     permission: {
+      rejectedPlan: "已拒绝的计划",
+      approvedPlan: "已批准的计划",
+      canceledPlan: "已取消的计划",
+
       plan: "Plan",
       required: "需要权限",
       deny: "拒绝",
@@ -1262,6 +1267,7 @@ export const zhCN: TranslationResources = {
       detail: "正在停止本地 daemon。",
     },
     daemon: {
+      lifecycle: en.desktop.daemon.lifecycle,
       title: "Daemon",
       status: {
         title: "状态",
@@ -2493,8 +2499,48 @@ export const zhCN: TranslationResources = {
       updateErrorTitle: "无法更新 Provider",
       actions: {
         menu: "{{name}} actions",
+        addAccount: "添加账户",
+        editAccount: "编辑账户",
         remove: "Remove provider",
         removing: "Removing...",
+      },
+      account: {
+        title: "添加 {{provider}} 账户",
+        editTitle: "编辑 {{provider}} 账户",
+        errorTitle: "无法保存账户",
+        submit: "添加账户",
+        save: "保存更改",
+        fields: {
+          label: "名称",
+          providerId: "Provider ID",
+          description: "描述",
+          env: "环境变量",
+          envKey: "变量名",
+          envValue: "变量值",
+        },
+        placeholders: {
+          label: "{{provider}}（工作）",
+          providerId: "claude-work",
+          description: "可选",
+          envKey: "名称",
+          envValue: "值",
+        },
+        actions: {
+          addVariable: "添加变量",
+          removeVariable: "移除变量",
+        },
+        warnings: {
+          renameUnsupported:
+            "此主机无法将现有对话迁移到新 ID。在你更新主机或恢复原 ID 之前，使用该账户的对话将不可用。",
+        },
+        errors: {
+          labelRequired: "请输入名称。",
+          idRequired: "请输入 Provider ID。",
+          idInvalid: "只能使用小写字母、数字和连字符，且以字母开头。",
+          idTaken: "该 Provider ID 已被占用。",
+          envKeyRequired: "请输入变量名。",
+          envDuplicate: "该变量已设置。",
+        },
       },
       remove: {
         confirmTitle: "Remove {{name}}?",
