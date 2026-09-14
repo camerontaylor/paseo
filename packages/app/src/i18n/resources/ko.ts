@@ -12,6 +12,7 @@ export const ko: TranslationResources = {
       copy: "복사",
       copyLine: "줄 복사",
       dismiss: "닫기",
+      reload: "다시 로드",
       retry: "다시 시도",
       search: "검색",
       select: "선택",
@@ -153,7 +154,7 @@ export const ko: TranslationResources = {
       initialPromptRequired: "초기 프롬프트가 필요합니다",
       alreadyLoading: "이미 불러오는 중입니다",
       uploadFailed: "파일을 업로드하지 못했습니다",
-      noClipboardImage: "클립보드에 이미지가 없습니다.",
+      noClipboardImage: "현재 클립보드에 이미지가 없습니다. 키보드에서 붙여넣기를 시도해 보세요.",
       pasteImageFailed: "이미지를 붙여넣지 못했습니다.",
       fileTooLarge: "{{fileName}}이(가) 너무 큽니다 (최대 {{size}})",
     },
@@ -208,6 +209,10 @@ export const ko: TranslationResources = {
     historyLoadFailed: "에이전트 기록을 로드할 수 없습니다.",
     messageCapped: "이 메시지는 길이 제한으로 잘렸습니다({{bytes}}바이트).",
     permission: {
+      rejectedPlan: "거부된 계획",
+      approvedPlan: "승인된 계획",
+      canceledPlan: "취소된 계획",
+
       plan: "계획",
       required: "권한 필요",
       deny: "거부",
@@ -1280,6 +1285,7 @@ export const ko: TranslationResources = {
       detail: "로컬 데몬을 중지하는 중입니다.",
     },
     daemon: {
+      lifecycle: en.desktop.daemon.lifecycle,
       title: "데몬",
       status: {
         title: "상태",
@@ -2538,8 +2544,48 @@ export const ko: TranslationResources = {
       updateErrorTitle: "프로바이더를 업데이트할 수 없습니다",
       actions: {
         menu: "{{name}} 작업",
+        addAccount: "계정 추가",
+        editAccount: "계정 편집",
         remove: "프로바이더 제거",
         removing: "제거 중...",
+      },
+      account: {
+        title: "{{provider}} 계정 추가",
+        editTitle: "{{provider}} 계정 편집",
+        errorTitle: "계정을 저장할 수 없습니다",
+        submit: "계정 추가",
+        save: "변경 사항 저장",
+        fields: {
+          label: "이름",
+          providerId: "프로바이더 ID",
+          description: "설명",
+          env: "환경 변수",
+          envKey: "변수 이름",
+          envValue: "변수 값",
+        },
+        placeholders: {
+          label: "{{provider}} (업무)",
+          providerId: "claude-work",
+          description: "선택 사항",
+          envKey: "NAME",
+          envValue: "값",
+        },
+        actions: {
+          addVariable: "변수 추가",
+          removeVariable: "변수 제거",
+        },
+        warnings: {
+          renameUnsupported:
+            "이 호스트는 기존 대화를 새 ID로 옮길 수 없습니다. 호스트를 업데이트하거나 이전 ID를 복원할 때까지 이 계정을 사용하는 대화를 사용할 수 없습니다.",
+        },
+        errors: {
+          labelRequired: "이름을 입력하세요.",
+          idRequired: "프로바이더 ID를 입력하세요.",
+          idInvalid: "영문 소문자로 시작하고 소문자, 숫자, 하이픈만 사용하세요.",
+          idTaken: "이미 사용 중인 프로바이더 ID입니다.",
+          envKeyRequired: "변수 이름을 입력하세요.",
+          envDuplicate: "이미 설정된 변수입니다.",
+        },
       },
       remove: {
         confirmTitle: "{{name}}를 제거하시겠습니까?",
