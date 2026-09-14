@@ -393,24 +393,34 @@ function parseArgs(argv) {
   return args;
 }
 
-// `npm view <pkg> versions --json` on the cli package — the LAST one published,
-// so a half-finished release never under-counts. A 404 means the scope has
-// nothing yet: fork.1. Any other failure is fatal — guessing N and colliding
-// with a published version fails the publish anyway, only later and noisier.
+// `npm view <pkg> versions --json` across ALL release packages, unioned.
+// Packages publish in order and the run aborts at the first failure, so a
+// half-finished release leaves its version live on an EARLIER package while
+// the last one (cli) lags — numbering off any single package under-counts
+// and the next run collides with the stranded version. A 404 means that
+// package has nothing yet. Any other failure is fatal — guessing N and
+// colliding with a published version fails the publish anyway, only later
+// and noisier.
 export function publishedVersions(forkScope, cwd) {
-  const result = spawnSync("npm", ["view", `${forkScope}/paseo-cli`, "versions", "--json"], {
-    cwd,
-    encoding: "utf8",
-  });
-  if (result.status === 0) {
-    const parsed = JSON.parse(result.stdout);
-    return Array.isArray(parsed) ? parsed : [parsed];
+  const versions = new Set();
+  for (const name of RELEASE_PACKAGES) {
+    const result = spawnSync("npm", ["view", `${forkScope}/paseo-${name}`, "versions", "--json"], {
+      cwd,
+      encoding: "utf8",
+    });
+    if (result.status === 0) {
+      const parsed = JSON.parse(result.stdout);
+      for (const version of Array.isArray(parsed) ? parsed : [parsed]) {
+        versions.add(version);
+      }
+    } else if (!/E404|404 Not Found/.test(`${result.stdout}${result.stderr}`)) {
+      process.stderr.write(result.stderr ?? "");
+      throw new Error(
+        `npm view ${forkScope}/paseo-${name} versions failed with exit code ${result.status}`,
+      );
+    }
   }
-  if (/E404|404 Not Found/.test(`${result.stdout}${result.stderr}`)) return [];
-  process.stderr.write(result.stderr ?? "");
-  throw new Error(
-    `npm view ${forkScope}/paseo-cli versions failed with exit code ${result.status}`,
-  );
+  return [...versions];
 }
 
 function publishCommands({ forkScope, forkVersion, notesPath, tarballDir }) {
@@ -583,9 +593,16 @@ function publishStagedRelease(stage, repoRoot, { forkScope, forkVersion, githubR
     run("npm", publishArgs(forkName), {
       cwd: stage,
     });
-    run("npm", distTagArgs(forkName, forkVersion), {
-      cwd: stage,
-    });
+    // Trusted publishing authorizes `npm publish` only — dist-tag writes get
+    // E401 under OIDC (2026-09-14, run 34805237539). `latest` is guaranteed
+    // by the publish itself, so a failed `fork` re-point warns and continues
+    // instead of killing the run mid-sequence; the marker advances on the
+    // next credentialed write (human publish or the npmjs Tags UI).
+    try {
+      run("npm", distTagArgs(forkName, forkVersion), { cwd: stage });
+    } catch (error) {
+      console.warn(`warning: dist-tag fork not re-pointed for ${forkName}: ${error.message}`);
+    }
     const out = capture("npm", tarballPackArgs(`${forkScope}/paseo-${name}`, stage), stage);
     tarballs.push(path.join(stage, out.trim().split("\n").at(-1)));
   }

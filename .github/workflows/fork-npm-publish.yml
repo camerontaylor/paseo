@@ -4,9 +4,11 @@
 # Every push to `mine` (the desvio-assembled build branch) cuts a fork release:
 # fork/scripts/release-fork.mjs stages a clean copy of HEAD, renames the 7
 # publishable workspaces to @camerontaylor/paseo-*, stamps <base>-fork.N with N
-# read from the registry, rebuilds, runs the pack-list gate, publishes under
-# dist-tags `latest` and `fork` (both track the newest build), pushes the
-# fork/v<version> tag and creates a GitHub Release
+# read from the registry (unioned across all 7 packages), rebuilds, runs
+# the pack-list gate, publishes under `latest` (set by the publish itself —
+# trusted publishing cannot write dist-tags, so the `fork` re-point is
+# best-effort and warns), pushes the fork/v<version> tag and creates a
+# GitHub Release
 # with the tarballs. Nothing here decides what goes into a release — that is
 # desvio's manifest and the `mine` merge; this only ships what landed.
 #
