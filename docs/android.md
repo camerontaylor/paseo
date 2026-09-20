@@ -168,6 +168,17 @@ This is the Android counterpart of the iOS local-simulator flow in [development.
 
 If the app cannot fetch the bundle from `10.0.2.2:8081` while Metro is clearly running, guest→host TCP is broken on the machine — and `ping 10.0.2.2` will not tell you, because the emulator's network stack answers that ICMP itself without touching host sockets. A per-process host firewall produces exactly this. `adb reverse` tunnels over the adb connection and sidesteps the whole path, which is why it is the fallback that always works.
 
+## Inverted timeline selection
+
+Android focus and selection visibility requests must not reposition inverted timelines. The
+`modules/paseo-scroll` package keeps React Native's scroll manager interface and returns zero for
+child-reveal scroll calculations when the vertical scale is inverted. Dragging and explicit scroll
+commands still work; non-inverted scroll views keep Android's default behavior.
+
+Register this package before React Native's core package through its Expo config plugin. Normal
+Android builds use the prebuilt `react-android` library, so patching Java under `node_modules` does
+not change the shipped scroll view. Keep this behavior in the app's compiled native module.
+
 ## F-Droid / source-only Android builds
 
 F-Droid builds should set `PASEO_FDROID_BUILD=1` when running Expo prebuild:

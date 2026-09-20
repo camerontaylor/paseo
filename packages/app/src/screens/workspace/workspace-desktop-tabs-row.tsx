@@ -90,7 +90,7 @@ const DROPDOWN_WIDTH = 220;
 const DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH = 36;
 const PANE_SPLIT_ACTIONS_HORIZONTAL_PADDING = 2;
 const PANE_SPLIT_ACTIONS_OUTER_MARGIN =
-  paneContentToolbarTrailingPadding(false) - PANE_SPLIT_ACTIONS_HORIZONTAL_PADDING;
+  paneContentToolbarTrailingPadding(false, "glyph") - PANE_SPLIT_ACTIONS_HORIZONTAL_PADDING;
 const PANE_SPLIT_ACTIONS_RESERVED_WIDTH =
   smallIconButtonChromeFrameSize(false) +
   PANE_SPLIT_ACTIONS_HORIZONTAL_PADDING * 2 +
@@ -745,6 +745,7 @@ function TabChip({
   dragHandleProps: DraggableListDragHandleProps | undefined;
 }) {
   const { closeButtonTestId, contextMenuTestId, menuEntries } = resolvedTab;
+  const { t } = useTranslation();
   const middleClickRef = useMiddleClickClose(
     useCallback(() => void onCloseTab(tab.tabId), [onCloseTab, tab.tabId]),
   );
@@ -894,6 +895,8 @@ function TabChip({
             <Pressable
               {...(closeButtonDragBlockers as object | undefined)}
               testID={closeButtonTestId}
+              accessibilityRole="button"
+              accessibilityLabel={t("workspace.tabs.menu.close")}
               disabled={isClosingTab}
               onPressIn={handleCloseButtonPressIn}
               onHoverIn={handleCloseButtonHoverIn}
