@@ -25,6 +25,8 @@ import type {
   ImportProviderSessionContext,
   ImportProviderSessionInput,
   ProviderCatalog,
+  SideAnswer,
+  SideConversationExchange,
   SteerActiveTurnOptions,
   SteerResult,
   ToolCallDetail,
@@ -36,6 +38,7 @@ import { getAgentProviderDefinition } from "@getpaseo/protocol/provider-manifest
 export const MOCK_LOAD_TEST_PROVIDER_ID = "mock";
 export const MOCK_LOAD_TEST_DEFAULT_MODEL_ID = "five-minute-stream";
 export const MOCK_LOAD_TEST_HANDLED_COMMAND = "/mock handled-command";
+export const MOCK_SIDE_ANSWER_PREFIX = "mock-side-answer";
 const MOCK_LOAD_TEST_MODE_ID = "load-test";
 const MOCK_LOAD_TEST_DURATION_MS = 5 * 60 * 1000;
 const MOCK_LOAD_TEST_INTERVAL_MS = 40;
@@ -732,6 +735,16 @@ export class MockLoadTestAgentSession implements AgentSession {
   private readonly rewindError: string | null;
   private remainingPromptRejections: number;
   private remainingSteerFailures: number;
+  /**
+   * Assigned only when the agent opts in, because `AgentManager` treats the mere presence of this
+   * method as "this provider supports side questions". Leaving it off by default keeps the mock
+   * usable as the seam-less provider double — the shape Codex, Copilot, Pi and ACP really have.
+   */
+  askSideQuestion?: (
+    question: string,
+    history: readonly SideConversationExchange[],
+    options?: { signal?: AbortSignal },
+  ) => Promise<SideAnswer>;
 
   constructor(options: { config: AgentSessionConfig; sessionId: string; logger?: Logger }) {
     this.id = options.sessionId;
@@ -768,6 +781,17 @@ export class MockLoadTestAgentSession implements AgentSession {
     this.remainingSteerFailures = getPositiveFeatureInteger(
       options.config.featureValues?.mockSteerAmbiguousFailures,
     );
+    if (options.config.featureValues?.mockSideQuestions === true) {
+      // Answers name the exchanges the daemon handed back, so a caller can prove a follow-up was
+      // threaded rather than asked cold. Nothing is emitted on the stream: a side question that
+      // reached the main timeline would be the bug this seam exists to avoid.
+      this.askSideQuestion = async (question, history) => ({
+        status: "answered",
+        content: `${MOCK_SIDE_ANSWER_PREFIX} ${history.length}: ${question}`,
+        synthetic: false,
+        threading: "threaded",
+      });
+    }
   }
 
   async run(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<AgentRunResult> {

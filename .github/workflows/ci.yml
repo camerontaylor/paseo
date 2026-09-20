@@ -7,6 +7,10 @@ on:
     branches: [main]
   merge_group:
   workflow_dispatch:
+  # FORK-LOCAL: lets .github/workflows/fork-ci.yml run this matrix on fork
+  # branches, which the main/pull_request triggers above never reach. Keep on
+  # an upstream merge; dropping it silently disables the fork's full CI.
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

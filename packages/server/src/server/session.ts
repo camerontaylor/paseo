@@ -22,6 +22,7 @@ import {
   type FirstAgentContext,
   type SessionInboundMessage,
   type SessionOutboundMessage,
+  type SideConversationSnapshotPayload,
   type GitSetupOptions,
   type StartWorkspaceScriptRequest,
   type WorkspaceScriptListRequest,
@@ -104,6 +105,10 @@ import type {
   AgentTimelineFetchResult,
   ManagedAgent,
 } from "./agent/agent-manager.js";
+import type {
+  SideConversationRecord,
+  SideConversationStoreEvent,
+} from "./agent/side-conversations/store.js";
 import { createAgentCommand } from "./agent/create-agent/create.js";
 import { resolveCreateAgentIntent, type CreateAgentIntent } from "./agent/create-agent/intent.js";
 import {
@@ -658,6 +663,23 @@ interface ClientActivity {
   lastActivityAt: Date;
   appVisible: boolean;
   appVisibilityChangedAt: Date;
+}
+
+function sideConversationSnapshot(record: SideConversationRecord): SideConversationSnapshotPayload {
+  return {
+    parentAgentId: record.parentAgentId,
+    threadId: record.threadId,
+    items: record.items,
+    pendingQuestion: record.pendingQuestion,
+    lastAnswer: record.lastAnswer,
+  };
+}
+
+function emptySideConversationSnapshot(
+  parentAgentId: string,
+  threadId: string,
+): SideConversationSnapshotPayload {
+  return { parentAgentId, threadId, items: [], pendingQuestion: null, lastAnswer: null };
 }
 
 export class Session {
@@ -1618,7 +1640,8 @@ export class Session {
       this.wantsEvent("agent_attention_required") ||
       this.wantsEvent("agent_permission_request") ||
       this.wantsEvent("agent_permission_resolved") ||
-      this.wantsEvent("agent.provider_subagents.update");
+      this.wantsEvent("agent.provider_subagents.update") ||
+      this.wantsEvent("agent.side_conversation.update");
     if (agents && !this.unsubscribeAgentEvents) this.subscribeToAgentEvents();
     if (!agents) {
       this.unsubscribeAgentEvents?.();
@@ -1882,6 +1905,37 @@ export class Session {
     }
   }
 
+  private forwardSideConversationUpdate(update: SideConversationStoreEvent): void {
+    const message: SessionOutboundMessage =
+      update.type === "update"
+        ? {
+            type: "agent.side_conversation.update",
+            payload: sideConversationSnapshot(update.record),
+          }
+        : {
+            type: "agent.side_conversation.removed",
+            payload: { parentAgentId: update.parentAgentId, threadId: update.threadId },
+          };
+
+    const delivered = new Set<object>();
+    for (const subscription of this.eventSubscriptions.values()) {
+      if (!subscription.events.has(message.type)) continue;
+      subscription.owner.emit(message);
+      delivered.add(subscription.owner.source);
+    }
+    if (this.clientSources.size === 0 || !this.onMessageToSource) {
+      if (this.supports(CLIENT_CAPS.sideConversations)) {
+        this.emit(message);
+      }
+      return;
+    }
+    for (const [source, { capabilities }] of this.clientSources) {
+      if (delivered.has(source) || this.delivery.isModern(source)) continue;
+      if (!capabilities.has(CLIENT_CAPS.sideConversations)) continue;
+      this.onMessageToSource(source, message);
+    }
+  }
+
   private subscribeToAgentEvents(): void {
     if (this.unsubscribeAgentEvents) {
       this.unsubscribeAgentEvents();
@@ -1912,6 +1966,11 @@ export class Session {
         if (event.type === "provider_subagent") {
           this.emitProviderSubagentWorkspaceUpdate(event.event);
           this.forwardProviderSubagentUpdate(event.event);
+          return;
+        }
+
+        if (event.type === "side_conversation") {
+          this.forwardSideConversationUpdate(event.event);
           return;
         }
 
@@ -2621,6 +2680,12 @@ export class Session {
         return this.handleProviderSubagentListRequest(msg);
       case "agent.provider_subagents.timeline.get.request":
         return this.handleProviderSubagentTimelineRequest(msg, source);
+      case "agent.side_conversation.ask.request":
+        return this.handleSideConversationAskRequest(msg);
+      case "agent.side_conversation.timeline.get.request":
+        return this.handleSideConversationTimelineGetRequest(msg);
+      case "agent.side_conversation.list.request":
+        return this.handleSideConversationListRequest(msg);
       case "session.events.set_subscription.request": {
         const owner = this.delivery.begin("events", undefined, async (id) => {
           this.eventSubscriptions.delete(id);
@@ -7969,6 +8034,116 @@ export class Session {
     }
   }
 
+  private async handleSideConversationAskRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.side_conversation.ask.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      // The manager broadcasts `agent.side_conversation.update` on begin and on complete, so this
+      // handler only owns the response.
+      const answer = await this.agentManager.askSideQuestion(
+        msg.parentAgentId,
+        msg.threadId,
+        msg.question,
+      );
+      this.emit({
+        type: "agent.side_conversation.ask.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threadId: msg.threadId,
+          answer,
+          error: null,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit({
+        type: "agent.side_conversation.ask.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threadId: msg.threadId,
+          answer: { status: "unavailable" },
+          error: message.startsWith("Agent is archived:") ? null : message,
+        },
+      });
+    }
+  }
+
+  private async handleSideConversationTimelineGetRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.side_conversation.timeline.get.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      const record = this.agentManager.getSideConversation(msg.parentAgentId, msg.threadId);
+      this.emit({
+        type: "agent.side_conversation.timeline.get.response",
+        payload: {
+          requestId: msg.requestId,
+          ...(record
+            ? sideConversationSnapshot(record)
+            : emptySideConversationSnapshot(msg.parentAgentId, msg.threadId)),
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.side_conversation.timeline.get.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threadId: msg.threadId,
+          items: [],
+          pendingQuestion: null,
+          lastAnswer: null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  private async handleSideConversationListRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.side_conversation.list.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      this.emit({
+        type: "agent.side_conversation.list.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threads: this.agentManager
+            .listSideConversations(msg.parentAgentId)
+            .map(sideConversationSnapshot),
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.side_conversation.list.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threads: [],
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
   private async handleAgentForkContextRequest(
     msg: Extract<SessionInboundMessage, { type: "agent.fork_context.request" }>,
   ): Promise<void> {
@@ -8494,6 +8669,7 @@ function isValidGitHubRepoSegment(value: string): boolean {
   return /^[A-Za-z0-9._-]+$/u.test(value);
 }
 
+// eslint-disable-next-line complexity
 function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubscription | null {
   switch (message.type) {
     case "project.update":
@@ -8505,6 +8681,8 @@ function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubs
     case "script_status_update":
     case "workspace_setup_progress":
     case "agent.provider_subagents.update":
+    case "agent.side_conversation.update":
+    case "agent.side_conversation.removed":
     case "terminal_attention_required":
     case "activity_log":
     case "hub.execution.agent.update":
@@ -8543,6 +8721,9 @@ function legacyWantsEvent(
       return !capabilities.has(CLIENT_CAPS.explicitEventSubscriptions);
     case "agent.provider_subagents.update":
       return capabilities.has(CLIENT_CAPS.providerSubagents);
+    case "agent.side_conversation.update":
+    case "agent.side_conversation.removed":
+      return capabilities.has(CLIENT_CAPS.sideConversations);
     default:
       return true;
   }
