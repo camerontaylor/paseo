@@ -52,6 +52,7 @@ describe("getClaudeModels", () => {
     expect(models.map((m) => m.id)).toEqual([
       "claude-opus-5-5",
       "claude-opus-5",
+      "claude-opus-5[1m]",
       "claude-fable-5-1",
       "claude-fable-5",
       "claude-fable-5[1m]",
@@ -85,6 +86,7 @@ describe("getClaudeModels", () => {
       new Map([
         ["claude-opus-5-5", 1_000_000],
         ["claude-opus-5", 1_000_000],
+        ["claude-opus-5[1m]", 1_000_000],
         ["claude-fable-5-1", 1_000_000],
         ["claude-fable-5", 1_000_000],
         ["claude-fable-5[1m]", 1_000_000],
@@ -458,24 +460,43 @@ describe("findClaudeModel", () => {
 });
 
 describe("Claude Opus 5 catalog", () => {
-  it("offers a single Opus 5 entry with a 1M context window", () => {
+  it("offers selectable plain and 1M Opus 5 entries", () => {
     const opus5Models = getClaudeModels()
       .filter((model) => /^claude-opus-5(\[1m\])?$/.test(model.id))
-      .map(({ id, label, contextWindowMaxTokens }) => ({ id, label, contextWindowMaxTokens }));
+      .map(({ id, aliases, isSelectable, label, contextWindowMaxTokens }) => ({
+        id,
+        aliases,
+        isSelectable,
+        label,
+        contextWindowMaxTokens,
+      }));
 
     expect(opus5Models).toEqual([
-      { id: "claude-opus-5", label: "Opus 5", contextWindowMaxTokens: 1_000_000 },
+      {
+        id: "claude-opus-5",
+        aliases: undefined,
+        isSelectable: undefined,
+        label: "Opus 5",
+        contextWindowMaxTokens: 1_000_000,
+      },
+      {
+        id: "claude-opus-5[1m]",
+        aliases: undefined,
+        isSelectable: undefined,
+        label: "Opus 5 1M",
+        contextWindowMaxTokens: 1_000_000,
+      },
     ]);
   });
 
-  it("resolves retired and dated Opus 5 IDs to the single catalog entry", () => {
-    expect(findClaudeModel("claude-opus-5[1m]")?.id).toBe("claude-opus-5");
+  it("resolves retired and dated Opus 5 IDs to the canonical catalog entries", () => {
+    expect(findClaudeModel("claude-opus-5[1m]")?.id).toBe("claude-opus-5[1m]");
     expect(findClaudeModel("claude-opus-5-20260724")?.id).toBe("claude-opus-5");
-    expect(findClaudeModel("claude-opus-5-20260724[1m]")?.id).toBe("claude-opus-5");
+    expect(findClaudeModel("claude-opus-5-20260724[1m]")?.id).toBe("claude-opus-5[1m]");
     expect(findClaudeModel("claude-opus-5[1m]")?.contextWindowMaxTokens).toBe(1_000_000);
   });
 
-  it("keeps disabled thinking available for agents persisted on the retired 1M ID", () => {
+  it("keeps disabled thinking available for agents persisted on the 1M ID", () => {
     expect(resolveClaudeDisabledThinkingForModel("claude-opus-5[1m]")).toEqual({
       supported: true,
       fallbackThinkingOptionId: "high",
