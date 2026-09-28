@@ -20,7 +20,10 @@ export function NavigationBackButton() {
   const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
   const canGoBack = useCanNavigateBackInFocusHistory();
-  const shortcutKeys = useMemo<ShortcutKey[]>(() => (isCompact ? [] : ["mod", "["]), [isCompact]);
+  const shortcutKeys = useMemo<ShortcutKey[]>(
+    () => (isCompact ? [] : ["mod", "alt", "ArrowLeft"]),
+    [isCompact],
+  );
   const accessibilityState = useMemo(() => ({ disabled: !canGoBack }), [canGoBack]);
   const handlePress = useCallback(() => {
     navigateBackInFocusHistory({ isCompact });
@@ -31,11 +34,11 @@ export function NavigationBackButton() {
       testID="navigation-back-button"
       onPress={handlePress}
       disabled={!canGoBack}
-      tooltipLabel={t("common.actions.back")}
+      tooltipLabel={t("common.actions.navigateBack")}
       tooltipKeys={shortcutKeys}
       tooltipSide="bottom"
       accessibilityRole="button"
-      accessibilityLabel={t("common.actions.back")}
+      accessibilityLabel={t("common.actions.navigateBack")}
       accessibilityState={accessibilityState}
     >
       {({ hovered, pressed }) => {

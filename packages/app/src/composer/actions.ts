@@ -1,4 +1,6 @@
+import type { SelectedFile } from "@/attachments/selected-file";
 import type { ForgeSearchItem } from "@getpaseo/protocol/messages";
+import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import type {
   AttachmentMetadata,
   ComposerAttachment,
@@ -12,15 +14,12 @@ import {
   splitComposerAttachmentsForSubmit,
   type ComposerAttachmentSubmitFormat,
 } from "@/composer/attachments/submit";
-import {
-  appendOptimisticUserMessageToStream,
-  buildOptimisticUserMessage,
-  generateMessageId,
-  type StreamItem,
-  type UserMessageItem,
-} from "@/types/stream";
+import { createUserMessage, generateMessageId, type UserMessageItem } from "@/types/stream";
+import type { MessageSubmissionRejectionOutcome } from "@/composer/submission/model";
 import type { PickedImageAttachmentInput } from "@/hooks/image-attachment-picker";
 import { i18n } from "@/i18n/i18next";
+import type { AgentQueueSnapshot, QueuedComposerAttachment } from "@getpaseo/protocol/messages";
+import { toQueuedComposerAttachments } from "@/composer/queue-sync";
 
 export interface QueuedComposerMessage {
   id: string;
@@ -39,6 +38,11 @@ export interface AttachmentPersister {
     mimeType: string;
     fileName: string | null;
   }) => Promise<AttachmentMetadata>;
+  persistFromDataUrl: (input: {
+    dataUrl: string;
+    mimeType: string;
+    fileName: string | null;
+  }) => Promise<AttachmentMetadata>;
   deleteAttachments: (metadata: AttachmentMetadata[]) => Promise<void> | void;
 }
 
@@ -48,10 +52,12 @@ export interface ComposerSendClient {
     text: string,
     options: {
       messageId: string;
+      activeTurnBehavior?: ActiveTurnBehavior;
       images: Array<{ data: string; mimeType: string }>;
       attachments: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
+      interrupt?: boolean;
     },
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   uploadFile: (input: { fileName: string; mimeType: string; bytes: Uint8Array }) => Promise<{
     requestId: string;
     file: {
@@ -70,11 +76,10 @@ export interface ComposerCancelClient {
   cancelAgent: (agentId: string) => Promise<void> | void;
 }
 
-export interface AgentStreamWriter {
-  getTail: (agentId: string) => StreamItem[] | undefined;
-  getHead: (agentId: string) => StreamItem[] | undefined;
-  setHead: (updater: (prev: Map<string, StreamItem[]>) => Map<string, StreamItem[]>) => void;
-  setTail: (updater: (prev: Map<string, StreamItem[]>) => Map<string, StreamItem[]>) => void;
+export interface MessageSubmissionWriter {
+  begin: (agentId: string, message: UserMessageItem) => void;
+  accept: (agentId: string, clientMessageId: string) => void;
+  reject: (agentId: string, clientMessageId: string) => MessageSubmissionRejectionOutcome;
 }
 
 export interface QueueWriter {
@@ -86,17 +91,27 @@ export interface QueueWriter {
 
 export async function pickAndPersistImages(input: {
   pickImages: () => Promise<PickedImageAttachmentInput[] | null>;
-  persister: Pick<AttachmentPersister, "persistFromBlob" | "persistFromFileUri">;
+  persister: Pick<
+    AttachmentPersister,
+    "persistFromBlob" | "persistFromFileUri" | "persistFromDataUrl"
+  >;
 }): Promise<AttachmentMetadata[]> {
   const result = await input.pickImages();
   if (!result?.length) return [];
   return await Promise.all(
     result.map(async (picked) => {
       const fileName = picked.fileName ?? null;
-      const mimeType = picked.mimeType || "image/jpeg";
+      const mimeType = picked.mimeType;
       if (picked.source.kind === "blob") {
         return await input.persister.persistFromBlob({
           blob: picked.source.blob,
+          mimeType,
+          fileName,
+        });
+      }
+      if (picked.source.kind === "data_url") {
+        return await input.persister.persistFromDataUrl({
+          dataUrl: picked.source.dataUrl,
           mimeType,
           fileName,
         });
@@ -112,11 +127,26 @@ export async function pickAndPersistImages(input: {
 
 export async function uploadFileAttachments(input: {
   client: ComposerSendClient;
-  files: Array<{ fileName: string; mimeType: string; bytes: Uint8Array }>;
+  files: SelectedFile[];
 }): Promise<Extract<ComposerAttachment, { kind: "file" }>[]> {
   const result: Extract<ComposerAttachment, { kind: "file" }>[] = [];
+  const prepared: Array<{ fileName: string; mimeType: string; bytes: Uint8Array }> = [];
 
   for (const file of input.files) {
+    const bytes = await file.readBytes();
+    if (bytes.byteLength > 50 * 1024 * 1024) {
+      throw new Error(
+        i18n.t("composer.errors.fileTooLarge", { size: "50MB", fileName: file.fileName }),
+      );
+    }
+    prepared.push({
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      bytes,
+    });
+  }
+
+  for (const file of prepared) {
     const response = await input.client.uploadFile(file);
     if (response.error || !response.file) {
       throw new Error(response.error ?? "Upload failed.");
@@ -145,31 +175,32 @@ export interface CancelComposerAgentInput {
   isAgentRunning: boolean;
   isCancellingAgent: boolean;
   isConnected: boolean;
-  onCancelFailed: (error: unknown) => void;
 }
 
-export function cancelComposerAgent(input: CancelComposerAgentInput): boolean {
-  if (!input.isAgentRunning || input.isCancellingAgent) return false;
-  if (!input.isConnected || !input.client) return false;
+export function cancelComposerAgent(input: CancelComposerAgentInput): Promise<void> | null {
+  if (!input.isAgentRunning || input.isCancellingAgent) return null;
+  if (!input.isConnected || !input.client) return null;
   try {
-    void Promise.resolve(input.client.cancelAgent(input.agentId)).catch(input.onCancelFailed);
+    return Promise.resolve(input.client.cancelAgent(input.agentId));
   } catch (error) {
-    input.onCancelFailed(error);
-    return false;
+    return Promise.reject(error);
   }
-  return true;
 }
 
 export interface DispatchComposerAgentMessageInput {
   client: ComposerSendClient;
   agentId: string;
   text: string;
+  /** True marks an intentional mid-turn interruption; see SendMessageOptions.interrupt. */
+  interrupt?: boolean;
   attachments: ComposerAttachment[];
   attachmentSubmitFormat?: ComposerAttachmentSubmitFormat;
   encodeImages: (
     images: AttachmentMetadata[],
   ) => Promise<Array<{ data: string; mimeType: string }> | undefined>;
-  stream: AgentStreamWriter;
+  submission: MessageSubmissionWriter;
+  activeTurnBehavior?: ActiveTurnBehavior;
+  activeTurnId?: string;
 }
 
 export async function dispatchComposerAgentMessage(
@@ -178,47 +209,31 @@ export async function dispatchComposerAgentMessage(
   const wirePayload = splitComposerAttachmentsForSubmit(input.attachments, {
     format: input.attachmentSubmitFormat,
   });
-  const messageId = generateMessageId();
-  const userMessage = buildOptimisticUserMessage({
-    id: messageId,
+  const clientMessageId = generateMessageId();
+  const userMessage = createUserMessage({
+    clientMessageId,
     text: input.text,
     timestamp: new Date(),
     images: wirePayload.images,
     attachments: wirePayload.attachments,
+    ...(input.activeTurnBehavior === "steer" && input.activeTurnId
+      ? { turnId: input.activeTurnId }
+      : {}),
   });
-  appendUserMessageToStream(input.agentId, userMessage, input.stream);
-  const imagesData = await input.encodeImages(wirePayload.images);
-  await input.client.sendAgentMessage(input.agentId, input.text, {
-    messageId,
-    images: imagesData ?? [],
-    attachments: wirePayload.attachments,
-  });
-}
-
-function appendUserMessageToStream(
-  agentId: string,
-  userMessage: UserMessageItem,
-  stream: AgentStreamWriter,
-): void {
-  const result = appendOptimisticUserMessageToStream({
-    tail: stream.getTail(agentId) ?? [],
-    head: stream.getHead(agentId) ?? [],
-    message: userMessage,
-    placement: "active-head",
-  });
-  if (result.changedHead) {
-    stream.setHead((prev) => {
-      const next = new Map(prev);
-      next.set(agentId, result.head);
-      return next;
+  input.submission.begin(input.agentId, userMessage);
+  try {
+    const imagesData = await input.encodeImages(wirePayload.images);
+    await input.client.sendAgentMessage(input.agentId, input.text, {
+      messageId: clientMessageId,
+      ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),
+      images: imagesData ?? [],
+      attachments: wirePayload.attachments,
+      ...(input.interrupt ? { interrupt: true } : {}),
     });
-  }
-  if (result.changedTail) {
-    stream.setTail((prev) => {
-      const next = new Map(prev);
-      next.set(agentId, result.tail);
-      return next;
-    });
+    input.submission.accept(input.agentId, clientMessageId);
+  } catch (error) {
+    input.submission.reject(input.agentId, clientMessageId);
+    throw error;
   }
 }
 
@@ -363,7 +378,9 @@ function isForgeAttachment(
   return (
     attachment.kind === "forge_issue" ||
     attachment.kind === "forge_change_request" ||
-    // COMPAT(githubAttachmentKinds): added in v0.1.106, remove after 2026-12-28 once daemon floor >= v0.1.106
+    // COMPAT(githubAttachmentKinds): accept legacy persisted attachment kinds
+    // until 2027-01-17, when supported floors are >= v0.2.0 and old drafts no
+    // longer require them.
     attachment.kind === "github_issue" ||
     attachment.kind === "github_pr"
   );
@@ -383,17 +400,17 @@ export function toggleForgeAttachment(
   return [...current, buildForgeAttachment(item)];
 }
 
-interface ToggleGithubAttachmentFromPickerInput {
+interface ToggleForgeAttachmentFromPickerInput {
   current: UserComposerAttachment[];
   item: ForgeSearchItem;
-  markGithubAttachmentRemoved: (attachment: UserComposerAttachment) => void;
+  markForgeAttachmentRemoved: (attachment: UserComposerAttachment) => void;
 }
 
-export function toggleGithubAttachmentFromPicker({
+export function toggleForgeAttachmentFromPicker({
   current,
   item,
-  markGithubAttachmentRemoved,
-}: ToggleGithubAttachmentFromPickerInput): UserComposerAttachment[] {
+  markForgeAttachmentRemoved,
+}: ToggleForgeAttachmentFromPickerInput): UserComposerAttachment[] {
   const existingAttachment = current.find(
     (attachment) =>
       isForgeAttachment(attachment) &&
@@ -401,19 +418,19 @@ export function toggleGithubAttachmentFromPicker({
       attachment.item.number === item.number,
   );
   if (existingAttachment) {
-    markGithubAttachmentRemoved(existingAttachment);
+    markForgeAttachmentRemoved(existingAttachment);
   }
   return toggleForgeAttachment(current, item);
 }
 
-export function findGithubItemByOption(
+export function findForgeItemByOption(
   items: readonly ForgeSearchItem[],
   optionId: string,
 ): ForgeSearchItem | undefined {
   return items.find((candidate) => `${candidate.kind}:${candidate.number}` === optionId);
 }
 
-export function isAttachmentSelectedForGithubItem(
+export function isAttachmentSelectedForForgeItem(
   current: readonly ComposerAttachment[],
   item: ForgeSearchItem,
 ): boolean {
@@ -426,3 +443,197 @@ export function isAttachmentSelectedForGithubItem(
 }
 
 export const toggleGithubAttachment = toggleForgeAttachment;
+
+// ============================================================================
+// Daemon-owned queue — see docs/queue-mirroring.md
+// ============================================================================
+
+export interface ComposerQueueClient {
+  enqueueAgentMessage: (input: {
+    agentId: string;
+    itemId: string;
+    text: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
+    composerAttachments?: QueuedComposerAttachment[];
+  }) => Promise<AgentQueueSnapshot>;
+  removeQueuedAgentMessage: (agentId: string, itemId: string) => Promise<AgentQueueSnapshot>;
+  getQueuedAgentMessageImages: (
+    agentId: string,
+    itemId: string,
+  ) => Promise<Array<{ id: string; mimeType: string; fileName?: string | null; data: string }>>;
+}
+
+/**
+ * Durable copy of an enqueue until the daemon acknowledges it. Backed by the
+ * queue outbox store; actions only see this narrow writer so they stay pure.
+ */
+export interface QueueOutboxWriter {
+  add: (entry: {
+    agentId: string;
+    itemId: string;
+    text: string;
+    images: Array<{ data: string; mimeType: string }>;
+    attachments: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
+    composerAttachments: QueuedComposerAttachment[];
+  }) => void;
+  remove: (itemId: string) => void;
+}
+
+export interface QueueComposerMessageOnServerInput {
+  client: ComposerQueueClient;
+  agentId: string;
+  text: string;
+  attachments: ComposerAttachment[];
+  attachmentSubmitFormat?: ComposerAttachmentSubmitFormat;
+  encodeImages: (
+    images: AttachmentMetadata[],
+  ) => Promise<Array<{ data: string; mimeType: string }> | undefined>;
+  queue: QueueWriter;
+  applySnapshot: (snapshot: AgentQueueSnapshot) => void;
+  outbox?: QueueOutboxWriter;
+}
+
+/**
+ * Queues a message on the daemon. The local row appears immediately and is
+ * replaced by the daemon's snapshot.
+ *
+ * With an outbox, the wire payload is written durably before the request goes
+ * out: a send the daemon never acknowledged — relay stall, app suspended
+ * mid-request — is retried on the next reconnect instead of being lost, so the
+ * optimistic row stays. Without one, failure rolls the row back and surfaces
+ * the error, as before.
+ */
+export async function queueComposerMessageOnServer(
+  input: QueueComposerMessageOnServerInput,
+): Promise<QueueComposerMessageResult & { error?: string }> {
+  const optimistic = queueComposerMessage({
+    agentId: input.agentId,
+    text: input.text,
+    attachments: input.attachments,
+    queue: input.queue,
+  });
+  if (!optimistic.queued) {
+    return optimistic;
+  }
+
+  const rollBack = (error: unknown): QueueComposerMessageResult & { error?: string } => {
+    removeQueuedComposerMessageLocally({
+      agentId: input.agentId,
+      messageId: optimistic.queued!.id,
+      queue: input.queue,
+    });
+    return {
+      queued: null,
+      error: error instanceof Error ? error.message : i18n.t("composer.errors.failedToSend"),
+    };
+  };
+
+  const wirePayload = splitComposerAttachmentsForSubmit(input.attachments, {
+    format: input.attachmentSubmitFormat,
+  });
+  let images: Array<{ data: string; mimeType: string }> | undefined;
+  try {
+    images = await input.encodeImages(wirePayload.images);
+  } catch (error) {
+    // Encoding is local; its failure is real and retrying would not help.
+    return rollBack(error);
+  }
+
+  const enqueueInput = {
+    agentId: input.agentId,
+    itemId: optimistic.queued.id,
+    text: optimistic.queued.text,
+    images: images ?? [],
+    attachments: wirePayload.attachments,
+    composerAttachments: toQueuedComposerAttachments(input.attachments),
+  };
+  input.outbox?.add(enqueueInput);
+  try {
+    const snapshot = await input.client.enqueueAgentMessage(enqueueInput);
+    input.outbox?.remove(enqueueInput.itemId);
+    input.applySnapshot(snapshot);
+    return optimistic;
+  } catch (error) {
+    if (input.outbox) {
+      // The durable entry retries on reconnect; keep the row so the message
+      // still reads as queued on this device.
+      return optimistic;
+    }
+    return rollBack(error);
+  }
+}
+
+export function removeQueuedComposerMessageLocally(input: {
+  agentId: string;
+  messageId: string;
+  queue: QueueWriter;
+}): QueuedComposerMessage | null {
+  const item = input.queue.read(input.agentId).find((q) => q.id === input.messageId);
+  if (!item) return null;
+  input.queue.write((prev) => {
+    const next = new Map(prev);
+    next.set(
+      input.agentId,
+      (prev.get(input.agentId) ?? []).filter((q) => q.id !== input.messageId),
+    );
+    return next;
+  });
+  return item;
+}
+
+export interface TakeQueuedComposerMessageInput {
+  client: ComposerQueueClient;
+  agentId: string;
+  messageId: string;
+  queue: QueueWriter;
+  persistImage: (input: {
+    dataUrl: string;
+    mimeType: string;
+    fileName: string | null;
+  }) => Promise<AttachmentMetadata>;
+  applySnapshot: (snapshot: AgentQueueSnapshot) => void;
+}
+
+export type TakeQueuedComposerMessageResult =
+  | { status: "missing" }
+  | { status: "taken"; text: string; attachments: UserComposerAttachment[] }
+  | { status: "failed"; errorMessage: string };
+
+/**
+ * Removes a queued message from the daemon and hands its content back for the
+ * composer. Images are fetched and re-persisted locally because only the device
+ * that queued them has the bytes.
+ */
+export async function takeQueuedComposerMessage(
+  input: TakeQueuedComposerMessageInput,
+): Promise<TakeQueuedComposerMessageResult> {
+  const item = input.queue.read(input.agentId).find((q) => q.id === input.messageId);
+  if (!item) return { status: "missing" };
+
+  try {
+    const images = await input.client.getQueuedAgentMessageImages(input.agentId, input.messageId);
+    const snapshot = await input.client.removeQueuedAgentMessage(input.agentId, input.messageId);
+    input.applySnapshot(snapshot);
+    const restoredImages = await Promise.all(
+      images.map(async (image) => ({
+        kind: "image" as const,
+        metadata: await input.persistImage({
+          dataUrl: `data:${image.mimeType};base64,${image.data}`,
+          mimeType: image.mimeType,
+          fileName: image.fileName ?? null,
+        }),
+      })),
+    );
+    return {
+      status: "taken",
+      text: item.text,
+      attachments: [...userAttachmentsOnly(item.attachments), ...restoredImages],
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      errorMessage: error instanceof Error ? error.message : i18n.t("composer.errors.failedToSend"),
+    };
+  }
+}

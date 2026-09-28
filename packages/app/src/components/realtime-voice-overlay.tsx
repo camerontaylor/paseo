@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Mic, MicOff, PhoneOff, Square } from "lucide-react-native";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { FOOTER_HEIGHT } from "@/constants/layout";
 import { useVoiceTelemetry } from "@/contexts/voice-context";
 import type { Theme } from "@/styles/theme";
@@ -25,7 +26,7 @@ const ThemedMic = withUnistyles(Mic);
 const ThemedMicOff = withUnistyles(MicOff);
 const ThemedPhoneOff = withUnistyles(PhoneOff);
 const ThemedSquare = withUnistyles(Square);
-const ThemedSpinner = withUnistyles(ActivityIndicator);
+const ThemedSpinner = withUnistyles(LoadingSpinner);
 const whiteIconProps = (theme: Theme) => ({
   size: theme.iconSize.lg,
   color: theme.colors.palette.white,
@@ -181,8 +182,8 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
-  hint: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
-  error: { color: theme.colors.destructive, fontSize: theme.fontSize.xs },
+  hint: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
+  error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
   container: {
     flexDirection: "row",
     alignItems: "center",

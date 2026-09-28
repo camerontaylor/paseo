@@ -5,6 +5,7 @@ import type { AgentCapabilityFlags } from "../agent-sdk-types.js";
 import { checkProviderLaunchAvailable, resolveProviderLaunch } from "../provider-launch-config.js";
 import {
   ACPAgentClient,
+  type ACPCatalogModelResolver,
   type ACPClientCapabilityMeta,
   type ACPConfigFeatureOption,
   DEFAULT_ACP_CAPABILITIES,
@@ -49,6 +50,8 @@ interface GenericACPAgentClientOptions {
   clientCapabilityMeta?: ACPClientCapabilityMeta;
   configFeatureOptions?: ACPConfigFeatureOption[];
   extensionCommandsParser?: ACPExtensionCommandsParser;
+  catalogModelResolver?: ACPCatalogModelResolver;
+  now?: () => number;
 }
 
 export class GenericACPAgentClient extends ACPAgentClient {
@@ -67,12 +70,16 @@ export class GenericACPAgentClient extends ACPAgentClient {
       },
       defaultCommand: options.command,
       capabilities: buildGenericACPCapabilities(providerParams),
-      waitForInitialCommands: options.waitForInitialCommands,
+      // ACP agents advertise slash commands with available_commands_update after
+      // session/new, so the first listCommands() waits for that batch.
+      waitForInitialCommands: options.waitForInitialCommands ?? true,
       initialCommandsWaitTimeoutMs: options.initialCommandsWaitTimeoutMs,
       clientCapabilities: providerParams.clientCapabilities,
       clientCapabilityMeta: options.clientCapabilityMeta,
       configFeatureOptions: options.configFeatureOptions,
       extensionCommandsParser: options.extensionCommandsParser,
+      catalogModelResolver: options.catalogModelResolver,
+      now: options.now,
     });
 
     this.command = options.command;

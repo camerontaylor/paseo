@@ -17,6 +17,8 @@ export interface WebSocketRuntimeCounters {
   relayExternalSocketAttached: number;
   originRejected: number;
   hostRejected: number;
+  applicationJsonRejected: number;
+  applicationBinaryRejected: number;
 }
 
 export interface WebSocketRuntimeMetricsSnapshot {
@@ -46,6 +48,7 @@ export interface WebSocketRuntimeMetricsSnapshot {
 export interface WebSocketRuntimeDiagnosticSnapshot<
   TRuntime = unknown,
   TAgents = unknown,
+  TGit = unknown,
 > extends WebSocketRuntimeMetricsSnapshot {
   collectedAt: string;
   final: boolean;
@@ -67,6 +70,7 @@ export interface WebSocketRuntimeDiagnosticSnapshot<
   memory: ProcessMemoryDiagnostics;
   runtime: TRuntime;
   agents: TAgents;
+  git: TGit;
 }
 
 type Clock = () => number;
@@ -230,6 +234,8 @@ function createRuntimeCounters(): WebSocketRuntimeCounters {
     relayExternalSocketAttached: 0,
     originRejected: 0,
     hostRejected: 0,
+    applicationJsonRejected: 0,
+    applicationBinaryRejected: 0,
   };
 }
 

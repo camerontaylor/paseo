@@ -1,12 +1,17 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { spawnProcess } from "@getpaseo/server";
+import { spawnProcess } from "@getpaseo/server/process";
 import { buildAgentDeepLink, type AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
 
 function findDesktopApp(): string | null {
   if (process.platform === "darwin") {
+    // The fork bundle is checked first: this CLI ships inside it, so opening a
+    // stock Paseo that happens to be installed alongside would hand the agent
+    // to a different daemon build than the one the user is driving.
     const candidates = [
+      "/Applications/Paseo Fork.app",
+      path.join(homedir(), "Applications", "Paseo Fork.app"),
       "/Applications/Paseo.app",
       path.join(homedir(), "Applications", "Paseo.app"),
     ];
@@ -22,6 +27,9 @@ function findDesktopApp(): string | null {
 
   if (process.platform === "linux") {
     const candidates = [
+      "/usr/bin/Paseo Fork",
+      "/opt/Paseo Fork/Paseo Fork",
+      path.join(homedir(), "Applications", "Paseo-Fork.AppImage"),
       "/usr/bin/Paseo",
       "/opt/Paseo/Paseo",
       path.join(homedir(), "Applications", "Paseo.AppImage"),
@@ -95,6 +103,7 @@ export async function openDesktopWithProject(projectPath: string): Promise<void>
   try {
     launchDesktop([projectPath]);
   } catch (error) {
+    if (error && typeof error === "object" && "code" in error) throw error;
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${message}\n`);
     process.exitCode = 1;

@@ -18,7 +18,8 @@ import {
   type OmpNoTurnScheduler,
   type OmpProviderIdleScheduler,
 } from "../agent.js";
-import type { OmpAgentMessage, OmpRpcSlashCommand } from "../rpc-types.js";
+import type { OmpUsagePollScheduler } from "../usage-poller.js";
+import type { OmpAgentMessage, OmpRpcSlashCommand, OmpRuntimeEvent } from "../rpc-types.js";
 import { FakeOmp } from "./fake-omp.js";
 
 const CWD = "/tmp/paseo-omp-agent-test";
@@ -69,6 +70,7 @@ export class OmpHarness {
     options: {
       providerIdleScheduler?: OmpProviderIdleScheduler;
       noTurnScheduler?: OmpNoTurnScheduler;
+      usagePollScheduler?: OmpUsagePollScheduler;
     } = {},
   ) {
     this.client = new OmpAgentClient({
@@ -76,6 +78,7 @@ export class OmpHarness {
       runtime: this.omp,
       providerIdleScheduler: options.providerIdleScheduler,
       noTurnScheduler: options.noTurnScheduler,
+      usagePollScheduler: options.usagePollScheduler,
     });
   }
 
@@ -201,16 +204,25 @@ export class OmpHarness {
     return { completion };
   }
 
-  async runPromptAfterExtensionNotice(input: string, output: string): Promise<unknown> {
+  async runPromptAfterExtensionNotice(
+    input: string,
+    output: string,
+    display?: boolean,
+  ): Promise<unknown> {
     const session = this.requireSession();
     const promptStarted = this.omp.latestSession().nextPrompt();
     const run = session.run(input);
     await promptStarted;
     const runtime = this.omp.latestSession();
+    const message = {
+      role: "custom" as const,
+      content: "extension inventory changed",
+      ...(display === undefined ? {} : { display }),
+    };
     runtime.beginTurn();
     runtime.acceptPrompt(input, "user-1");
-    runtime.acceptCustomMessage("extension inventory changed");
-    runtime.finishTurn({ role: "custom", content: "extension inventory changed" });
+    runtime.emit({ type: "message_end", message });
+    runtime.finishTurn(message);
     runtime.beginTurn();
     runtime.streamAssistantText(output);
     runtime.finishTurn();
@@ -382,6 +394,10 @@ export class OmpHarness {
     return this.events.flatMap((event) => (event.type === "timeline" ? [event.item] : []));
   }
 
+  eventTypes(): AgentStreamEvent["type"][] {
+    return this.events.map((event) => event.type);
+  }
+
   async history(): Promise<AgentTimelineItem[]> {
     const items: AgentTimelineItem[] = [];
     for await (const event of this.requireSession().streamHistory()) {
@@ -394,12 +410,20 @@ export class OmpHarness {
     return this.events.filter((event) => event.type === "turn_completed").length;
   }
 
+  usageUpdates() {
+    return this.events.flatMap((event) => (event.type === "usage_updated" ? [event.usage] : []));
+  }
+
   requestToolApproval(input: {
     id: string;
     tool: "bash" | "edit" | "write";
     detail: string;
   }): void {
     this.omp.latestSession().requestToolApproval(input);
+  }
+
+  emit(event: OmpRuntimeEvent): void {
+    this.omp.latestSession().emit(event);
   }
 
   pendingPermissions() {
@@ -470,7 +494,9 @@ export class OmpHarness {
       .map(([callId]) => callId);
   }
 
-  subagentUpserts(): Array<{ id: string; status: string }> {
+  // `status` is optional on the upsert event — an upsert may report only model or usage. OMP
+  // always sets one, so this stays a plain string for assertions.
+  subagentUpserts(): Array<{ id: string; status: string | undefined }> {
     return this.events.flatMap((event) =>
       event.type === "provider_subagent" && event.event.type === "upsert"
         ? [{ id: event.event.id, status: event.event.status }]

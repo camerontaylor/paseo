@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { parseConnectionOfferFromUrl } from "@getpaseo/protocol/connection-offer";
 import { normalizeHostPort } from "@getpaseo/protocol/daemon-endpoints";
-import { resolvePaseoHome } from "@getpaseo/server";
+import { resolvePaseoHome } from "@getpaseo/server/daemon-control";
 import {
   clearDefaultDaemonTarget,
   readDefaultDaemonTarget,
@@ -38,7 +38,7 @@ function printTargetResult(
     return;
   }
 
-  process.stdout.write("local daemon discovery\n");
+  process.stdout.write("default daemon home\n");
 }
 
 export function normalizeDefaultDaemonTarget(rawTarget: string): string {

@@ -1,8 +1,10 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { FileFind, FileFindModel } from "../find/index.web";
 import { Annotation, Compartment, EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { getLanguageForFile } from "@getpaseo/highlight";
 import { getCM, vim } from "@replit/codemirror-vim";
+import { isRenderedMarkdownFile } from "@/components/file-pane-render-mode";
 import type { WorkspaceFileLocation } from "@/workspace/file-open";
 import type { FileEditorModel } from "./model";
 import { editorBaseExtensions, editorTheme, type EditorVisualTheme } from "./extensions.web";
@@ -19,8 +21,13 @@ interface FileEditorViewProps {
 }
 
 const languageCompartment = new Compartment();
+const wrappingCompartment = new Compartment();
 const themeCompartment = new Compartment();
 const vimCompartment = new Compartment();
+
+function wrappingForFile(filename: string) {
+  return isRenderedMarkdownFile(filename) ? EditorView.lineWrapping : [];
+}
 
 export function FileEditorView({
   model,
@@ -32,6 +39,7 @@ export function FileEditorView({
   onCursorChange,
   onVimModeChange,
 }: FileEditorViewProps) {
+  const [find] = useState(() => new FileFindModel());
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const snapshot = useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
@@ -48,15 +56,18 @@ export function FileEditorView({
         doc: values.content,
         extensions: [
           vimCompartment.of(values.vimEnabled ? vim() : []),
+          find.extension,
           ...editorBaseExtensions(() => void values.model.save()),
           languageCompartment.of(getLanguageForFile(values.filename)?.extension ?? []),
+          wrappingCompartment.of(wrappingForFile(values.filename)),
           themeCompartment.of(editorTheme(values.theme)),
           EditorView.updateListener.of((update) => {
             if (
               update.docChanged &&
               !update.transactions.some((tr) => tr.annotation(remoteUpdate))
             ) {
-              values.model.edit(update.state.doc.toString());
+              const { lineSeparator } = values.model.getSnapshot();
+              values.model.edit(update.state.doc.sliceString(0, undefined, lineSeparator));
             }
             if (update.selectionSet || update.docChanged) {
               const head = update.state.selection.main.head;
@@ -73,14 +84,16 @@ export function FileEditorView({
       view.destroy();
       viewRef.current = null;
     };
-  }, []);
+  }, [find]);
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || view.state.doc.toString() === snapshot.content) return;
-    const head = Math.min(view.state.selection.main.head, snapshot.content.length);
+    if (!view) return;
+    const document = view.state.toText(snapshot.content);
+    if (view.state.doc.eq(document)) return;
+    const head = Math.min(view.state.selection.main.head, document.length);
     view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: snapshot.content },
+      changes: { from: 0, to: view.state.doc.length, insert: document },
       selection: { anchor: head },
       annotations: [remoteUpdate.of(true), Transaction.addToHistory.of(false)],
     });
@@ -101,7 +114,10 @@ export function FileEditorView({
 
   useEffect(() => {
     viewRef.current?.dispatch({
-      effects: languageCompartment.reconfigure(getLanguageForFile(filename)?.extension ?? []),
+      effects: [
+        languageCompartment.reconfigure(getLanguageForFile(filename)?.extension ?? []),
+        wrappingCompartment.reconfigure(wrappingForFile(filename)),
+      ],
     });
   }, [filename]);
 
@@ -128,15 +144,25 @@ export function FileEditorView({
   }, [onVimModeChange, vimEnabled]);
 
   return (
-    <div
-      ref={hostRef}
-      data-pmono=""
-      data-testid="file-source-editor"
-      aria-label={`Source editor for ${filename}`}
-      style={HOST_STYLE}
-    />
+    <div style={FRAME_STYLE}>
+      <div
+        ref={hostRef}
+        data-pmono=""
+        data-testid="file-source-editor"
+        aria-label={`Source editor for ${filename}`}
+        style={HOST_STYLE}
+      />
+      <FileFind model={find} editor={viewRef} />
+    </div>
   );
 }
 
 const remoteUpdate = Annotation.define<boolean>();
+const FRAME_STYLE = {
+  display: "flex",
+  position: "relative",
+  flex: 1,
+  minHeight: 0,
+  minWidth: 0,
+} as const;
 const HOST_STYLE = { flex: 1, minHeight: 0, overflow: "hidden" } as const;

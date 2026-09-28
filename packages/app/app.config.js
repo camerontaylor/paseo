@@ -1,9 +1,15 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const pkg = require("./package.json");
+const withAndroidAsyncStorageSize = require("./plugins/with-android-async-storage-size");
+const withAndroidProfileable = require("./plugins/with-android-profileable");
 const withFdroidAutolinking = require("./plugins/with-fdroid-autolinking");
+const withPasteInput = require("./plugins/with-paste-input");
+const withAndroidScroll = require("./modules/paseo-scroll/app.plugin");
+const { getNativeReleaseVersion } = require("./native-release-version");
 const appVariant = process.env.APP_VARIANT ?? "production";
 const isFdroidBuild = process.env.PASEO_FDROID_BUILD === "1";
+const isProfileBuild = process.env.PASEO_PROFILE_BUILD === "1";
 
 const buildProfile = isFdroidBuild
   ? {
@@ -15,7 +21,6 @@ const buildProfile = isFdroidBuild
       cameraPlugins: [],
       fdroidPlugins: [withFdroidAutolinking],
       notificationPlugins: [],
-      updates: { enabled: false },
     }
   : {
       androidPermissions: [
@@ -44,32 +49,7 @@ const buildProfile = isFdroidBuild
           },
         ],
       ],
-      updates: {},
     };
-
-function getNativeBuildVersionCode(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
-  if (!match) {
-    throw new Error(`Cannot derive Android versionCode from non-semver version: ${version}`);
-  }
-
-  const [, majorText, minorText, patchText] = match;
-  const major = Number(majorText);
-  const minor = Number(minorText);
-  const patch = Number(patchText);
-
-  if (minor > 999 || patch > 999) {
-    throw new Error(`Cannot derive collision-free Android versionCode from version: ${version}`);
-  }
-
-  const versionCode = major * 1_000_000 + minor * 1_000 + patch;
-
-  if (!Number.isSafeInteger(versionCode) || versionCode <= 0 || versionCode > 2_100_000_000) {
-    throw new Error(`Derived Android versionCode is out of range: ${versionCode}`);
-  }
-
-  return versionCode;
-}
 
 function resolveSecretFile(params) {
   const fromEnv = process.env[params.envKey];
@@ -85,10 +65,15 @@ function resolveSecretFile(params) {
   return undefined;
 }
 
+// Fork identity — see FORK.md. This build installs beside stock Paseo, so it
+// carries its own name and application identifiers. iOS bundle identifiers may
+// contain hyphens; Android application ids may not, so the two diverge here by
+// necessity (io.ideaflow.paseo-fork vs io.ideaflow.paseofork).
 const variants = {
   production: {
-    name: "Paseo",
-    packageId: "sh.paseo",
+    name: "Paseo Fork",
+    bundleIdentifier: "io.ideaflow.paseo-fork",
+    androidPackage: "io.ideaflow.paseofork",
     googleServicesFile: resolveSecretFile({
       envKey: "GOOGLE_SERVICES_FILE_PROD",
       fallbackRelativePath: "./.secrets/google-services.prod.json",
@@ -99,8 +84,9 @@ const variants = {
     }),
   },
   development: {
-    name: "Paseo Debug",
-    packageId: "sh.paseo.debug",
+    name: "Paseo Fork Debug",
+    bundleIdentifier: "io.ideaflow.paseo-fork.debug",
+    androidPackage: "io.ideaflow.paseofork.debug",
     googleServicesFile: resolveSecretFile({
       envKey: "GOOGLE_SERVICES_FILE_DEBUG",
       fallbackRelativePath: "./.secrets/google-services.debug.json",
@@ -113,25 +99,18 @@ const variants = {
 };
 
 const variant = variants[appVariant] ?? variants.production;
-const nativeBuildVersionCode = getNativeBuildVersionCode(pkg.version);
+const nativeReleaseVersion = getNativeReleaseVersion(pkg.version);
 
 export default {
   expo: {
     name: variant.name,
     slug: "voice-mobile",
-    version: pkg.version,
+    version: nativeReleaseVersion.appVersion,
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: "paseo",
     userInterfaceStyle: "automatic",
     newArchEnabled: true,
-    runtimeVersion: {
-      policy: "appVersion",
-    },
-    updates: {
-      url: "https://u.expo.dev/0e7f65ce-0367-46c8-a238-2b65963d235a",
-      ...buildProfile.updates,
-    },
     ios: {
       supportsTablet: true,
       infoPlist: {
@@ -139,11 +118,11 @@ export default {
         NSMicrophoneUsageDescription: "This app needs access to the microphone for voice commands.",
         ITSAppUsesNonExemptEncryption: false,
       },
-      bundleIdentifier: variant.packageId,
+      bundleIdentifier: variant.bundleIdentifier,
       ...(variant.googleServiceInfoPlist
         ? { googleServicesFile: variant.googleServiceInfoPlist }
         : {}),
-      buildNumber: String(nativeBuildVersionCode),
+      buildNumber: nativeReleaseVersion.iosBuildNumber,
     },
     android: {
       adaptiveIcon: {
@@ -156,8 +135,8 @@ export default {
       // Allow HTTP connections for local network hosts (required for release builds)
       usesCleartextTraffic: true,
       permissions: buildProfile.androidPermissions,
-      package: variant.packageId,
-      versionCode: nativeBuildVersionCode,
+      package: variant.androidPackage,
+      versionCode: nativeReleaseVersion.androidVersionCode,
       ...(variant.googleServicesFile ? { googleServicesFile: variant.googleServicesFile } : {}),
     },
     web: {
@@ -169,6 +148,9 @@ export default {
     },
     plugins: [
       "expo-router",
+      withPasteInput,
+      withAndroidScroll,
+      [withAndroidAsyncStorageSize, 64],
       ...buildProfile.cameraPlugins,
       [
         "expo-splash-screen",
@@ -203,6 +185,7 @@ export default {
         },
       ],
       ...buildProfile.fdroidPlugins,
+      ...(isProfileBuild ? [withAndroidProfileable] : []),
     ],
     experiments: {
       typedRoutes: true,
@@ -211,11 +194,12 @@ export default {
     },
     extra: {
       fdroidBuild: isFdroidBuild,
+      profileBuild: isProfileBuild,
       router: {},
-      eas: {
-        projectId: "0e7f65ce-0367-46c8-a238-2b65963d235a",
-      },
     },
-    owner: "getpaseo",
+    // No EAS `owner` / `extra.eas.projectId`: this fork ships iOS locally via
+    // scripts/testflight-fork.sh (archive/export/upload with the IdeaFlow
+    // signing team) rather than through upstream's getpaseo EAS project. Add
+    // your own Expo owner + projectId here if you later adopt EAS cloud builds.
   },
 };

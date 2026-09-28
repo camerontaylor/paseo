@@ -22,6 +22,8 @@ the web UI. The served app receives a same-origin connection hint and connects
 back to that daemon. Static UI files load without daemon auth; API and
 WebSocket requests still require `PASEO_PASSWORD` when one is configured.
 
+Host-side CLI commands select the container explicitly, for example `paseo project ls --host 127.0.0.1:6767`. Without an endpoint selector the CLI looks for a local home’s supervisor. Container environment settings are deployment overrides; worker restart preserves them. Your container manager owns full supervisor replacement.
+
 ## Quick Start
 
 ```bash
@@ -176,8 +178,9 @@ IPs and `localhost` are allowed by default.
 
 - Set `PASEO_PASSWORD` for any published port or network-reachable deployment.
 - Prefer HTTPS at the reverse proxy for direct browser access.
-- Use the Paseo relay for untrusted networks or mobile access when you do not
-  want to expose the daemon port directly.
+- Use the [official Paseo relay](https://github.com/getpaseo/paseo-relay) for
+  untrusted networks or mobile access when you do not want to expose the daemon
+  port directly.
 - The container is the isolation boundary for agents. Agents can read and write
   whatever you mount into `/workspace` and whatever credentials you place in
   `/home/paseo`.

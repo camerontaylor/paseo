@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
 import { AUTO_OPEN_AGENT_TAB_LABEL } from "@getpaseo/protocol/agent-labels";
 import {
   buildRunAgentLabels,
@@ -8,28 +9,53 @@ import {
   type AgentRunOptions,
 } from "./run";
 
+const daemonTarget = { kind: "endpoint" as const, host: "example.test:12345" };
+
+// Answers fetchAgent the way a daemon does: an unknown id is an error.
+function daemonWithAgents(...agentIds: string[]) {
+  return {
+    async fetchAgent({ agentId }: { agentId: string }) {
+      if (!agentIds.includes(agentId)) {
+        throw new Error(`Agent not found: ${agentId}`);
+      }
+      return { agent: { id: agentId } };
+    },
+  };
+}
+
 describe("managed agent caller context", () => {
-  it("propagates a trimmed PASEO_AGENT_ID", () => {
-    expect(resolveRunCallerAgentId({ PASEO_AGENT_ID: "  parent-agent  " })).toBe("parent-agent");
+  it("uses a trimmed PASEO_AGENT_ID when the target daemon runs that agent", async () => {
+    await expect(
+      resolveRunCallerAgentId(daemonWithAgents("parent-agent"), {
+        PASEO_AGENT_ID: "  parent-agent  ",
+      }),
+    ).resolves.toBe("parent-agent");
   });
 
-  it("omits blank caller ids", () => {
-    expect(resolveRunCallerAgentId({ PASEO_AGENT_ID: "   " })).toBeUndefined();
-  });
-});
-
-describe("run agent labels", () => {
-  it("marks every CLI-created agent for cross-client tab auto-open", () => {
-    expect(buildRunAgentLabels(["team=infra"])).toEqual({
-      team: "infra",
-      [AUTO_OPEN_AGENT_TAB_LABEL]: "true",
-    });
+  it("runs without a caller when PASEO_AGENT_ID belongs to another daemon", async () => {
+    await expect(
+      resolveRunCallerAgentId(daemonWithAgents("other-agent"), {
+        PASEO_AGENT_ID: "parent-agent",
+      }),
+    ).resolves.toBeUndefined();
   });
 
-  it("keeps the CLI placement marker authoritative over user labels", () => {
-    expect(buildRunAgentLabels([`${AUTO_OPEN_AGENT_TAB_LABEL}=false`])).toEqual({
-      [AUTO_OPEN_AGENT_TAB_LABEL]: "true",
-    });
+  it("fails instead of dropping the caller when the lookup loses its connection", async () => {
+    const disconnectedDaemon = {
+      async fetchAgent(): Promise<never> {
+        throw new DaemonConnectionError("Connection lost before message could be sent");
+      },
+    };
+
+    await expect(
+      resolveRunCallerAgentId(disconnectedDaemon, { PASEO_AGENT_ID: "parent-agent" }),
+    ).rejects.toBeInstanceOf(DaemonConnectionError);
+  });
+
+  it("omits blank caller ids", async () => {
+    await expect(
+      resolveRunCallerAgentId(daemonWithAgents(), { PASEO_AGENT_ID: "   " }),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -82,8 +108,13 @@ describe("runRunCommand option validation", () => {
     }
   });
 
-  async function expectInvalidOptions(options: AgentRunOptions, messageMatch: RegExp) {
-    await expect(runRunCommand("do something", options, {} as never)).rejects.toMatchObject({
+  async function expectInvalidOptions(
+    options: Omit<AgentRunOptions, "daemonTarget">,
+    messageMatch: RegExp,
+  ) {
+    await expect(
+      runRunCommand("do something", { ...options, daemonTarget }, {} as never),
+    ).rejects.toMatchObject({
       code: "INVALID_OPTIONS",
       message: expect.stringMatching(messageMatch),
     });
@@ -101,7 +132,11 @@ describe("runRunCommand option validation", () => {
     // must clear validation. It still fails later (provider resolution), which
     // is enough to prove the new guard did not reject it.
     await expect(
-      runRunCommand("do something", { newWorkspace: "worktree", provider: undefined }, {} as never),
+      runRunCommand(
+        "do something",
+        { newWorkspace: "worktree", provider: undefined, daemonTarget },
+        {} as never,
+      ),
     ).rejects.not.toMatchObject({ code: "INVALID_OPTIONS" });
   });
 
@@ -121,5 +156,20 @@ describe("runRunCommand option validation", () => {
       { newWorkspace: "worktree", worktreeMode: "container" },
       /Unsupported worktree mode/,
     );
+  });
+});
+
+describe("run agent labels", () => {
+  it("marks every CLI-created agent for cross-client tab auto-open", () => {
+    expect(buildRunAgentLabels(["team=infra"])).toEqual({
+      team: "infra",
+      [AUTO_OPEN_AGENT_TAB_LABEL]: "true",
+    });
+  });
+
+  it("keeps the CLI placement marker authoritative over user labels", () => {
+    expect(buildRunAgentLabels([`${AUTO_OPEN_AGENT_TAB_LABEL}=false`])).toEqual({
+      [AUTO_OPEN_AGENT_TAB_LABEL]: "true",
+    });
   });
 });

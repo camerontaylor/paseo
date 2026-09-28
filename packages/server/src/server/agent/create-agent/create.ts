@@ -14,6 +14,7 @@ import type { AgentAttachment, FirstAgentContext, GitSetupOptions } from "../../
 import type { AgentManager, CreateAgentOptions, ManagedAgent } from "../agent-manager.js";
 import type { AgentPromptInput, AgentRunOptions, AgentSessionConfig } from "../agent-sdk-types.js";
 import type { AgentStorage } from "../agent-storage.js";
+import type { AgentQueueService } from "../../agent-queue/service.js";
 import type { AgentOwner } from "../agent-owner.js";
 import type { ProviderSnapshotManager } from "../provider-snapshot-manager.js";
 import { setupFinishNotification, startCreatedAgentInitialPrompt } from "../agent-prompt.js";
@@ -38,6 +39,8 @@ export interface CreateAgentSessionWorktreeResult {
 export interface CreateAgentCommandDependencies {
   agentManager: AgentManager;
   agentStorage: AgentStorage;
+  /** See SetupFinishNotificationParams.queueService. */
+  queueService?: AgentQueueService | null;
   logger: Logger;
   paseoHome?: string;
   worktreesRoot?: string;
@@ -55,6 +58,8 @@ export type EnsureWorkspaceForCreate = (
 
 export interface CreateAgentFromSessionInput {
   kind: "session";
+  onAgentReady?: (agent: ManagedAgent) => Promise<void>;
+  agentId?: string;
   config: AgentSessionConfig;
   workspaceId: string;
   worktreeName?: string;
@@ -181,13 +186,15 @@ export async function createAgentCommand(
 
   const snapshot = await dependencies.agentManager.createAgent(
     resolved.config,
-    undefined,
+    input.kind === "session" ? input.agentId : undefined,
     resolved.createOptions,
   );
 
   resolved.setupContinuation?.startAfterAgentCreate({
     agentId: snapshot.id,
   });
+
+  if (input.kind === "session") await input.onAgentReady?.(snapshot);
 
   let liveSnapshot = snapshot;
   let initialPromptStarted = false;
@@ -206,6 +213,7 @@ export async function createAgentCommand(
     setupFinishNotification({
       agentManager: dependencies.agentManager,
       agentStorage: dependencies.agentStorage,
+      queueService: dependencies.queueService ?? null,
       childAgentId: snapshot.id,
       callerAgentId: input.callerAgentId,
       requireParentOwnership: true,

@@ -14,12 +14,14 @@ import { addReloadOptions, runReloadCommand } from "./reload.js";
 import { addImportOptions, runImportCommand } from "./import.js";
 import { runUpdateCommand } from "./update.js";
 import { runDetachCommand } from "./detach.js";
+import { addArtifactsScanOptions, runArtifactsScanCommand } from "./artifacts-scan.js";
 import { addOpenOptions, runOpenCommand } from "./open.js";
 import { withOutput } from "../../output/index.js";
 import {
   addDaemonHostOption,
   addJsonAndDaemonHostOptions,
   collectMultiple,
+  withGlobalOptions,
 } from "../../utils/command-options.js";
 
 export function createAgentCommand(): Command {
@@ -36,9 +38,13 @@ export function createAgentCommand(): Command {
     withOutput(runImportCommand),
   );
 
-  addDaemonHostOption(addAttachOptions(agent.command("attach"))).action(runAttachCommand);
+  addDaemonHostOption(addAttachOptions(agent.command("attach"))).action(
+    withGlobalOptions(runAttachCommand),
+  );
 
-  addDaemonHostOption(addLogsOptions(agent.command("logs"))).action(runLogsCommand);
+  addDaemonHostOption(addLogsOptions(agent.command("logs"))).action(
+    withGlobalOptions(runLogsCommand),
+  );
 
   addJsonAndDaemonHostOptions(addOpenOptions(agent.command("open"))).action(
     withOutput(runOpenCommand),
@@ -83,6 +89,15 @@ export function createAgentCommand(): Command {
   );
 
   addJsonAndDaemonHostOptions(
+    addArtifactsScanOptions(
+      agent
+        .command("artifacts-scan")
+        .description("Backfill an agent's artifact feed from files already on disk")
+        .argument("<id>", "Agent ID, prefix, or name"),
+    ),
+  ).action(withOutput(runArtifactsScanCommand));
+
+  addJsonAndDaemonHostOptions(
     agent
       .command("detach")
       .description("Make a subagent independent without stopping or moving it")
@@ -92,9 +107,10 @@ export function createAgentCommand(): Command {
   addJsonAndDaemonHostOptions(
     agent
       .command("update")
-      .description("Update an agent's metadata")
+      .description("Update an agent's settings or metadata")
       .argument("<id>", "Agent ID (or prefix)")
       .option("--name <name>", "Update the agent's display name")
+      .option("--thinking <id>", "Update the agent's thinking option ID")
       .option(
         "--label <label>",
         "Add/set label(s) on the agent (can be used multiple times or comma-separated)",

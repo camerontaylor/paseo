@@ -15,6 +15,7 @@ import {
   type MutableWorkspacePlacement,
 } from "./workspace-registry-model.js";
 import { workspaceIdsForProjects } from "./workspace-directory.js";
+import { deriveProjectKey } from "./project-key.js";
 
 const DEFAULT_RESCAN_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_DEBOUNCE_MS = 100;
@@ -66,7 +67,7 @@ export type ReconciliationChange =
       kind: "project_updated";
       projectId: string;
       directory: string;
-      fields: Partial<Pick<PersistedProjectRecord, "kind">>;
+      fields: Partial<Pick<PersistedProjectRecord, "kind" | "projectKey">>;
     }
   | {
       kind: "workspace_updated";
@@ -81,12 +82,14 @@ export interface ReconciliationResult {
 }
 
 export interface WorkspaceReconciliationServiceOptions {
+  serverId?: string;
   projectRegistry: ProjectRegistry;
   workspaceRegistry: WorkspaceRegistry;
   logger: pino.Logger;
   onChanges?: (changes: ReconciliationChange[]) => void;
   workspaceGitService?: Pick<WorkspaceGitService, "getCheckout">;
   onProjectUpdate?: (update: ProjectUpdate) => void;
+  onWorkspaceArchived?: (workspaceId: string) => void | Promise<void>;
   onWorkspacesChanged?: (workspaceIds: string[]) => Promise<void>;
   watchProjectRoot?: ProjectRootWatch;
   clock?: ReconciliationClock;
@@ -110,12 +113,14 @@ interface CachedCheckoutRead {
 type DirectoryState = "directory" | "missing" | "unreadable";
 
 export class WorkspaceReconciliationService {
+  private readonly serverId: string | undefined;
   private readonly projectRegistry: ProjectRegistry;
   private readonly workspaceRegistry: WorkspaceRegistry;
   private readonly logger: pino.Logger;
   private readonly onChanges: ((changes: ReconciliationChange[]) => void) | null;
   private readonly workspaceGitService: Pick<WorkspaceGitService, "getCheckout"> | null;
   private readonly onProjectUpdate: ((update: ProjectUpdate) => void) | null;
+  private readonly onWorkspaceArchived: ((workspaceId: string) => void | Promise<void>) | null;
   private readonly onWorkspacesChanged: ((workspaceIds: string[]) => Promise<void>) | null;
   private readonly watchProjectRoot: ProjectRootWatch;
   private readonly clock: ReconciliationClock;
@@ -131,12 +136,14 @@ export class WorkspaceReconciliationService {
   private reconcileQueuedMode: "metadata" | "full" | null = null;
 
   constructor(options: WorkspaceReconciliationServiceOptions) {
+    this.serverId = options.serverId;
     this.projectRegistry = options.projectRegistry;
     this.workspaceRegistry = options.workspaceRegistry;
     this.logger = options.logger.child({ module: "workspace-reconciliation" });
     this.onChanges = options.onChanges ?? null;
     this.workspaceGitService = options.workspaceGitService ?? null;
     this.onProjectUpdate = options.onProjectUpdate ?? null;
+    this.onWorkspaceArchived = options.onWorkspaceArchived ?? null;
     this.onWorkspacesChanged = options.onWorkspacesChanged ?? null;
     this.watchProjectRoot = options.watchProjectRoot ?? watchProjectRoot;
     this.clock = options.clock ?? systemClock;
@@ -220,6 +227,14 @@ export class WorkspaceReconciliationService {
       workspace,
       state: this.inspectDirectory(workspace.cwd),
     }));
+    // Project roots are read after the workspace directories, so a volume that
+    // goes away mid-pass leaves its project unreachable rather than its workspaces
+    // alone. The skew can only withhold an archive, never produce one.
+    const reachableProjectIds = new Set(
+      activeProjects
+        .filter((project) => this.inspectDirectory(project.rootPath) === "directory")
+        .map((project) => project.projectId),
+    );
 
     const workspacesByProject = new Map<string, PersistedWorkspaceRecord[]>();
     for (const { workspace, state } of workspaceDirectoryStates) {
@@ -229,14 +244,22 @@ export class WorkspaceReconciliationService {
       workspacesByProject.set(workspace.projectId, list);
     }
 
-    // 1. Archive workspaces whose directories no longer exist
+    // 1. Archive workspaces whose directories no longer exist, but only when the
+    //    project they belong to is still reachable. A missing project root means the
+    //    whole location is unavailable - an unmounted volume, an offline share, a disk
+    //    that has not appeared yet - and absence there proves nothing about the
+    //    workspace. Projects already persist through that; their workspaces do too.
     const missingWorkspaces = workspaceDirectoryStates
-      .filter(({ state }) => state === "missing")
+      .filter(
+        ({ workspace, state }) =>
+          state === "missing" && reachableProjectIds.has(workspace.projectId),
+      )
       .map(({ workspace }) => workspace);
     await Promise.all(
       missingWorkspaces.map(async (workspace) => {
         const timestamp = new Date().toISOString();
         await this.workspaceRegistry.archive(workspace.workspaceId, timestamp);
+        await this.onWorkspaceArchived?.(workspace.workspaceId);
         changes.push({
           kind: "workspace_archived",
           workspaceId: workspace.workspaceId,
@@ -257,7 +280,7 @@ export class WorkspaceReconciliationService {
     //    Projects persist until explicitly removed, even when they currently have
     //    zero active workspaces, so they still reconcile their own metadata.
     await this.reconcileGitMetadataForProjects(
-      activeProjects.filter((project) => this.inspectDirectory(project.rootPath) === "directory"),
+      activeProjects.filter((project) => reachableProjectIds.has(project.projectId)),
       workspacesByProject,
       changes,
     );
@@ -274,6 +297,11 @@ export class WorkspaceReconciliationService {
       );
     }
     return result;
+  }
+
+  /** Runs the boot-time convergence path and publishes every affected workspace. */
+  async reconcileNow(): Promise<void> {
+    await this.reconcileObservedGitMetadata("full");
   }
 
   private async reconcileGitMetadataForProjects(
@@ -330,11 +358,21 @@ export class WorkspaceReconciliationService {
         checkout: await readCheckout(workspace.cwd),
       })),
     );
-    const projectUpdates: Partial<Pick<PersistedProjectRecord, "kind">> = {};
+    const projectUpdates: Partial<Pick<PersistedProjectRecord, "kind" | "projectKey">> = {};
     const mappedKind = deriveProjectKind(currentGit);
+    const projectKey = deriveProjectKey({
+      rootPath: project.rootPath,
+      remoteUrl: currentGit.remoteUrl,
+      worktreeRoot: currentGit.worktreeRoot,
+      mainRepoRoot: currentGit.mainRepoRoot,
+      serverId: this.serverId,
+    });
 
     if (project.kind !== mappedKind) {
       projectUpdates.kind = mappedKind;
+    }
+    if (project.projectKey !== projectKey) {
+      projectUpdates.projectKey = projectKey;
     }
 
     if (Object.keys(projectUpdates).length > 0) {
@@ -362,7 +400,12 @@ export class WorkspaceReconciliationService {
         });
         if (!update) return;
 
-        await this.workspaceRegistry.upsert(update.workspace);
+        const updated = await this.workspaceRegistry.update(workspace.workspaceId, (current) => ({
+          ...current,
+          ...update.fields,
+          updatedAt: timestamp,
+        }));
+        if (!updated) return;
         changes.push({
           kind: "workspace_updated",
           workspaceId: workspace.workspaceId,

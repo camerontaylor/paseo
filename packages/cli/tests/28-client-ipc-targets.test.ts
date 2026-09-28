@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 
 import assert from "node:assert";
-import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -9,8 +9,8 @@ import {
   normalizeDaemonHost,
   resolveDaemonPassword,
   resolveDaemonTarget,
-  resolveDefaultDaemonHosts,
 } from "../src/utils/client.js";
+import { selectDaemonTarget } from "../src/utils/daemon-target.js";
 import {
   clearDefaultDaemonTarget,
   readDefaultDaemonTarget,
@@ -30,6 +30,17 @@ console.log("=== CLI IPC Target Helpers ===\n");
     socketPath: "/tmp/paseo.sock",
   });
   console.log("✓ unix hosts resolve to ws+unix URLs\n");
+}
+
+{
+  console.log("Test 1b: bare unix socket paths resolve at the connection boundary");
+  const target = resolveDaemonTarget("/tmp/paseo.sock");
+  assert.deepStrictEqual(target, {
+    type: "ipc",
+    url: "ws+unix:///tmp/paseo.sock:/ws",
+    socketPath: "/tmp/paseo.sock",
+  });
+  console.log("✓ bare unix socket paths resolve at the connection boundary\n");
 }
 
 {
@@ -76,76 +87,19 @@ console.log("=== CLI IPC Target Helpers ===\n");
 }
 
 {
-  console.log("Test 6: default host resolution tries local IPC first, then localhost fallback");
-  const paseoHome = mkdtempSync(path.join(os.tmpdir(), "paseo-client-targets-"));
-  try {
-    mkdirSync(paseoHome, { recursive: true });
-    writeFileSync(
-      path.join(paseoHome, "paseo.pid"),
-      JSON.stringify({ pid: process.pid, listen: "/tmp/paseo-from-pid.sock" }),
-    );
-    assert.deepStrictEqual(resolveDefaultDaemonHosts({ PASEO_HOME: paseoHome }), [
-      "unix:///tmp/paseo-from-pid.sock",
-      "localhost:6767",
-    ]);
-    const previousHome = process.env.PASEO_HOME;
-    const previousHost = process.env.PASEO_HOST;
-    process.env.PASEO_HOME = paseoHome;
-    delete process.env.PASEO_HOST;
-    assert.strictEqual(getDaemonHost(), "unix:///tmp/paseo-from-pid.sock");
-    if (previousHome === undefined) delete process.env.PASEO_HOME;
-    else process.env.PASEO_HOME = previousHome;
-    if (previousHost === undefined) delete process.env.PASEO_HOST;
-    else process.env.PASEO_HOST = previousHost;
-  } finally {
-    rmSync(paseoHome, { recursive: true, force: true });
-  }
-  console.log("✓ default host resolution tries local IPC first, then localhost fallback\n");
-}
-
-{
-  console.log("Test 7: configured TCP host is preserved before the localhost fallback");
-  const paseoHome = mkdtempSync(path.join(os.tmpdir(), "paseo-client-targets-tcp-"));
-  try {
-    assert.deepStrictEqual(
-      resolveDefaultDaemonHosts({
-        PASEO_HOME: paseoHome,
-        PASEO_LISTEN: "127.0.0.1:7777",
-      }),
-      ["127.0.0.1:7777", "localhost:6767"],
-    );
-  } finally {
-    rmSync(paseoHome, { recursive: true, force: true });
-  }
-  console.log("✓ configured TCP host is preserved before the localhost fallback\n");
+  const target = selectDaemonTarget(
+    { home: "/tmp/selected-home" },
+    { PASEO_HOST: "ignored:12345", PASEO_LISTEN: "ignored:23456" },
+  );
+  assert.deepStrictEqual(target, { kind: "instance", home: "/tmp/selected-home" });
+  assert.strictEqual(getDaemonHost({ target }), "home /tmp/selected-home");
+  assert.throws(() => selectDaemonTarget({}, { PASEO_HOME: "/tmp/a", PASEO_HOST: "unused:12345" }));
 }
 
 {
   console.log("Test 8: CLI app version resolves for daemon hello compatibility");
   assert.match(resolveCliVersion(), /^\d+\.\d+\.\d+/);
   console.log("✓ CLI app version resolves for daemon hello compatibility\n");
-}
-
-{
-  console.log("Test 9: local IPC still takes priority over configured TCP hosts");
-  const paseoHome = mkdtempSync(path.join(os.tmpdir(), "paseo-client-targets-order-"));
-  try {
-    mkdirSync(paseoHome, { recursive: true });
-    writeFileSync(
-      path.join(paseoHome, "paseo.pid"),
-      JSON.stringify({ pid: process.pid, listen: "/tmp/paseo-priority.sock" }),
-    );
-    assert.deepStrictEqual(
-      resolveDefaultDaemonHosts({
-        PASEO_HOME: paseoHome,
-        PASEO_LISTEN: "127.0.0.1:7777",
-      }),
-      ["unix:///tmp/paseo-priority.sock", "127.0.0.1:7777", "localhost:6767"],
-    );
-  } finally {
-    rmSync(paseoHome, { recursive: true, force: true });
-  }
-  console.log("✓ local IPC still takes priority over configured TCP hosts\n");
 }
 
 {
@@ -203,7 +157,10 @@ console.log("=== CLI IPC Target Helpers ===\n");
     saveDefaultDaemonTarget(paseoHome, offerUrl);
 
     assert.strictEqual(readDefaultDaemonTarget(paseoHome), offerUrl);
-    assert.deepStrictEqual(resolveDefaultDaemonHosts({ PASEO_HOME: paseoHome }), [offerUrl]);
+    assert.deepStrictEqual(selectDaemonTarget({}, { PASEO_HOME: paseoHome }), {
+      kind: "endpoint",
+      host: offerUrl,
+    });
     assert.strictEqual(statSync(path.join(paseoHome, "cli.json")).mode & 0o777, 0o600);
   } finally {
     rmSync(paseoHome, { recursive: true, force: true });
@@ -212,40 +169,40 @@ console.log("=== CLI IPC Target Helpers ===\n");
 }
 
 {
-  console.log("Test 12: PASEO_HOST overrides a persisted daemon target");
+  console.log("Test 12: --host and PASEO_HOST override a persisted daemon target");
   const paseoHome = mkdtempSync(path.join(os.tmpdir(), "paseo-client-env-target-"));
-  const previousHome = process.env.PASEO_HOME;
-  const previousHost = process.env.PASEO_HOST;
   try {
     saveDefaultDaemonTarget(paseoHome, "m4-mini.example:6767");
-    process.env.PASEO_HOME = paseoHome;
-    process.env.PASEO_HOST = "override.example:7767";
-    assert.strictEqual(getDaemonHost(), "override.example:7767");
+    assert.deepStrictEqual(selectDaemonTarget({}, { PASEO_HOST: "override.example:7767" }), {
+      kind: "endpoint",
+      host: "override.example:7767",
+    });
+    assert.deepStrictEqual(
+      selectDaemonTarget({ host: "flag.example:7767" }, { PASEO_HOME: paseoHome }),
+      { kind: "endpoint", host: "flag.example:7767" },
+    );
   } finally {
-    if (previousHome === undefined) delete process.env.PASEO_HOME;
-    else process.env.PASEO_HOME = previousHome;
-    if (previousHost === undefined) delete process.env.PASEO_HOST;
-    else process.env.PASEO_HOST = previousHost;
     rmSync(paseoHome, { recursive: true, force: true });
   }
   console.log("✓ environment target wins over persisted target\n");
 }
 
 {
-  console.log("Test 13: clearing a persisted daemon target restores local discovery");
+  console.log("Test 13: clearing a persisted daemon target restores the default home");
   const paseoHome = mkdtempSync(path.join(os.tmpdir(), "paseo-client-clear-target-"));
   try {
     saveDefaultDaemonTarget(paseoHome, "m4-mini.example:6767");
     assert.strictEqual(clearDefaultDaemonTarget(paseoHome), true);
     assert.strictEqual(clearDefaultDaemonTarget(paseoHome), false);
     assert.strictEqual(readDefaultDaemonTarget(paseoHome), null);
-    assert.deepStrictEqual(resolveDefaultDaemonHosts({ PASEO_HOME: paseoHome }), [
-      "localhost:6767",
-    ]);
+    assert.deepStrictEqual(selectDaemonTarget({}, { PASEO_HOME: paseoHome }), {
+      kind: "instance",
+      home: paseoHome,
+    });
   } finally {
     rmSync(paseoHome, { recursive: true, force: true });
   }
-  console.log("✓ clearing target restores local discovery\n");
+  console.log("✓ clearing target restores the default home\n");
 }
 
 {

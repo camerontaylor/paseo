@@ -3,7 +3,7 @@ import { z } from "zod";
 import type pino from "pino";
 import { getErrorMessage } from "@getpaseo/protocol/error-utils";
 import type { SessionInboundMessage, SessionOutboundMessage } from "../../messages.js";
-import { TTSManager } from "../../agent/tts-manager.js";
+import { TTSManager, AudioPlaybackError } from "../../agent/tts-manager.js";
 import { STTManager } from "../../agent/stt-manager.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "../../speech/speech-provider.js";
 import type { TurnDetectionProvider } from "../../speech/turn-detection-provider.js";
@@ -22,7 +22,7 @@ import type { LocalSpeechModelId } from "../../speech/providers/local/models.js"
 import { toResolver, type Resolvable } from "../../speech/provider-resolver.js";
 import type { SpeechReadinessSnapshot, SpeechReadinessState } from "../../speech/speech-runtime.js";
 
-import { isVoiceInputCommandPrefix, parseVoiceInputCommand } from "./voice-input-command.js";
+import { parseVoiceInputCommand } from "./voice-input-command.js";
 
 const PCM_SAMPLE_RATE = 16000;
 const PCM_CHANNELS = 1;
@@ -137,6 +137,7 @@ export interface VoiceSessionOptions {
   host: VoiceSessionHost;
   logger: pino.Logger;
   sessionId: string;
+  onIdle?: () => void;
   sttLanguage?: string;
   tts: Resolvable<TextToSpeechProvider | null>;
   stt: Resolvable<SpeechToTextProvider | null>;
@@ -171,6 +172,8 @@ export class VoiceSession {
   private readonly sttLanguage: string;
 
   private abortController: AbortController;
+  private closed = false;
+  private readonly onIdle: (() => void) | undefined;
   private processingPhase: ProcessingPhase = "idle";
 
   private isVoiceMode = false;
@@ -217,6 +220,7 @@ export class VoiceSession {
     const { host, logger, sessionId, sttLanguage, tts, stt, voice, voiceBridge, dictation } =
       options;
     this.host = host;
+    this.onIdle = options.onIdle;
     this.sessionLogger = logger;
     this.sessionId = sessionId;
     this.sttLanguage = sttLanguage ?? "en";
@@ -240,7 +244,18 @@ export class VoiceSession {
       stt: dictation?.stt ?? null,
       language: dictation?.sttLanguage,
       finalTimeoutMs: dictation?.finalTimeoutMs,
+      onIdle: this.onIdle,
     });
+  }
+
+  get hasDemand(): boolean {
+    return (
+      this.isVoiceMode ||
+      this.dictationStreamManager.hasDemand ||
+      this.processingPhase !== "idle" ||
+      this.audioBuffer !== null ||
+      this.pendingAudioSegments.length > 0
+    );
   }
 
   isActiveForAgent(agentId: string): boolean {
@@ -385,6 +400,10 @@ export class VoiceSession {
           );
           const refreshedAgentId = await this.enableVoiceModeForAgent(normalizedAgentId);
           this.voiceModeAgentId = refreshedAgentId;
+          if (this.closed) {
+            await this.disableVoiceModeForActiveAgent(true);
+            return;
+          }
           this.sessionLogger.info(
             { agentId: refreshedAgentId, elapsedMs: Date.now() - startedAt },
             "set_voice_mode agent enable complete",
@@ -400,7 +419,7 @@ export class VoiceSession {
           { agentId: this.voiceModeAgentId, elapsedMs: Date.now() - startedAt },
           "set_voice_mode voice turn controller started",
         );
-        this.isVoiceMode = true;
+        this.isVoiceMode = !this.closed;
         await this.configureInputCommands(input);
         this.sessionLogger.info(
           {
@@ -489,6 +508,7 @@ export class VoiceSession {
     const startedAt = Date.now();
     this.sessionLogger.info({ agentId }, "enableVoiceModeForAgent.ensureAgentLoaded.start");
     const existing = await this.host.loadAgent(agentId);
+    if (this.closed) throw new Error("Voice source is closed");
     this.sessionLogger.info(
       { agentId, elapsedMs: Date.now() - startedAt },
       "enableVoiceModeForAgent.ensureAgentLoaded.done",
@@ -533,9 +553,6 @@ export class VoiceSession {
       return;
     }
 
-    this.unregisterVoiceSpeakHandler?.(agentId);
-    this.unregisterVoiceCallerContext?.(agentId);
-
     if (restoreAgentConfig && this.voiceModeBaseConfig) {
       const baseConfig = this.voiceModeBaseConfig;
       try {
@@ -550,6 +567,8 @@ export class VoiceSession {
       }
     }
 
+    this.unregisterVoiceSpeakHandler?.(agentId);
+    this.unregisterVoiceCallerContext?.(agentId);
     this.voiceModeBaseConfig = null;
     this.voiceModeAgentId = null;
   }
@@ -632,26 +651,26 @@ export class VoiceSession {
       sttLanguage: this.sttLanguage,
       callbacks: {
         onSpeechStarted: async () => {
+          // Voice STT providers return final transcripts only. Use the detector's
+          // confirmed speech event so interruption does not wait for transcription.
           this.sessionLogger.debug("Voice VAD speech_started");
-        },
-        onPartialTranscript: async ({ segmentId, transcript }) => {
-          if (
-            this.inputMuted ||
-            (this.voiceCommandsEnabled && isVoiceInputCommandPrefix(transcript))
-          ) {
-            return;
-          }
-          this.sessionLogger.info(
-            { segmentId, transcriptLength: transcript.trim().length },
-            "voice_input_state emitting isSpeaking=true",
-          );
+          if (this.inputMuted) return;
           this.emit({
             type: "voice_input_state",
             payload: {
               isSpeaking: true,
             },
           });
+          // With verbal commands enabled the utterance may be "mute microphone", so
+          // barge-in waits for the final transcript (see onTranscript) instead.
+          if (this.voiceCommandsEnabled) return;
           await this.handleVoiceSpeechStart();
+        },
+        onPartialTranscript: async ({ segmentId, transcript }) => {
+          this.sessionLogger.debug(
+            { segmentId, transcriptLength: transcript.trim().length },
+            "Voice partial transcript",
+          );
         },
         onSpeechStopped: async () => {
           if (this.inputMuted || this.voiceCommandsEnabled) return;
@@ -736,8 +755,9 @@ export class VoiceSession {
     });
 
     this.sessionLogger.info("startVoiceTurnController connecting controller");
-    await controller.start();
     this.voiceTurnController = controller;
+    await controller.start();
+    if (this.closed) await controller.stop();
     this.controllerSupportsInputCommands = stt.id === "local" && turnDetection.id === "local";
     this.sessionLogger.info("startVoiceTurnController connected");
   }
@@ -1141,13 +1161,26 @@ export class VoiceSession {
         },
         "Voice speak tool call received by session handler",
       );
-      const abortSignal = signal ?? this.abortController.signal;
-      await this.ttsManager.generateAndWaitForPlayback(
-        text,
-        (msg) => this.emit(msg),
-        abortSignal,
-        true,
-      );
+      const abortSignal = signal
+        ? AbortSignal.any([signal, this.abortController.signal])
+        : this.abortController.signal;
+      try {
+        await this.ttsManager.generateAndWaitForPlayback(
+          text,
+          (msg) => this.emit(msg),
+          abortSignal,
+          true,
+        );
+      } catch (error) {
+        // An interruption (barge-in, abort, voice stop) ends the speak call quietly, as
+        // upstream's speak contract expects. Timeouts and client playback failures still
+        // reject so a stalled relay surfaces instead of hanging the tool call.
+        if (error instanceof AudioPlaybackError && error.reason === "interrupted") {
+          this.sessionLogger.info({ agentId }, "Voice speak tool call interrupted");
+          return;
+        }
+        throw error;
+      }
       this.sessionLogger.info(
         { agentId, textLength: text.length },
         "Voice speak tool call finished playback",
@@ -1294,6 +1327,7 @@ export class VoiceSession {
    */
   private setPhase(phase: ProcessingPhase): void {
     this.processingPhase = phase;
+    if (phase === "idle") this.onIdle?.();
     this.sessionLogger.debug({ phase }, `Phase: ${phase}`);
   }
 
@@ -1341,6 +1375,7 @@ export class VoiceSession {
    * debug persistence before forwarding to the session emitter.
    */
   private emit(msg: SessionOutboundMessage): void {
+    if (this.closed) return;
     if (
       msg.type === "audio_output" &&
       (process.env.TTS_DEBUG_AUDIO_DIR || isPaseoDictationDebugEnabled()) &&
@@ -1392,21 +1427,40 @@ export class VoiceSession {
     this.host.emit(msg);
   }
 
-  /**
-   * Tear down all voice resources.
-   */
-  async cleanup(): Promise<void> {
+  /** Stop input synchronously, including a source disconnected during bootstrap. */
+  cancel(): void {
+    if (this.closed) return;
+    this.closed = true;
     this.abortController.abort();
     this.clearBufferTimeout();
     this.pendingAudioSegments = [];
     this.audioBuffer = null;
-    await this.stopVoiceTurnController();
+    const failures: unknown[] = [];
+    for (const cleanup of [
+      () => this.ttsManager.cleanup(),
+      () => this.sttManager.cleanup(),
+      () => this.dictationStreamManager.cleanupAll(),
+    ]) {
+      try {
+        cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, "Voice input cleanup failed");
+  }
 
-    this.ttsManager.cleanup();
-    this.sttManager.cleanup();
-    this.dictationStreamManager.cleanupAll();
-
-    await this.disableVoiceModeForActiveAgent(true);
-    this.isVoiceMode = false;
+  /** Restore the agent only after the caller has drained its in-flight requests. */
+  async cleanup(): Promise<void> {
+    try {
+      this.cancel();
+    } finally {
+      try {
+        await this.stopVoiceTurnController();
+      } finally {
+        await this.disableVoiceModeForActiveAgent(true);
+        this.isVoiceMode = false;
+      }
+    }
   }
 }
