@@ -526,6 +526,13 @@ function requireWebSocketServices(params: {
 /**
  * WebSocket server that only accepts sockets + parses/forwards messages to the session layer.
  */
+function resolveProviderUsageService(
+  logger: pino.Logger,
+  service: ProviderUsageService | undefined,
+): ProviderUsageService {
+  return service ?? new ProviderUsageService({ logger });
+}
+
 export class VoiceAssistantWebSocketServer {
   private readonly logger: pino.Logger;
   private readonly wss: WebSocketServer;
@@ -733,8 +740,7 @@ export class VoiceAssistantWebSocketServer {
       this.speech?.onReadinessChange((snapshot) => {
         this.publishSpeechReadiness(snapshot);
       }) ?? null;
-    this.providerUsageService =
-      providerUsageService ?? new ProviderUsageService({ logger: this.logger });
+    this.providerUsageService = resolveProviderUsageService(this.logger, providerUsageService);
     const unsubscribeProviderConfig = attachMutableProviderConfigOwner({
       store: this.daemonConfigStore,
       providerSnapshotManager: this.providerSnapshotManager,
