@@ -129,6 +129,14 @@ packages/app/scripts/testflight-fork.sh --upload   # + upload to TestFlight
 Signing/notary material (distribution cert, ASC key `KWJX4896S5`, issuer id) is
 documented in `~/.claude/rules/ios-deploy.md`.
 
+Builds run on the M3 build server (`ssh m3`) from `~/code/paseo-fork` on `main`.
+Over SSH the login keychain is locked and codesign fails, so unlock it for the
+session first (`security unlock-keychain` with the password in
+`~/.config/m3-login.txt`) and keep it unlocked for the length of the archive.
+Each upload needs a CFBundleVersion App Store Connect has not seen; it derives
+from the `packages/app/package.json` version (`packages/app/native-release-version.js`),
+so bump the version before cutting a second build from the same release.
+
 ## Adding a feature
 
 ```bash

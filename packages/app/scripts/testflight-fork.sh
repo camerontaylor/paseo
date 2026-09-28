@@ -97,7 +97,10 @@ fi
 
 # --- build workspace deps ----------------------------------------------------
 log "Building app workspace deps"
-( cd "$REPO_ROOT" && npm run build:app-deps )
+# The client typechecks against @getpaseo/relay's dist declarations, which
+# build:app-deps does not rebuild. A checkout that last built an older lineage
+# fails in the client build with stale relay types, so rebuild relay first.
+( cd "$REPO_ROOT" && npm run build:relay && npm run build:app-deps )
 
 # --- generate the native iOS project -----------------------------------------
 log "expo prebuild (APP_VARIANT=$APP_VARIANT)"
