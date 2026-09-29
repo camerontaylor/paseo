@@ -10,6 +10,7 @@ import {
   type WorkspaceDescriptorPayload,
 } from "@getpaseo/protocol/messages";
 import { writeFileAtomic } from "../atomic-file.js";
+import { toDiagnosticErrorMessage } from "../agent/providers/diagnostic-utils.js";
 import { generateWorkspaceId } from "../workspace-registry-model.js";
 
 type Observer = (snapshot: CreationSnapshot) => void;
@@ -204,7 +205,7 @@ export class CreationService {
       if (!unknown) record.inFlight = null;
       await this.publish(identity, record, {
         phase: "failed",
-        error: error instanceof Error ? error.message : String(error),
+        error: toDiagnosticErrorMessage(error),
         errorCode: code,
         failedStage: stage,
         outcomeUnknown: unknown,

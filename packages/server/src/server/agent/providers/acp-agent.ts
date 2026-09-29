@@ -197,12 +197,12 @@ export function summarizeACPRequestError(error: unknown): {
     return { message: error.message };
   }
 
-  return { message: String(error) };
+  return { message: toDiagnosticErrorMessage(error) };
 }
 
 function toACPRequestError(error: unknown): Error {
   if (!isACPError(error)) {
-    return error instanceof Error ? error : new Error(String(error));
+    return error instanceof Error ? error : new Error(toDiagnosticErrorMessage(error));
   }
 
   const summary = summarizeACPRequestError(error);

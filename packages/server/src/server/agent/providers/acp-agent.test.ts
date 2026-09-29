@@ -2588,6 +2588,14 @@ describe("ACPAgentSession", () => {
     expect(summary.diagnostic).toContain("Droid process exited unexpectedly");
   });
 
+  test("preserves details from nonstandard ACP rejection objects", () => {
+    const summary = summarizeACPRequestError({
+      error: { code: -32603, data: { details: "Workspace is not trusted" } },
+    });
+    expect(summary.message).toContain("Workspace is not trusted");
+    expect(summary.message).not.toBe("[object Object]");
+  });
+
   test("accepts ACP extension notifications without failing the JSON-RPC connection", async () => {
     const logger = createTestLogger();
     const trace = vi.spyOn(logger, "trace");
