@@ -1886,6 +1886,18 @@ export const ProviderUsageListRequestMessageSchema = z.object({
   requestId: z.string(),
 });
 
+export const UsageListReportsRequestMessageSchema = z.object({
+  type: z.literal("usage.list_reports.request"),
+  requestId: z.string(),
+  reportIds: z.array(z.string()).optional(),
+  forceRefresh: z.boolean().optional(),
+});
+export const AgentResolveUsageReportRequestMessageSchema = z.object({
+  type: z.literal("agent.resolve_usage_report.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+});
+
 export const ResumeAgentRequestMessageSchema = z.object({
   type: z.literal("resume_agent_request"),
   handle: AgentPersistenceHandleSchema,
@@ -3451,6 +3463,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   RefreshProvidersSnapshotRequestMessageSchema,
   ProviderDiagnosticRequestMessageSchema,
   ProviderUsageListRequestMessageSchema,
+  UsageListReportsRequestMessageSchema,
+  AgentResolveUsageReportRequestMessageSchema,
   ResumeAgentRequestMessageSchema,
   ImportAgentRequestMessageSchema,
   RefreshAgentRequestMessageSchema,
@@ -3734,6 +3748,7 @@ const ServerCapabilitiesFromUnknownSchema = z
 export const ServerInfoStatusPayloadSchema = z
   .object({
     status: z.literal("server_info"),
+    protocolVersion: z.number().int().optional(),
     serverId: z.string().trim().min(1),
     hostname: ServerInfoHostnameSchema.optional(),
     version: ServerInfoVersionSchema.optional(),
@@ -3756,6 +3771,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(changeBreakdown): added in v0.8.0, remove gate after 2027-03-10.
         changeBreakdown: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
+        usageSources: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: z.boolean().optional(),
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -6482,6 +6498,32 @@ export const ProviderUsageListResponseMessageSchema = z.object({
   }),
 });
 
+export const UsageReportSchema = z.object({
+  status: ProviderUsageStatusSchema,
+  planLabel: z.string().optional(),
+  windows: z.array(ProviderUsageWindowSchema.extend({ headline: z.boolean().optional() })),
+  balances: z.array(ProviderUsageBalanceSchema).optional(),
+  details: z.array(ProviderUsageDetailSchema).optional(),
+  error: z.string().optional(),
+});
+export const UsageReportEntrySchema = z.object({
+  id: z.string(),
+  account: z.object({ label: z.string().optional() }),
+  fetchedAt: z.string(),
+  sourceId: z.string(),
+  sourceLabel: z.string(),
+  icon: z.string().optional(),
+  report: UsageReportSchema,
+});
+export const UsageListReportsResponseMessageSchema = z.object({
+  type: z.literal("usage.list_reports.response"),
+  payload: z.object({ requestId: z.string(), reports: z.array(UsageReportEntrySchema) }),
+});
+export const AgentResolveUsageReportResponseMessageSchema = z.object({
+  type: z.literal("agent.resolve_usage_report.response"),
+  payload: z.object({ requestId: z.string(), reportId: z.string().nullable() }),
+});
+
 const AgentSlashCommandSchema = z.object({
   name: z.string(),
   description: z.string(),
@@ -7176,6 +7218,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   RefreshProvidersSnapshotResponseMessageSchema,
   ProviderDiagnosticResponseMessageSchema,
   ProviderUsageListResponseMessageSchema,
+  UsageListReportsResponseMessageSchema,
+  AgentResolveUsageReportResponseMessageSchema,
   ListCommandsResponseSchema,
   ListTerminalsResponseSchema,
   TerminalsChangedSchema,
@@ -7354,6 +7398,12 @@ export type ProviderDiagnosticResponseMessage = z.infer<
   typeof ProviderDiagnosticResponseMessageSchema
 >;
 export type ProviderUsageTone = z.infer<typeof ProviderUsageToneSchema>;
+export type UsageReport = z.infer<typeof UsageReportSchema>;
+export type UsageReportEntry = z.infer<typeof UsageReportEntrySchema>;
+export type UsageListReportsResponseMessage = z.infer<typeof UsageListReportsResponseMessageSchema>;
+export type AgentResolveUsageReportResponseMessage = z.infer<
+  typeof AgentResolveUsageReportResponseMessageSchema
+>;
 export type ProviderUsageStatus = z.infer<typeof ProviderUsageStatusSchema>;
 export type ProviderUsage = z.infer<typeof ProviderUsageSchema>;
 export type ProviderUsageWindow = z.infer<typeof ProviderUsageWindowSchema>;
@@ -7677,10 +7727,17 @@ export const WSHelloMessageSchema = z.object({
   clientId: z.string().min(1),
   clientType: z.enum(["mobile", "browser", "cli", "mcp", "hub"]),
   protocolVersion: z.number().int(),
+  auth: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("password"), password: z.string() }),
+      z.object({ kind: z.literal("localCredential"), token: z.string() }),
+    ])
+    .optional(),
   appVersion: z.string().optional(),
   capabilities: z
     .object({
       voice: z.boolean().optional(),
+      [CLIENT_CAPS.helloRejection]: z.boolean().optional(),
       pushNotifications: z.boolean().optional(),
       [CLIENT_CAPS.explicitEventSubscriptions]: z.boolean().optional(),
       [CLIENT_CAPS.allProviders]: z.boolean().optional(),
@@ -7716,6 +7773,12 @@ export const WSSessionOutboundSchema = z.object({
   message: SessionOutboundMessageSchema,
 });
 
+export const WSHelloRejectedMessageSchema = z.object({
+  type: z.literal("hello.rejected"),
+  reason: z.enum(["password_required", "incorrect_password", "incompatible_protocol"]),
+  accepts: z.array(z.literal("password")),
+});
+
 // Complete WebSocket message schemas
 export const WSInboundMessageSchema = z.discriminatedUnion("type", [
   WSPingMessageSchema,
@@ -7727,6 +7790,7 @@ export const WSInboundMessageSchema = z.discriminatedUnion("type", [
 export const WSOutboundMessageSchema = z.discriminatedUnion("type", [
   WSPongMessageSchema,
   WSSessionOutboundSchema,
+  WSHelloRejectedMessageSchema,
 ]);
 
 export type WSInboundMessage = z.infer<typeof WSInboundMessageSchema>;

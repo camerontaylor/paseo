@@ -2441,7 +2441,7 @@ export function NewWorkspaceScreen({
       clearDraft={handleClearDraft}
       autoFocus
       autoFocusKey={launchFocusKey}
-      commandDraftConfig={composerState?.commandDraftConfig}
+      commandDraft={composerState?.commandDraft}
       agentControls={agentControlsWithDisabled}
     />
   );

@@ -7,11 +7,8 @@ import {
 
 export type ChatOutlinePrompt = AgentTimelinePromptIndexPayload["prompts"][number];
 
-export function shouldAcceptPromptIndexEpoch(
-  timelineEpoch: string | null,
-  indexEpoch: string,
-): boolean {
-  return timelineEpoch === null || timelineEpoch === indexEpoch;
+export function shouldAcceptPromptIndexEpoch(timelineEpoch: string, indexEpoch: string): boolean {
+  return timelineEpoch === indexEpoch;
 }
 
 /**

@@ -1585,6 +1585,8 @@ export const ar = {
     noFiles: "لم يتم العثور على ملفات أو أدلة",
     noCommands: "لم يتم العثور على أي أوامر",
     failedToLoad: "فشل التحميل",
+    chooseProjectForCommands: "اختر مشروعًا لعرض الأوامر",
+    chooseModelForCommands: "اختر نموذجًا لعرض الأوامر",
   },
   loadOlderHistory: {
     failed: "تعذر تحميل السجل الأقدم",
@@ -1676,6 +1678,10 @@ export const ar = {
     },
   },
   pairing: {
+    hostPassword: {
+      title: "كلمة المرور لـ {{host}}",
+      label: "كلمة مرور المضيف",
+    },
     connectionMethods: {
       title: "إضافة اتصال",
       direct: {
@@ -2012,8 +2018,11 @@ export const ar = {
     groupInfo: "حول{{title}}",
     sections: {
       general: "عام",
+      chat: "الدردشة",
       appearance: "مظهر",
-      layout: en.settings.sections.layout,
+      sidebar: "الشريط الجانبي",
+      terminal: "الطرفية",
+      browser: "المتصفح",
       editor: "المحرر",
       shortcuts: "الاختصارات",
       integrations: "التكامل",
@@ -2072,6 +2081,7 @@ export const ar = {
     },
     general: {
       title: "عام",
+      sending: "الإرسال",
       browserData: {
         title: "بيانات المتصفح",
         siteData: "ملفات تعريف الارتباط وبيانات المواقع",
@@ -2099,8 +2109,6 @@ export const ar = {
         },
       },
       serviceUrls: {
-        label: "عناوين URL للخدمة",
-        description: "مكان فتح عناوين URL من تشغيل البرامج النصية",
         options: {
           ask: "بسأل",
           inApp: "في Paseo",
@@ -2119,7 +2127,6 @@ export const ar = {
       toolCallDetail: {
         label: "عرض استدعاءات الأدوات",
         description: "كيفية ظهور استدعاءات الأدوات في المخطط الزمني",
-        accessibilityLabel: "حدد عرض استدعاءات الأدوات ({{value}})",
         options: {
           overview: "ملخص",
           detailed: "التفاصيل الكاملة",
@@ -2357,6 +2364,9 @@ export const ar = {
       },
     },
     host: {
+      password: {
+        guidance: "أزل هذا المضيف ثم أضفه مرة أخرى بكلمة المرور التي يطلبها هذا الخادم.",
+      },
       appearance: {
         title: "المظهر",
         name: {
