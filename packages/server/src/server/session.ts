@@ -8431,6 +8431,7 @@ export class Session {
       if (
         msg.activeTurnBehavior !== "interrupt" &&
         msg.activeTurnBehavior !== "steer" &&
+        msg.activeTurnBehavior !== "steer_only" &&
         this.agentQueueService
       ) {
         const result = await sendOrQueuePromptToAgent({
