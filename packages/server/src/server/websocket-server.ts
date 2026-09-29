@@ -1798,6 +1798,8 @@ export class VoiceAssistantWebSocketServer {
         // COMPAT(workspaceSetupRun): added in v0.7.3, remove gate after 2027-09-02.
         workspaceSetupRun: true,
         // COMPAT(providersSnapshot): keep optional until all clients rely on snapshot flow.
+        // COMPAT(checkoutBaseRefSet): added in fork v0.10.1, remove after 2027-09-30 when the supported daemon floor advertises it.
+        checkoutBaseRefSet: true,
         providersSnapshot: true,
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: true,
