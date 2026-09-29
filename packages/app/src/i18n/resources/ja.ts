@@ -150,7 +150,7 @@ export const ja: TranslationResources = {
       unmuteVoice: "音声のミュートを解除",
       muteVoice: "音声をミュート",
       dictation: "音声入力",
-      interruptBeforeVoice: "音声モードを開始する前にエージェントを中断してください",
+      interruptBeforeVoice: "エージェントの作業中に音声を使うにはホストを更新してください",
     },
     attachments: {
       addImage: "画像を追加",
@@ -1848,6 +1848,10 @@ export const ja: TranslationResources = {
     commandsUnavailable:
       "音声ミュートには、更新済みのホストとローカル音声認識が必要です。マイクボタンを使用してください。",
     notListening: "聞き取り停止中",
+    inputQueued: "発話をエージェントのキューに追加しました",
+    inputSent: "発話をエージェントに送信しました",
+    inputRemoved: "発話をキューから削除しました",
+    inputUnknown: "発話の送信状態を確認できません",
     failure: {
       "nothing-recognized": "聞き取れませんでした。もう一度話してください。",
       "recognition-stalled": "音声認識が応答しなくなりました。音声を停止して再開してください。",
@@ -1857,6 +1861,7 @@ export const ja: TranslationResources = {
       "microphone-lost": "マイクが使えなくなりました。音声を停止しました。",
     },
     actions: {
+      interruptAgent: "エージェントを中断",
       mute: "リアルタイム音声をミュート",
       unmute: "リアルタイム音声のミュートを解除",
       stop: "音声セッションを終了",

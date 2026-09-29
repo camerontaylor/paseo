@@ -75,3 +75,116 @@ test("failed local message preparation does not leave an ambiguous receipt", asy
   await requests.send(input);
   expect(sends).toBe(1);
 });
+
+test("voice receipts remain readable after more than 100 later deliveries", async () => {
+  const { requests, directory } = await fixture();
+  const input = {
+    agentId: "agent",
+    messageId: "attachment:first",
+    attachmentId: "attachment",
+    request: { text: "first" },
+    send: async () => {},
+  };
+  await requests.send(input);
+  for (let index = 0; index < 101; index++) {
+    await requests.send({
+      ...input,
+      messageId: `attachment:${index}`,
+      request: { text: `${index}` },
+    });
+  }
+  const reopened = new MessageReceipts(directory);
+  expect(await reopened.get("agent", "attachment:first", input.request)).toBe("completed");
+  const outcomes = await reopened.listForAttachment({
+    agentId: "agent",
+    attachmentId: "attachment",
+  });
+  expect(outcomes).toHaveLength(102);
+  expect(outcomes.map((item) => item.messageId)).toContain("attachment:first");
+  await expect(reopened.get("agent", "attachment:first", { text: "changed" })).rejects.toThrow(
+    "agent_request_key_conflict",
+  );
+});
+
+test("known reservation loss clears the pending receipt but provider ambiguity does not", async () => {
+  const { requests, directory } = await fixture();
+  const busy = Object.assign(new Error("busy"), { code: "AGENT_RUN_BUSY" });
+  const input = {
+    agentId: "agent",
+    messageId: "retryable",
+    request: { text: "follow up" },
+    send: async () => {
+      throw busy;
+    },
+  };
+  await expect(requests.send(input)).rejects.toThrow("busy");
+  expect(await new MessageReceipts(directory).get("agent", "retryable")).toBe("absent");
+  await requests.send({ ...input, send: async () => {} });
+  expect(await requests.get("agent", "retryable")).toBe("completed");
+});
+
+test("attachment receipts retain client authority across owner reconstruction", async () => {
+  const { requests, directory } = await fixture();
+  await requests.send({
+    agentId: "agent",
+    messageId: "attachment:one",
+    attachmentId: "attachment",
+    voiceOwner: "principal/client-a",
+    request: {},
+    send: async () => {},
+  });
+  const reopened = new MessageReceipts(directory);
+  expect(
+    await reopened.listForAttachment({
+      agentId: "agent",
+      attachmentId: "attachment",
+      voiceOwner: "principal/client-b",
+    }),
+  ).toEqual([]);
+  expect(
+    await reopened.listForAttachment({
+      agentId: "agent",
+      attachmentId: "attachment",
+      voiceOwner: "principal/client-a",
+    }),
+  ).toHaveLength(1);
+});
+
+test("pre-dispatch preparation failure stays retryable, active dispatch is not unknown", async () => {
+  const { requests } = await fixture();
+  const input = {
+    agentId: "agent",
+    messageId: "attachment:one",
+    attachmentId: "attachment",
+    request: {},
+  };
+  await expect(
+    requests.send({
+      ...input,
+      send: async () => {
+        throw Object.assign(new Error("load failed"), { code: "AGENT_PROMPT_NOT_SUBMITTED" });
+      },
+    }),
+  ).rejects.toThrow("load failed");
+  expect(await requests.get(input.agentId, input.messageId)).toBe("absent");
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = requests.send({
+    ...input,
+    send: async () => {
+      entered();
+      await barrier;
+    },
+  });
+  await started;
+  expect((await requests.listForAttachment(input))[0].state).toBe("sending");
+  release();
+  await pending;
+  expect((await requests.listForAttachment(input))[0].state).toBe("completed");
+});

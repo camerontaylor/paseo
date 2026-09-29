@@ -23,6 +23,8 @@ const StoredQueuedImageSchema = z.object({
 const StoredQueuedMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
+  origin: z.literal("voice").optional(),
+  voiceOwner: z.string().optional(),
   attachments: z.array(AgentAttachmentWireSchema).optional(),
   composerAttachments: z.array(QueuedComposerAttachmentSchema).optional(),
   images: z.array(StoredQueuedImageSchema).optional(),
@@ -66,6 +68,7 @@ export function toAgentQueueSnapshot(queue: StoredAgentQueue): AgentQueueSnapsho
     items: queue.items.map((item) => ({
       id: item.id,
       text: item.text,
+      ...(item.origin ? { origin: item.origin } : {}),
       createdAt: item.createdAt,
       ...(item.attachments?.length ? { attachments: item.attachments } : {}),
       ...(item.composerAttachments?.length
@@ -95,7 +98,7 @@ function approximateBase64ByteSize(data: string): number {
   return Math.max(0, Math.floor((data.length * 3) / 4) - padding);
 }
 
-type QueueMutator = (current: StoredAgentQueue) => StoredAgentQueue;
+type QueueMutator = (current: StoredAgentQueue) => StoredAgentQueue | Promise<StoredAgentQueue>;
 
 export interface AgentQueueMutationResult {
   queue: StoredAgentQueue;
@@ -132,7 +135,7 @@ export class AgentQueueStore {
   async mutate(agentId: string, mutate: QueueMutator): Promise<AgentQueueMutationResult> {
     return this.serialize(agentId, async () => {
       const current = await this.get(agentId);
-      const next = mutate(current);
+      const next = await mutate(current);
       if (next === current) {
         return { queue: current, changed: false };
       }

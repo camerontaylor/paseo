@@ -150,7 +150,7 @@ export const es: TranslationResources = {
       unmuteVoice: "Activar voz",
       muteVoice: "voz muda",
       dictation: "Dictado",
-      interruptBeforeVoice: "Interrumpir al agente antes de iniciar el modo de voz.",
+      interruptBeforeVoice: "Actualiza el host para usar la voz mientras el agente trabaja",
     },
     attachments: {
       addImage: "Agregar imagen",
@@ -1880,6 +1880,10 @@ export const es: TranslationResources = {
     commandsUnavailable:
       "El silencio por voz requiere un equipo actualizado con reconocimiento local. Usa el botón del micrófono.",
     notListening: "No escucha",
+    inputQueued: "Voz en cola para el agente",
+    inputSent: "Voz enviada al agente",
+    inputRemoved: "Voz eliminada de la cola",
+    inputUnknown: "Entrega de voz incierta",
     failure: {
       "nothing-recognized": "No lo entendí. Dilo otra vez.",
       "recognition-stalled": "El reconocimiento de voz dejó de responder. Detén y reinicia la voz.",
@@ -1890,6 +1894,7 @@ export const es: TranslationResources = {
       "microphone-lost": "Se perdió el micrófono. La voz se detuvo.",
     },
     actions: {
+      interruptAgent: "Interrumpir al agente",
       mute: "Silenciar voz en tiempo real",
       unmute: "Activar voz en tiempo real",
       stop: "Detener la sesión de voz",

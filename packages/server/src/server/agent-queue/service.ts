@@ -13,6 +13,8 @@ import type { AgentPromptInput } from "../agent/agent-sdk-types.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import { buildAgentPrompt } from "../agent/prompt-attachments.js";
 import { sendPromptToAgent } from "../agent/agent-prompt.js";
+import { wrapSpokenInput } from "../voice-config.js";
+import type { MessageReceipts } from "../message-receipts/index.js";
 import {
   recordDrainedId,
   toAgentQueueSnapshot,
@@ -28,6 +30,8 @@ export interface EnqueueAgentMessageInput {
   agentId: string;
   itemId: string;
   text: string;
+  origin?: "voice";
+  voiceOwner?: string;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: AgentAttachment[];
   composerAttachments?: QueuedComposerAttachment[];
@@ -51,7 +55,8 @@ export interface AgentQueueServiceOptions {
   sendPrompt?: (input: SendQueuedPromptInput) => Promise<unknown>;
 }
 
-export type AgentQueueAgentController = Pick<AgentManager, "subscribe" | "getAgent">;
+export type AgentQueueAgentController = Pick<AgentManager, "subscribe" | "getAgent"> &
+  Partial<Pick<AgentManager, "getPendingPermissions" | "hasInFlightRun">>;
 
 /**
  * Owns the per-agent message queue for the whole daemon: one instance, shared by
@@ -64,8 +69,10 @@ export class AgentQueueService {
   private readonly agentStorage: AgentStorage;
   private readonly logger: Logger;
   private readonly sendPrompt: (input: SendQueuedPromptInput) => Promise<unknown>;
+  private receipts: MessageReceipts | null = null;
 
   private readonly listeners = new Set<AgentQueueMutationListener>();
+  private readonly lastPermissionCount = new Map<string, number>();
   private readonly lastLifecycle = new Map<string, AgentLifecycleStatus>();
   private readonly drainTails = new Map<string, Promise<void>>();
   private unsubscribeAgentEvents: (() => void) | null = null;
@@ -77,15 +84,24 @@ export class AgentQueueService {
     this.logger = options.logger.child({ module: "agent", component: "agent-queue" });
     this.sendPrompt =
       options.sendPrompt ??
-      ((input) =>
-        sendPromptToAgent({
+      (async (input) => {
+        await sendPromptToAgent({
           agentManager: this.agentManager as AgentManager,
           agentStorage: this.agentStorage,
           agentId: input.agentId,
           prompt: input.prompt,
           messageId: input.messageId,
+          replaceRunning: false,
+          blockPendingPermissions: true,
+          awaitRunStart: true,
           logger: this.logger,
-        }));
+        });
+      });
+  }
+
+  /** Reuse the daemon's direct-send receipt owner once the WebSocket server constructs it. */
+  setMessageReceipts(receipts: MessageReceipts): void {
+    this.receipts = receipts;
   }
 
   start(): void {
@@ -93,9 +109,20 @@ export class AgentQueueService {
       return;
     }
     this.unsubscribeAgentEvents = this.agentManager.subscribe((event) => {
+      if (event.type === "agent_stream" && event.event.type === "permission_resolved") {
+        this.scheduleDrain(event.agentId);
+        return;
+      }
       if (event.type !== "agent_state") {
         return;
       }
+      const permissionCount =
+        event.agent.pendingPermissions?.size ??
+        this.agentManager.getPendingPermissions?.(event.agent.id).length ??
+        0;
+      const previousCount = this.lastPermissionCount.get(event.agent.id) ?? 0;
+      this.lastPermissionCount.set(event.agent.id, permissionCount);
+      if (previousCount > 0 && permissionCount === 0) this.scheduleDrain(event.agent.id);
       this.handleAgentState(event.agent.id, event.agent.lifecycle);
     });
   }
@@ -105,6 +132,7 @@ export class AgentQueueService {
     this.unsubscribeAgentEvents = null;
     this.listeners.clear();
     this.lastLifecycle.clear();
+    this.lastPermissionCount.clear();
   }
 
   subscribeToMutations(listener: AgentQueueMutationListener): () => void {
@@ -118,17 +146,32 @@ export class AgentQueueService {
     return toAgentQueueSnapshot(await this.store.get(agentId));
   }
 
+  async listVoiceInputs(
+    agentId: string,
+    attachmentId: string,
+    voiceOwner?: string,
+  ): Promise<StoredQueuedMessage[]> {
+    const queue = await this.store.get(agentId);
+    return queue.items.filter(
+      (item) =>
+        item.origin === "voice" &&
+        item.voiceOwner === voiceOwner &&
+        item.id.startsWith(`${attachmentId}:`),
+    );
+  }
+
   async enqueue(input: EnqueueAgentMessageInput): Promise<AgentQueueSnapshot> {
-    const text = input.text.trim();
+    const text = input.text;
     const attachments = input.attachments ?? [];
     const images = input.images ?? [];
-    if (!text && attachments.length === 0 && images.length === 0) {
+    if (!text.trim() && attachments.length === 0 && images.length === 0) {
       throw new Error("Cannot queue an empty message");
     }
 
     const item: StoredQueuedMessage = {
       id: input.itemId,
       text,
+      ...(input.origin ? { origin: input.origin, voiceOwner: input.voiceOwner } : {}),
       createdAt: new Date().toISOString(),
       ...(attachments.length ? { attachments } : {}),
       ...(input.composerAttachments?.length
@@ -146,20 +189,55 @@ export class AgentQueueService {
         : {}),
     };
 
-    const result = await this.store.mutate(input.agentId, (current) =>
-      // Re-enqueueing the same id is a retry, not a duplicate — including a
-      // retry that lands after the item was already drained and delivered.
-      current.items.some((existing) => existing.id === item.id) ||
-      current.drainedIds?.includes(item.id)
+    const result = await this.store.mutate(input.agentId, async (current) => {
+      const existing = current.items.find((candidate) => candidate.id === item.id);
+      if (existing) {
+        const samePayload =
+          existing.text === item.text &&
+          existing.origin === item.origin &&
+          existing.voiceOwner === item.voiceOwner &&
+          JSON.stringify(existing.attachments ?? []) === JSON.stringify(item.attachments ?? []) &&
+          JSON.stringify(
+            existing.images?.map(({ data, mimeType }) => ({ data, mimeType })) ?? [],
+          ) === JSON.stringify(images);
+        if (!samePayload) throw new Error("agent_request_key_conflict");
+        return current;
+      }
+      if (this.receipts) {
+        const { request } = this.receiptRequest(item);
+        const receiptState = await this.receipts.get(input.agentId, input.itemId, request);
+        if (receiptState === "completed" || receiptState === "removed") return current;
+        if (receiptState === "pending") throw new Error("agent_request_outcome_unknown");
+      }
+      // A receipt remains durable after the bounded legacy drained-id window expires.
+      return current.drainedIds?.includes(item.id)
         ? current
-        : { ...current, items: [...current.items, item] },
-    );
+        : { ...current, items: [...current.items, item] };
+    });
     this.publish(result);
     this.scheduleDrain(input.agentId);
     return toAgentQueueSnapshot(result.queue);
   }
 
   async remove(agentId: string, itemId: string): Promise<AgentQueueSnapshot> {
+    const queued = await this.store.get(agentId);
+    const queuedItem = queued.items.find((candidate) => candidate.id === itemId);
+    if (queuedItem && this.receipts) {
+      const { request } = this.receiptRequest(queuedItem);
+      const removed = await this.receipts.recordRemoved({
+        agentId,
+        messageId: itemId,
+        request,
+        ...(queuedItem.origin === "voice"
+          ? {
+              attachmentId: itemId.split(":", 1)[0],
+              voiceOwner: queuedItem.voiceOwner,
+              createdAt: queuedItem.createdAt,
+            }
+          : {}),
+      });
+      if (!removed) throw new Error("Queued message is already being submitted");
+    }
     const result = await this.store.mutate(agentId, (current) =>
       current.items.some((item) => item.id === itemId)
         ? { ...current, items: current.items.filter((item) => item.id !== itemId) }
@@ -206,6 +284,7 @@ export class AgentQueueService {
   async deleteForAgent(agentId: string): Promise<void> {
     await this.store.delete(agentId);
     this.lastLifecycle.delete(agentId);
+    this.lastPermissionCount.delete(agentId);
   }
 
   private handleAgentState(agentId: string, lifecycle: AgentLifecycleStatus): void {
@@ -245,6 +324,47 @@ export class AgentQueueService {
     }
   }
 
+  /** Bridge durable admission to the provider run observed by wait-for-finish. */
+  async waitForPendingDispatch(agentId: string, signal: AbortSignal): Promise<void> {
+    const aborted = () => new DOMException("Queue dispatch wait aborted", "AbortError");
+    while (true) {
+      if (signal.aborted) throw aborted();
+      const pending = this.drainTails.get(agentId);
+      if (pending) {
+        // Abort only this observer. Delivery belongs to the daemon, not its socket.
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => {
+            signal.removeEventListener("abort", onAbort);
+            reject(aborted());
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          void pending.then(() => {
+            signal.removeEventListener("abort", onAbort);
+            resolve();
+            return;
+          });
+        });
+        continue;
+      }
+      const queue = await this.store.get(agentId);
+      if (this.drainTails.has(agentId)) continue;
+      if (signal.aborted) throw aborted();
+      const agent = this.agentManager.getAgent(agentId);
+      if (
+        queue.items.length > 0 &&
+        (!agent || agent.lifecycle === "idle" || agent.lifecycle === "closed") &&
+        !this.agentManager.hasInFlightRun?.(agentId) &&
+        !this.agentManager.getPendingPermissions?.(agentId).length
+      ) {
+        // An uncertain or failed dispatch is still queued; it is not completion.
+        throw new Error(
+          "Queued input has not been confirmed submitted; inspect its delivery outcome",
+        );
+      }
+      return;
+    }
+  }
+
   /**
    * Sends the head of the queue when the agent is free. Serialized per agent so a
    * burst of state events cannot send the same item twice.
@@ -254,9 +374,57 @@ export class AgentQueueService {
     if (agent && agent.lifecycle !== "idle" && agent.lifecycle !== "closed") {
       return;
     }
+    if (this.agentManager.hasInFlightRun?.(agentId)) return;
+    if (agent && this.agentManager.getPendingPermissions?.(agentId).length) return;
     const queue = await this.store.get(agentId);
     const next = queue.items[0];
     if (!next) {
+      return;
+    }
+
+    if (this.receipts) {
+      const { prompt, request } = this.receiptRequest(next);
+      const receiptState = await this.receipts.get(agentId, next.id, request);
+      if (receiptState === "pending") return;
+      if (receiptState === "absent") {
+        try {
+          await this.receipts.send({
+            agentId,
+            messageId: next.id,
+            ...(next.origin === "voice"
+              ? {
+                  attachmentId: next.id.split(":", 1)[0],
+                  voiceOwner: next.voiceOwner,
+                  createdAt: next.createdAt,
+                }
+              : {}),
+            request,
+            send: () =>
+              this.sendPrompt({ agentId, prompt, messageId: next.id }).then(() => undefined),
+          });
+        } catch (error) {
+          this.logger.warn(
+            { err: error, agentId, itemId: next.id },
+            "Queued message was not confirmed submitted",
+          );
+          // Wake connected receipt readers after the dispatch owner has settled.
+          if ((await this.receipts.get(agentId, next.id)) === "pending") {
+            this.publish(await this.store.mutate(agentId, (current) => ({ ...current })));
+          }
+          return;
+        }
+      }
+      const drained = await this.store.mutate(agentId, (current) =>
+        current.items.some((item) => item.id === next.id)
+          ? {
+              ...current,
+              items: current.items.filter((item) => item.id !== next.id),
+              drainedIds: recordDrainedId(current.drainedIds, next.id),
+            }
+          : current,
+      );
+      this.publish(drained);
+      if (drained.changed) this.scheduleDrain(agentId);
       return;
     }
 
@@ -296,6 +464,36 @@ export class AgentQueueService {
       }));
       this.publish(restored);
     }
+  }
+
+  private receiptRequest(input: {
+    text: string;
+    origin?: "voice";
+    voiceOwner?: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: AgentAttachment[];
+  }): {
+    prompt: AgentPromptInput;
+    request: {
+      prompt: AgentPromptInput;
+      origin?: string;
+      voiceOwner?: string;
+      activeTurnBehavior?: "interrupt";
+    };
+  } {
+    const prompt = buildAgentPrompt(
+      input.origin === "voice" ? wrapSpokenInput(input.text) : input.text,
+      input.images,
+      input.attachments,
+    );
+    // COMPAT(directSendReceipts): preserve pre-queue typed fingerprints, added in fork v0.10.0-beta.1; retain until old receipts are retired.
+    return {
+      prompt,
+      request:
+        input.origin === "voice"
+          ? { prompt, origin: "voice", voiceOwner: input.voiceOwner }
+          : { prompt, activeTurnBehavior: "interrupt" },
+    };
   }
 
   private publish(result: AgentQueueMutationResult): void {

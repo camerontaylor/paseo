@@ -150,7 +150,7 @@ export const ru: TranslationResources = {
       unmuteVoice: "Включить звук",
       muteVoice: "Отключить голос",
       dictation: "Диктовка",
-      interruptBeforeVoice: "Остановите агента перед запуском голосового режима",
+      interruptBeforeVoice: "Обновите хост, чтобы использовать голос, пока агент работает",
     },
     attachments: {
       addImage: "Добавить изображение",
@@ -1861,6 +1861,10 @@ export const ru: TranslationResources = {
     commandsUnavailable:
       "Голосовое отключение требует обновлённого хоста с локальным распознаванием речи. Используйте кнопку микрофона.",
     notListening: "Не слушает",
+    inputQueued: "Речь добавлена в очередь агента",
+    inputSent: "Речь отправлена агенту",
+    inputRemoved: "Речь удалена из очереди",
+    inputUnknown: "Статус доставки речи неизвестен",
     failure: {
       "nothing-recognized": "Не расслышал. Повторите.",
       "recognition-stalled":
@@ -1871,6 +1875,7 @@ export const ru: TranslationResources = {
       "microphone-lost": "Микрофон потерян. Голосовой режим остановлен.",
     },
     actions: {
+      interruptAgent: "Прервать агента",
       mute: "Отключить микрофон в голосовом режиме реального времени",
       unmute: "Включить микрофон в голосовом режиме реального времени",
       stop: "Остановить голосовой режим реального времени",

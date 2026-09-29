@@ -460,6 +460,7 @@ type SessionConnection = ReconnectableSessionConnection | PluginSessionConnectio
 
 interface SocketSessionOptions {
   clientId: string;
+  principalId: string;
   appVersion: string | null;
   clientCapabilities: Record<string, unknown> | null;
   permissions: readonly DaemonPermission[];
@@ -573,7 +574,18 @@ export class VoiceAssistantWebSocketServer {
   private dictation!: {
     finalTimeoutMs?: number;
   } | null;
-  private readonly voiceSpeakHandlers = new Map<string, VoiceSpeakHandler>();
+  private readonly voiceSpeakHandlers = new Map<
+    string,
+    {
+      principalId: string;
+      clientId: string;
+      attachmentId: string;
+      generation: string;
+      handler: VoiceSpeakHandler;
+      revoke: () => void;
+    }
+  >();
+  private readonly spokenTurns = new Map<string, string>();
   private readonly voiceCallerContexts = new Map<string, VoiceCallerContext>();
   private readonly workspaceSetupSnapshots = new Map<string, WorkspaceSetupSnapshot>();
   private readonly workspaceSetupRuntime: WorkspaceSetupRuntime;
@@ -703,6 +715,7 @@ export class VoiceAssistantWebSocketServer {
     });
     this.scheduleService = requiredServices.scheduleService;
     this.agentQueueService = orNull(agentQueueService);
+    this.agentQueueService?.setMessageReceipts(this.messageReceipts);
     this.checkoutDiffManager = requiredServices.checkoutDiffManager;
     this.github = github ?? createGitHubService();
     this.workspaceGitService = workspaceGitService ?? createFallbackWorkspaceGitService();
@@ -1416,6 +1429,7 @@ export class VoiceAssistantWebSocketServer {
 
     const session = this.createSocketSession({
       clientId,
+      principalId: admission.principalId,
       appVersion,
       clientCapabilities,
       permissions: admission.permissions,
@@ -1516,6 +1530,7 @@ export class VoiceAssistantWebSocketServer {
       agentManager: this.agentManager,
       agentStorage: this.agentStorage,
       messageReceipts: this.messageReceipts,
+      voiceOwner: JSON.stringify([options.principalId, options.clientId]),
       creationService: this.creationService,
       projectRegistry: this.projectRegistry,
       workspaceRegistry: this.workspaceRegistry,
@@ -1553,20 +1568,48 @@ export class VoiceAssistantWebSocketServer {
         turnDetection: () => this.speech?.resolveTurnDetection() ?? null,
       },
       voiceBridge: {
-        registerVoiceSpeakHandler: (agentId, handler) => {
-          if (this.voiceSpeakHandlers.has(agentId))
-            throw new Error("Voice mode is already active for this agent");
-          this.voiceSpeakHandlers.set(agentId, handler);
+        registerVoiceSpeakHandler: (agentId, attachmentId, handler, revoke) => {
+          const previous = this.voiceSpeakHandlers.get(agentId);
+          if (
+            previous &&
+            (previous.principalId !== options.principalId ||
+              previous.clientId !== options.clientId ||
+              previous.attachmentId !== attachmentId)
+          )
+            throw new Error("Voice mode is already active for this agent on another device");
+          const generation = randomUUID();
+          this.voiceSpeakHandlers.set(agentId, {
+            principalId: options.principalId,
+            clientId: options.clientId,
+            attachmentId,
+            generation,
+            handler,
+            revoke,
+          });
+          previous?.revoke();
+          return generation;
         },
-        unregisterVoiceSpeakHandler: (agentId) => {
-          this.voiceSpeakHandlers.delete(agentId);
+        unregisterVoiceSpeakHandler: (agentId, generation) => {
+          if (this.voiceSpeakHandlers.get(agentId)?.generation === generation) {
+            this.voiceSpeakHandlers.delete(agentId);
+          }
         },
-        registerVoiceCallerContext: (agentId, context) => {
-          this.voiceCallerContexts.set(agentId, context);
+        registerVoiceCallerContext: (agentId, generation, context) => {
+          if (this.voiceSpeakHandlers.get(agentId)?.generation === generation) {
+            this.voiceCallerContexts.set(agentId, context);
+          }
         },
-        unregisterVoiceCallerContext: (agentId) => {
-          this.voiceCallerContexts.delete(agentId);
+        unregisterVoiceCallerContext: (agentId, generation) => {
+          if (
+            !this.voiceSpeakHandlers.has(agentId) ||
+            this.voiceSpeakHandlers.get(agentId)?.generation === generation
+          ) {
+            this.voiceCallerContexts.delete(agentId);
+          }
         },
+        hasSpokenInTurn: (agentId, turnId) => this.spokenTurns.get(agentId) === turnId,
+        isCurrent: (agentId, generation) =>
+          this.voiceSpeakHandlers.get(agentId)?.generation === generation,
       },
       dictation:
         this.dictation || this.speech
@@ -1969,6 +2012,8 @@ export class VoiceAssistantWebSocketServer {
         canonicalSubmittedPrompts: true,
         // COMPAT(voiceVerbalMute): fork feature, added in fork v0.10.0-beta.1, drop the gate after 2027-03-28.
         voiceVerbalMute: true,
+        // COMPAT(voiceConcurrentInput): fork feature, added in fork v0.10.0-beta.1, remove gate after 2027-03-29.
+        voiceConcurrentInput: this.agentQueueService !== null,
         // COMPAT(stableProjectIdentity): added in v0.1.109, remove gate after 2027-01-15.
         stableProjectIdentity: true,
         // COMPAT(workspaceScriptManagement): added in v0.1.105, remove gate after 2027-01-10.
@@ -2057,7 +2102,10 @@ export class VoiceAssistantWebSocketServer {
   }
 
   public resolveVoiceSpeakHandler(callerAgentId: string): VoiceSpeakHandler | null {
-    return this.voiceSpeakHandlers.get(callerAgentId) ?? null;
+    // Record actual tool invocation even while detached, so reconnect cannot read it twice.
+    const turnId = this.agentManager.getAgent(callerAgentId)?.activeForegroundTurnId;
+    if (turnId) this.spokenTurns.set(callerAgentId, turnId);
+    return this.voiceSpeakHandlers.get(callerAgentId)?.handler ?? null;
   }
 
   public resolveVoiceCallerContext(callerAgentId: string): VoiceCallerContext | null {

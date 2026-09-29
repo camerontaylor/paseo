@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { createAgentMcpServer } from "./mcp-server.js";
+import { createPaseoToolCatalog } from "./tools/paseo-tools.js";
 import { AgentManager, type ManagedAgent } from "./agent-manager.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent-storage.js";
 import { createTestAgentClients } from "../test-utils/fake-agent-client.js";
@@ -5527,6 +5528,38 @@ describe("provider MCP tools", () => {
 describe("speak MCP tool", () => {
   const logger = createTestLogger();
 
+  it.each([{ enabled: false }, { disabledTools: ["speak"] }])(
+    "honors speak disablement in native and MCP catalogs: %j",
+    async (paseoToolPolicy) => {
+      const { agentManager, agentStorage } = createTestDeps();
+      const options = {
+        agentManager,
+        agentStorage,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        callerAgentId: "voice-agent",
+        paseoToolPolicy,
+        logger,
+      };
+      const catalog = createPaseoToolCatalog(options);
+      expect(catalog.getTool("speak")).toBeUndefined();
+      const server = await createAgentMcpServer(options);
+      const client = await connectInMemoryMcpClient(server);
+      try {
+        if ("enabled" in paseoToolPolicy && paseoToolPolicy.enabled === false) {
+          await expect(client.listTools()).rejects.toThrow("Method not found");
+        } else {
+          expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain("speak");
+          expect(
+            (await client.callTool({ name: "speak", arguments: { text: "Private" } })).isError,
+          ).toBe(true);
+        }
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    },
+  );
+
   it("invokes registered speak handler for caller agent", async () => {
     const { agentManager, agentStorage } = createTestDeps();
     const speak = vi.fn().mockResolvedValue(undefined);
@@ -5598,24 +5631,27 @@ describe("speak MCP tool", () => {
     }
   });
 
-  it("fails when no speak handler exists", async () => {
+  it("settles when no speak handler is attached", async () => {
     const { agentManager, agentStorage } = createTestDeps();
     const server = await createAgentMcpServer({
       agentManager,
       agentStorage,
       providerSnapshotManager: createOpenCodeManager().manager,
       callerAgentId: "voice-agent-2",
-      enableVoiceTools: true,
       resolveSpeakHandler: () => null,
       logger,
     });
     const tool = registeredTool(server, "speak");
-    await expect(tool.handler({ text: "Hello." })).rejects.toThrow(
-      "No speak handler registered for your session",
+    const result = await tool.handler({ text: "Hello." });
+    expect(result).toEqual(
+      expect.objectContaining({
+        content: [{ type: "text", text: "Voice is not attached. Continue in the chat." }],
+        structuredContent: { ok: false },
+      }),
     );
   });
 
-  it("does not register speak tool unless voice tools are enabled", async () => {
+  it("advertises speak before attachment in MCP and native agent catalogs", async () => {
     const { agentManager, agentStorage } = createTestDeps();
     const server = await createAgentMcpServer({
       agentManager,
@@ -5625,7 +5661,19 @@ describe("speak MCP tool", () => {
       logger,
     });
     const tool = lookupTool(server, "speak");
-    expect(tool).toBeUndefined();
+    expect(tool).toBeDefined();
+    const catalog = createPaseoToolCatalog({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: "agent-no-voice",
+      resolveSpeakHandler: () => null,
+      logger,
+    });
+    expect(catalog.getTool("speak")?.name).toBe("speak");
+    expect(await catalog.executeTool("speak", { text: "Hello." })).toEqual(
+      expect.objectContaining({ structuredContent: { ok: false } }),
+    );
   });
 });
 
