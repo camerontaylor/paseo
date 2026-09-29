@@ -2632,6 +2632,16 @@ export const AgentQueueRemoveRequestSchema = z.object({
   itemId: z.string(),
 });
 
+export const AgentQueueEditRequestSchema = z.object({
+  type: z.literal("agent.queue.edit.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+  itemId: z.string(),
+  /** Reject a stale edit rather than overwriting a change made on another device. */
+  expectedText: z.string(),
+  text: z.string(),
+});
+
 export const AgentQueueListRequestSchema = z.object({
   type: z.literal("agent.queue.list.request"),
   requestId: z.string(),
@@ -2689,6 +2699,11 @@ export const AgentQueueEnqueueResponseSchema = z.object({
 
 export const AgentQueueRemoveResponseSchema = z.object({
   type: z.literal("agent.queue.remove.response"),
+  payload: AgentQueueResponsePayloadSchema,
+});
+
+export const AgentQueueEditResponseSchema = z.object({
+  type: z.literal("agent.queue.edit.response"),
   payload: AgentQueueResponsePayloadSchema,
 });
 
@@ -3601,6 +3616,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentRewindRequestMessageSchema,
   AgentQueueEnqueueRequestSchema,
   AgentQueueRemoveRequestSchema,
+  AgentQueueEditRequestSchema,
   AgentQueueListRequestSchema,
   AgentQueueReorderRequestSchema,
   AgentQueueGetItemImagesRequestSchema,
@@ -3992,6 +4008,7 @@ export const ServerInfoStatusPayloadSchema = z
         agentMessageQueue: z.boolean().optional(),
         // COMPAT(companionStream): fork feature, added in fork v0.10.0-beta.1, drop the gate after 2027-03-28.
         companionStream: z.boolean().optional(),
+        queueEdit: z.boolean().optional(),
         // Strict steering never falls back to interrupting the active turn.
         steerOnly: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
@@ -7267,6 +7284,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentRewindResponseMessageSchema,
   AgentQueueEnqueueResponseSchema,
   AgentQueueRemoveResponseSchema,
+  AgentQueueEditResponseSchema,
   AgentQueueListResponseSchema,
   AgentQueueReorderResponseSchema,
   AgentQueueGetItemImagesResponseSchema,

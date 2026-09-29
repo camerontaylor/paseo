@@ -659,6 +659,7 @@ type AgentQueueRequestMessage = Extract<
 const AGENT_QUEUE_RESPONSE_TYPES = {
   "agent.queue.enqueue.request": "agent.queue.enqueue.response",
   "agent.queue.remove.request": "agent.queue.remove.response",
+  "agent.queue.edit.request": "agent.queue.edit.response",
   "agent.queue.list.request": "agent.queue.list.response",
   "agent.queue.reorder.request": "agent.queue.reorder.response",
 } as const;
@@ -2649,6 +2650,7 @@ export class Session {
         return this.handleUpdateCompanionEntryRequest(msg);
       case "agent.queue.enqueue.request":
       case "agent.queue.remove.request":
+      case "agent.queue.edit.request":
       case "agent.queue.list.request":
       case "agent.queue.reorder.request":
         return this.handleAgentQueueRequest(msg);
@@ -5053,6 +5055,8 @@ export class Session {
         });
       case "agent.queue.remove.request":
         return service.remove(agentId, msg.itemId);
+      case "agent.queue.edit.request":
+        return service.edit(agentId, msg.itemId, msg.expectedText, msg.text);
       case "agent.queue.reorder.request":
         return service.reorder(agentId, msg.itemIds);
       case "agent.queue.list.request":
