@@ -760,6 +760,8 @@ export const zhCN: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "根目录",
+      searchPlaceholder: "搜索脚本或软件包…",
       title: "Scripts",
       actions: {
         chooseUrl: "选择 URL",
@@ -787,6 +789,8 @@ export const zhCN: TranslationResources = {
         direct: "直接地址",
       },
       states: {
+        empty: "未找到脚本",
+        noMatches: "没有匹配的脚本",
         exitCode: "exit {{code}}",
         startFailed: "启动 {{scriptName}} 失败",
         stopFailed: "停止 {{scriptName}} 失败",
@@ -1217,6 +1221,7 @@ export const zhCN: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "脚本 {{name}} 正在运行",
         serviceRunning: "服务 {{name}} 运行中",
         serviceUnhealthy: "服务 {{name}} 异常",
         creating: "正在创建...",

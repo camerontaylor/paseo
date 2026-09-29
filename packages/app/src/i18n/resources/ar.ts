@@ -764,6 +764,8 @@ export const ar: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "الجذر",
+      searchPlaceholder: "البحث عن السكربتات أو الحزم…",
       title: "البرامج النصية",
       actions: {
         chooseUrl: "اختيار الرابط",
@@ -791,6 +793,8 @@ export const ar: TranslationResources = {
         direct: "مباشر",
       },
       states: {
+        empty: "لم يتم العثور على نصوص برمجية",
+        noMatches: "لا توجد سكربتات مطابقة",
         exitCode: "الخروج من{{code}}",
         startFailed: "فشل بدء تشغيل{{scriptName}}",
         stopFailed: "فشل إيقاف{{scriptName}}",
@@ -1227,6 +1231,7 @@ export const ar: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "النص البرمجي {{name}} قيد التشغيل",
         serviceRunning: "الخدمة {{name}} قيد التشغيل",
         serviceUnhealthy: "الخدمة {{name}} غير سليمة",
         creating: "جارٍ الإنشاء...",
