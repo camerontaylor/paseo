@@ -959,6 +959,29 @@ describe("ACP selection validity helpers", () => {
 });
 
 describe("ACPAgentSession Zed parity", () => {
+  test("reports ACP mode rejection details during startup", async () => {
+    const session = createSessionWithConfig({ modeId: "yolo" });
+    const rejected = prepareConfiguredOverrideSession(session, {
+      currentMode: "default",
+      availableModes: [
+        { id: "default", label: "Default" },
+        { id: "yolo", label: "YOLO" },
+      ],
+      connection: {
+        setSessionMode: vi.fn(async () => {
+          throw {
+            code: -32603,
+            message: "Internal error",
+            data: { details: "Cannot enable privileged approval modes in an untrusted folder." },
+          };
+        }),
+      },
+    });
+    await expect(rejected.internals.applyConfiguredOverrides()).rejects.toThrow(
+      "Internal error: Cannot enable privileged approval modes in an untrusted folder.",
+    );
+  });
+
   test("applies valid stored mode/model values, routes current_mode_update, and skips invalid Cursor-style stored values with warnings", async () => {
     const validSession = createSessionWithConfig({ modeId: "plan", model: "sonnet" });
     const valid = prepareConfiguredOverrideSession(validSession, {

@@ -2071,7 +2071,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
 
     if (selection.hasAvailableModes) {
-      await this.connection.setSessionMode({ sessionId: this.sessionId, modeId });
+      await this.runACPRequest(() =>
+        this.connection!.setSessionMode({ sessionId: this.sessionId!, modeId }),
+      );
       this.currentMode = modeId;
       this.pushEvent({
         type: "mode_changed",
@@ -2087,11 +2089,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       throw new Error(`${this.provider} does not expose ACP mode switching`);
     }
 
-    const response = await this.connection.setSessionConfigOption({
-      sessionId: this.sessionId,
-      configId: modeOption.id,
-      value: modeId,
-    });
+    const response = await this.runACPRequest(() =>
+      this.connection!.setSessionConfigOption({
+        sessionId: this.sessionId!,
+        configId: modeOption.id,
+        value: modeId,
+      }),
+    );
     this.currentMode = this.applyConfigOptionResponse({
       response,
       configId: modeOption.id,
