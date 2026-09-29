@@ -274,6 +274,11 @@ export const ptBR: TranslationResources = {
       implement: "Implementar",
       question: "Como você quer prosseguir?",
       proposedPlan: "Plano proposto",
+      copyContent: "Copiar conteúdo",
+      copyLink: "Copiar link",
+      contentCopied: "Plano copiado",
+      linkCopied: "Link da sessão copiado",
+      copyFailed: "Não foi possível copiar o plano.",
     },
   },
   agentPanel: {

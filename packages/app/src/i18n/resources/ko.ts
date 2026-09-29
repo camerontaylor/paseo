@@ -273,6 +273,11 @@ export const ko: TranslationResources = {
       implement: "구현",
       question: "어떻게 진행할까요?",
       proposedPlan: "제안된 계획",
+      copyContent: "내용 복사",
+      copyLink: "링크 복사",
+      contentCopied: "계획을 복사했습니다",
+      linkCopied: "세션 링크를 복사했습니다",
+      copyFailed: "계획을 복사할 수 없습니다.",
     },
   },
   agentPanel: {

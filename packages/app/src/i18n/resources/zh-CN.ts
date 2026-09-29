@@ -273,6 +273,11 @@ export const zhCN: TranslationResources = {
       implement: "实施",
       question: "你想如何继续？",
       proposedPlan: "建议计划",
+      copyContent: "复制内容",
+      copyLink: "复制链接",
+      contentCopied: "已复制计划",
+      linkCopied: "已复制会话链接",
+      copyFailed: "无法复制计划。",
     },
   },
   agentPanel: {

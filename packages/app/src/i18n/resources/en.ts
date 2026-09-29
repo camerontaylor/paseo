@@ -269,6 +269,11 @@ export const en = {
       implement: "Implement",
       question: "How would you like to proceed?",
       proposedPlan: "Proposed plan",
+      copyContent: "Copy content",
+      copyLink: "Copy link",
+      contentCopied: "Plan copied",
+      linkCopied: "Session link copied",
+      copyFailed: "Could not copy the plan.",
     },
   },
   agentPanel: {
