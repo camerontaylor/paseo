@@ -15,6 +15,7 @@ import {
   ArrowLeftToLine,
   ArrowRightToLine,
   Copy,
+  History,
   MessageCirclePlus,
   Pencil,
   RotateCw,
@@ -74,6 +75,7 @@ import { useCompactTimeAgo } from "@/hooks/use-compact-time-ago";
 import { buildWorkspaceKeyboardHandlerId } from "@/keyboard/handler-id";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import { WorkspaceNewTabMenuContent } from "@/screens/workspace/workspace-new-tab-menu";
+import { WorkspaceRecentAgentsMenuContent } from "@/screens/workspace/workspace-recent-agents-menu";
 import {
   paneContentToolbarTrailingPadding,
   ToolbarButton,
@@ -87,7 +89,7 @@ import {
 import { useSessionStore } from "@/stores/session-store";
 
 const DROPDOWN_WIDTH = 220;
-const DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH = 36;
+const DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH = 36 + buttonControlHeight.xs;
 const PANE_SPLIT_ACTIONS_HORIZONTAL_PADDING = 2;
 const PANE_SPLIT_ACTIONS_OUTER_MARGIN =
   paneContentToolbarTrailingPadding(false, "glyph") - PANE_SPLIT_ACTIONS_HORIZONTAL_PADDING;
@@ -124,6 +126,7 @@ const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
 const ThemedMessageCirclePlus = withUnistyles(MessageCirclePlus);
 const ThemedPencil = withUnistyles(Pencil);
+const ThemedHistory = withUnistyles(History);
 const ThemedPlus = withUnistyles(Plus);
 const ThemedColumns2 = withUnistyles(Columns2);
 const ThemedRows2 = withUnistyles(Rows2);
@@ -219,6 +222,7 @@ function TabLabelMeasurement({
 
 interface WorkspaceNewTabButtonProps {
   serverId: string;
+  workspaceId: string;
   paneId?: string;
   shortcutKeys: ShortcutKey[][] | null;
   placement: "inline" | "toolbar";
@@ -226,6 +230,7 @@ interface WorkspaceNewTabButtonProps {
 
 function WorkspaceNewTabButton({
   serverId,
+  workspaceId,
   paneId,
   shortcutKeys,
   placement,
@@ -233,23 +238,36 @@ function WorkspaceNewTabButton({
   const { t } = useTranslation();
   const tooltipText = t("workspace.tabs.actions.newTab");
   const menu = (
-    <DropdownMenu>
-      <ToolbarButton
-        kind="menu"
-        label={tooltipText}
-        shortcut={shortcutKeys}
-        testID="workspace-new-tab-button"
-        style={placement === "inline" ? styles.inlineNewTabButton : undefined}
-      >
-        <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
-      </ToolbarButton>
-      <WorkspaceNewTabMenuContent
-        serverId={serverId}
-        purpose="primary"
-        host="main"
-        paneId={paneId}
-      />
-    </DropdownMenu>
+    <>
+      <DropdownMenu>
+        <ToolbarButton
+          kind="menu"
+          label={tooltipText}
+          shortcut={shortcutKeys}
+          testID="workspace-new-tab-button"
+          style={placement === "inline" ? styles.inlineNewTabButton : undefined}
+        >
+          <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
+        </ToolbarButton>
+        <WorkspaceNewTabMenuContent
+          serverId={serverId}
+          purpose="primary"
+          host="main"
+          paneId={paneId}
+        />
+      </DropdownMenu>
+      <DropdownMenu>
+        <ToolbarButton
+          kind="menu"
+          label={t("workspace.tabs.actions.recentlyClosed")}
+          testID="workspace-recent-agents-button"
+          style={placement === "inline" ? styles.inlineNewTabButton : undefined}
+        >
+          <ThemedHistory size={14} uniProps={extraMutedColorMapping} />
+        </ToolbarButton>
+        <WorkspaceRecentAgentsMenuContent serverId={serverId} workspaceId={workspaceId} />
+      </DropdownMenu>
+    </>
   );
 
   return placement === "inline" ? <View style={styles.inlineAddButton}>{menu}</View> : menu;
@@ -261,6 +279,7 @@ function WorkspacePaneToolbarActions({
   showMaximizeAction,
   paneMaximized,
   serverId,
+  workspaceId,
   paneId,
   newTabShortcutKeys,
   onSplitRight,
@@ -272,6 +291,7 @@ function WorkspacePaneToolbarActions({
   showMaximizeAction: boolean;
   paneMaximized: boolean;
   serverId: string;
+  workspaceId: string;
   paneId?: string;
   newTabShortcutKeys: ShortcutKey[][] | null;
   onSplitRight?: () => void;
@@ -307,6 +327,7 @@ function WorkspacePaneToolbarActions({
         <WorkspaceNewTabButton
           placement="toolbar"
           serverId={serverId}
+          workspaceId={workspaceId}
           paneId={paneId}
           shortcutKeys={newTabShortcutKeys}
         />
@@ -1380,6 +1401,7 @@ function ResolvedWorkspaceDesktopTabsRow({
             <WorkspaceNewTabButton
               placement="inline"
               serverId={normalizedServerId}
+              workspaceId={normalizedWorkspaceId}
               paneId={paneId}
               shortcutKeys={newTabKeys}
             />
@@ -1399,6 +1421,7 @@ function ResolvedWorkspaceDesktopTabsRow({
         showMaximizeAction={showPaneMaximizeAction}
         paneMaximized={paneMaximized}
         serverId={normalizedServerId}
+        workspaceId={normalizedWorkspaceId}
         paneId={paneId}
         newTabShortcutKeys={newTabKeys}
         onSplitRight={onSplitRight}
