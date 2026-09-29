@@ -545,6 +545,8 @@ export const zhCN: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "列出目录失败",
+        pathUnavailable: "无法从对话的工作目录解析此路径。",
+        outsideWorkspaceDirectory: "此文件夹位于当前工作区之外。请从其源工作区打开。",
         createFailed: "创建条目失败",
         renameFailed: "重命名条目失败",
         duplicateFailed: "复制条目失败",

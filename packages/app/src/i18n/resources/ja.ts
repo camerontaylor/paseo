@@ -552,6 +552,9 @@ export const ja: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "ディレクトリの一覧取得に失敗しました",
+        pathUnavailable: "このパスは会話の作業ディレクトリから解決できません。",
+        outsideWorkspaceDirectory:
+          "このフォルダーは現在のワークスペースの外にあります。元のワークスペースから開いてください。",
         createFailed: "エントリの作成に失敗しました",
         renameFailed: "エントリの名前変更に失敗しました",
         duplicateFailed: "エントリの複製に失敗しました",
