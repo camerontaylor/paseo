@@ -4,6 +4,13 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.10.1 base decision — 2026-09-29
+
+Advance `custom` to upstream `v0.10.1`, the latest published release including
+betas. Pin the local Desvio build base to that tag; it includes #5227's
+external-volume protection. Preserve the fork's side conversations and ACP
+cancellation boundary alongside upstream's injectable Claude rewind SDK.
+
 ## npm channel goes automatic — 2026-09-13
 
 Scope confirmed as **`@camerontaylor`** (the ADR's "personal scope, pending

@@ -123,9 +123,9 @@ fixes are in [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md)
   markers.
 
 **`desvio build` green means typecheck and lint passed. Nothing was executed.**
-The build sits on the unreleased dev tip plus unmerged PRs, so it is less tested
-than the current beta release, not more. Use it to pull a specific fix when you
-need it; do not treat it as a daily driver without your own QA.
+The build uses the base pinned in `~/.paseo-fork/desvio.conf` plus unmerged PRs.
+Check the base before building, and run your own QA before using the result as
+a daily driver.
 
 `desvio run start` swaps the daemon on the real `~/.paseo` and kills every
 running agent, including any agent session running on this machine. It prompts
