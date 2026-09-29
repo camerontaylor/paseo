@@ -51,6 +51,12 @@ export type PiAgentMessage =
       responseModel?: string;
       errorMessage?: string | null;
       stopReason?: string;
+      usage?: {
+        input?: number;
+        output?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+      };
     }
   | {
       role: "toolResult";
@@ -157,6 +163,7 @@ export type PiAssistantMessageEvent =
   | { type: "start" | "text_start" | "text_end" | "thinking_start" | "thinking_end" | "done" };
 
 export type PiAgentSessionEvent =
+  | { type: "thinking_level_changed"; level: string }
   | { type: "agent_start" }
   | { type: "turn_start" }
   | { type: "message_start"; message: PiAgentMessage }

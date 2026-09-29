@@ -80,6 +80,7 @@ import type {
   PiThinkingLevel,
 } from "./rpc-types.js";
 import { PiUsagePoller, type PiUsagePollScheduler } from "./usage-poller.js";
+import { getPiEffortChangeNotice } from "./effort-cache-notice.js";
 import {
   mapToolDetail,
   parseToolArgs,
@@ -1008,6 +1009,7 @@ function isPiAgentSessionEvent(event: PiRuntimeEvent): event is PiAgentSessionEv
     case "agent_end":
     case "agent_settled":
     case "auto_retry_start":
+    case "thinking_level_changed":
       return true;
     default:
       return false;
@@ -1706,10 +1708,29 @@ export class PiRpcAgentSession implements AgentSession {
     this.config.model = `${model.provider}/${model.id}`;
   }
 
-  async setThinkingOption(thinkingOptionId: string | null): Promise<void> {
+  async setThinkingOption(thinkingOptionId: string | null): Promise<void | AgentProviderNotice> {
     const thinkingLevel = normalizePiThinkingOption(thinkingOptionId) ?? DEFAULT_PI_THINKING_LEVEL;
+    await this.refreshState();
+    const previousLevel = this.state.thinkingLevel;
     await this.runtimeSession.setThinkingLevel(thinkingLevel);
     await this.refreshState();
+    const change = {
+      model: this.state.model,
+      previousLevel,
+      effectiveLevel: this.state.thinkingLevel,
+      hasConversation: this.state.messageCount > 0,
+      messages: [] as PiAgentMessage[],
+    };
+    if (!getPiEffortChangeNotice(change)) {
+      return;
+    }
+    try {
+      change.messages = await this.runtimeSession.getMessages();
+    } catch (error) {
+      // The change has already succeeded. Missing telemetry must not turn it into a failed update.
+      this.logger.debug({ err: error }, "Pi effort cache sample unavailable");
+    }
+    return getPiEffortChangeNotice(change);
   }
 
   private emit(event: AgentStreamEvent): void {
@@ -1747,6 +1768,7 @@ export class PiRpcAgentSession implements AgentSession {
       }
       return;
     }
+    this.syncThinkingLevel(runtimeState.thinkingLevel);
     this.state = runtimeState;
 
     if (this.activeTurnId !== turnId || this.activeTurnStarted || runtimeState.isStreaming) {
@@ -2198,6 +2220,13 @@ export class PiRpcAgentSession implements AgentSession {
     }
 
     switch (event.type) {
+      case "thinking_level_changed": {
+        const level = normalizePiThinkingOption(event.level);
+        if (level) {
+          this.syncThinkingLevel(level);
+        }
+        return;
+      }
       case "agent_start":
         this.activeTurnStarted = true;
         this.clearNoTurnBuffers();
@@ -2500,8 +2529,22 @@ export class PiRpcAgentSession implements AgentSession {
   }
 
   private async refreshState(): Promise<void> {
-    this.state = await this.runtimeSession.getState();
-    this.config.thinkingOptionId = this.state.thinkingLevel;
+    const state = await this.runtimeSession.getState();
+    this.syncThinkingLevel(state.thinkingLevel);
+    this.state = state;
+  }
+
+  private syncThinkingLevel(level: PiThinkingLevel): void {
+    const changed = this.state.thinkingLevel !== level;
+    this.state = { ...this.state, thinkingLevel: level };
+    this.config.thinkingOptionId = level;
+    if (changed) {
+      this.emit({
+        type: "thinking_option_changed",
+        provider: this.provider,
+        thinkingOptionId: level,
+      });
+    }
   }
 
   private async refreshAfterTurn(finalUsage: Promise<void>): Promise<void> {
