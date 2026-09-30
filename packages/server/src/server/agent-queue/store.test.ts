@@ -25,7 +25,11 @@ test("journals complete queue states before they can be replaced", async () => {
     expect(entries[1]?.before.items[0]?.text).toBe("keep this message");
     expect(entries[1]?.after.items).toEqual([]);
     expect((await store.get("agent-1")).items).toEqual([]);
-    expect((await stat(journalPath)).mode & 0o077).toBe(0);
+    // Windows reports synthesized POSIX mode bits; this assertion is meaningful
+    // only where the 0600 mode used when opening the journal is enforced.
+    if (process.platform !== "win32") {
+      expect((await stat(journalPath)).mode & 0o077).toBe(0);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
