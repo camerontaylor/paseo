@@ -10,7 +10,7 @@ import {
 import Animated, { FadeIn, FadeOut, useReducedMotion } from "react-native-reanimated";
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from "react-native-svg";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { MAX_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import type { Theme } from "@/styles/theme";
 import { PROMPT_JUMP_TOP_INSET_PX } from "../prompt-jump-settle";
 import type { PinnedPromptResolution } from "./model";
@@ -165,7 +165,7 @@ const styles = StyleSheet.create((theme) => {
     // The transcript's own content rail, right-aligned like the real user bubble.
     rail: {
       width: "100%",
-      maxWidth: MAX_CONTENT_WIDTH,
+      maxWidth: theme.contentMaxWidth,
       paddingHorizontal: theme.spacing[2],
       flexDirection: "row",
       justifyContent: "flex-end",
