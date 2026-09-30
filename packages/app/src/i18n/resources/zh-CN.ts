@@ -685,6 +685,7 @@ export const zhCN: TranslationResources = {
       actions: {
         newTab: "新建标签页",
         newAgent: "新建 Agent",
+        recentlyClosed: "最近关闭",
         newTerminal: "新建 Terminal",
         preparingTerminal: "正在准备 Terminal 标签",
         preparingTerminalTooltip: "正在准备 Terminal...",
@@ -700,6 +701,12 @@ export const zhCN: TranslationResources = {
         pullRequest: "拉取请求",
         terminalProfilesMenu: "Terminal profiles",
         editTerminalProfiles: "Edit profiles",
+      },
+      recentAgents: {
+        title: "最近关闭",
+        loading: "正在加载…",
+        empty: "此工作区没有已关闭的代理",
+        showAll: "在历史记录中查看全部",
       },
       explorerSidebar: {
         open: "打开侧边面板",

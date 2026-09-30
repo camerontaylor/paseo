@@ -693,6 +693,7 @@ export const ru: TranslationResources = {
       actions: {
         newTab: "Новая вкладка",
         newAgent: "Новый агент",
+        recentlyClosed: "Недавно закрытые",
         newTerminal: "Новый терминал",
         preparingTerminal: "Подготовка вкладки терминала",
         preparingTerminalTooltip: "Подготовка терминала...",
@@ -708,6 +709,12 @@ export const ru: TranslationResources = {
         pullRequest: "PR",
         terminalProfilesMenu: "Профили терминала",
         editTerminalProfiles: "Изменить профили",
+      },
+      recentAgents: {
+        title: "Недавно закрытые",
+        loading: "Загрузка…",
+        empty: "В этой рабочей области нет закрытых агентов",
+        showAll: "Показать все в истории",
       },
       explorerSidebar: {
         open: "Открыть боковую панель",

@@ -694,6 +694,7 @@ export const ja: TranslationResources = {
       actions: {
         newTab: "新しいタブ",
         newAgent: "新しいエージェント",
+        recentlyClosed: "最近閉じた項目",
         newTerminal: "新しいターミナル",
         preparingTerminal: "ターミナルタブを準備中",
         preparingTerminalTooltip: "ターミナルを準備中...",
@@ -709,6 +710,12 @@ export const ja: TranslationResources = {
         pullRequest: "プルリクエスト",
         terminalProfilesMenu: "ターミナルプロファイル",
         editTerminalProfiles: "プロファイルを編集",
+      },
+      recentAgents: {
+        title: "最近閉じた項目",
+        loading: "読み込み中…",
+        empty: "このワークスペースに閉じたエージェントはありません",
+        showAll: "履歴ですべて表示",
       },
       explorerSidebar: {
         open: "サイドパネルを開く",
