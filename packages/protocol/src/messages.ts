@@ -2642,6 +2642,14 @@ export const AgentQueueEditRequestSchema = z.object({
   text: z.string(),
 });
 
+/** Atomically claims a queued item and sends its daemon-owned content using strict steering. */
+export const AgentQueueSendNowRequestSchema = z.object({
+  type: z.literal("agent.queue.send_now.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+  itemId: z.string(),
+});
+
 export const AgentQueueListRequestSchema = z.object({
   type: z.literal("agent.queue.list.request"),
   requestId: z.string(),
@@ -2704,6 +2712,11 @@ export const AgentQueueRemoveResponseSchema = z.object({
 
 export const AgentQueueEditResponseSchema = z.object({
   type: z.literal("agent.queue.edit.response"),
+  payload: AgentQueueResponsePayloadSchema,
+});
+
+export const AgentQueueSendNowResponseSchema = z.object({
+  type: z.literal("agent.queue.send_now.response"),
   payload: AgentQueueResponsePayloadSchema,
 });
 
@@ -3617,6 +3630,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentQueueEnqueueRequestSchema,
   AgentQueueRemoveRequestSchema,
   AgentQueueEditRequestSchema,
+  AgentQueueSendNowRequestSchema,
   AgentQueueListRequestSchema,
   AgentQueueReorderRequestSchema,
   AgentQueueGetItemImagesRequestSchema,
@@ -4009,6 +4023,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(companionStream): fork feature, added in fork v0.10.0-beta.1, drop the gate after 2027-03-28.
         companionStream: z.boolean().optional(),
         queueEdit: z.boolean().optional(),
+        queueSendNow: z.boolean().optional(),
         // Strict steering never falls back to interrupting the active turn.
         steerOnly: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
@@ -7285,6 +7300,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentQueueEnqueueResponseSchema,
   AgentQueueRemoveResponseSchema,
   AgentQueueEditResponseSchema,
+  AgentQueueSendNowResponseSchema,
   AgentQueueListResponseSchema,
   AgentQueueReorderResponseSchema,
   AgentQueueGetItemImagesResponseSchema,

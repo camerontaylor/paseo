@@ -3008,6 +3008,14 @@ export class DaemonClient {
     );
   }
 
+  async sendQueuedAgentMessageNow(agentId: string, itemId: string): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.send_now.response">({
+        message: { type: "agent.queue.send_now.request", agentId, itemId },
+      }),
+    );
+  }
+
   async editQueuedAgentMessage(input: {
     agentId: string;
     itemId: string;
