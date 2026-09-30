@@ -275,6 +275,11 @@ export const ru: TranslationResources = {
       implement: "Реализовать",
       question: "Как бы вы хотели продолжить?",
       proposedPlan: "Предлагаемый план",
+      copyContent: "Копировать содержимое",
+      copyLink: "Копировать ссылку",
+      contentCopied: "План скопирован",
+      linkCopied: "Ссылка на сессию скопирована",
+      copyFailed: "Не удалось скопировать план.",
     },
   },
   agentPanel: {
