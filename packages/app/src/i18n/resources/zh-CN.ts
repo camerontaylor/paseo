@@ -261,6 +261,7 @@ export const zhCN: TranslationResources = {
     scrollToBottom: "滚动到底部",
     historyLoadFailed: "无法加载智能体历史记录",
     messageCapped: "此消息已被截断（{{bytes}} 字节）。",
+    pinnedPrompt: { jump: "滚动到此消息" },
     permission: {
       rejectedPlan: "已拒绝的计划",
       approvedPlan: "已批准的计划",
