@@ -77,6 +77,8 @@ To connect from your phone, open **Settings → your host → Pair Device**.
 
 When an agent is running, the composer shows **Steer** as the default send action. It adds your message to the current turn. Open **Options** beside it to **Queue message** for the next turn or **Interrupt agent** to stop the current turn and send your message. The same controls are available on desktop and phone; you can change the default in Settings.
 
+**Settings → Chat → Tool call display** defaults to **Summary** on desktop and phone, including existing installs after the update. Summary groups routine calls. Failures (including nonzero shell exits), plans, questions, and approvals remain visible. Choose **Quiet** to hide routine calls from the chat view or **Full detail** to show each call. These choices do not delete timeline history, and a choice made after the update persists.
+
 ### CLI / headless
 
 Install the CLI and start Paseo:

@@ -13,7 +13,10 @@ const AppliedMigrationsSchema = z.strictObject({ applied: z.array(z.string()) })
  */
 const STEER_DEFAULT_MIGRATION = "steer-default";
 
-/** Existing installs materialized earlier tool-call defaults in storage. */
+/**
+ * Existing installs materialized earlier tool-call defaults in storage, so the old default
+ * cannot be distinguished from a deliberate choice. Switch to Summary once; later choices stick.
+ */
 const SUMMARY_TOOL_CALLS_MIGRATION = "summary-tool-calls";
 
 /** Existing mobile installs materialized the old 15px content default in storage. */
