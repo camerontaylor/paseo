@@ -1865,6 +1865,7 @@ export class VoiceAssistantWebSocketServer {
         // COMPAT(terminalSizeOwnership): added in v0.2.6, remove gate after 2027-02-02.
         "terminal-size-ownership": true,
         workspaceTerminals: true,
+        packageJsonScripts: true,
         // COMPAT(rewind): added in v0.1.X, drop the gate when floor >= v0.1.X.
         rewind: true,
         // COMPAT(agentTimelinePromptIndex): added in v0.2.X, drop the gate when floor >= v0.2.X.
@@ -2761,8 +2762,7 @@ export class VoiceAssistantWebSocketServer {
       nowMs,
     });
 
-    const title = terminalAttentionTitle(params.reason);
-    const body = params.terminalName;
+    const { title, body } = this.terminalAttentionCopy(params);
 
     if (plan.shouldPush) {
       void this.pushNotificationSender
@@ -2805,6 +2805,26 @@ export class VoiceAssistantWebSocketServer {
         this.sessions.get(ws)!.session.publishToSource(ws, message.message);
       else this.sendToClient(ws, message);
     }
+  }
+
+  private terminalAttentionCopy(params: {
+    terminalId: string;
+    workspaceId?: string;
+    terminalName: string;
+    reason: TerminalAttentionReason;
+  }): { title: string; body: string } {
+    const script = params.workspaceId
+      ? this.scriptRuntimeStore
+          ?.listForWorkspace(params.workspaceId)
+          .find((entry) => entry.terminalId === params.terminalId && entry.type === "script")
+      : null;
+    if (script?.lifecycle === "stopped" && params.reason === "finished") {
+      return {
+        title: script.exitCode === 0 ? "Script finished" : "Script failed",
+        body: `${params.terminalName} (exit ${script.exitCode ?? "unknown"})`,
+      };
+    }
+    return { title: terminalAttentionTitle(params.reason), body: params.terminalName };
   }
 }
 

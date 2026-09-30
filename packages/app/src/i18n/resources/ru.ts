@@ -775,6 +775,8 @@ export const ru: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "Корень",
+      searchPlaceholder: "Поиск скриптов или пакетов…",
       title: "Скрипты",
       actions: {
         chooseUrl: "Выбрать URL",
@@ -802,6 +804,8 @@ export const ru: TranslationResources = {
         direct: "Прямой адрес",
       },
       states: {
+        empty: "Скрипты не найдены",
+        noMatches: "Подходящие скрипты не найдены",
         exitCode: "Код выхода: {{code}}",
         startFailed: "Не удалось запустить скрипт {{scriptName}}",
         stopFailed: "Не удалось остановить скрипт {{scriptName}}",
@@ -1248,6 +1252,7 @@ export const ru: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "Скрипт {{name}} выполняется",
         serviceRunning: "Сервис {{name}} запущен",
         serviceUnhealthy: "Сервис {{name}} работает некорректно",
         creating: "Создание...",
