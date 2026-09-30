@@ -2147,6 +2147,7 @@ export const zhCN: TranslationResources = {
         label: "工具调用显示",
         description: "工具调用在时间线中的显示方式",
         options: {
+          quiet: "精简",
           overview: "摘要",
           detailed: "完整详情",
         },

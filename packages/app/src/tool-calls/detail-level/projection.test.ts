@@ -63,6 +63,23 @@ function project(input: {
 }
 
 describe("tool call detail-level projection", () => {
+  it("hides routine calls in quiet mode but keeps failures and plans", () => {
+    const routine = toolCall("1", { type: "shell", command: "ls" });
+    const failure = toolCall("2", { type: "shell", command: "false" }, { status: "failed" });
+    const plan = toolCall("3", { type: "plan", text: "Review before editing" });
+    const response = assistant("answer");
+    const tail = [routine, failure, response];
+    const head = [routine, plan];
+
+    const result = project({ level: "quiet", tail, head });
+
+    expect(result.tail).toEqual([failure, response]);
+    expect(result.head).toEqual([plan]);
+    expect(result.groupsByHostId.size).toBe(0);
+    expect(tail).toEqual([routine, failure, response]);
+    expect(head).toEqual([routine, plan]);
+  });
+
   it.each(["detailed", "overview"] as const)(
     "keeps pending approval tools out of %s presentation without removing their canonical position",
     (level) => {

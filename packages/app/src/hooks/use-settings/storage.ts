@@ -34,7 +34,7 @@ export type WorkspaceTitleSource = "title" | "branch";
 export type PullRequestOpenLocation = "main" | "side" | "explorer";
 /** What a sidebar workspace row shows in the space to the right of its title. */
 export type SidebarWorkspaceTrailing = "diff" | "timestamp" | "none";
-export type ToolCallDetailLevel = "overview" | "detailed";
+export type ToolCallDetailLevel = "quiet" | "overview" | "detailed";
 
 const ThemePreferenceSchema = z.enum([
   ...THEME_OPTIONS.map((option) => option.name),
@@ -140,7 +140,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   sidebarChecksDisplay: DEFAULT_SIDEBAR_CHECKS_DISPLAY,
   sidebarNavItems: [],
   autoExpandReasoning: false,
-  toolCallDetailLevel: "detailed",
+  toolCallDetailLevel: "quiet",
   chatOutlineEnabled: true,
   vimKeybindings: false,
   openInSidePane: DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
@@ -230,10 +230,10 @@ const StoredAppSettingsSchema = z
     sidebarNavItems: z.array(z.object({ key: z.string(), visible: z.boolean() })).catch([]),
     autoExpandReasoning: z.boolean().catch(false),
     toolCallDetailLevel: z
-      .enum(["overview", "detailed"])
+      .enum(["quiet", "overview", "detailed"])
       .or(z.literal("concise").transform(() => "overview" as const))
       .optional()
-      .catch("detailed"),
+      .catch("quiet"),
     // COMPAT(compactToolCalls): migrated in v0.1.105, remove after 2027-01-12.
     compactToolCalls: z.boolean().optional().catch(undefined),
     chatOutlineEnabled: z.boolean().catch(true),
@@ -283,7 +283,7 @@ const StoredAppSettingsSchema = z
         ? "none"
         : DEFAULT_SIDEBAR_CHECKS_DISPLAY);
     const toolCallDetailLevel =
-      stored.toolCallDetailLevel ?? (stored.compactToolCalls ? "overview" : "detailed");
+      stored.toolCallDetailLevel ?? (stored.compactToolCalls ? "overview" : "quiet");
     return {
       ...stored,
       openInSidePane,

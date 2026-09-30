@@ -1,8 +1,10 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "../support/fixtures";
+import { openSettings } from "../support/helpers/app";
 import { expectComposerVisible } from "../support/helpers/composer";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
+import { openSettingsSection } from "../support/helpers/settings";
 
 type WebSocketMessage = string | Buffer;
 
@@ -274,6 +276,40 @@ test("keeps overview tool calls inline on desktop", async ({ page }) => {
     await group.click();
     await expect(page.getByTestId("tool-call-group-sheet")).toHaveCount(0);
     await expect(group.getByTestId("tool-call-badge").first()).toBeVisible();
+  } finally {
+    await agent.cleanup();
+  }
+});
+
+test("defaults to quiet calls and lets people reveal the retained tool history", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const agent = await seedMockAgentWorkspace({
+    repoPrefix: "tool-call-quiet-default-",
+    title: "Quiet tool calls",
+    model: "ten-second-stream",
+  });
+
+  try {
+    await openAgentRoute(page, agent);
+    await expectComposerVisible(page);
+    await agent.client.sendAgentMessage(agent.agentId, "Exercise the quiet tool-call default.");
+    await expect(page.getByText("(end of synthetic stream)")).toBeVisible({ timeout: 30_000 });
+    const quietBadges = await page.getByTestId("tool-call-badge").allTextContents();
+    expect(quietBadges.length).toBeGreaterThan(0);
+    expect(quietBadges.every((label) => label.trim() === "Thinking")).toBe(true);
+    await expect(page.getByTestId("tool-call-group").filter({ visible: true })).toHaveCount(0);
+
+    const timelineUrl = page.url();
+    await openSettings(page);
+    await openSettingsSection(page, "chat");
+    await page.getByRole("button", { name: "Tool call display: Quiet" }).click();
+    await page.getByRole("menuitem", { name: "Full detail" }).click();
+    await page.goto(timelineUrl);
+    await expect(
+      page.getByTestId("tool-call-badge").filter({ hasNotText: "Thinking" }).first(),
+    ).toBeVisible();
   } finally {
     await agent.cleanup();
   }

@@ -2189,6 +2189,7 @@ export const ko: TranslationResources = {
         label: "도구 호출 표시",
         description: "타임라인에 도구 호출이 표시되는 방식",
         options: {
+          quiet: "간소화",
           overview: "요약",
           detailed: "전체 세부정보",
         },
