@@ -2424,6 +2424,8 @@ export const en = {
         jumpToWorkspace: "Jump to workspace",
         jumpToTab: "Jump to tab",
         previousWorkspace: "Previous workspace",
+        historyBack: "Back",
+        historyForward: "Forward",
         nextWorkspace: "Next workspace",
         previousTab: "Previous tab",
         nextTab: "Next tab",
