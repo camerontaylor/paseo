@@ -76,6 +76,7 @@ export class AgentQueueService {
   private readonly lastPermissionCount = new Map<string, number>();
   private readonly lastLifecycle = new Map<string, AgentLifecycleStatus>();
   private readonly drainTails = new Map<string, Promise<void>>();
+  private readonly sendNowClaims = new Set<string>();
   private unsubscribeAgentEvents: (() => void) | null = null;
 
   constructor(options: AgentQueueServiceOptions) {
@@ -222,6 +223,9 @@ export class AgentQueueService {
   }
 
   async remove(agentId: string, itemId: string): Promise<AgentQueueSnapshot> {
+    if (this.sendNowClaims.has(`${agentId}\0${itemId}`)) {
+      throw new Error("This queued message is being sent.");
+    }
     const queued = await this.store.get(agentId);
     const queuedItem = queued.items.find((candidate) => candidate.id === itemId);
     if (queuedItem && this.receipts) {
@@ -256,7 +260,10 @@ export class AgentQueueService {
     text: string,
   ): Promise<AgentQueueSnapshot> {
     const trimmed = text.trim();
-    const result = await this.store.mutate(agentId, (current) => {
+    const result = await this.store.mutate(agentId, async (current) => {
+      if (this.sendNowClaims.has(`${agentId}\0${itemId}`)) {
+        throw new Error("This queued message is being sent.");
+      }
       const index = current.items.findIndex((item) => item.id === itemId);
       if (index === -1) {
         throw new Error("This message is no longer queued.");
@@ -264,6 +271,12 @@ export class AgentQueueService {
       const item = current.items[index];
       if (item.text !== expectedText) {
         throw new Error("This queued message changed on another device. Review it and try again.");
+      }
+      if (this.receipts) {
+        const { request } = this.receiptRequest(item);
+        if ((await this.receipts.get(agentId, itemId, request)) !== "absent") {
+          throw new Error("This queued message is already being submitted.");
+        }
       }
       if (!trimmed && !item.attachments?.length && !item.images?.length) {
         throw new Error("A queued message cannot be empty.");
@@ -277,8 +290,79 @@ export class AgentQueueService {
     return toAgentQueueSnapshot(result.queue);
   }
 
-  /** Claims the current daemon item before sending, so a drain, edit, or second device cannot race it. */
+  /** Sends authoritative stored content without racing an edit, drain, or second device. */
   async sendNow(agentId: string, itemId: string): Promise<AgentQueueSnapshot> {
+    const key = `${agentId}\0${itemId}`;
+    // Acquire the claim under the store lock. An edit already in progress must
+    // finish its write before we read the item that will actually be sent.
+    await this.store.mutate(agentId, (current) => {
+      if (!current.items.some((item) => item.id === itemId)) {
+        throw new Error("This message is no longer queued.");
+      }
+      if (this.sendNowClaims.has(key)) {
+        throw new Error("This queued message is already being sent.");
+      }
+      this.sendNowClaims.add(key);
+      return current;
+    });
+    try {
+      if (this.receipts) return await this.sendNowWithReceipt(agentId, itemId, this.receipts);
+      return await this.sendNowWithoutReceipt(agentId, itemId);
+    } finally {
+      this.sendNowClaims.delete(key);
+    }
+  }
+
+  private async sendNowWithReceipt(
+    agentId: string,
+    itemId: string,
+    receipts: MessageReceipts,
+  ): Promise<AgentQueueSnapshot> {
+    const queue = await this.store.get(agentId);
+    const item = queue.items.find((candidate) => candidate.id === itemId);
+    if (!item) throw new Error("This message is no longer queued.");
+    const { prompt, request } = this.receiptRequest(item);
+    const state = await receipts.get(agentId, itemId, request);
+    if (state === "pending") throw new Error("agent_request_outcome_unknown");
+    if (state === "removed") throw new Error("This queued message was cancelled.");
+    if (state === "absent") {
+      await receipts.send({
+        agentId,
+        messageId: itemId,
+        ...(item.origin === "voice"
+          ? {
+              attachmentId: itemId.split(":", 1)[0],
+              voiceOwner: item.voiceOwner,
+              createdAt: item.createdAt,
+            }
+          : {}),
+        request,
+        send: () =>
+          this.sendPrompt({
+            agentId,
+            prompt,
+            messageId: itemId,
+            activeTurnBehavior: "steer_only",
+          }).then(() => undefined),
+      });
+    }
+    const result = await this.store.mutate(agentId, (current) =>
+      current.items.some((candidate) => candidate.id === itemId)
+        ? {
+            ...current,
+            items: current.items.filter((candidate) => candidate.id !== itemId),
+            drainedIds: recordDrainedId(current.drainedIds, itemId),
+          }
+        : current,
+    );
+    this.publish(result);
+    return toAgentQueueSnapshot(result.queue);
+  }
+
+  private async sendNowWithoutReceipt(
+    agentId: string,
+    itemId: string,
+  ): Promise<AgentQueueSnapshot> {
     let claimedItem: StoredQueuedMessage | undefined;
     let originalIndex = -1;
     const claimed = await this.store.mutate(agentId, (current) => {
@@ -453,50 +537,10 @@ export class AgentQueueService {
     if (!next) {
       return;
     }
+    if (this.sendNowClaims.has(`${agentId}\0${next.id}`)) return;
 
     if (this.receipts) {
-      const { prompt, request } = this.receiptRequest(next);
-      const receiptState = await this.receipts.get(agentId, next.id, request);
-      if (receiptState === "pending") return;
-      if (receiptState === "absent") {
-        try {
-          await this.receipts.send({
-            agentId,
-            messageId: next.id,
-            ...(next.origin === "voice"
-              ? {
-                  attachmentId: next.id.split(":", 1)[0],
-                  voiceOwner: next.voiceOwner,
-                  createdAt: next.createdAt,
-                }
-              : {}),
-            request,
-            send: () =>
-              this.sendPrompt({ agentId, prompt, messageId: next.id }).then(() => undefined),
-          });
-        } catch (error) {
-          this.logger.warn(
-            { err: error, agentId, itemId: next.id },
-            "Queued message was not confirmed submitted",
-          );
-          // Wake connected receipt readers after the dispatch owner has settled.
-          if ((await this.receipts.get(agentId, next.id)) === "pending") {
-            this.publish(await this.store.mutate(agentId, (current) => ({ ...current })));
-          }
-          return;
-        }
-      }
-      const drained = await this.store.mutate(agentId, (current) =>
-        current.items.some((item) => item.id === next.id)
-          ? {
-              ...current,
-              items: current.items.filter((item) => item.id !== next.id),
-              drainedIds: recordDrainedId(current.drainedIds, next.id),
-            }
-          : current,
-      );
-      this.publish(drained);
-      if (drained.changed) this.scheduleDrain(agentId);
+      await this.drainWithReceipt(agentId, next, this.receipts);
       return;
     }
 
@@ -540,6 +584,69 @@ export class AgentQueueService {
         drainedIds: (current.drainedIds ?? []).filter((id) => id !== sendItem.id),
       }));
       this.publish(restored);
+    }
+  }
+
+  private async drainWithReceipt(
+    agentId: string,
+    next: StoredQueuedMessage,
+    receipts: MessageReceipts,
+  ): Promise<void> {
+    const key = `${agentId}\0${next.id}`;
+    let claimedItem: StoredQueuedMessage | undefined;
+    await this.store.mutate(agentId, (current) => {
+      if (current.items[0]?.id !== next.id || this.sendNowClaims.has(key)) return current;
+      claimedItem = current.items[0];
+      this.sendNowClaims.add(key);
+      return current;
+    });
+    if (!claimedItem) return;
+    try {
+      const { prompt, request } = this.receiptRequest(claimedItem);
+      const receiptState = await receipts.get(agentId, next.id, request);
+      if (receiptState === "pending") return;
+      if (receiptState === "absent") {
+        try {
+          await receipts.send({
+            agentId,
+            messageId: next.id,
+            ...(next.origin === "voice"
+              ? {
+                  attachmentId: next.id.split(":", 1)[0],
+                  voiceOwner: next.voiceOwner,
+                  createdAt: next.createdAt,
+                }
+              : {}),
+            request,
+            send: () =>
+              this.sendPrompt({ agentId, prompt, messageId: next.id }).then(() => undefined),
+          });
+        } catch (error) {
+          this.logger.warn(
+            { err: error, agentId, itemId: next.id },
+            "Queued message was not confirmed submitted",
+          );
+          // Wake connected receipt readers after the dispatch owner has settled.
+          if ((await receipts.get(agentId, next.id)) === "pending") {
+            this.publish(await this.store.mutate(agentId, (current) => ({ ...current })));
+          }
+          return;
+        }
+      }
+      const drained = await this.store.mutate(agentId, (current) =>
+        current.items.some((item) => item.id === next.id)
+          ? {
+              ...current,
+              items: current.items.filter((item) => item.id !== next.id),
+              drainedIds: recordDrainedId(current.drainedIds, next.id),
+            }
+          : current,
+      );
+      this.publish(drained);
+      if (drained.changed) this.scheduleDrain(agentId);
+      return;
+    } finally {
+      this.sendNowClaims.delete(key);
     }
   }
 

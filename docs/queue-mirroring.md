@@ -44,6 +44,11 @@ by one store method per operation.
 Persist across daemon restarts: yes. A queue that evaporates on restart reintroduces the delivery
 bug it exists to fix.
 
+Each queue mutation also writes a private JSON line to
+`$PASEO_HOME/queues/{agentId}.journal.jsonl` before replacing the queue file. A record contains
+the complete before and after states, including image bytes. The journal rotates at 64 MiB and
+keeps one previous segment. Copy these files aside before a manual recovery attempt.
+
 ## Protocol
 
 Dotted names per [rpc-namespacing.md](rpc-namespacing.md), in `packages/protocol/src/messages.ts`
@@ -55,7 +60,7 @@ defined there, and a separate module would import them in a cycle.
 | `agent.queue.enqueue.request`         | in        | Append an item                                 |
 | `agent.queue.remove.request`          | in        | Cancel one item                                |
 | `agent.queue.edit.request`            | in        | Edit an item's text without moving it          |
-| `agent.queue.send_now.request`        | in        | Claim and strictly steer one queued item       |
+| `agent.queue.send_now.request`        | in        | Send stored item with strict steering          |
 | `agent.queue.reorder.request`         | in        | Reorder by explicit id list                    |
 | `agent.queue.list.request`            | in        | Read the queue for one agent                   |
 | `agent.queue.get_item_images.request` | in        | Fetch one item's image bytes                   |
@@ -76,11 +81,11 @@ If an edit fails while the item is still queued, the editor remains open so the 
 revise the draft. The capability flag
 `queueEdit` prevents a newer client from sending this RPC to an older daemon.
 
-Send-now is a daemon operation gated by `queueSendNow`. It claims the authoritative stored item
-under the same per-agent lock as edits and drains, then sends that exact content with strict
-steering. A second device cannot send stale text or send the same item again. If the provider
-rejects the steer, the daemon restores the item at its prior position. A journal entry records
-both the claim and any restoration for manual recovery after a crash.
+Send-now is a daemon operation gated by `queueSendNow`. It reads the authoritative stored item,
+blocks concurrent edits, and sends that content with strict steering. On daemons with delivery
+receipts, the item stays queued until dispatch is confirmed. A completed receipt is persisted
+before removal, so a restart cannot send it twice. A refused steer leaves the item in its original
+position. An uncertain outcome also leaves it queued for inspection without an automatic retry.
 
 The wire item:
 

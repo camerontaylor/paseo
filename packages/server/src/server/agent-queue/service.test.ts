@@ -470,6 +470,86 @@ describe("AgentQueueService", () => {
     expect(harness.sent).toEqual([]);
   });
 
+  test("receipt-backed send-now sends the latest edit and records completion before removal", async () => {
+    const receipts = new MessageReceipts(join(dir, "agent-requests"));
+    harness.service.setMessageReceipts(receipts);
+    harness.agents.lifecycle = "running";
+    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "old" });
+    await harness.service.edit(AGENT_ID, "item-1", "old", "latest");
+
+    await harness.service.sendNow(AGENT_ID, "item-1");
+
+    expect(harness.sent.map((attempt) => attempt.prompt)).toEqual(["latest"]);
+    expect(harness.sent[0]?.activeTurnBehavior).toBe("steer_only");
+    expect(await receipts.get(AGENT_ID, "item-1")).toBe("completed");
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+  });
+
+  test("receipt-backed drain sends the latest edit after reading an older snapshot", async () => {
+    const receipts = new MessageReceipts(join(dir, "agent-requests"));
+    harness.service.setMessageReceipts(receipts);
+    harness.agents.lifecycle = "running";
+    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "old" });
+    await harness.service.flushDrains();
+
+    const originalGet = harness.store.get.bind(harness.store);
+    let injectEdit = true;
+    harness.store.get = async (agentId) => {
+      const snapshot = await originalGet(agentId);
+      if (injectEdit && snapshot.items[0]?.id === "item-1") {
+        injectEdit = false;
+        await harness.service.edit(agentId, "item-1", "old", "latest");
+      }
+      return snapshot;
+    };
+
+    harness.agents.emitLifecycle("running");
+    harness.agents.emitLifecycle("idle");
+    await harness.service.flushDrains();
+    expect(harness.sent[0]?.prompt).toBe("latest");
+  });
+
+  test("receipt-backed refused steer stays queued and can be edited", async () => {
+    const receipts = new MessageReceipts(join(dir, "agent-requests"));
+    harness.service.setMessageReceipts(receipts);
+    harness.agents.lifecycle = "running";
+    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "first" });
+    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-2", text: "second" });
+    harness.failSends(
+      Object.assign(new Error("steer refused"), { code: "AGENT_PROMPT_NOT_SUBMITTED" }),
+    );
+
+    await expect(harness.service.sendNow(AGENT_ID, "item-1")).rejects.toThrow("steer refused");
+    expect(await receipts.get(AGENT_ID, "item-1")).toBe("absent");
+    await harness.service.edit(AGENT_ID, "item-1", "first", "revised");
+    expect((await harness.service.list(AGENT_ID)).items.map((item) => item.text)).toEqual([
+      "revised",
+      "second",
+    ]);
+  });
+
+  test("uncertain receipt-backed send-now keeps the item queued without retrying it", async () => {
+    const receipts = new MessageReceipts(join(dir, "agent-requests"));
+    harness.service.setMessageReceipts(receipts);
+    harness.agents.lifecycle = "running";
+    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "once" });
+    harness.failSends(new Error("provider outcome unknown"));
+
+    await expect(harness.service.sendNow(AGENT_ID, "item-1")).rejects.toThrow(
+      "provider outcome unknown",
+    );
+
+    expect(await receipts.get(AGENT_ID, "item-1")).toBe("pending");
+    expect((await harness.service.list(AGENT_ID)).items.map((item) => item.id)).toEqual(["item-1"]);
+    await expect(harness.service.edit(AGENT_ID, "item-1", "once", "changed")).rejects.toThrow(
+      "already being submitted",
+    );
+    await expect(harness.service.sendNow(AGENT_ID, "item-1")).rejects.toThrow(
+      "agent_request_outcome_unknown",
+    );
+    expect(harness.attempts).toHaveLength(1);
+  });
+
   test("revision increases monotonically across mutations", async () => {
     harness.agents.lifecycle = "running";
     const first = await harness.service.enqueue({
