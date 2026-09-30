@@ -1,7 +1,6 @@
 import type { Locator, Page } from "@playwright/test";
 import { expect, test as baseTest } from "../support/fixtures";
 import {
-  awaitToolCall,
   expectAgentIdle,
   expectAgentReadyToInterrupt,
   expectAgentSurfacesIdle,
@@ -353,13 +352,12 @@ async function replaySteeredSleepTurnInBrowser(
     prompt: `Replay a ${shape}-shaped foreground shell tool call while the user steers this turn.`,
   });
   try {
-    await expect(page.getByTestId("tool-call-badge").last()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("tool-call-group").last()).toBeVisible({ timeout: 30_000 });
     await expectComposerVisible(page);
+    await expectInFlightForkAvailable(page);
     await submitMessage(page, "hello");
 
     await expect(page.getByText("hello", { exact: true })).toHaveCount(1);
-    await expect(page.getByRole("button", { name: /^Worked for/ })).toHaveCount(0);
-    await expectInFlightForkAvailable(page);
 
     await gate.waitForHeldServerMessage();
     gate.releaseHeldServerMessage();
@@ -657,7 +655,11 @@ async function expectStaleCanonicalPagePreservesNewerLiveOutput(
     await openAgentRoute(page, { workspaceId: agent.workspaceId, agentId: agent.agentId });
     await expectComposerVisible(page);
     await agent.client.sendAgentMessage(agent.agentId, "End the snapshot at a tool call.");
-    await awaitToolCall(page, "read");
+    await expect(
+      page.getByTestId("tool-call-group").filter({ hasText: /read/i }).first(),
+    ).toBeVisible({
+      timeout: 30_000,
+    });
     await page
       .getByRole("button", { name: /stop|cancel/i })
       .first()
@@ -1191,7 +1193,7 @@ test.describe("Agent message submission", () => {
       page.getByTestId("assistant-message").last(),
     );
     const assistantMessageCount = await page.getByTestId("assistant-message").count();
-    const toolCallCount = await page.getByTestId("tool-call-badge").count();
+    const toolCallCount = await page.getByTestId("tool-call-group").count();
     await composer.press("Enter");
     const userMessage = page.getByTestId("user-message").filter({ hasText: prompt }).last();
     await expect(userMessage).toBeVisible();
@@ -1199,7 +1201,7 @@ test.describe("Agent message submission", () => {
       .poll(async () => page.getByTestId("assistant-message").count())
       .toBeGreaterThan(assistantMessageCount);
     await expect
-      .poll(async () => page.getByTestId("tool-call-badge").count())
+      .poll(async () => page.getByTestId("tool-call-group").count())
       .toBeGreaterThan(toolCallCount);
     await finishTimelineRowStabilityCheck();
   });

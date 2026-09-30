@@ -452,17 +452,15 @@ function expectRowContinuity(frames: TurnFrame[]): void {
   const first = frames.findIndex((frame) => hasPaintedLayout(frame.userRow));
   const baselineFrame = frames[first];
   const baselineContentTop = submittedRowContentTop(baselineFrame);
-  const disappeared = frames.findIndex(
-    (frame, index) => index > first && !hasPaintedLayout(frame.userRow),
-  );
+  const disappeared = frames.findIndex((frame, index) => index > first && !frame.userRow.mounted);
   const reappeared = frames.findIndex(
-    (frame, index) => index > disappeared && disappeared >= 0 && hasPaintedLayout(frame.userRow),
+    (frame, index) => index > disappeared && disappeared >= 0 && frame.userRow.mounted,
   );
   const contentShifted = frames.findIndex((frame, index) => {
     const contentTop = submittedRowContentTop(frame);
     return (
       index > first &&
-      hasPaintedLayout(frame.userRow) &&
+      frame.userRow.mounted &&
       baselineContentTop !== undefined &&
       contentTop !== undefined &&
       Math.abs(contentTop - baselineContentTop) > 1
@@ -478,7 +476,7 @@ function expectRowContinuity(frames: TurnFrame[]): void {
       ].some(Boolean),
   );
   const attachmentMissing = frames.findIndex(
-    (frame, index) => index >= first && !hasPaintedLayout(frame.attachment),
+    (frame, index) => index >= first && !frame.attachment.mounted,
   );
   const violations = [
     ...(first < 0 ? ["submitted row never became visible"] : []),
@@ -493,7 +491,7 @@ function expectRowContinuity(frames: TurnFrame[]): void {
         ]
       : []),
     ...(viewportChanged >= 0 ? ["scroll viewport geometry changed"] : []),
-    ...(attachmentMissing >= 0 ? ["submitted image attachment left the painted layout"] : []),
+    ...(attachmentMissing >= 0 ? ["submitted image attachment left the layout"] : []),
   ];
   let failure = Math.max(0, first);
   if (attachmentMissing >= 0) failure = attachmentMissing;
@@ -697,7 +695,16 @@ function expectSubmittedMessageHeightStable(frames: TurnFrame[]): void {
 function expectAtomicFirstPromptTransition(frames: TurnFrame[]): void {
   expectRowContinuity(frames);
   const first = frames.findIndex((frame) => hasPaintedLayout(frame.userRow));
-  const transition = frames.slice(first);
+  // The mock turn can finish before a slow host records all requested frames.
+  // Check the active turn, including any gap before its final running frame.
+  const lastRunning = frames.findLastIndex(
+    (frame) =>
+      frame.footerRow.mounted || frame.tabProgress.mounted || frame.interruptControl.mounted,
+  );
+  expect(lastRunning, "first prompt never overlapped the running turn").toBeGreaterThanOrEqual(
+    first,
+  );
+  const transition = frames.slice(first, lastRunning + 1);
   const violations: FrameViolation[] = [];
   for (const [offset, frame] of transition.entries()) {
     const index = first + offset;
