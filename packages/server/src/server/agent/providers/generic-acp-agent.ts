@@ -21,6 +21,8 @@ import {
 export const GenericACPProviderParamsSchema = z
   .object({
     supportsMcpServers: z.boolean().optional(),
+    waitForInitialCommands: z.boolean().optional(),
+    initialCommandsWaitTimeoutMs: z.number().int().positive().optional(),
     clientCapabilities: z
       .object({
         fs: z
@@ -72,8 +74,10 @@ export class GenericACPAgentClient extends ACPAgentClient {
       capabilities: buildGenericACPCapabilities(providerParams),
       // ACP agents advertise slash commands with available_commands_update after
       // session/new, so the first listCommands() waits for that batch.
-      waitForInitialCommands: options.waitForInitialCommands ?? true,
-      initialCommandsWaitTimeoutMs: options.initialCommandsWaitTimeoutMs,
+      waitForInitialCommands:
+        options.waitForInitialCommands ?? providerParams.waitForInitialCommands ?? true,
+      initialCommandsWaitTimeoutMs:
+        options.initialCommandsWaitTimeoutMs ?? providerParams.initialCommandsWaitTimeoutMs,
       clientCapabilities: providerParams.clientCapabilities,
       clientCapabilityMeta: options.clientCapabilityMeta,
       configFeatureOptions: options.configFeatureOptions,
