@@ -13,6 +13,12 @@ const AppliedMigrationsSchema = z.strictObject({ applied: z.array(z.string()) })
  */
 const STEER_DEFAULT_MIGRATION = "steer-default";
 
+/**
+ * Existing installs materialized earlier tool-call defaults in storage, so the old default
+ * cannot be distinguished from a deliberate choice. Switch to Summary once; later choices stick.
+ */
+const SUMMARY_TOOL_CALLS_MIGRATION = "summary-tool-calls";
+
 /** Existing mobile installs materialized the old 15px content default in storage. */
 const MOBILE_CONTENT_16_MIGRATION = "mobile-content-16";
 
@@ -41,6 +47,15 @@ export async function migrateAppSettings(
     migrated =
       migrated.sendBehavior === "interrupt" ? { ...migrated, sendBehavior: "steer" } : migrated;
     applied.add(STEER_DEFAULT_MIGRATION);
+    addedMigration = true;
+  }
+
+  if (!applied.has(SUMMARY_TOOL_CALLS_MIGRATION)) {
+    migrated =
+      migrated.toolCallDetailLevel !== "overview"
+        ? { ...migrated, toolCallDetailLevel: "overview" }
+        : migrated;
+    applied.add(SUMMARY_TOOL_CALLS_MIGRATION);
     addedMigration = true;
   }
 

@@ -2213,6 +2213,7 @@ export const ru: TranslationResources = {
         label: "Отображение вызовов инструментов",
         description: "Как вызовы инструментов отображаются на временной шкале",
         options: {
+          quiet: "Тихий режим",
           overview: "Сводка",
           detailed: "Все подробности",
         },

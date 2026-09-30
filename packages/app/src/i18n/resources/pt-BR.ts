@@ -2214,6 +2214,7 @@ export const ptBR: TranslationResources = {
         label: "Exibição de chamadas de ferramentas",
         description: "Como as chamadas de ferramentas aparecem na linha do tempo",
         options: {
+          quiet: "Discreto",
           overview: "Resumo",
           detailed: "Detalhes completos",
         },

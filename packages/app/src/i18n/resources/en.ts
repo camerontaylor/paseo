@@ -2300,6 +2300,7 @@ export const en = {
         label: "Tool call display",
         description: "How tool calls appear in the timeline",
         options: {
+          quiet: "Quiet",
           overview: "Summary",
           detailed: "Full detail",
         },

@@ -2195,6 +2195,7 @@ export const ja: TranslationResources = {
         label: "ツール呼び出しの表示",
         description: "タイムラインでのツール呼び出しの表示方法",
         options: {
+          quiet: "控えめ",
           overview: "要約",
           detailed: "すべての詳細",
         },

@@ -63,7 +63,88 @@ function project(input: {
 }
 
 describe("tool call detail-level projection", () => {
-  it.each(["detailed", "overview"] as const)(
+  it("hides routine calls in quiet mode but keeps failures and plans", () => {
+    const routine = toolCall("1", { type: "shell", command: "ls" });
+    const failure = toolCall("2", { type: "shell", command: "false" }, { status: "failed" });
+    const plan = toolCall("3", { type: "plan", text: "Review before editing" });
+    const nonzeroExit = toolCall("4", { type: "shell", command: "false", exitCode: 1 });
+    const zeroExit = toolCall("5", { type: "shell", command: "true", exitCode: 0 });
+    const response = assistant("answer");
+    const tail = [routine, failure, nonzeroExit, zeroExit, response];
+    const head = [routine, plan, nonzeroExit, zeroExit];
+
+    const result = project({ level: "quiet", tail, head });
+
+    expect(result.tail).toEqual([failure, nonzeroExit, response]);
+    expect(result.head).toEqual([plan, nonzeroExit]);
+    expect(result.groupsByHostId.size).toBe(0);
+    expect(tail).toEqual([routine, failure, nonzeroExit, zeroExit, response]);
+    expect(head).toEqual([routine, plan, nonzeroExit, zeroExit]);
+  });
+
+  it("keeps pending and answered questions and approvals visible in quiet and separate in summary", () => {
+    const routine = toolCall("1", { type: "shell", command: "ls" });
+    const pendingQuestion = toolCall(
+      "2",
+      { type: "plain_text", text: "Which option?" },
+      { name: "request_user_input", status: "running" },
+    );
+    const answeredQuestion = toolCall(
+      "2",
+      { type: "plain_text", text: "Which option?\n\nAnswers:\nchoice: B" },
+      { name: "request_user_input" },
+    );
+    const asyncAnswer = toolCall(
+      "3",
+      { type: "plain_text", text: "Proceed?\nYes" },
+      { name: "request_user_input_async" },
+    );
+    const claudeAnswer = toolCall(
+      "4",
+      { type: "plain_text", text: "Keep changes?\nNo" },
+      { name: "AskUserQuestion" },
+    );
+    const approval = toolCall(
+      "5",
+      { type: "unknown", input: "Publish?", output: "Approved" },
+      { name: "approval" },
+    );
+
+    expect(project({ level: "quiet", head: [routine, pendingQuestion] }).head).toEqual([
+      pendingQuestion,
+    ]);
+    const tail = [routine, answeredQuestion, asyncAnswer, claudeAnswer, approval];
+    expect(project({ level: "quiet", tail }).tail).toEqual([
+      answeredQuestion,
+      asyncAnswer,
+      claudeAnswer,
+      approval,
+    ]);
+    const summary = project({ level: "overview", tail });
+    expect(summary.tail).toEqual(tail);
+    expect(summary.groupsByHostId.has(routine.id)).toBe(true);
+    for (const call of [answeredQuestion, asyncAnswer, claudeAnswer, approval]) {
+      expect(summary.groupsByHostId.has(call.id)).toBe(false);
+    }
+    expect(tail).toEqual([routine, answeredQuestion, asyncAnswer, claudeAnswer, approval]);
+  });
+
+  it("keeps failed calls outside collapsed summary groups", () => {
+    const routine = toolCall("1", { type: "shell", command: "ls" });
+    const failed = toolCall("2", { type: "shell", command: "false" }, { status: "failed" });
+    const nonzeroExit = toolCall("3", { type: "shell", command: "false", exitCode: 1 });
+    const successful = toolCall("4", { type: "shell", command: "true", exitCode: 0 });
+
+    const result = project({ level: "overview", head: [routine, failed, nonzeroExit, successful] });
+
+    expect(result.head).toEqual([routine, failed, nonzeroExit, successful]);
+    expect(result.groupsByHostId.has(routine.id)).toBe(true);
+    expect(result.groupsByHostId.has(failed.id)).toBe(false);
+    expect(result.groupsByHostId.has(nonzeroExit.id)).toBe(false);
+    expect(result.groupsByHostId.has(successful.id)).toBe(true);
+  });
+
+  it.each(["detailed", "overview", "quiet"] as const)(
     "keeps pending approval tools out of %s presentation without removing their canonical position",
     (level) => {
       const pending = toolCall(
@@ -245,7 +326,7 @@ describe("tool call detail-level projection", () => {
       toolCall("1", { type: "read", filePath: "/repo/src/a.ts" }),
       toolCall("2", { type: "read", filePath: "/repo/src/b.ts" }),
       toolCall("3", { type: "shell", command: "npm test" }),
-      toolCall("4", { type: "edit", filePath: "/repo/src/a.ts" }, { status: "failed" }),
+      toolCall("4", { type: "edit", filePath: "/repo/src/a.ts" }),
     ];
 
     const overview = project({ level: "overview", head: calls });
@@ -270,11 +351,7 @@ describe("tool call detail-level projection", () => {
       toolCall("1", { type: "read", filePath: "/repo/src/a.ts" }),
       toolCall("2", { type: "read", filePath: "C:\\repo\\src\\beta.ts" }),
       toolCall("3", { type: "fetch", url: "https://github.com/org/repo" }),
-      toolCall(
-        "4",
-        { type: "search", query: "paseo", toolName: "web_search" },
-        { status: "failed" },
-      ),
+      toolCall("4", { type: "search", query: "paseo", toolName: "web_search" }),
       toolCall("5", { type: "fetch", url: "not a url" }),
     ];
 
