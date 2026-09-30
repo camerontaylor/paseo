@@ -82,6 +82,53 @@ describe("tool call detail-level projection", () => {
     expect(head).toEqual([routine, plan, nonzeroExit, zeroExit]);
   });
 
+  it("keeps pending and answered questions and approvals visible in quiet and separate in summary", () => {
+    const routine = toolCall("1", { type: "shell", command: "ls" });
+    const pendingQuestion = toolCall(
+      "2",
+      { type: "plain_text", text: "Which option?" },
+      { name: "request_user_input", status: "running" },
+    );
+    const answeredQuestion = toolCall(
+      "2",
+      { type: "plain_text", text: "Which option?\n\nAnswers:\nchoice: B" },
+      { name: "request_user_input" },
+    );
+    const asyncAnswer = toolCall(
+      "3",
+      { type: "plain_text", text: "Proceed?\nYes" },
+      { name: "request_user_input_async" },
+    );
+    const claudeAnswer = toolCall(
+      "4",
+      { type: "plain_text", text: "Keep changes?\nNo" },
+      { name: "AskUserQuestion" },
+    );
+    const approval = toolCall(
+      "5",
+      { type: "unknown", input: "Publish?", output: "Approved" },
+      { name: "approval" },
+    );
+
+    expect(project({ level: "quiet", head: [routine, pendingQuestion] }).head).toEqual([
+      pendingQuestion,
+    ]);
+    const tail = [routine, answeredQuestion, asyncAnswer, claudeAnswer, approval];
+    expect(project({ level: "quiet", tail }).tail).toEqual([
+      answeredQuestion,
+      asyncAnswer,
+      claudeAnswer,
+      approval,
+    ]);
+    const summary = project({ level: "overview", tail });
+    expect(summary.tail).toEqual(tail);
+    expect(summary.groupsByHostId.has(routine.id)).toBe(true);
+    for (const call of [answeredQuestion, asyncAnswer, claudeAnswer, approval]) {
+      expect(summary.groupsByHostId.has(call.id)).toBe(false);
+    }
+    expect(tail).toEqual([routine, answeredQuestion, asyncAnswer, claudeAnswer, approval]);
+  });
+
   it("keeps failed calls outside collapsed summary groups", () => {
     const routine = toolCall("1", { type: "shell", command: "ls" });
     const failed = toolCall("2", { type: "shell", command: "false" }, { status: "failed" });

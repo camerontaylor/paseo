@@ -36,6 +36,16 @@ export interface ToolCallGroupLookup<TGroup> {
 }
 
 const EMPTY_GROUPS = new Map<string, never>();
+const ACTIONABLE_TOOL_NAMES = new Set([
+  "askuserquestion",
+  "ask_user",
+  "ask_user_question",
+  "question",
+  "request_user_input",
+  "request_user_input_async",
+  "approval",
+  "plan_approval",
+]);
 
 export function describeToolCall(item: ToolCallItem): ToolCallDescriptor {
   if (item.payload.source === "agent") {
@@ -64,6 +74,7 @@ export function describeToolCall(item: ToolCallItem): ToolCallDescriptor {
 
 export function isStandaloneToolCall(item: ToolCallItem): boolean {
   const descriptor = describeToolCall(item);
+  const name = descriptor.name.trim().toLowerCase();
   return (
     descriptor.status === "failed" ||
     descriptor.error != null ||
@@ -71,7 +82,8 @@ export function isStandaloneToolCall(item: ToolCallItem): boolean {
       descriptor.detail.exitCode != null &&
       descriptor.detail.exitCode !== 0) ||
     descriptor.detail.type === "plan" ||
-    descriptor.name.trim().toLowerCase() === "speak"
+    name === "speak" ||
+    ACTIONABLE_TOOL_NAMES.has(name)
   );
 }
 
