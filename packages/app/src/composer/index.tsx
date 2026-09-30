@@ -34,6 +34,8 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { useShallow } from "zustand/shallow";
 import {
   ArrowUp,
+  ChevronDown,
+  ChevronUp,
   Square,
   Pencil,
   AudioLines,
@@ -403,6 +405,10 @@ function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | nu
 
 interface RenderQueueTrackArgs {
   queuedMessages: readonly QueuedMessage[];
+  summaryLabel: string;
+  attachmentPreviewLabel: string;
+  expandLabel: string;
+  collapseLabel: string;
   handleSaveQueuedMessage: (id: string, expectedText: string, text: string) => Promise<boolean>;
   handleSendQueuedNow: (id: string) => Promise<void>;
   editLabel: string;
@@ -411,9 +417,13 @@ interface RenderQueueTrackArgs {
   sendNowLabel: string;
 }
 
-function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
+function QueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
   const {
     queuedMessages,
+    summaryLabel,
+    attachmentPreviewLabel,
+    expandLabel,
+    collapseLabel,
     handleSaveQueuedMessage,
     handleSendQueuedNow,
     editLabel,
@@ -421,21 +431,48 @@ function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
     cancelLabel,
     sendNowLabel,
   } = args;
+  const [expandedOverride, setExpandedOverride] = useState<boolean | null>(null);
+  const expanded = expandedOverride ?? queuedMessages.length <= 3;
+  const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
+  const toggleExpanded = useCallback(() => setExpandedOverride(!expanded), [expanded]);
   if (queuedMessages.length === 0) return null;
   return (
     <View style={styles.queueTrack}>
-      {queuedMessages.map((item) => (
-        <QueuedMessageRow
-          key={item.id}
-          item={item}
-          onSave={handleSaveQueuedMessage}
-          onSendNow={handleSendQueuedNow}
-          editLabel={editLabel}
-          saveLabel={saveLabel}
-          cancelLabel={cancelLabel}
-          sendNowLabel={sendNowLabel}
-        />
-      ))}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={expanded ? collapseLabel : expandLabel}
+        accessibilityState={accessibilityState}
+        onPress={toggleExpanded}
+        style={styles.queueHeader}
+        testID="composer-queue-toggle"
+      >
+        <View style={styles.queueHeaderContent}>
+          <Text style={styles.queueHeaderText}>{summaryLabel}</Text>
+          {!expanded && (
+            <Text style={styles.queuePreviewText} numberOfLines={1} ellipsizeMode="tail">
+              {queuedMessages[0]?.text.trim() || attachmentPreviewLabel}
+            </Text>
+          )}
+        </View>
+        {expanded ? (
+          <ThemedChevronUp size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />
+        ) : (
+          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />
+        )}
+      </Pressable>
+      {expanded &&
+        queuedMessages.map((item) => (
+          <QueuedMessageRow
+            key={item.id}
+            item={item}
+            onSave={handleSaveQueuedMessage}
+            onSendNow={handleSendQueuedNow}
+            editLabel={editLabel}
+            saveLabel={saveLabel}
+            cancelLabel={cancelLabel}
+            sendNowLabel={sendNowLabel}
+          />
+        ))}
     </View>
   );
 }
@@ -2587,18 +2624,25 @@ function ComposerContentImpl({
   );
 
   const queueList = useMemo(
-    () =>
-      renderQueueTrack({
-        queuedMessages,
-        handleSaveQueuedMessage,
-        handleSendQueuedNow,
-        editLabel: t("composer.attachments.editQueuedMessage"),
-        saveLabel: t("composer.attachments.saveQueuedMessage"),
-        cancelLabel: t("common.actions.cancel"),
-        sendNowLabel: isAgentRunning
-          ? t("composer.input.sendAndSteer")
-          : t("composer.attachments.sendQueuedMessageNow"),
-      }),
+    () => (
+      <QueueTrack
+        queuedMessages={queuedMessages}
+        summaryLabel={t("composer.attachments.queuedMessages", { count: queuedMessages.length })}
+        attachmentPreviewLabel={t("composer.attachments.queuedAttachment")}
+        expandLabel={t("composer.attachments.expandQueuedMessages")}
+        collapseLabel={t("composer.attachments.collapseQueuedMessages")}
+        handleSaveQueuedMessage={handleSaveQueuedMessage}
+        handleSendQueuedNow={handleSendQueuedNow}
+        editLabel={t("composer.attachments.editQueuedMessage")}
+        saveLabel={t("composer.attachments.saveQueuedMessage")}
+        cancelLabel={t("common.actions.cancel")}
+        sendNowLabel={
+          isAgentRunning
+            ? t("composer.input.sendAndSteer")
+            : t("composer.attachments.sendQueuedMessageNow")
+        }
+      />
+    ),
     [handleSaveQueuedMessage, handleSendQueuedNow, isAgentRunning, queuedMessages, t],
   );
 
@@ -2874,6 +2918,29 @@ const styles = StyleSheet.create((theme: Theme) => ({
     flexDirection: "column",
     gap: theme.spacing[2],
   },
+  queueHeader: {
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    gap: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    backgroundColor: theme.colors.surface1,
+  },
+  queueHeaderContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  queueHeaderText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  queuePreviewText: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
   queueItem: {
     flexDirection: "row",
     alignItems: "center",
@@ -2949,6 +3016,8 @@ const styles = StyleSheet.create((theme: Theme) => ({
 const ThemedAttachmentSpinner = withUnistyles(LoadingSpinner);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedArrowUp = withUnistyles(ArrowUp);
+const ThemedChevronDown = withUnistyles(ChevronDown);
+const ThemedChevronUp = withUnistyles(ChevronUp);
 const ThemedGitPullRequest = withUnistyles(GitPullRequest);
 const ThemedCircleDot = withUnistyles(CircleDot);
 const ThemedAudioLines = withUnistyles(AudioLines);
