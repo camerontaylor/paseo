@@ -29,6 +29,7 @@ function reloadableConfig(
     appendSystemPrompt: daemon.appendSystemPrompt ?? "",
     terminalProfiles: daemon.terminalProfiles,
     agentProfiles: daemon.agentProfiles,
+    agentDefaults: daemon.agentDefaults,
     cors: { allowedOrigins: [] },
     trustedProxies: ["loopback"],
     git: {
@@ -959,6 +960,43 @@ describe("DaemonConfigStore reload", () => {
     writeFileSync(path.join(paseoHome, "config.json"), `${JSON.stringify(config, null, 2)}\n`);
   }
 
+  describe("agent defaults", () => {
+    test("persists project patches without replacing the host or sibling projects", () => {
+      const { paseoHome, store } = createReloadableStore();
+      const host = { provider: "codex", model: "gpt-6-astra" };
+      const webBuilder = { provider: "claude", model: "claude-opus-5-5" };
+      store.patch({ agentDefaults: { host } });
+      store.patch({ agentDefaults: { projects: { webBuilder } } });
+      store.patch({ agentDefaults: { projects: { another: host } } });
+      expect(store.get().agentDefaults).toEqual({ host, projects: { webBuilder, another: host } });
+      expect(loadPersistedConfig(paseoHome).daemon?.agentDefaults).toEqual(
+        store.get().agentDefaults,
+      );
+
+      store.patch({ agentDefaults: { projects: { webBuilder: null } } });
+      store.patch({ agentDefaults: { host: null } });
+      const cleared = { host: null, projects: { webBuilder: null, another: host } };
+      expect(store.get().agentDefaults).toEqual(cleared);
+      expect(loadPersistedConfig(paseoHome).daemon?.agentDefaults).toEqual(cleared);
+    });
+
+    test("reload applies defaults and their removal without a restart", () => {
+      const { paseoHome, store, persisted } = createReloadableStore();
+      const agentDefaults = { host: { provider: "codex", model: "gpt-6-astra" } };
+      writeConfig(paseoHome, { ...persisted, daemon: { ...persisted.daemon, agentDefaults } });
+      expect(store.reload()).toMatchObject({
+        appliedPaths: ["daemon.agentDefaults"],
+        restartRequiredPaths: [],
+      });
+      expect(store.get().agentDefaults).toEqual(agentDefaults);
+      writeConfig(paseoHome, persisted);
+      expect(store.reload()).toMatchObject({
+        appliedPaths: ["daemon.agentDefaults"],
+        restartRequiredPaths: [],
+      });
+      expect(store.get().agentDefaults).toBeUndefined();
+    });
+  });
   test("applies mutable edits and reports startup-only edits", () => {
     const { paseoHome, store, persisted } = createReloadableStore();
     writeConfig(paseoHome, {

@@ -22,6 +22,8 @@ import {
   DEFAULT_TERMINAL_PROFILES,
 } from "@getpaseo/protocol/terminal-profiles";
 import { AgentProfilesSection } from "@/agent-profiles";
+// FORK(agent-defaults): the host default is shared by every connected device.
+import { AgentDefaultsSection } from "@/agent-defaults/settings-section";
 import { AgentSkillsSection } from "@/agent-skills";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { SettingsTextAreaCard } from "@/components/settings-textarea";
@@ -302,6 +304,7 @@ export function HostAgentsPage({ serverId }: { serverId: string }) {
       )}
       <AgentSkillsSection serverId={serverId} />
       <AgentProfilesSection serverId={serverId} />
+      <AgentDefaultsSection serverId={serverId} />
     </View>
   );
 }

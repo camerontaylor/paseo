@@ -42,6 +42,8 @@ export interface AgentFormReducerState {
   resolution: AgentFormResolutionState;
   inputs?: {
     serverId: string | null;
+    // FORK(agent-defaults): a project switch starts a fresh default selection.
+    projectId?: string | null;
     initialValues: FormInitialValues | undefined;
     active: boolean;
   };
@@ -68,6 +70,7 @@ export const SELECTABLE_PROVIDER_STATUSES = new Set<ProviderSnapshotEntry["statu
 interface AgentFormInputs {
   type: "INPUTS_CHANGED";
   serverId: string | null;
+  projectId?: string | null;
   isVisible: boolean;
   isCreateFlow: boolean;
   isPreferencesLoading: boolean;
@@ -595,12 +598,18 @@ function receiveInputs(
   const changed =
     previous?.active !== active ||
     previous.serverId !== action.serverId ||
+    previous.projectId !== action.projectId ||
     !sameInitialValues(previous.initialValues, initial);
   let next = state;
   if (changed) {
     next = {
       ...resolveAgentForm(state, { type: action.isVisible ? "REQUEST_RESOLUTION" : "RESET" }),
-      inputs: { serverId: action.serverId, initialValues: initial, active },
+      inputs: {
+        serverId: action.serverId,
+        projectId: action.projectId,
+        initialValues: initial,
+        active,
+      },
     };
   }
   if (!active || action.isPreferencesLoading || !action.serverId || !action.hasSnapshot)

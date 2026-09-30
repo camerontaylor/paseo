@@ -1,4 +1,5 @@
 import { ToolCallSummaryStore } from "./agent/tool-call-summaries/store.js";
+import type { AgentDefaults } from "@getpaseo/protocol/agent-defaults";
 import { ToolCallSummarizer } from "./agent/tool-call-summaries/service.js";
 import { AgentSummaryGenerator } from "./agent/tool-call-summaries/generation.js";
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
@@ -414,6 +415,8 @@ export interface PaseoDaemonConfig {
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
   agentProfiles?: AgentProfile[];
+  // FORK(agent-defaults): launch defaults are runtime-safe daemon preferences.
+  agentDefaults?: AgentDefaults;
   skillSelection?: AgentSkillSelection;
   pluginsEnabled?: boolean;
   plugins?: Record<string, PluginSource>;
@@ -576,6 +579,8 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     pluginsEnabled: config.pluginsEnabled ?? false,
     plugins: config.plugins ?? {},
     skills: { selection: config.skillSelection },
+    // FORK(agent-defaults): publish defaults to clients on connect and reload.
+    agentDefaults: config.agentDefaults,
   };
 
   if (config.terminalProfiles !== undefined) {

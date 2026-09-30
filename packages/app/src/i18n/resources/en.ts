@@ -2211,6 +2211,14 @@ export const en = {
         },
       },
     },
+    // FORK(agent-defaults): defaults are host preferences with project overrides.
+    agentDefaults: {
+      title: "Default agent",
+      model: "Model",
+      inherit: "Use host default",
+      remember: "Remember last selection",
+      updateHost: "Update this host to configure agent defaults.",
+    },
     editor: {
       title: "Editor",
       vimKeybindings: "Vim keybindings",

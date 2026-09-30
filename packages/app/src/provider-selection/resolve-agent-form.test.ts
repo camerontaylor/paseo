@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { findDefaultProjectId, seedAgentDefaults } from "@/agent-defaults/defaults";
 import {
   resolveAgentForm,
   resolveFormState,
@@ -1268,4 +1269,81 @@ it("owns input readiness, reopening and user edits in the reducer", () => {
   expect(state.resolution.status).toBe("pending");
   state = resolveAgentForm(state, { ...inputs, isPreferencesLoading: false, hasSnapshot: true });
   expect(state.form).toMatchObject({ provider: "codex", model: "astra" });
+});
+
+describe("host and project agent defaults", () => {
+  const host = { provider: "codex", model: "gpt-6-astra" };
+  const webBuilder = { provider: "claude", model: "claude-opus-5-5" };
+  const defaults = { host, projects: { webBuilder } };
+
+  it("uses stable project membership for the source checkout and its worktrees", () => {
+    const projects = [{ projectId: "webBuilder", projectRootPath: "/www/web-builder" }];
+    const workspaces = [{ projectId: "webBuilder", workspaceDirectory: "/worktrees/hippo" }];
+    for (const workingDir of ["/www/web-builder", "/worktrees/hippo"]) {
+      const projectId = findDefaultProjectId({ workingDir, projects, workspaces });
+      expect(seedAgentDefaults({ defaults, projectId, initialValues: undefined })).toEqual(
+        webBuilder,
+      );
+    }
+    const projectId = findDefaultProjectId({ workingDir: "/www/another", projects, workspaces });
+    expect(seedAgentDefaults({ defaults, projectId, initialValues: undefined })).toEqual(host);
+  });
+
+  it("preserves an explicit handoff and falls back to the host when an override is cleared", () => {
+    const initialValues = {
+      provider: "codex",
+      model: "manual",
+      modeId: "plan",
+      thinkingOptionId: "high",
+    };
+    expect(seedAgentDefaults({ defaults, projectId: "webBuilder", initialValues })).toBe(
+      initialValues,
+    );
+    expect(
+      seedAgentDefaults({
+        defaults: { host, projects: { webBuilder: null } },
+        projectId: "webBuilder",
+        initialValues: undefined,
+      }),
+    ).toEqual(host);
+    expect(
+      seedAgentDefaults({ defaults: undefined, projectId: "webBuilder", initialValues: undefined }),
+    ).toBeUndefined();
+  });
+
+  it("keeps manual choices until switching projects and does not use last selection over a default", () => {
+    const inputs = {
+      type: "INPUTS_CHANGED" as const,
+      serverId: "host",
+      projectId: "webBuilder",
+      isVisible: true,
+      isCreateFlow: true,
+      isPreferencesLoading: false,
+      hasSnapshot: true,
+      initialValues: webBuilder,
+      preferences: { provider: "codex", providerPreferences: { codex: { model: "remembered" } } },
+      allowedProviderMap: new Map(),
+      providerModelsByProvider: new Map(),
+    };
+    let state = resolveAgentForm(makeState(), inputs);
+    expect(state.form).toMatchObject(webBuilder);
+    state = resolveAgentForm(state, {
+      type: "SET_MODEL_FROM_USER",
+      modelId: "manual",
+      availableModels: null,
+      providerPrefs: undefined,
+    });
+    state = resolveAgentForm(state, inputs);
+    expect(state.form.model).toBe("manual");
+    state = resolveAgentForm(state, { ...inputs, projectId: "another", initialValues: host });
+    expect(state.form).toMatchObject(host);
+    state = resolveAgentForm(state, {
+      type: "SET_MODEL_FROM_USER",
+      modelId: "manual-again",
+      availableModels: null,
+      providerPrefs: undefined,
+    });
+    state = resolveAgentForm(state, { ...inputs, projectId: "third", initialValues: host });
+    expect(state.form).toMatchObject(host);
+  });
 });

@@ -215,6 +215,7 @@ snapshot so a mixed edit can apply its live subset and still name the paths that
     appendSystemPrompt: string,    // appended to supported provider system/developer prompts
     terminalProfiles: TerminalProfile[],  // named shell commands; omitted means DEFAULT_TERMINAL_PROFILES
     agentProfiles: AgentProfile[],        // named agent launch bundles; omitted means none
+    agentDefaults?: { host?: { provider, model } | null, projects?: Record<projectId, { provider, model } | null> },
     cors: { allowedOrigins: string[] },
     relay: { enabled: boolean, endpoint: string, publicEndpoint: string, useTls: boolean, publicUseTls: boolean }, // new homes materialize enabled: false
     auth: { password: string }    // bcrypt hash, optional
@@ -288,6 +289,23 @@ defaults, so both mean none.
 rather than storing something it cannot describe. That is why the client gates the agent profiles
 UI on `server_info.features.agentProfiles` instead of letting a save appear to succeed against an
 older daemon.
+
+### Default agents
+
+Set the host default in **Settings → your host → Agents → Default agent** and an
+override in the project's settings. Defaults live on the daemon so every connected
+device uses them. Project overrides use the host's stable project ID, so renaming a
+project or creating a worktree does not change its default.
+
+Defaults seed new chat and workspace composers. Explicit handoff choices and manual
+composer selections win; choosing another model for one chat does not rewrite the
+default. Without a configured default, the app keeps its remembered selection.
+CLI and MCP calls continue to use their explicitly supplied provider and model.
+
+Config patches merge individual project overrides. Set one entry to `null` to
+inherit the host default; set `host` to `null` to return to remembered selections.
+The `agentDefaults` capability gates editing on older hosts, whose strict config
+parser cannot persist this field.
 
 ### Agent provider Paseo tools
 

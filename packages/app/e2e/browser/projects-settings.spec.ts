@@ -58,8 +58,95 @@ import {
   buildSettingsRoute,
 } from "@/utils/host-routes";
 import { getServerId } from "../support/helpers/server-id";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
+import {
+  openAgentProfileSettings,
+  searchAllModels,
+  selectModelRow,
+  expectComposerModel,
+} from "../support/helpers/agent-profiles";
+import {
+  openGlobalNewWorkspaceComposer,
+  selectNewWorkspaceProject,
+} from "../support/helpers/new-workspace";
+import { gotoWorkspace } from "../support/helpers/launcher";
+import { runWorkspaceActionFromCommandCenter } from "../support/helpers/command-center-workspace-actions";
+import { waitForDraftComposer } from "../support/helpers/command-center-agent-controls";
 
 const updatedSetup = ["npm install", "npm run build"];
+
+base(
+  "shares host and project agent defaults across new workspace and chat composers",
+  async ({ page }, testInfo) => {
+    test.setTimeout(180_000);
+    const first = await seedWorkspace({ repoPrefix: "project-default-agent-" });
+    const second = await seedWorkspace({ repoPrefix: "host-default-agent-" });
+    const client = await connectDaemonClient<DaemonClient>({ clientIdPrefix: "agent-defaults" });
+    const previousHost = (await client.getDaemonConfig()).config.agentDefaults?.host ?? null;
+    try {
+      await openAgentProfileSettings(page);
+      const section = page.getByTestId("agent-defaults-section");
+      await section.getByTestId("combined-model-selector").click();
+      await searchAllModels(page, "Ten second stream");
+      await selectModelRow(page, { provider: "mock", modelId: "ten-second-stream" });
+      await expect
+        .poll(async () => (await client.getDaemonConfig()).config.agentDefaults?.host)
+        .toEqual({ provider: "mock", model: "ten-second-stream" });
+
+      await openProjects(page);
+      await openProjectSettings(page, first.projectDisplayName);
+      await section.getByTestId("combined-model-selector").click();
+      await searchAllModels(page, "One minute stream");
+      await selectModelRow(page, { provider: "mock", modelId: "one-minute-stream" });
+      await expect
+        .poll(
+          async () =>
+            (await client.getDaemonConfig()).config.agentDefaults?.projects?.[first.projectId],
+        )
+        .toEqual({ provider: "mock", model: "one-minute-stream" });
+      await page.screenshot({
+        path: testInfo.outputPath("project-default-agent.png"),
+        fullPage: true,
+      });
+
+      await gotoAppShell(page);
+      await openGlobalNewWorkspaceComposer(page);
+      await selectNewWorkspaceProject(page, first);
+      await expectComposerModel(page, "One minute stream");
+      await selectNewWorkspaceProject(page, second);
+      await expectComposerModel(page, "Ten second stream");
+      await selectNewWorkspaceProject(page, first);
+      await expectComposerModel(page, "One minute stream");
+
+      await gotoWorkspace(page, first.workspaceId);
+      await runWorkspaceActionFromCommandCenter(page, "New agent");
+      await waitForDraftComposer(page);
+      await expectComposerModel(page, "One minute stream");
+
+      await openProjects(page);
+      await openProjectSettings(page, first.projectDisplayName);
+      await section.getByTestId("agent-defaults-reset").click();
+      await expect
+        .poll(
+          async () =>
+            (await client.getDaemonConfig()).config.agentDefaults?.projects?.[first.projectId],
+        )
+        .toBeNull();
+      await gotoAppShell(page);
+      await openGlobalNewWorkspaceComposer(page);
+      await selectNewWorkspaceProject(page, first);
+      await expectComposerModel(page, "Ten second stream");
+    } finally {
+      await client.patchDaemonConfig({
+        agentDefaults: { host: previousHost, projects: { [first.projectId]: null } },
+      });
+      await client.close();
+      await first.cleanup();
+      await second.cleanup();
+    }
+  },
+);
 
 // Smallest valid square PNG the daemon will accept as a custom project icon.
 const PNG_1X1 = Buffer.from([

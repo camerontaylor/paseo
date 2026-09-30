@@ -553,6 +553,8 @@ function resolveStaticLoadConfigSettings(
     ...resolvePersistedDaemonToggles(persisted),
     appendSystemPrompt: resolveAppendSystemPrompt(persisted),
     ...resolveProfileLists(persisted),
+    // FORK(agent-defaults): resolve the same snapshot at startup and on reload.
+    agentDefaults: persisted.daemon?.agentDefaults,
     hostnames: mergeHostnames([
       persisted.daemon?.hostnames,
       parseHostnamesEnv(env.PASEO_HOSTNAMES ?? env.PASEO_ALLOWED_HOSTS),
@@ -590,6 +592,7 @@ export function resolveConfigFromPersisted(
     appendSystemPrompt,
     terminalProfiles,
     agentProfiles,
+    agentDefaults,
     hostnames,
     trustedProxies,
     appBaseUrl,
@@ -638,6 +641,7 @@ export function resolveConfigFromPersisted(
     terminalProfiles,
     agentProfiles,
     skillSelection: persisted.agents?.skills?.selection,
+    agentDefaults,
     pluginsEnabled: persisted.pluginsEnabled ?? false,
     plugins: persisted.plugins,
     mcpDebug: env.MCP_DEBUG === "1",

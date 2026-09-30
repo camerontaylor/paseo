@@ -68,6 +68,12 @@ One entry per fork feature: the commits that built it, the files that own it, an
 
 Commits are the fork commits that built the feature (`git show --stat <sha>` for the full file list). "Owns" lists the fork-owned entry points. "Wires into" lists the upstream files the feature edits, largest first.
 
+### Host and project agent defaults
+
+- Owns: `packages/protocol/src/agent-defaults.ts`, `packages/app/src/agent-defaults/`
+- Wires into: daemon config schemas, resolution, store and bootstrap; `websocket-server.ts`; app agent-form resolution, project settings and host Agents settings.
+- Shared defaults for new composers, with project overrides that follow worktree membership. See [default agents](data-model.md#default-agents).
+
 ### Project PR browser
 
 - Commits: `80c69f95c`

@@ -37,6 +37,8 @@ import {
   type ProviderModelsByProvider,
 } from "@/provider-selection/resolve-agent-form";
 import type { MaterializedAgentProfile } from "@/agent-profiles";
+// FORK(agent-defaults): seed all draft composers from host and project defaults.
+import { useAgentDefaults } from "@/agent-defaults/use-agent-defaults";
 
 export type { FormInitialValues } from "@/provider-selection/resolve-agent-form";
 
@@ -145,7 +147,9 @@ async function persistProviderPreferences(input: {
 }
 
 export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFormStateResult {
-  const { serverId, initialValues, workingDir, isVisible = true, isCreateFlow = true } = options;
+  const { serverId, workingDir, isVisible = true, isCreateFlow = true } = options;
+  const defaults = useAgentDefaults({ serverId, workingDir, initialValues: options.initialValues });
+  const { initialValues, projectId } = defaults;
 
   const { preferences, isLoading: isPreferencesLoading, updatePreferences } = useFormPreferences();
   const preferenceOverlayRef = useRef(new OptimisticFormPreferences(preferences));
@@ -256,7 +260,8 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       serverId,
       isVisible,
       isCreateFlow,
-      isPreferencesLoading,
+      isPreferencesLoading: isPreferencesLoading || defaults.isLoading,
+      projectId,
       hasSnapshot: snapshotEntries !== undefined,
       initialValues,
       preferences,
@@ -268,6 +273,8 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     isVisible,
     isCreateFlow,
     isPreferencesLoading,
+    defaults.isLoading,
+    projectId,
     snapshotEntries,
     initialValues,
     preferences,
@@ -467,7 +474,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     [availableThinkingOptionsRaw],
   );
   const isModelLoading = isModelSelectionLoading;
-  const modelError = snapshotError;
+  const modelError = defaults.error ?? snapshotError;
 
   const workingDirIsEmpty = !workingDir.trim();
 

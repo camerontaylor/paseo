@@ -7,6 +7,8 @@ import { StyleSheet } from "react-native-unistyles";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MoreVertical, Pencil, Plus } from "lucide-react-native";
 import { ProjectIconView } from "@/components/project-icon-view";
+// FORK(agent-defaults): override the host default for this project's workspaces.
+import { AgentDefaultsSection } from "@/agent-defaults/settings-section";
 import type {
   PaseoConfigRaw,
   PaseoConfigRevision,
@@ -318,6 +320,11 @@ function ProjectSettingsBody({
         onBackToProjects,
         showBackToProjects,
       })}
+      <AgentDefaultsSection
+        serverId={selectedHost.serverId}
+        projectId={selectedHost.projectId}
+        workingDir={selectedHost.repoRoot}
+      />
     </View>
   );
 }

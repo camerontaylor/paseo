@@ -9,6 +9,8 @@ import {
   CodeSnippetsResponseSchema,
 } from "./code-language.js";
 import { AgentProfileSchema, AgentSkillSelectionSchema } from "./agent-profile.js";
+// FORK(agent-defaults): host defaults and project overrides share daemon config.
+import { AgentDefaultsSchema } from "./agent-defaults.js";
 export {
   AgentProfileSchema,
   AgentSkillSelectionSchema,
@@ -216,6 +218,7 @@ export const MutableDaemonConfigSchema = z
     appendSystemPrompt: z.string().default(""),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
+    agentDefaults: AgentDefaultsSchema.optional(),
     skills: z.object({ selection: AgentSkillSelectionSchema.optional() }).strict().optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
@@ -239,6 +242,7 @@ export const MutableDaemonConfigPatchSchema = z
     appendSystemPrompt: z.string().optional(),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
+    agentDefaults: AgentDefaultsSchema.optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
   })
@@ -3942,6 +3946,8 @@ export const ServerInfoStatusPayloadSchema = z
         // agentProfiles to one is silently dropped. The client hides the feature
         // rather than letting a save appear to succeed.
         agentProfiles: z.boolean().optional(),
+        // FORK(agent-defaults): old hosts must not silently discard default changes.
+        agentDefaults: z.boolean().optional(),
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: z.boolean().optional(),
       })
