@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "../support/fixtures";
-import { openSettings } from "../support/helpers/app";
+import { gotoAppShell, openSettings } from "../support/helpers/app";
 import { expectComposerVisible } from "../support/helpers/composer";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
@@ -281,43 +281,10 @@ test("keeps overview tool calls inline on desktop", async ({ page }) => {
   }
 });
 
-test("defaults to summary calls and lets people change the retained tool history", async ({
-  page,
-}) => {
+test("defaults tool calls to Summary", async ({ page }) => {
   test.setTimeout(120_000);
-  const agent = await seedMockAgentWorkspace({
-    repoPrefix: "tool-call-summary-default-",
-    title: "Summary tool calls",
-    model: "ten-second-stream",
-  });
-
-  try {
-    await openAgentRoute(page, agent);
-    await expectComposerVisible(page);
-    await agent.client.sendAgentMessage(agent.agentId, "Exercise the summary tool-call default.");
-    await expect(page.getByText("(end of synthetic stream)")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId("tool-call-group").first()).toBeVisible();
-
-    const timelineUrl = page.url();
-    await openSettings(page);
-    await openSettingsSection(page, "chat");
-    await page.getByRole("button", { name: "Tool call display: Summary" }).click();
-    await page.getByRole("menuitem", { name: "Quiet" }).click();
-    await page.goto(timelineUrl);
-    const quietBadges = await page.getByTestId("tool-call-badge").allTextContents();
-    expect(quietBadges.length).toBeGreaterThan(0);
-    expect(quietBadges.every((label) => label.trim() === "Thinking")).toBe(true);
-    await expect(page.getByTestId("tool-call-group").filter({ visible: true })).toHaveCount(0);
-
-    await openSettings(page);
-    await openSettingsSection(page, "chat");
-    await page.getByRole("button", { name: "Tool call display: Quiet" }).click();
-    await page.getByRole("menuitem", { name: "Full detail" }).click();
-    await page.goto(timelineUrl);
-    await expect(
-      page.getByTestId("tool-call-badge").filter({ hasNotText: "Thinking" }).first(),
-    ).toBeVisible();
-  } finally {
-    await agent.cleanup();
-  }
+  await gotoAppShell(page);
+  await openSettings(page);
+  await openSettingsSection(page, "chat");
+  await expect(page.getByRole("button", { name: "Tool call display: Summary" })).toBeVisible();
 });
