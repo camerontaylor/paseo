@@ -161,7 +161,12 @@ export const ptBR: TranslationResources = {
       dropImagesHere: "Solte imagens aqui",
       dropFilesHere: "Solte arquivos aqui",
       editQueuedMessage: "Editar mensagem na fila",
+      saveQueuedMessage: "Salvar mensagem na fila",
       sendQueuedMessageNow: "Enviar mensagem da fila agora",
+      queuedMessages: "Mensagens na fila ({{count}})",
+      queuedAttachment: "Anexo",
+      expandQueuedMessages: "Mostrar mensagens na fila",
+      collapseQueuedMessages: "Ocultar mensagens na fila",
       openImage: "Abrir anexo de imagem",
       removeImage: "Remover anexo de imagem",
       removeFile: "Remover anexo de arquivo",
@@ -175,6 +180,11 @@ export const ptBR: TranslationResources = {
     },
     errors: {
       failedToSend: "Falha ao enviar mensagem",
+      queueEditRequiresUpdatedHost:
+        "Atualize este host Paseo para editar mensagens na fila sem alterar a ordem.",
+      queueEditFailed: "Falha ao editar mensagem na fila",
+      steerRequiresUpdatedHost:
+        "Atualize este host do Paseo para orientar sem interromper a tarefa em andamento.",
       failedToCreateAgent: "Falha ao criar agente",
       noHostSelected: "Nenhum host selecionado",
       initialPromptRequired: "O prompt inicial é obrigatório",
@@ -1180,6 +1190,17 @@ export const ptBR: TranslationResources = {
     },
   },
   sidebar: {
+    filterSidebar: {
+      placeholder: "Filtrar projetos ou chats",
+      clear: "Limpar filtro da barra lateral",
+      sortHeading: "Ordenar chats",
+      sortBy: "Ordenar chats: {{value}}",
+      sort: {
+        manual: "Ordem manual",
+        recent: "Atividade recente",
+        title: "Título A–Z",
+      },
+    },
     display: {
       trigger: "Preferências de exibição",
       heading: "Exibição",

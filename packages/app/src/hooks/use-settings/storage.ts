@@ -27,7 +27,7 @@ import { migrateAppSettings } from "./migrations";
 export { APP_SETTINGS_KEY } from "./keys";
 export const APP_SETTINGS_QUERY_KEY = ["app-settings"];
 
-export type SendBehavior = ActiveTurnBehavior | "queue";
+export type SendBehavior = Exclude<ActiveTurnBehavior, "steer_only"> | "queue";
 export type ReleaseChannel = "stable" | "beta";
 export type ServiceUrlBehavior = "ask" | "in-app" | "external";
 export type WorkspaceTitleSource = "title" | "branch";
@@ -123,6 +123,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   theme: DEFAULT_THEME_PREFERENCE,
   pluginThemeId: null,
   language: "system",
+  // The fork's Steer uses strict steering on the wire. It never falls back to interruption.
   sendBehavior: "steer",
   serviceUrlBehavior: "ask",
   terminalScrollbackLines: DEFAULT_TERMINAL_SCROLLBACK_LINES,

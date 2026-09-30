@@ -160,7 +160,12 @@ export const ko: TranslationResources = {
       dropImagesHere: "여기에 이미지를 끌어다 놓으세요",
       dropFilesHere: "여기에 파일을 끌어다 놓으세요",
       editQueuedMessage: "대기 중인 메시지 편집",
+      saveQueuedMessage: "대기 메시지 저장",
       sendQueuedMessageNow: "대기 중인 메시지 지금 보내기",
+      queuedMessages: "대기 중인 메시지 ({{count}}개)",
+      queuedAttachment: "첨부 파일",
+      expandQueuedMessages: "대기 중인 메시지 표시",
+      collapseQueuedMessages: "대기 중인 메시지 숨기기",
       openImage: "이미지 첨부 열기",
       removeImage: "이미지 첨부 제거",
       removeFile: "파일 첨부 제거",
@@ -174,6 +179,11 @@ export const ko: TranslationResources = {
     },
     errors: {
       failedToSend: "메시지를 보내지 못했습니다",
+      queueEditRequiresUpdatedHost:
+        "대기 메시지의 순서를 유지한 채 편집하려면 이 Paseo 호스트를 업데이트하세요.",
+      queueEditFailed: "대기 메시지를 편집하지 못했습니다",
+      steerRequiresUpdatedHost:
+        "진행 중인 작업을 중단하지 않고 지시하려면 이 Paseo 호스트를 업데이트하세요.",
       failedToCreateAgent: "에이전트를 생성하지 못했습니다",
       noHostSelected: "선택된 호스트가 없습니다",
       initialPromptRequired: "초기 프롬프트가 필요합니다",
@@ -1160,6 +1170,17 @@ export const ko: TranslationResources = {
     },
   },
   sidebar: {
+    filterSidebar: {
+      placeholder: "프로젝트 또는 채팅 필터",
+      clear: "사이드바 필터 지우기",
+      sortHeading: "채팅 정렬",
+      sortBy: "채팅 정렬: {{value}}",
+      sort: {
+        manual: "수동 순서",
+        recent: "최근 활동",
+        title: "제목 가나다순",
+      },
+    },
     display: {
       trigger: "표시 설정",
       heading: "표시",

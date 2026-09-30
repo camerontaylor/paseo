@@ -161,7 +161,12 @@ export const ja: TranslationResources = {
       dropImagesHere: "ここに画像をドロップ",
       dropFilesHere: "ここにファイルをドロップ",
       editQueuedMessage: "キューに入れたメッセージを編集",
+      saveQueuedMessage: "キューのメッセージを保存",
       sendQueuedMessageNow: "キューに入れたメッセージを今すぐ送信",
+      queuedMessages: "キュー内のメッセージ（{{count}}件）",
+      queuedAttachment: "添付ファイル",
+      expandQueuedMessages: "キュー内のメッセージを表示",
+      collapseQueuedMessages: "キュー内のメッセージを非表示",
       openImage: "画像添付ファイルを開く",
       removeImage: "画像添付ファイルを削除",
       removeFile: "ファイル添付ファイルを削除",
@@ -175,6 +180,11 @@ export const ja: TranslationResources = {
     },
     errors: {
       failedToSend: "メッセージの送信に失敗しました",
+      queueEditRequiresUpdatedHost:
+        "キュー内の順序を変えずに編集するには、この Paseo ホストを更新してください。",
+      queueEditFailed: "キューのメッセージを編集できませんでした",
+      steerRequiresUpdatedHost:
+        "実行中のターンを中断せずに誘導するには、この Paseo ホストを更新してください。",
       failedToCreateAgent: "エージェントの作成に失敗しました",
       noHostSelected: "ホストが選択されていません",
       initialPromptRequired: "初期プロンプトが必要です",
@@ -1164,6 +1174,17 @@ export const ja: TranslationResources = {
     },
   },
   sidebar: {
+    filterSidebar: {
+      placeholder: "プロジェクトやチャットを絞り込む",
+      clear: "サイドバーの絞り込みを解除",
+      sortHeading: "チャットの並び替え",
+      sortBy: "チャットの並び替え: {{value}}",
+      sort: {
+        manual: "手動の順序",
+        recent: "最近のアクティビティ",
+        title: "タイトル順",
+      },
+    },
     display: {
       trigger: "表示設定",
       heading: "表示",

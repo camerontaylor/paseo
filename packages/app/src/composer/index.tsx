@@ -10,6 +10,10 @@ import {
   StyleSheet as RNStyleSheet,
   type PressableStateCallbackType,
 } from "react-native";
+import {
+  EditingTextInput as TextInput,
+  type EditingTextInputHandle,
+} from "@/components/ui/text-input";
 import type { TFunction } from "i18next";
 import {
   useState,
@@ -30,6 +34,8 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { useShallow } from "zustand/shallow";
 import {
   ArrowUp,
+  ChevronDown,
+  ChevronUp,
   Square,
   Pencil,
   AudioLines,
@@ -67,7 +73,6 @@ import { focusWithRetries } from "@/utils/web-focus";
 import {
   cancelComposerAgent,
   dispatchComposerAgentMessage,
-  editQueuedComposerMessage,
   findForgeItemByOption,
   isAttachmentSelectedForForgeItem,
   openComposerAttachment,
@@ -76,7 +81,7 @@ import {
   queueComposerMessageOnServer,
   removeComposerAttachmentAtIndex,
   sendQueuedComposerMessageNow,
-  takeQueuedComposerMessage,
+  updateQueuedComposerMessage,
   toggleForgeAttachmentFromPicker,
   uploadFileAttachments,
   type AttachmentPersister,
@@ -111,7 +116,7 @@ import {
 } from "@/attachments/service";
 import { resolveAgentControlsMode } from "@/composer/agent-controls/mode";
 import { resolveComposerInputMode, type ComposerInputMode } from "@/composer/input-mode";
-import { resolveActiveSendBehavior } from "./input/state";
+import { resolveActiveSendBehavior, resolveDirectActiveTurnBehavior } from "./input/state";
 import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
@@ -400,28 +405,74 @@ function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | nu
 
 interface RenderQueueTrackArgs {
   queuedMessages: readonly QueuedMessage[];
-  handleEditQueuedMessage: (id: string) => void;
+  summaryLabel: string;
+  attachmentPreviewLabel: string;
+  expandLabel: string;
+  collapseLabel: string;
+  handleSaveQueuedMessage: (id: string, expectedText: string, text: string) => Promise<boolean>;
   handleSendQueuedNow: (id: string) => Promise<void>;
   editLabel: string;
+  saveLabel: string;
+  cancelLabel: string;
   sendNowLabel: string;
 }
 
-function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
-  const { queuedMessages, handleEditQueuedMessage, handleSendQueuedNow, editLabel, sendNowLabel } =
-    args;
+function QueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
+  const {
+    queuedMessages,
+    summaryLabel,
+    attachmentPreviewLabel,
+    expandLabel,
+    collapseLabel,
+    handleSaveQueuedMessage,
+    handleSendQueuedNow,
+    editLabel,
+    saveLabel,
+    cancelLabel,
+    sendNowLabel,
+  } = args;
+  const [expandedOverride, setExpandedOverride] = useState<boolean | null>(null);
+  const expanded = expandedOverride ?? queuedMessages.length <= 3;
+  const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
+  const toggleExpanded = useCallback(() => setExpandedOverride(!expanded), [expanded]);
   if (queuedMessages.length === 0) return null;
   return (
     <View style={styles.queueTrack}>
-      {queuedMessages.map((item) => (
-        <QueuedMessageRow
-          key={item.id}
-          item={item}
-          onEdit={handleEditQueuedMessage}
-          onSendNow={handleSendQueuedNow}
-          editLabel={editLabel}
-          sendNowLabel={sendNowLabel}
-        />
-      ))}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={expanded ? collapseLabel : expandLabel}
+        accessibilityState={accessibilityState}
+        onPress={toggleExpanded}
+        style={styles.queueHeader}
+        testID="composer-queue-toggle"
+      >
+        <View style={styles.queueHeaderContent}>
+          <Text style={styles.queueHeaderText}>{summaryLabel}</Text>
+          {!expanded && (
+            <Text style={styles.queuePreviewText} numberOfLines={1} ellipsizeMode="tail">
+              {queuedMessages[0]?.text.trim() || attachmentPreviewLabel}
+            </Text>
+          )}
+        </View>
+        {expanded ? (
+          <ThemedChevronUp size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />
+        ) : (
+          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />
+        )}
+      </Pressable>
+      {expanded &&
+        queuedMessages.map((item) => (
+          <QueuedMessageRow
+            key={item.id}
+            item={item}
+            onSave={handleSaveQueuedMessage}
+            onSendNow={handleSendQueuedNow}
+            editLabel={editLabel}
+            saveLabel={saveLabel}
+            cancelLabel={cancelLabel}
+            sendNowLabel={sendNowLabel}
+          />
+        ))}
     </View>
   );
 }
@@ -688,25 +739,87 @@ function resolveMessageInputPassthroughAction(
 
 interface QueuedMessageRowProps {
   item: QueuedMessage;
-  onEdit: (id: string) => void;
+  onSave: (id: string, expectedText: string, text: string) => Promise<boolean>;
   onSendNow: (id: string) => void;
   editLabel: string;
+  saveLabel: string;
+  cancelLabel: string;
   sendNowLabel: string;
 }
 
 function QueuedMessageRow({
   item,
-  onEdit,
+  onSave,
   onSendNow,
   editLabel,
+  saveLabel,
+  cancelLabel,
   sendNowLabel,
 }: QueuedMessageRowProps) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(item.text);
+  const [expectedText, setExpectedText] = useState(item.text);
+  const [isSaving, setIsSaving] = useState(false);
+  const editInputRef = useRef<EditingTextInputHandle | null>(null);
   const handleEdit = useCallback(() => {
-    onEdit(item.id);
-  }, [onEdit, item.id]);
+    setDraft(item.text);
+    setExpectedText(item.text);
+    setIsEditing(true);
+  }, [item.text]);
+  const handleCancel = useCallback(() => {
+    setIsEditing(false);
+    setDraft(item.text);
+  }, [item.text]);
+  const handleSave = useCallback(async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      if (await onSave(item.id, expectedText, editInputRef.current?.getText() ?? draft)) {
+        setIsEditing(false);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }, [draft, expectedText, isSaving, item.id, onSave]);
   const handleSendNow = useCallback(() => {
     onSendNow(item.id);
   }, [onSendNow, item.id]);
+  if (isEditing) {
+    return (
+      <View style={[styles.queueItem, styles.queueEditItem]}>
+        <TextInput
+          ref={editInputRef}
+          initialValue={item.text}
+          onChangeText={setDraft}
+          multiline
+          autoFocus
+          editable={!isSaving}
+          accessibilityLabel={editLabel}
+          style={styles.queueEditInput}
+        />
+        <View style={styles.queueActions}>
+          <Pressable
+            onPress={handleCancel}
+            disabled={isSaving}
+            style={styles.queueEditTextButton}
+            accessibilityRole="button"
+            accessibilityLabel={cancelLabel}
+          >
+            <Text style={styles.queueEditTextButtonLabel}>{cancelLabel}</Text>
+          </Pressable>
+          <Pressable
+            onPress={handleSave}
+            disabled={isSaving}
+            style={[styles.queueEditTextButton, styles.queueEditSaveButton]}
+            accessibilityRole="button"
+            accessibilityLabel={saveLabel}
+          >
+            <Text style={styles.queueEditSaveButtonLabel}>{saveLabel}</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
   return (
     <View style={styles.queueItem}>
       <Text style={styles.queueText} numberOfLines={2} ellipsizeMode="tail">
@@ -1351,6 +1464,9 @@ function ComposerContentImpl({
   const supportsForgeSearch = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.forgeSearch === true,
   );
+  const supportsSteerOnly = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.steerOnly === true,
+  );
   // COMPAT(agentMessageQueue): added in v0.4.0. Older daemons have no queue, so
   // the client keeps its own against those hosts.
   const supportsAgentMessageQueue = useSessionStore(
@@ -1359,6 +1475,12 @@ function ComposerContentImpl({
   // COMPAT(voiceConcurrentInput): fork feature, added in fork v0.10.0-beta.1, remove gate after 2027-03-29.
   const supportsVoiceConcurrentInput = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.voiceConcurrentInput === true,
+  );
+  const supportsQueueEdit = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.queueEdit === true,
+  );
+  const supportsQueueSendNow = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.queueSendNow === true,
   );
   const applyAgentQueueSnapshot = useSessionStore((state) => state.applyAgentQueueSnapshot);
   const forgeAutoAttachRef = useRef<ReturnType<typeof useComposerForgeAutoAttach>>(null);
@@ -1501,7 +1623,7 @@ function ComposerContentImpl({
         agentId: string,
         text: string,
         attachments: ComposerAttachment[],
-        activeTurnBehavior: "interrupt" | "steer",
+        activeTurnBehavior?: MessagePayload["activeTurnBehavior"],
       ) => Promise<void>)
     | null
   >(null);
@@ -1555,7 +1677,18 @@ function ComposerContentImpl({
   }, [focusInput, onFocusInput]);
 
   const submitMessage = useCallback(
-    async (text: string, submitAttachments: ComposerAttachment[]) => {
+    async (
+      text: string,
+      submitAttachments: ComposerAttachment[],
+      activeTurnBehavior?: MessagePayload["activeTurnBehavior"],
+    ) => {
+      const resolvedBehavior = resolveDirectActiveTurnBehavior(
+        appSettings.sendBehavior,
+        activeTurnBehavior,
+      );
+      if (resolvedBehavior === "steer_only" && !supportsSteerOnly) {
+        throw new Error(t("composer.errors.steerRequiresUpdatedHost"));
+      }
       onMessageSent?.();
       if (onSubmitMessageRef.current) {
         await onSubmitMessageRef.current({ text, attachments: submitAttachments, cwd });
@@ -1568,10 +1701,10 @@ function ComposerContentImpl({
         agentIdRef.current,
         text,
         submitAttachments,
-        appSettings.sendBehavior === "steer" ? "steer" : "interrupt",
+        resolvedBehavior,
       );
     },
-    [appSettings.sendBehavior, cwd, onMessageSent, t],
+    [appSettings.sendBehavior, cwd, onMessageSent, supportsSteerOnly, t],
   );
 
   useEffect(() => {
@@ -1583,14 +1716,13 @@ function ComposerContentImpl({
       targetAgentId: string,
       text: string,
       sendAttachments: ComposerAttachment[],
-      activeTurnBehavior: "interrupt" | "steer",
+      activeTurnBehavior?: MessagePayload["activeTurnBehavior"],
     ) => {
       if (!client) {
         throw new Error(t("workspace.terminal.hostDisconnected"));
       }
-      // Reaching a direct send while the agent's turn is active means the user
-      // chose the interrupt-labeled action (queue mode routes elsewhere), so
-      // tell the daemon the interruption is intentional.
+      // Only an explicit interrupt action may request cancellation. Queue mode's
+      // immediate action uses strict steering and must leave the turn intact.
       const isTargetTurnActive = selectAgentTurnPresentation(
         useSessionStore.getState().sessions[serverId],
         targetAgentId,
@@ -1599,7 +1731,7 @@ function ComposerContentImpl({
         client,
         agentId: targetAgentId,
         text,
-        ...(isTargetTurnActive ? { interrupt: true } : {}),
+        ...(isTargetTurnActive && activeTurnBehavior === "interrupt" ? { interrupt: true } : {}),
         attachments: sendAttachments,
         attachmentSubmitFormat: resolveComposerAttachmentSubmitFormat({
           supportsForgeAttachments: supportsForgeSearch,
@@ -1608,7 +1740,7 @@ function ComposerContentImpl({
         submission: createMessageSubmissionWriter(serverId),
         activeTurnBehavior,
         activeTurnId:
-          activeTurnBehavior === "steer"
+          activeTurnBehavior === "steer" || activeTurnBehavior === "steer_only"
             ? (selectAgentTurnPresentation(
                 useSessionStore.getState().sessions[serverId],
                 targetAgentId,
@@ -1746,6 +1878,7 @@ function ComposerContentImpl({
       outgoingMessage: string,
       outgoingAttachments: ComposerAttachment[],
       forceSend?: boolean,
+      activeTurnBehavior?: MessagePayload["activeTurnBehavior"],
     ) => {
       const result = await submitAgentInput({
         message: outgoingMessage,
@@ -1765,7 +1898,7 @@ function ComposerContentImpl({
           if (submitBehavior !== "preserve-and-lock") {
             beginSubmit(submitAttachments);
           }
-          await submitMessage(submitText, submitAttachments);
+          await submitMessage(submitText, submitAttachments, activeTurnBehavior);
         },
         clearDraft,
         setUserInput: replaceUserInput,
@@ -1820,7 +1953,12 @@ function ComposerContentImpl({
       if (blurOnSubmit) {
         messageInputRef.current?.blur();
       }
-      void sendMessageWithContent(payload.text, outgoingAttachments, payload.forceSend);
+      void sendMessageWithContent(
+        payload.text,
+        outgoingAttachments,
+        payload.forceSend,
+        payload.activeTurnBehavior,
+      );
     },
     [
       attachments,
@@ -2020,92 +2158,70 @@ function ComposerContentImpl({
     });
   }, [agentId, hasAgent, isConnected, serverId, voice]);
 
-  const handleEditQueuedMessage = useCallback(
-    (id: string) => {
+  const handleSaveQueuedMessage = useCallback(
+    async (id: string, expectedText: string, text: string): Promise<boolean> => {
       if (supportsAgentMessageQueue && client) {
-        void (async () => {
-          const result = await takeQueuedComposerMessage({
-            client,
+        if (!supportsQueueEdit) {
+          setSendError(t("composer.errors.queueEditRequiresUpdatedHost"));
+          return false;
+        }
+        try {
+          const snapshot = await client.editQueuedAgentMessage({
             agentId,
-            messageId: id,
-            queue: queueWriter,
-            persistImage: persistAttachmentFromDataUrl,
-            applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+            itemId: id,
+            expectedText,
+            text,
           });
-          if (result.status === "failed") {
-            setSendError(result.errorMessage);
-            return;
-          }
-          if (result.status === "taken") {
-            replaceUserInput(result.text);
-            setSelectedAttachments(result.attachments);
-          }
-        })();
-        return;
+          applyAgentQueueSnapshot(serverId, snapshot);
+          return true;
+        } catch (error) {
+          setSendError(
+            error instanceof Error ? error.message : t("composer.errors.queueEditFailed"),
+          );
+          return false;
+        }
       }
 
-      const result = editQueuedComposerMessage({
+      const updated = updateQueuedComposerMessage({
         agentId,
         messageId: id,
+        expectedText,
+        text,
         queue: queueWriter,
       });
-      if (!result) return;
-      replaceUserInput(result.text);
-      setSelectedAttachments(result.attachments);
+      if (!updated) setSendError(t("composer.errors.queueEditFailed"));
+      return updated;
     },
     [
       agentId,
       applyAgentQueueSnapshot,
       client,
       queueWriter,
-      replaceUserInput,
       serverId,
-      setSelectedAttachments,
       supportsAgentMessageQueue,
+      supportsQueueEdit,
+      t,
     ],
   );
 
   const handleSendQueuedNow = useCallback(
     async (id: string) => {
       if (!sendAgentMessageRef.current && !onSubmitMessageRef.current) return;
-      // Reuse the regular send path; server-side send atomically interrupts any active run.
+      const immediateBehavior = "steer_only";
+      if (!supportsSteerOnly) {
+        setSendError(t("composer.errors.steerRequiresUpdatedHost"));
+        return;
+      }
       if (supportsAgentMessageQueue && client) {
-        // Take the message off the daemon queue first. The daemon drains the same
-        // queue, so leaving it there while we send would risk sending it twice.
-        const taken = await takeQueuedComposerMessage({
-          client,
-          agentId,
-          messageId: id,
-          queue: queueWriter,
-          persistImage: persistAttachmentFromDataUrl,
-          applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
-        });
-        if (taken.status === "failed") {
-          setSendError(taken.errorMessage);
-          return;
-        }
-        if (taken.status === "missing") {
+        if (!supportsQueueSendNow) {
+          setSendError(t("composer.errors.steerRequiresUpdatedHost"));
           return;
         }
         try {
-          await submitMessage(taken.text, taken.attachments);
+          const snapshot = await client.sendQueuedAgentMessageNow(agentId, id);
+          applyAgentQueueSnapshot(serverId, snapshot);
         } catch (error) {
           setSendError(error instanceof Error ? error.message : t("composer.errors.failedToSend"));
-          // Requeue so the message is not lost. It lands at the end rather than
-          // where it was, because the daemon queue has no insert-at-position.
-          await queueComposerMessageOnServer({
-            client,
-            agentId,
-            text: taken.text,
-            attachments: taken.attachments,
-            attachmentSubmitFormat: resolveComposerAttachmentSubmitFormat({
-              supportsForgeAttachments: supportsForgeSearch,
-            }),
-            encodeImages,
-            queue: queueWriter,
-            applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
-            outbox: queueOutbox,
-          });
         }
         return;
       }
@@ -2115,7 +2231,7 @@ function ComposerContentImpl({
         messageId: id,
         queue: queueWriter,
         submitMessage: ({ text, attachments: queuedAttachments }) =>
-          submitMessage(text, queuedAttachments),
+          submitMessage(text, queuedAttachments, immediateBehavior),
         failedToSendMessage: t("composer.errors.failedToSend"),
       });
       if (result.status === "failed") {
@@ -2126,12 +2242,12 @@ function ComposerContentImpl({
       agentId,
       applyAgentQueueSnapshot,
       client,
-      queueOutbox,
       queueWriter,
       serverId,
       submitMessage,
       supportsAgentMessageQueue,
-      supportsForgeSearch,
+      supportsQueueSendNow,
+      supportsSteerOnly,
       t,
     ],
   );
@@ -2508,15 +2624,26 @@ function ComposerContentImpl({
   );
 
   const queueList = useMemo(
-    () =>
-      renderQueueTrack({
-        queuedMessages,
-        handleEditQueuedMessage,
-        handleSendQueuedNow,
-        editLabel: t("composer.attachments.editQueuedMessage"),
-        sendNowLabel: t("composer.attachments.sendQueuedMessageNow"),
-      }),
-    [handleEditQueuedMessage, handleSendQueuedNow, queuedMessages, t],
+    () => (
+      <QueueTrack
+        queuedMessages={queuedMessages}
+        summaryLabel={t("composer.attachments.queuedMessages", { count: queuedMessages.length })}
+        attachmentPreviewLabel={t("composer.attachments.queuedAttachment")}
+        expandLabel={t("composer.attachments.expandQueuedMessages")}
+        collapseLabel={t("composer.attachments.collapseQueuedMessages")}
+        handleSaveQueuedMessage={handleSaveQueuedMessage}
+        handleSendQueuedNow={handleSendQueuedNow}
+        editLabel={t("composer.attachments.editQueuedMessage")}
+        saveLabel={t("composer.attachments.saveQueuedMessage")}
+        cancelLabel={t("common.actions.cancel")}
+        sendNowLabel={
+          isAgentRunning
+            ? t("composer.input.sendAndSteer")
+            : t("composer.attachments.sendQueuedMessageNow")
+        }
+      />
+    ),
+    [handleSaveQueuedMessage, handleSendQueuedNow, isAgentRunning, queuedMessages, t],
   );
 
   const autocompleteConfiguration = useMemo(
@@ -2791,6 +2918,29 @@ const styles = StyleSheet.create((theme: Theme) => ({
     flexDirection: "column",
     gap: theme.spacing[2],
   },
+  queueHeader: {
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    gap: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    backgroundColor: theme.colors.surface1,
+  },
+  queueHeaderContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  queueHeaderText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  queuePreviewText: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
   queueItem: {
     flexDirection: "row",
     alignItems: "center",
@@ -2802,6 +2952,39 @@ const styles = StyleSheet.create((theme: Theme) => ({
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.border,
     gap: theme.spacing[2],
+  },
+  queueEditItem: {
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
+  queueEditInput: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    minHeight: 64,
+    width: "100%",
+    padding: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    backgroundColor: theme.colors.surface2,
+    textAlignVertical: "top",
+  },
+  queueEditTextButton: {
+    minHeight: 32,
+    paddingHorizontal: theme.spacing[3],
+    borderRadius: theme.borderRadius.md,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.colors.surface2,
+  },
+  queueEditTextButtonLabel: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
+  queueEditSaveButton: {
+    backgroundColor: theme.colors.accent,
+  },
+  queueEditSaveButtonLabel: {
+    color: theme.colors.accentForeground,
+    fontSize: theme.fontSize.sm,
   },
   queueText: {
     flex: 1,
@@ -2833,6 +3016,8 @@ const styles = StyleSheet.create((theme: Theme) => ({
 const ThemedAttachmentSpinner = withUnistyles(LoadingSpinner);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedArrowUp = withUnistyles(ArrowUp);
+const ThemedChevronDown = withUnistyles(ChevronDown);
+const ThemedChevronUp = withUnistyles(ChevronUp);
 const ThemedGitPullRequest = withUnistyles(GitPullRequest);
 const ThemedCircleDot = withUnistyles(CircleDot);
 const ThemedAudioLines = withUnistyles(AudioLines);

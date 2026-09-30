@@ -156,7 +156,12 @@ export const en = {
       dropImagesHere: "Drop images here",
       dropFilesHere: "Drop files here",
       editQueuedMessage: "Edit queued message",
+      saveQueuedMessage: "Save queued message",
       sendQueuedMessageNow: "Send queued message now",
+      queuedMessages: "Queued messages ({{count}})",
+      queuedAttachment: "Attachment",
+      expandQueuedMessages: "Show queued messages",
+      collapseQueuedMessages: "Hide queued messages",
       openImage: "Open image attachment",
       removeImage: "Remove image attachment",
       removeFile: "Remove file attachment",
@@ -170,6 +175,10 @@ export const en = {
     },
     errors: {
       failedToSend: "Failed to send message",
+      queueEditRequiresUpdatedHost: "Update this Paseo host to edit queued messages in place.",
+      queueEditFailed: "Failed to edit queued message",
+      steerRequiresUpdatedHost:
+        "Update this Paseo host to steer without interrupting its active turn.",
       failedToCreateAgent: "Failed to create agent",
       noHostSelected: "No host selected",
       initialPromptRequired: "Initial prompt is required",
@@ -1161,6 +1170,17 @@ export const en = {
     },
   },
   sidebar: {
+    filterSidebar: {
+      placeholder: "Filter projects or chats",
+      clear: "Clear sidebar filter",
+      sortHeading: "Sort chats",
+      sortBy: "Sort chats: {{value}}",
+      sort: {
+        manual: "Manual order",
+        recent: "Recent activity",
+        title: "Title A–Z",
+      },
+    },
     display: {
       trigger: "Display preferences",
       heading: "Display",
@@ -2247,7 +2267,7 @@ export const en = {
           interrupt: "When the agent is running, Enter interrupts. Command/Ctrl+Enter queues.",
           steer:
             "When the agent is running, Enter steers the active turn. Command/Ctrl+Enter queues.",
-          queue: "When the agent is running, Enter queues. Command/Ctrl+Enter submits.",
+          queue: "When the agent is running, Enter queues. Command/Ctrl+Enter steers.",
         },
         options: {
           interrupt: "Interrupt",

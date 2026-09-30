@@ -161,7 +161,12 @@ export const es: TranslationResources = {
       dropImagesHere: "Suelta imágenes aquí",
       dropFilesHere: "Drop files here",
       editQueuedMessage: "Editar mensaje en cola",
+      saveQueuedMessage: "Guardar mensaje en cola",
       sendQueuedMessageNow: "Enviar mensaje en cola ahora",
+      queuedMessages: "Mensajes en cola ({{count}})",
+      queuedAttachment: "Archivo adjunto",
+      expandQueuedMessages: "Mostrar mensajes en cola",
+      collapseQueuedMessages: "Ocultar mensajes en cola",
       openImage: "Abrir imagen adjunta",
       removeImage: "Quitar imagen adjunta",
       removeFile: "Remove file attachment",
@@ -175,6 +180,11 @@ export const es: TranslationResources = {
     },
     errors: {
       failedToSend: "No se pudo enviar el mensaje",
+      queueEditRequiresUpdatedHost:
+        "Actualiza este host de Paseo para editar mensajes en cola sin cambiar su orden.",
+      queueEditFailed: "No se pudo editar el mensaje en cola",
+      steerRequiresUpdatedHost:
+        "Actualiza este host de Paseo para dirigir el mensaje sin interrumpir el turno activo.",
       failedToCreateAgent: "No se pudo crear el agente",
       noHostSelected: "Ningún anfitrión seleccionado",
       initialPromptRequired: "Se requiere aviso inicial",
@@ -1190,6 +1200,17 @@ export const es: TranslationResources = {
     },
   },
   sidebar: {
+    filterSidebar: {
+      placeholder: "Filtrar proyectos o chats",
+      clear: "Borrar filtro lateral",
+      sortHeading: "Ordenar chats",
+      sortBy: "Ordenar chats: {{value}}",
+      sort: {
+        manual: "Orden manual",
+        recent: "Actividad reciente",
+        title: "Título A–Z",
+      },
+    },
     display: {
       trigger: "Preferencias de visualización",
       heading: "Visualización",

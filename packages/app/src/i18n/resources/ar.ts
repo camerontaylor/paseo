@@ -160,7 +160,12 @@ export const ar: TranslationResources = {
       dropImagesHere: "إسقاط الصور هنا",
       dropFilesHere: "Drop files here",
       editQueuedMessage: "تحرير الرسالة في قائمة الانتظار",
+      saveQueuedMessage: "حفظ الرسالة في قائمة الانتظار",
       sendQueuedMessageNow: "إرسال رسالة في قائمة الانتظار الآن",
+      queuedMessages: "الرسائل في قائمة الانتظار ({{count}})",
+      queuedAttachment: "مرفق",
+      expandQueuedMessages: "إظهار الرسائل في قائمة الانتظار",
+      collapseQueuedMessages: "إخفاء الرسائل في قائمة الانتظار",
       openImage: "فتح مرفق الصورة",
       removeImage: "إزالة مرفق الصورة",
       removeFile: "Remove file attachment",
@@ -174,6 +179,10 @@ export const ar: TranslationResources = {
     },
     errors: {
       failedToSend: "فشل في إرسال الرسالة",
+      queueEditRequiresUpdatedHost:
+        "حدّث مضيف Paseo لتعديل الرسائل في قائمة الانتظار دون تغيير ترتيبها.",
+      queueEditFailed: "تعذّر تعديل الرسالة في قائمة الانتظار",
+      steerRequiresUpdatedHost: "حدّث مضيف Paseo للتوجيه دون مقاطعة المهمة الجارية.",
       failedToCreateAgent: "فشل في إنشاء الوكيل",
       noHostSelected: "لم يتم تحديد مضيف",
       initialPromptRequired: "مطلوب موجه الأولي",
@@ -1151,6 +1160,17 @@ export const ar: TranslationResources = {
     },
   },
   sidebar: {
+    filterSidebar: {
+      placeholder: "تصفية المشاريع أو المحادثات",
+      clear: "مسح تصفية الشريط الجانبي",
+      sortHeading: "ترتيب المحادثات",
+      sortBy: "ترتيب المحادثات: {{value}}",
+      sort: {
+        manual: "الترتيب اليدوي",
+        recent: "النشاط الأخير",
+        title: "العنوان أ–ي",
+      },
+    },
     display: {
       trigger: "تفضيلات العرض",
       heading: "العرض",

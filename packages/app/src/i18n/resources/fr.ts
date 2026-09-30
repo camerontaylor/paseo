@@ -164,7 +164,12 @@ export const fr: TranslationResources = {
       dropImagesHere: "Déposez des images ici",
       dropFilesHere: "Drop files here",
       editQueuedMessage: "Modifier le message en file d'attente",
+      saveQueuedMessage: "Enregistrer le message en file d’attente",
       sendQueuedMessageNow: "Envoyer le message en file d'attente maintenant",
+      queuedMessages: "Messages en attente ({{count}})",
+      queuedAttachment: "Pièce jointe",
+      expandQueuedMessages: "Afficher les messages en attente",
+      collapseQueuedMessages: "Masquer les messages en attente",
       openImage: "Ouvrir la pièce jointe de l'image",
       removeImage: "Supprimer l'image jointe",
       removeFile: "Remove file attachment",
@@ -178,6 +183,11 @@ export const fr: TranslationResources = {
     },
     errors: {
       failedToSend: "Échec de l'envoi du message",
+      queueEditRequiresUpdatedHost:
+        "Mettez à jour cet hôte Paseo pour modifier les messages en file d’attente sans changer leur ordre.",
+      queueEditFailed: "Impossible de modifier le message en file d’attente",
+      steerRequiresUpdatedHost:
+        "Mettez à jour cet hôte Paseo pour orienter le message sans interrompre le tour actif.",
       failedToCreateAgent: "Échec de la création de l'agent",
       noHostSelected: "Aucun hôte sélectionné",
       initialPromptRequired: "Une invite initiale est requise",
@@ -1190,6 +1200,17 @@ export const fr: TranslationResources = {
     },
   },
   sidebar: {
+    filterSidebar: {
+      placeholder: "Filtrer les projets ou les discussions",
+      clear: "Effacer le filtre latéral",
+      sortHeading: "Trier les discussions",
+      sortBy: "Trier les discussions : {{value}}",
+      sort: {
+        manual: "Ordre manuel",
+        recent: "Activité récente",
+        title: "Titre A–Z",
+      },
+    },
     display: {
       trigger: "Préférences d'affichage",
       heading: "Affichage",
