@@ -551,6 +551,10 @@ export const fr: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "Échec de la liste du répertoire",
+        pathUnavailable:
+          "Ce chemin ne peut pas être résolu depuis le répertoire de travail de la conversation.",
+        outsideWorkspaceDirectory:
+          "Ce dossier se trouve hors de l’espace de travail actuel. Ouvrez-le depuis son espace de travail d’origine.",
         createFailed: "Échec de la création de l'entrée",
         renameFailed: "Échec du renommage de l'entrée",
         duplicateFailed: "Échec de la duplication de l'entrée",

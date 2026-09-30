@@ -550,6 +550,10 @@ export const ptBR: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "Falha ao listar diretório",
+        pathUnavailable:
+          "Não é possível resolver este caminho a partir do diretório de trabalho da conversa.",
+        outsideWorkspaceDirectory:
+          "Esta pasta está fora do espaço de trabalho atual. Abra-a no espaço de trabalho de origem.",
         createFailed: "Falha ao criar entrada",
         renameFailed: "Falha ao renomear entrada",
         duplicateFailed: "Falha ao duplicar entrada",

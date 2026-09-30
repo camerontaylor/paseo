@@ -552,6 +552,10 @@ export const es: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "No se pudo listar el directorio",
+        pathUnavailable:
+          "No se puede resolver esta ruta desde el directorio de trabajo de la conversación.",
+        outsideWorkspaceDirectory:
+          "Esta carpeta está fuera del espacio de trabajo actual. Ábrela desde su espacio de trabajo de origen.",
         createFailed: "No se pudo crear la entrada",
         renameFailed: "No se pudo renombrar la entrada",
         duplicateFailed: "No se pudo duplicar la entrada",
