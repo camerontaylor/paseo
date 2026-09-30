@@ -5,11 +5,7 @@ import {
   TERMINAL_PROFILE_ICON_NAMES,
 } from "@getpaseo/protocol/provider-icon-names";
 import { ACP_PROVIDER_CATALOG } from "@/data/acp-provider-catalog";
-import {
-  registerProviderIconAliases,
-  replaceProviderSnapshotIcons,
-  resolveProviderIconName,
-} from "./provider-icon-name";
+import { resolveProviderIconName } from "./provider-icon-name";
 
 describe("resolveProviderIconName", () => {
   it("returns the built-in identifier for known provider ids", () => {
@@ -33,63 +29,7 @@ describe("resolveProviderIconName", () => {
   it("resolves a snapshot SVG for a custom provider", () => {
     const svg = '<svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z" /></svg>';
 
-    replaceProviderSnapshotIcons("server-1", [{ provider: "snapshot-provider", iconSvg: svg }]);
-
-    expect(resolveProviderIconName("snapshot-provider", "server-1")).toEqual({ kind: "svg", svg });
-  });
-
-  it("replaces each host snapshot without leaking icons across hosts", () => {
-    const secondSvg = "<svg id='second' />";
-    replaceProviderSnapshotIcons("server-1", [
-      { provider: "removed-provider", iconSvg: "<svg />" },
-      { provider: "snapshot-provider", iconSvg: "<svg />" },
-      { provider: "claude", iconSvg: "<svg />" },
-    ]);
-    replaceProviderSnapshotIcons("server-2", [
-      { provider: "snapshot-provider", iconSvg: secondSvg },
-    ]);
-
-    expect(resolveProviderIconName("snapshot-provider", "server-1")).toEqual({
-      kind: "svg",
-      svg: "<svg />",
-    });
-    expect(resolveProviderIconName("snapshot-provider", "server-2")).toEqual({
-      kind: "svg",
-      svg: secondSvg,
-    });
-    expect(resolveProviderIconName("claude", "server-1")).toEqual({
-      kind: "builtin",
-      id: "claude",
-    });
-
-    replaceProviderSnapshotIcons("server-1", [{ provider: "snapshot-provider" }]);
-
-    expect(resolveProviderIconName("removed-provider", "server-1")).toEqual({ kind: "bot" });
-    expect(resolveProviderIconName("snapshot-provider", "server-1")).toEqual({ kind: "bot" });
-    expect(resolveProviderIconName("snapshot-provider", "server-2")).toEqual({
-      kind: "svg",
-      svg: secondSvg,
-    });
-  });
-
-  it("resolves registered provider accounts to their base provider's icon", () => {
-    registerProviderIconAliases([
-      { provider: "claude-work", baseProviderId: "claude" },
-      { provider: "gemini-personal", baseProviderId: "gemini" },
-      { provider: "claude" },
-    ]);
-    expect(resolveProviderIconName("claude-work")).toEqual({ kind: "builtin", id: "claude" });
-    expect(resolveProviderIconName("gemini-personal")).toEqual({ kind: "catalog", id: "gemini" });
-  });
-
-  it("keeps the bot fallback when an alias points at an unknown base provider", () => {
-    registerProviderIconAliases([{ provider: "mystery-account", baseProviderId: "mystery" }]);
-    expect(resolveProviderIconName("mystery-account")).toEqual({ kind: "bot" });
-  });
-
-  it("never lets an alias shadow a real provider id", () => {
-    registerProviderIconAliases([{ provider: "codex", baseProviderId: "claude" }]);
-    expect(resolveProviderIconName("codex")).toEqual({ kind: "builtin", id: "codex" });
+    expect(resolveProviderIconName("snapshot-provider", svg)).toEqual({ kind: "svg", svg });
   });
 });
 
@@ -114,5 +54,20 @@ describe("known provider icon names", () => {
         expect(catalogIdsWithIcons).toContain(name);
       }
     }
+  });
+});
+
+it("resolves account icons through their configured base without shadowing real providers", () => {
+  expect(resolveProviderIconName("claude-work", undefined, "claude")).toEqual({
+    kind: "builtin",
+    id: "claude",
+  });
+  expect(resolveProviderIconName("gemini-work", undefined, "gemini")).toEqual({
+    kind: "catalog",
+    id: "gemini",
+  });
+  expect(resolveProviderIconName("codex", undefined, "claude")).toEqual({
+    kind: "builtin",
+    id: "codex",
   });
 });

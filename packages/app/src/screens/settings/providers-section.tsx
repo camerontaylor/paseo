@@ -31,7 +31,7 @@ import {
   groupProviderAccounts,
   resolveProviderAccountBaseId,
 } from "@/provider-accounts/provider-account-form-model";
-import { getProviderIcon } from "@/components/provider-icons";
+import { useProviderIcon } from "@/components/provider-icons";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -246,7 +246,7 @@ function ProviderRow({
   const { t } = useTranslation();
   const { theme } = useUnistyles();
   const isCompact = useIsCompactFormFactor();
-  const ProviderIcon = getProviderIcon(iconProviderId, serverId);
+  const ProviderIcon = useProviderIcon(iconProviderId, serverId);
   const providerError =
     enabled &&
     entry.status === "error" &&

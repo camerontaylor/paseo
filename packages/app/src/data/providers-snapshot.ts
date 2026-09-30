@@ -7,10 +7,7 @@ import {
   type ProviderSnapshotCache,
 } from "./provider-snapshot-cache";
 import { queryClient as singletonQueryClient } from "./query-client";
-import {
-  registerProviderIconAliases,
-  replaceProviderSnapshotIcons,
-} from "@/components/provider-icon-name";
+import { replaceProviderSnapshotIcons } from "@/data/provider-icons";
 import { agentCommandsQueryRoot } from "@/hooks/agent-commands-query";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
 import { normalizeWorkspacePath } from "@/utils/workspace-identity";
@@ -119,7 +116,6 @@ export async function fetchProvidersSnapshot(input: {
   }
   if (input.signal?.aborted) throw new CancelledError();
   replaceProviderSnapshotIcons(input.serverId, snapshot.entries);
-  registerProviderIconAliases(snapshot.entries);
   return snapshot;
 }
 
