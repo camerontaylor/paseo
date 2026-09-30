@@ -1,6 +1,6 @@
 import type { StreamItem } from "@/types/stream";
 import type { ToolCallDetailLevel } from "@/hooks/use-settings/storage";
-import { describeToolCall } from "./grouping";
+import { isStandaloneToolCall } from "./grouping";
 import {
   groupLiveToolCalls,
   prepareGroupedHistory,
@@ -27,13 +27,7 @@ function quietToolCallItems(items: StreamItem[]): StreamItem[] {
   if (cached) return cached;
   const visible = visibleToolCallItems(items).filter((item) => {
     if (item.kind !== "tool_call") return true;
-    const call = describeToolCall(item);
-    return (
-      call.status === "failed" ||
-      call.error != null ||
-      call.detail.type === "plan" ||
-      call.name.trim().toLowerCase() === "speak"
-    );
+    return isStandaloneToolCall(item);
   });
   const result = visible.length === items.length ? items : visible;
   quietItemsCache.set(items, result);

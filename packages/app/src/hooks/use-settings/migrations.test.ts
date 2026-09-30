@@ -52,7 +52,7 @@ describe("migrateAppSettings", () => {
 
     expect(result.sendBehavior).toBe("steer");
     expect(storedSendBehavior(storage)).toBe("steer");
-    expect(appliedIds(storage)).toEqual(["steer-default", "quiet-tool-calls"]);
+    expect(appliedIds(storage)).toEqual(["steer-default", "summary-tool-calls"]);
   });
 
   it("leaves interrupt alone once the migration has run", async () => {
@@ -71,7 +71,7 @@ describe("migrateAppSettings", () => {
 
     expect(result.sendBehavior).toBe("queue");
     expect(storage.entries.has(APP_SETTINGS_KEY)).toBe(false);
-    expect(appliedIds(storage)).toEqual(["steer-default", "quiet-tool-calls"]);
+    expect(appliedIds(storage)).toEqual(["steer-default", "summary-tool-calls"]);
   });
 
   it("marks itself applied on a fresh install without rewriting settings", async () => {
@@ -80,7 +80,7 @@ describe("migrateAppSettings", () => {
     await migrateAppSettings(settingsWith("steer"), storage);
 
     expect(storage.entries.has(APP_SETTINGS_KEY)).toBe(false);
-    expect(appliedIds(storage)).toEqual(["steer-default", "quiet-tool-calls"]);
+    expect(appliedIds(storage)).toEqual(["steer-default", "summary-tool-calls"]);
   });
 
   it("keeps unknown migration ids written by a newer client", async () => {
@@ -93,7 +93,7 @@ describe("migrateAppSettings", () => {
     expect(appliedIds(storage)).toEqual([
       "some-later-migration",
       "steer-default",
-      "quiet-tool-calls",
+      "summary-tool-calls",
     ]);
   });
 
@@ -105,7 +105,11 @@ describe("migrateAppSettings", () => {
 
     expect(result.contentFontSize).toBe(16);
     expect(storedContentFontSize(storage)).toBe(16);
-    expect(appliedIds(storage)).toEqual(["steer-default", "quiet-tool-calls", "mobile-content-16"]);
+    expect(appliedIds(storage)).toEqual([
+      "steer-default",
+      "summary-tool-calls",
+      "mobile-content-16",
+    ]);
   });
 
   it("leaves a 15px web content preference unchanged", async () => {
@@ -116,7 +120,7 @@ describe("migrateAppSettings", () => {
 
     expect(result.contentFontSize).toBe(15);
     expect(storedContentFontSize(storage)).toBeUndefined();
-    expect(appliedIds(storage)).toEqual(["steer-default", "quiet-tool-calls"]);
+    expect(appliedIds(storage)).toEqual(["steer-default", "summary-tool-calls"]);
   });
 
   it("lets a mobile user choose 15px after the default migration ran", async () => {
@@ -155,18 +159,37 @@ describe("migrateAppSettings", () => {
     const result = await migrateAppSettings(settingsWith("steer"), recovered);
 
     expect(result.sendBehavior).toBe("steer");
-    expect(appliedIds(recovered)).toEqual(["steer-default", "quiet-tool-calls"]);
+    expect(appliedIds(recovered)).toEqual(["steer-default", "summary-tool-calls"]);
   });
 
-  it("moves the old full-detail default to quiet once while retaining later choices", async () => {
+  it("moves the old full-detail default to summary once while retaining later choices", async () => {
     const storage = createInMemoryKeyValueStorage();
     const oldSettings = { ...settingsWith("steer"), toolCallDetailLevel: "detailed" as const };
 
     const migrated = await migrateAppSettings(oldSettings, storage);
-    expect(migrated.toolCallDetailLevel).toBe("quiet");
-    expect(storedToolCallDetailLevel(storage)).toBe("quiet");
+    expect(migrated.toolCallDetailLevel).toBe("overview");
+    expect(storedToolCallDetailLevel(storage)).toBe("overview");
 
     const laterChoice = await migrateAppSettings(oldSettings, storage);
     expect(laterChoice.toolCallDetailLevel).toBe("detailed");
+  });
+
+  it("moves a stored quiet default to summary and retains a later quiet choice", async () => {
+    const storage = createInMemoryKeyValueStorage({
+      [SETTINGS_MIGRATIONS_KEY]: JSON.stringify({ applied: ["quiet-tool-calls"] }),
+    });
+    const quietSettings = { ...settingsWith("steer"), toolCallDetailLevel: "quiet" as const };
+
+    const migrated = await migrateAppSettings(quietSettings, storage);
+    expect(migrated.toolCallDetailLevel).toBe("overview");
+    expect(storedToolCallDetailLevel(storage)).toBe("overview");
+    expect(appliedIds(storage)).toEqual([
+      "quiet-tool-calls",
+      "steer-default",
+      "summary-tool-calls",
+    ]);
+
+    const laterChoice = await migrateAppSettings(quietSettings, storage);
+    expect(laterChoice.toolCallDetailLevel).toBe("quiet");
   });
 });

@@ -62,12 +62,24 @@ export function describeToolCall(item: ToolCallItem): ToolCallDescriptor {
   };
 }
 
+export function isStandaloneToolCall(item: ToolCallItem): boolean {
+  const descriptor = describeToolCall(item);
+  return (
+    descriptor.status === "failed" ||
+    descriptor.error != null ||
+    (descriptor.detail.type === "shell" &&
+      descriptor.detail.exitCode != null &&
+      descriptor.detail.exitCode !== 0) ||
+    descriptor.detail.type === "plan" ||
+    descriptor.name.trim().toLowerCase() === "speak"
+  );
+}
+
 export function isGroupableToolCall(item: StreamItem): item is ToolCallItem {
   if (item.kind !== "tool_call") {
     return false;
   }
-  const descriptor = describeToolCall(item);
-  return descriptor.detail.type !== "plan" && descriptor.name.trim().toLowerCase() !== "speak";
+  return !isStandaloneToolCall(item);
 }
 
 function createRun(calls: readonly ToolCallItem[], isSealed: boolean): ToolCallRun {

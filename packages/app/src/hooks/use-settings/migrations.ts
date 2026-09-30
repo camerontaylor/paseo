@@ -13,8 +13,8 @@ const AppliedMigrationsSchema = z.strictObject({ applied: z.array(z.string()) })
  */
 const STEER_DEFAULT_MIGRATION = "steer-default";
 
-/** Existing installs materialized the old full-detail tool-call default in storage. */
-const QUIET_TOOL_CALLS_MIGRATION = "quiet-tool-calls";
+/** Existing installs materialized earlier tool-call defaults in storage. */
+const SUMMARY_TOOL_CALLS_MIGRATION = "summary-tool-calls";
 
 /** Existing mobile installs materialized the old 15px content default in storage. */
 const MOBILE_CONTENT_16_MIGRATION = "mobile-content-16";
@@ -47,12 +47,12 @@ export async function migrateAppSettings(
     addedMigration = true;
   }
 
-  if (!applied.has(QUIET_TOOL_CALLS_MIGRATION)) {
+  if (!applied.has(SUMMARY_TOOL_CALLS_MIGRATION)) {
     migrated =
-      migrated.toolCallDetailLevel === "detailed"
-        ? { ...migrated, toolCallDetailLevel: "quiet" }
+      migrated.toolCallDetailLevel !== "overview"
+        ? { ...migrated, toolCallDetailLevel: "overview" }
         : migrated;
-    applied.add(QUIET_TOOL_CALLS_MIGRATION);
+    applied.add(SUMMARY_TOOL_CALLS_MIGRATION);
     addedMigration = true;
   }
 
