@@ -68,6 +68,11 @@ One entry per fork feature: the commits that built it, the files that own it, an
 
 Commits are the fork commits that built the feature (`git show --stat <sha>` for the full file list). "Owns" lists the fork-owned entry points. "Wires into" lists the upstream files the feature edits, largest first.
 
+### Responsive browser preview scale
+
+- Wires into: `packages/app/src/desktop/browser/pane/index.electron.tsx`, `desktop/browser/store/state.ts`, `desktop/browser/resident-webviews.ts`, and English browser labels.
+- Responsive tabs default to 75% with a persisted percentage picker. Parking preserves logical viewport dimensions; see [browser capture](browser-capture-harness.md#mechanism).
+
 ### Host and project agent defaults
 
 - Owns: `packages/protocol/src/agent-defaults.ts`, `packages/app/src/agent-defaults/`

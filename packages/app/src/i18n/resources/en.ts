@@ -715,6 +715,7 @@ export const en = {
       devices: {
         label: "Device size",
         responsive: "Responsive",
+        scale: "Preview scale",
       },
       errors: {
         failedToLoad: "Failed to load page",

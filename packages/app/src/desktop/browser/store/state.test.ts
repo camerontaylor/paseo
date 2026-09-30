@@ -59,13 +59,28 @@ describe("createBrowserRecord", () => {
       canGoForward: false,
       faviconUrl: null,
       lastError: null,
-      viewport: { mode: "responsive" },
+      viewport: { mode: "responsive", scale: 0.75 },
       createdAt: 1000,
     });
   });
 });
 
 describe("applyBrowserPatch", () => {
+  it("updates and persists responsive scale without dropping the tab", () => {
+    const initial = withRecords([
+      createBrowserRecord({ browserId: "b1", initialUrl: "https://a.test", now: 0 }),
+    ]);
+    const next = applyBrowserPatch(initial, "b1", {
+      viewport: { mode: "responsive", scale: 0.5 },
+    });
+    expect(next).not.toBe(initial);
+    expect(normalizeBrowserIndexState(sanitizeBrowsersForPersist(next))).toEqual(next);
+    expect(next.browsersById.b1.viewport).toEqual({ mode: "responsive", scale: 0.5 });
+    expect(applyBrowserPatch(next, "b1", { viewport: { mode: "responsive", scale: 0.5 } })).toBe(
+      next,
+    );
+  });
+
   it("updates the browser's canonical viewport", () => {
     const initial = withRecords([
       createBrowserRecord({ browserId: "b1", initialUrl: "https://a.test", now: 0 }),
@@ -176,6 +191,14 @@ describe("sanitizeBrowsersForPersist", () => {
 });
 
 describe("normalizeBrowserIndexState", () => {
+  it("defaults existing responsive tabs to 75%", () => {
+    const record = createBrowserRecord({ browserId: "b1", initialUrl: "https://a.test", now: 0 });
+    const restored = normalizeBrowserIndexState({
+      browsersById: { b1: { ...record, viewport: { mode: "responsive" } } },
+    });
+    expect(restored.browsersById.b1.viewport).toEqual({ mode: "responsive", scale: 0.75 });
+  });
+
   it("defaults legacy persisted records to Responsive", () => {
     const legacy = createBrowserRecord({
       browserId: "b1",
@@ -186,6 +209,6 @@ describe("normalizeBrowserIndexState", () => {
 
     expect(
       normalizeBrowserIndexState({ browsersById: { b1: legacy } }).browsersById.b1?.viewport,
-    ).toEqual({ mode: "responsive" });
+    ).toEqual({ mode: "responsive", scale: 0.75 });
   });
 });

@@ -146,6 +146,7 @@ const DEVICE_SIZE_PRESETS: readonly DeviceSizePreset[] = [
 ];
 
 const RESPONSIVE_DEVICE_LABEL_KEY = "workspace.browser.devices.responsive";
+const RESPONSIVE_SCALE_OPTIONS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2];
 
 function formatDevicePresetLabel(preset: DeviceSizePreset, responsiveLabel: string): string {
   const name = preset.id === "responsive" ? responsiveLabel : preset.name;
@@ -562,6 +563,64 @@ function DeviceSizeMenu({
   );
 }
 
+function ResponsiveScaleMenuItem({
+  scale,
+  selected,
+  onSelect,
+}: {
+  scale: number;
+  selected: boolean;
+  onSelect: (scale: number) => void;
+}) {
+  const handleSelect = useCallback(() => onSelect(scale), [onSelect, scale]);
+  return (
+    <DropdownMenuItem selected={selected} showSelectedCheck onSelect={handleSelect}>
+      {Math.round(scale * 100)}%
+    </DropdownMenuItem>
+  );
+}
+
+// FORK(browser-scale): Keep responsive preview scaling in the tab's viewport state.
+function ResponsiveScaleMenu({
+  scale,
+  onSelect,
+  triggerStyle,
+}: {
+  scale: number;
+  onSelect: (scale: number) => void;
+  triggerStyle: (state: { hovered?: boolean; pressed?: boolean }) => StyleProp<ViewStyle>;
+}) {
+  const { t } = useTranslation();
+  const scaleTriggerStyle = useCallback(
+    (state: { hovered?: boolean; pressed?: boolean }) => [triggerStyle(state), styles.scaleButton],
+    [triggerStyle],
+  );
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        accessibilityRole="button"
+        accessibilityLabel={t("workspace.browser.devices.scale")}
+        style={scaleTriggerStyle}
+      >
+        <View style={styles.deviceTrigger}>
+          <Text style={styles.scaleLabel}>{Math.round(scale * 100)}%</Text>
+          <ThemedChevronDown size={12} uniProps={deviceMutedIconMapping} />
+        </View>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {RESPONSIVE_SCALE_OPTIONS.map((option) => (
+          <ResponsiveScaleMenuItem
+            key={option}
+            scale={option}
+            selected={option === scale}
+            onSelect={onSelect}
+          />
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function deviceSizeIdForViewport(viewport: BrowserViewport): DeviceSizeId | null {
   if (viewport.mode === "responsive") {
     return "responsive";
@@ -574,8 +633,11 @@ function deviceSizeIdForViewport(viewport: BrowserViewport): DeviceSizeId | null
 }
 
 function rememberResolvedBrowserWebviewSize(browserId: string, webview: HTMLElement): void {
-  const bounds = webview.getBoundingClientRect();
-  rememberBrowserWebviewSize({ browserId, width: bounds.width, height: bounds.height });
+  rememberBrowserWebviewSize({
+    browserId,
+    width: webview.clientWidth,
+    height: webview.clientHeight,
+  });
 }
 
 // eslint-disable-next-line complexity
@@ -1372,6 +1434,11 @@ export function BrowserPane({
   );
   const isResponsiveDevice = browserViewport.mode === "responsive";
 
+  const handleSelectResponsiveScale = useCallback(
+    (scale: number) => setBrowserViewport(browserId, { mode: "responsive", scale }),
+    [browserId, setBrowserViewport],
+  );
+
   const handleSelectDeviceSize = useCallback(
     (deviceSizeId: DeviceSizeId) => {
       const preset =
@@ -1485,6 +1552,13 @@ export function BrowserPane({
             onSelect={handleSelectDeviceSize}
             triggerStyle={baseIconButtonStyle}
           />
+          {browserViewport.mode === "responsive" ? (
+            <ResponsiveScaleMenu
+              scale={browserViewport.scale}
+              onSelect={handleSelectResponsiveScale}
+              triggerStyle={baseIconButtonStyle}
+            />
+          ) : null}
           <ToolbarButton
             label={t("workspace.browser.controls.openDevTools")}
             onPress={handleOpenDevTools}
@@ -1744,6 +1818,14 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     paddingVertical: 0,
     paddingHorizontal: 0,
+  },
+  scaleLabel: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
+  },
+  scaleButton: {
+    width: "auto",
+    paddingHorizontal: theme.spacing[2],
   },
   errorRow: {
     paddingHorizontal: theme.spacing[2],

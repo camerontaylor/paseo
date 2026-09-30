@@ -1,10 +1,21 @@
 import { z } from "zod";
 
-export type BrowserViewport =
-  | { mode: "responsive" }
-  | { mode: "fixed"; width: number; height: number };
+const BrowserViewportSchema = z.discriminatedUnion("mode", [
+  z.strictObject({
+    mode: z.literal("responsive"),
+    // FORK(browser-scale): Existing tabs adopt the same preview scale as new tabs.
+    scale: z.number().min(0.25).max(2).default(0.75),
+  }),
+  z.strictObject({
+    mode: z.literal("fixed"),
+    width: z.number().positive(),
+    height: z.number().positive(),
+  }),
+]);
 
-export const RESPONSIVE_BROWSER_VIEWPORT: BrowserViewport = { mode: "responsive" };
+export type BrowserViewport = z.infer<typeof BrowserViewportSchema>;
+
+export const RESPONSIVE_BROWSER_VIEWPORT: BrowserViewport = { mode: "responsive", scale: 0.75 };
 
 export interface BrowserRecord {
   browserId: string;
@@ -24,15 +35,6 @@ export type BrowserRecordPatch = Partial<Omit<BrowserRecord, "browserId" | "crea
 export interface BrowserIndexState {
   browsersById: Record<string, BrowserRecord>;
 }
-
-const BrowserViewportSchema = z.discriminatedUnion("mode", [
-  z.strictObject({ mode: z.literal("responsive") }),
-  z.strictObject({
-    mode: z.literal("fixed"),
-    width: z.number().positive(),
-    height: z.number().positive(),
-  }),
-]);
 
 const BrowserRecordSchema = z.strictObject({
   browserId: z.string(),
@@ -61,17 +63,19 @@ export function createFixedBrowserViewport(width: number, height: number): Brows
 
 export function normalizeBrowserViewport(value: unknown): BrowserViewport {
   const result = BrowserViewportSchema.safeParse(value);
-  return result.success && result.data.mode === "fixed"
+  if (!result.success) {
+    return RESPONSIVE_BROWSER_VIEWPORT;
+  }
+  return result.data.mode === "fixed"
     ? createFixedBrowserViewport(result.data.width, result.data.height)
-    : RESPONSIVE_BROWSER_VIEWPORT;
+    : result.data;
 }
 
 function browserViewportsEqual(left: BrowserViewport, right: BrowserViewport): boolean {
-  return (
-    left.mode === right.mode &&
-    (left.mode === "responsive" ||
-      (right.mode === "fixed" && left.width === right.width && left.height === right.height))
-  );
+  if (left.mode === "responsive") {
+    return right.mode === "responsive" && left.scale === right.scale;
+  }
+  return right.mode === "fixed" && left.width === right.width && left.height === right.height;
 }
 
 export function normalizeBrowserIndexState(value: unknown): BrowserIndexState {

@@ -141,6 +141,7 @@ describe("resident browser webviews", () => {
 
     presentBrowserWebview("browser-stable-parent", webview, anchor, clip, {
       mode: "responsive",
+      scale: 1,
     });
     expect(webview.parentElement).toBe(permanentParent);
     expect(permanentParent.style.left).toBe("40px");
@@ -159,8 +160,52 @@ describe("resident browser webviews", () => {
 
     presentBrowserWebview("browser-stable-parent", webview, anchor, clip, {
       mode: "responsive",
+      scale: 1,
     });
     expect(webview.parentElement).toBe(permanentParent);
+  });
+
+  it("scales the responsive preview while retaining logical dimensions when parked", () => {
+    const browserId = "browser-scaled";
+    const webview = ensureTestBrowser({
+      browserId,
+      workspaceId: "workspace-scaled",
+      url: "https://example.com",
+    });
+    if (!webview) throw new Error("Expected webview");
+    const anchor = document.createElement("div");
+    anchor.style.cssText = "position:fixed;left:40px;top:60px;width:600px;height:450px";
+    document.body.appendChild(anchor);
+    try {
+      presentBrowserWebview(browserId, webview, anchor, anchor, {
+        mode: "responsive",
+        scale: 0.75,
+      });
+      expect(webview.clientWidth).toBe(800);
+      expect(webview.clientHeight).toBe(600);
+      expect(webview.getBoundingClientRect().width).toBe(600);
+      expect(webview.getBoundingClientRect().height).toBe(450);
+      rememberBrowserWebviewSize({
+        browserId,
+        width: webview.clientWidth,
+        height: webview.clientHeight,
+      });
+      releaseResidentBrowserWebview(browserId, webview);
+      expect(webview.clientWidth).toBe(800);
+      expect(webview.clientHeight).toBe(600);
+      presentBrowserWebview(browserId, webview, anchor, anchor, { mode: "responsive", scale: 0.5 });
+      expect(webview.clientWidth).toBe(1200);
+      expect(webview.getBoundingClientRect().width).toBe(600);
+      presentBrowserWebview(browserId, webview, anchor, anchor, {
+        mode: "fixed",
+        width: 375,
+        height: 667,
+      });
+      expect(webview.getBoundingClientRect().width).toBe(375);
+      expect(webview.getBoundingClientRect().height).toBe(667);
+    } finally {
+      anchor.remove();
+    }
   });
 
   it("clips an oversized fixed viewport to its pane without resizing the webview", () => {
@@ -382,7 +427,10 @@ describe("resident browser webviews", () => {
     const webview = document.createElement("webview");
     rememberBrowserWebviewSize({ browserId: "browser-inactive", width: 640, height: 480 });
 
-    applyInactiveBrowserWebviewViewport("browser-inactive", webview, { mode: "responsive" });
+    applyInactiveBrowserWebviewViewport("browser-inactive", webview, {
+      mode: "responsive",
+      scale: 1,
+    });
 
     expect(webview.style.flex).toBe("0 0 auto");
     expect(webview.style.width).toBe("640px");

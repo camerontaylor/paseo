@@ -379,10 +379,13 @@ async function clickGuestElement(page, client, browserId, selector) {
   });
   const elementRect = JSON.parse(evaluated.resultJson);
   assert(elementRect, `Guest element ${selector} was unavailable`);
+  const scale = await page
+    .locator(`[data-paseo-browser-id="${browserId}"]`)
+    .evaluate((webview) => webview.getBoundingClientRect().width / webview.clientWidth);
   await page.locator(`[data-paseo-browser-id="${browserId}"]`).click({
     position: {
-      x: elementRect.x + elementRect.width / 2,
-      y: elementRect.y + elementRect.height / 2,
+      x: (elementRect.x + elementRect.width / 2) * scale,
+      y: (elementRect.y + elementRect.height / 2) * scale,
     },
   });
 }
@@ -608,12 +611,30 @@ async function runRegression({
   );
   const firstGuest = await readGuest(page, browserId);
   assert(firstGuest, "Original browser guest was not attached to its workspace pane");
+  const paneBounds = await page.getByTestId(`browser-webview-clip-${browserId}`).boundingBox();
+  assert(paneBounds, "Responsive browser pane has visible bounds");
   recordViewportMismatch(
     failures,
     "Responsive viewport follows the visible browser pane",
     await readViewport(client, browserId),
-    { width: firstGuest.width, height: firstGuest.height },
+    { width: Math.round(paneBounds.width / 0.75), height: Math.round(paneBounds.height / 0.75) },
   );
+
+  const scalePicker = page.getByRole("button", { name: "Preview scale", exact: true });
+  assert((await scalePicker.innerText()).includes("75%"), "Responsive preview defaults to 75%");
+  await scalePicker.click();
+  await page.getByText("50%", { exact: true }).click();
+  await page.waitForFunction((id) => {
+    const webview = document.querySelector(`[data-paseo-browser-id="${id}"]`);
+    return webview?.style.transform === "scale(0.5)";
+  }, browserId);
+  recordViewportMismatch(
+    failures,
+    "Scale picker expands the logical viewport",
+    await readViewport(client, browserId),
+    { width: Math.round(paneBounds.width * 2), height: Math.round(paneBounds.height * 2) },
+  );
+  await page.screenshot({ path: path.join(artifactDir, "responsive-scale-50.png") });
 
   await clickGuestElement(page, client, browserId, "#typing-target");
   assert(

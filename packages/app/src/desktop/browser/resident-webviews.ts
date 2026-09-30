@@ -184,6 +184,7 @@ function applyResidentWebviewStyle(webview: HTMLElement, browserId: string | nul
   webview.style.top = "0";
   webview.style.marginTop = "0";
   webview.style.zIndex = "0";
+  webview.style.transform = "";
 }
 
 function clearResidentWebviewParkingStyle(webview: HTMLElement): void {
@@ -255,6 +256,14 @@ export function presentBrowserWebview(
   }
   const anchorBounds = anchor.getBoundingClientRect();
   const clipBounds = clip.getBoundingClientRect();
+  if (
+    anchorBounds.width <= 0 ||
+    anchorBounds.height <= 0 ||
+    clipBounds.width <= 0 ||
+    clipBounds.height <= 0
+  ) {
+    return;
+  }
   const left = Math.max(anchorBounds.left, clipBounds.left);
   const top = Math.max(anchorBounds.top, clipBounds.top);
   const right = Math.min(
@@ -282,12 +291,16 @@ export function presentBrowserWebview(
   surface.style.display = "flex";
   surface.style.visibility = "visible";
   clearResidentWebviewParkingStyle(webview);
+  // FORK(browser-scale): Scale the presentation while keeping guest coordinates logical.
+  const scale = viewport.mode === "responsive" ? viewport.scale : 1;
   applyBrowserWebviewDimensions(
     webview,
     viewport.mode === "responsive"
-      ? { width: anchorBounds.width, height: anchorBounds.height }
+      ? { width: anchorBounds.width / scale, height: anchorBounds.height / scale }
       : viewport,
   );
+  webview.style.transformOrigin = "top left";
+  webview.style.transform = `scale(${scale})`;
   webview.style.position = "absolute";
   webview.style.left = `${Math.round(anchorBounds.left - surfaceLeft)}px`;
   webview.style.top = `${Math.round(anchorBounds.top - surfaceTop)}px`;

@@ -92,8 +92,9 @@ or parking changes that surface's geometry without reparenting the webview. The 
 uses `left:0`, `top:0`, `width:1px`, `height:1px`, `overflow:hidden`, `opacity:1`, and
 `pointer-events:none`. The webview stays at its resolved logical viewport, defaulting to
 1280x800 before first presentation, with `display:inline-flex` at `left:0`, `top:0`.
-Presentation resolves responsive guests to the pane's exact pixel dimensions after the surface
-has visible bounds. Do not apply percentage guest sizing against the parked surface: Electron
+Presentation resolves responsive guests to the pane's pixel dimensions divided by the preview
+scale, then scales their presentation to fill the pane. Remember the untransformed logical
+dimensions when parking so captures and page layout stay stable. Do not apply percentage guest sizing against the parked surface: Electron
 exposes the 1x1 parking geometry as a real guest resize before expanding it again.
 
 The permanent browser host and `overlay-root` are explicit sibling paint planes. The browser
