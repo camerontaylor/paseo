@@ -3940,6 +3940,29 @@ describe("Codex app-server provider", () => {
     });
   });
 
+  test("preserves provider titles on live command notifications", () => {
+    const session = createSession();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    asInternals(session).handleNotification("codex/event/exec_command_begin", {
+      msg: {
+        type: "exec_command_begin",
+        call_id: "native-title",
+        command: "pwd",
+        title: "Show current directory",
+      },
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline",
+        item: expect.objectContaining({
+          callId: "native-title",
+          metadata: { "paseo.toolCallTitle": "Show current directory" },
+        }),
+      }),
+    );
+  });
+
   test("routes msg-scoped legacy Codex events to their child thread", () => {
     const session = createSession();
     const events: AgentStreamEvent[] = [];

@@ -26,6 +26,20 @@ function fakeResolveIcon(
 }
 
 describe("tool-call presentation", () => {
+  it("shows provider titles immediately, ahead of generated and inferred labels", () => {
+    const presentation = buildToolCallPresentation({
+      toolName: "Bash",
+      status: "running",
+      error: null,
+      detail: { type: "shell", command: "cat /tmp/file.txt" },
+      metadata: {
+        "paseo.toolCallTitle": "Inspect configuration",
+        "paseo.toolCallInputSummary": { description: "Old generated label" },
+      },
+      resolveIcon: fakeResolveIcon,
+    });
+    expect(presentation.inputLabel).toBe("Inspect configuration");
+  });
   it("builds badge, detail, icon, and file-open policy in one model", () => {
     const presentation = buildToolCallPresentation({
       toolName: "read_file",

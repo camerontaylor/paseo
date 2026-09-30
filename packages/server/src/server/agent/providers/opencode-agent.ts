@@ -435,6 +435,7 @@ const OpencodeToolPartWithCallIdSchema = OpencodeToolPartBaseSchema.extend({
   output: part.state?.output,
   error: part.state?.error,
   metadata: part.state?.metadata,
+  title: part.state?.title,
 }));
 
 const OpencodeToolPartWithIdSchema = OpencodeToolPartBaseSchema.extend({
@@ -448,6 +449,7 @@ const OpencodeToolPartWithIdSchema = OpencodeToolPartBaseSchema.extend({
   output: part.state?.output,
   error: part.state?.error,
   metadata: part.state?.metadata,
+  title: part.state?.title,
 }));
 
 const OpencodeToolPartWithoutIdSchema = OpencodeToolPartBaseSchema.extend({
@@ -461,6 +463,7 @@ const OpencodeToolPartWithoutIdSchema = OpencodeToolPartBaseSchema.extend({
   output: part.state?.output,
   error: part.state?.error,
   metadata: part.state?.metadata,
+  title: part.state?.title,
 }));
 
 const OpencodeToolPartSchema = z.union([
@@ -477,6 +480,7 @@ const OpencodeToolPartTimelineEnvelopeSchema = OpencodeToolPartSchema.transform(
   output: part.output,
   error: part.error,
   metadata: part.metadata,
+  title: part.title,
 }));
 
 const OpencodeToolPartToTimelineItemSchema = OpencodeToolPartTimelineEnvelopeSchema.transform(
@@ -489,6 +493,7 @@ const OpencodeToolPartToTimelineItemSchema = OpencodeToolPartTimelineEnvelopeSch
       output: part.output,
       error: part.error,
       metadata: part.metadata,
+      title: part.title,
     }),
 );
 

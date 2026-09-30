@@ -1,6 +1,7 @@
 import { i18n } from "@/i18n/i18next";
 import { isAbsolutePath } from "@/utils/path";
 import {
+  readToolCallTitle,
   readToolCallSummary,
   readToolCallSummaryFilePath,
 } from "@getpaseo/protocol/tool-call-summary";
@@ -81,12 +82,14 @@ export function buildToolCallPresentation(
     hasMeaningfulToolCallDetail(input.detail);
 
   const filePath = extractToolCallFilePath(input.detail);
-  const inputLabel = buildInputLabel({
-    detail: detailForDisplay,
-    filePath,
-    generated: readToolCallSummary(input.metadata, "input"),
-    displayName: displayModel.displayName,
-  });
+  const inputLabel =
+    readToolCallTitle(input.metadata) ??
+    buildInputLabel({
+      detail: detailForDisplay,
+      filePath,
+      generated: readToolCallSummary(input.metadata, "input"),
+      displayName: displayModel.displayName,
+    });
 
   const toolCwd =
     detailForDisplay.type === "shell" ? (detailForDisplay.cwd ?? input.cwd) : input.cwd;

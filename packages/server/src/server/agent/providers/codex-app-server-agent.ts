@@ -1608,6 +1608,8 @@ function decodeCodexOutputDeltaChunk(chunk: string): string {
 function mapCodexExecNotificationToToolCall(params: {
   callId?: string | null;
   command: unknown;
+  title?: unknown;
+  description?: unknown;
   cwd?: string | null;
   output?: string | null;
   exitCode?: number | null;
@@ -1637,6 +1639,8 @@ function mapCodexExecNotificationToToolCall(params: {
     input: {
       command,
       ...(params.cwd ? { cwd: params.cwd } : {}),
+      title: params.title,
+      description: params.description,
     },
     output,
     error: isFailure ? { message: params.stderr?.trim() || "Command failed" } : null,
@@ -2558,6 +2562,8 @@ type ParsedCodexNotification =
     }
   | {
       kind: "exec_command_started";
+      title: unknown;
+      description: unknown;
       callId: string | null;
       command: unknown;
       cwd: string | null;
@@ -2565,6 +2571,8 @@ type ParsedCodexNotification =
     }
   | {
       kind: "exec_command_completed";
+      title: unknown;
+      description: unknown;
       callId: string | null;
       command: unknown;
       cwd: string | null;
@@ -2889,6 +2897,8 @@ const CodexNotificationSchema = z.union([
     .transform(
       ({ params }): ParsedCodexNotification => ({
         kind: "exec_command_started",
+        title: params.msg.title,
+        description: params.msg.description,
         callId: params.msg.call_id ?? null,
         command: params.msg.command ?? null,
         cwd: params.msg.cwd ?? null,
@@ -2910,6 +2920,8 @@ const CodexNotificationSchema = z.union([
     .transform(
       ({ params }): ParsedCodexNotification => ({
         kind: "exec_command_completed",
+        title: params.msg.title,
+        description: params.msg.description,
         callId: params.msg.call_id ?? null,
         command: params.msg.command ?? null,
         cwd: params.msg.cwd ?? null,
@@ -6364,6 +6376,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     const timelineItem = mapCodexExecNotificationToToolCall({
       callId: parsed.callId,
       command: parsed.command,
+      title: parsed.title,
+      description: parsed.description,
       cwd: parsed.cwd ?? this.config.cwd ?? null,
       running: true,
     });
@@ -6390,6 +6404,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     const timelineItem = mapCodexExecNotificationToToolCall({
       callId: parsed.callId,
       command: parsed.command,
+      title: parsed.title,
+      description: parsed.description,
       cwd: parsed.cwd ?? this.config.cwd ?? null,
       output: resolvedOutput,
       exitCode: parsed.exitCode,

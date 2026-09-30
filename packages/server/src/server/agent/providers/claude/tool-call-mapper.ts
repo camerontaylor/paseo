@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { withToolCallTitle } from "../tool-call-mapper-utils.js";
 
 import type { ToolCallTimelineItem } from "../../agent-sdk-types.js";
 import { isSpeakToolName } from "@getpaseo/protocol/tool-name-normalization";
@@ -141,6 +142,7 @@ function mapClaudeToolCall(
   const name = toolKind === "speak" ? "speak" : trimmedName;
   const input = raw.input ?? null;
   const output = raw.output ?? null;
+  const metadata = withToolCallTitle(raw.metadata, input);
   const detail = deriveClaudeToolDetail(resolveDetailName(toolKind, name), input, output);
 
   if (raw.status === "failed") {
@@ -151,7 +153,7 @@ function mapClaudeToolCall(
       detail,
       status: "failed",
       error: raw.error ?? { message: "Tool call failed" },
-      ...(raw.metadata ? { metadata: raw.metadata } : {}),
+      ...(metadata ? { metadata } : {}),
     };
   }
   return {
@@ -161,7 +163,7 @@ function mapClaudeToolCall(
     detail,
     status: raw.status,
     error: null,
-    ...(raw.metadata ? { metadata: raw.metadata } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 

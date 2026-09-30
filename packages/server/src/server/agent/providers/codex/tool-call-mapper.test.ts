@@ -8,6 +8,27 @@ function expectMapped<T>(item: T | null): T {
 }
 
 describe("codex tool-call mapper", () => {
+  it("preserves supplied titles without using approval justification as a title", () => {
+    const item = mapCodexToolCallEnvelope({
+      callId: "title",
+      name: "browser",
+      input: { title: "Inspect page navigation" },
+    });
+    expect(item?.metadata).toMatchObject({ "paseo.toolCallTitle": "Inspect page navigation" });
+    const shell = mapCodexToolCallFromThreadItem({
+      type: "commandExecution",
+      id: "shell",
+      command: "pwd",
+      title: "Show current directory",
+    });
+    expect(shell?.metadata).toMatchObject({ "paseo.toolCallTitle": "Show current directory" });
+    const approval = mapCodexToolCallEnvelope({
+      callId: "approval",
+      name: "shell",
+      input: { command: "pwd", justification: "Allow access?", description: "  " },
+    });
+    expect(approval?.metadata).toBeUndefined();
+  });
   it("maps commandExecution start into running canonical call", () => {
     const item = expectMapped(
       mapCodexToolCallFromThreadItem({

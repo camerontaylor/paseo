@@ -16,6 +16,14 @@ function expectMapped<T>(item: T | null): T {
 }
 
 describe("claude tool-call mapper", () => {
+  it("preserves the agent's shell description for immediate labels", () => {
+    const item = mapClaudeRunningToolCall({
+      callId: "native-title",
+      name: "Bash",
+      input: { command: "git status", description: " Show working tree status " },
+    });
+    expect(item?.metadata).toMatchObject({ "paseo.toolCallTitle": "Show working tree status" });
+  });
   it("preserves a plan's original tool identity and outcome for live and replayed results", () => {
     const proposal = { name: "ExitPlanMode", callId: "plan-tool-1", input: { plan: "Ship it" } };
     const pending = expectMapped(mapClaudeRunningToolCall(proposal));

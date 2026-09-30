@@ -1,6 +1,6 @@
 import type { AgentManager } from "../agent-manager.js";
 import type { Logger } from "pino";
-import { readToolCallSummary } from "@getpaseo/protocol/tool-call-summary";
+import { readToolCallTitle, readToolCallSummary } from "@getpaseo/protocol/tool-call-summary";
 import type { ToolCallSummarySource, ToolCallSummaryTarget } from "./types.js";
 import { summaryCall, type SummaryCall, type SummaryResponse } from "./prompt.js";
 
@@ -56,7 +56,12 @@ export class ToolCallSummarizer {
     if (this.stopped || this.paused) return;
     if (this.active?.agentId === target.agentId && this.active.keys.has(target.key)) return;
     const source = this.options.getSource(target);
-    if (!source || readToolCallSummary(source.item.metadata, target.phase)) return;
+    if (
+      !source ||
+      readToolCallTitle(source.item.metadata) ||
+      readToolCallSummary(source.item.metadata, target.phase)
+    )
+      return;
     const queue = this.queues.get(target.agentId) ?? new Map<string, PendingCall>();
     if (queue.has(target.key)) return;
     queue.set(target.key, { target, queuedAt: Date.now(), attempt: 0 });
@@ -173,7 +178,11 @@ export class ToolCallSummarizer {
     let chars = 2;
     for (const [key, pending] of queue) {
       const source = this.options.getSource(pending.target);
-      if (!source || readToolCallSummary(source.item.metadata, pending.target.phase)) {
+      if (
+        !source ||
+        readToolCallTitle(source.item.metadata) ||
+        readToolCallSummary(source.item.metadata, pending.target.phase)
+      ) {
         queue.delete(key);
         if (pending.requestId) droppedRequests.add(pending.requestId);
         continue;
@@ -267,7 +276,13 @@ export class ToolCallSummarizer {
       const descriptions = new Map(response.descriptions.map((entry) => [entry.id, entry]));
       for (const pending of batch.pending) {
         const description = descriptions.get(pending.target.key);
-        if (description && !controller.signal.aborted)
+        const source = this.options.getSource(pending.target);
+        if (
+          description &&
+          source &&
+          !readToolCallTitle(source.item.metadata) &&
+          !controller.signal.aborted
+        )
           await this.options.apply(pending.target, description.description, description.filePath);
       }
       this.finishActivity(requestId);

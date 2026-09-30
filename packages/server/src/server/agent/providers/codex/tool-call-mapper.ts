@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { withToolCallTitle } from "../tool-call-mapper-utils.js";
 
 import type { ToolCallTimelineItem } from "../../agent-sdk-types.js";
 import {
@@ -87,6 +88,7 @@ interface CodexMcpToolResultImagesSplit {
 }
 
 function toToolCallTimelineItem(envelope: CodexResolvedToolCall): ToolCallTimelineItem {
+  const metadata = withToolCallTitle(envelope.metadata, envelope.input);
   const name = envelope.toolKind === "speak" ? ("speak" as const) : envelope.name;
   const parsedDetail = deriveCodexToolDetail({
     name,
@@ -114,7 +116,7 @@ function toToolCallTimelineItem(envelope: CodexResolvedToolCall): ToolCallTimeli
       status: "failed",
       error: envelope.error ?? { message: "Tool call failed" },
       detail,
-      ...(envelope.metadata ? { metadata: envelope.metadata } : {}),
+      ...(metadata ? { metadata } : {}),
     };
   }
 
@@ -125,7 +127,7 @@ function toToolCallTimelineItem(envelope: CodexResolvedToolCall): ToolCallTimeli
     status: envelope.status,
     error: null,
     detail,
-    ...(envelope.metadata ? { metadata: envelope.metadata } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -683,6 +685,8 @@ function mapCommandExecutionItem(
   const input = toNullableObject({
     ...(command !== undefined ? { command } : {}),
     ...(item.cwd !== undefined ? { cwd: item.cwd } : {}),
+    description: item.description,
+    title: item.title,
   });
 
   const output =

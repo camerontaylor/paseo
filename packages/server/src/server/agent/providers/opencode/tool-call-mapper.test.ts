@@ -11,6 +11,19 @@ function expectMapped<T>(item: T | null): T {
 }
 
 describe("opencode tool-call mapper", () => {
+  it.each([
+    { input: { command: "pwd", description: "Show current directory" } },
+    { input: { command: "pwd" }, title: "Show current directory" },
+    { input: { command: "pwd" }, metadata: { description: "Show current directory" } },
+  ])("preserves provider titles from each OpenCode source", (fields) => {
+    const item = mapOpencodeToolCall({
+      toolName: "bash",
+      callId: "title",
+      status: "running",
+      ...fields,
+    });
+    expect(item?.metadata).toMatchObject({ "paseo.toolCallTitle": "Show current directory" });
+  });
   it("maps running shell calls", () => {
     const item = expectMapped(
       mapOpencodeToolCall({

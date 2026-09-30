@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { withToolCallTitle } from "../tool-call-mapper-utils.js";
 
 import type { ToolCallTimelineItem } from "../../agent-sdk-types.js";
 import { normalizeToolCallStatus } from "../tool-call-mapper-utils.js";
@@ -11,6 +12,7 @@ interface OpencodeToolCallParams {
   input?: unknown;
   output?: unknown;
   error?: unknown;
+  title?: unknown;
   metadata?: Record<string, unknown>;
 }
 
@@ -22,6 +24,7 @@ const OpencodeRawToolCallSchema = z
     input: z.unknown().optional(),
     output: z.unknown().optional(),
     error: z.unknown().optional(),
+    title: z.unknown().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .passthrough();
@@ -43,6 +46,7 @@ export function mapOpencodeToolCall(params: OpencodeToolCallParams): ToolCallTim
   const error = raw.error ?? null;
   const rawStatus = typeof raw.status === "string" ? raw.status : undefined;
   const status = normalizeToolCallStatus(rawStatus, error, output);
+  const metadata = withToolCallTitle(raw.metadata, input, { title: raw.title }, raw.metadata);
   const detail = deriveOpencodeToolDetail(name, input, output, error, raw.metadata);
 
   if (status === "failed") {
@@ -53,7 +57,7 @@ export function mapOpencodeToolCall(params: OpencodeToolCallParams): ToolCallTim
       status: "failed",
       detail,
       error: error ?? { message: "Tool call failed" },
-      ...(raw.metadata ? { metadata: raw.metadata } : {}),
+      ...(metadata ? { metadata } : {}),
     };
   }
   return {
@@ -63,6 +67,6 @@ export function mapOpencodeToolCall(params: OpencodeToolCallParams): ToolCallTim
     status,
     detail,
     error: null,
-    ...(raw.metadata ? { metadata: raw.metadata } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }

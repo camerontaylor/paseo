@@ -342,3 +342,16 @@ describe("tool-call summary scheduling", () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 });
+
+it.each(["input", "output"] as const)(
+  "skips %s generation when a provider title arrives while queued",
+  async (phase) => {
+    const { enqueue, sources, generate, service } = fixture();
+    const [target] = enqueue("agent");
+    const source = sources.get(target.key)!;
+    source.item.metadata = { "paseo.toolCallTitle": "Print greeting" };
+    service.enqueue({ ...target, phase });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(generate).not.toHaveBeenCalled();
+  },
+);

@@ -1,3 +1,22 @@
+import { TOOL_CALL_TITLE_KEY } from "@getpaseo/protocol/tool-call-summary";
+
+export function withToolCallTitle(
+  metadata: Record<string, unknown> | undefined,
+  ...sources: unknown[]
+): Record<string, unknown> | undefined {
+  for (const source of sources) {
+    if (typeof source !== "object" || source === null) continue;
+    const description = "description" in source ? source.description : undefined;
+    const title = "title" in source ? source.title : undefined;
+    for (const value of [description, title]) {
+      if (typeof value === "string" && value.trim()) {
+        return { ...metadata, [TOOL_CALL_TITLE_KEY]: value.trim() };
+      }
+    }
+  }
+  return metadata;
+}
+
 export type NormalizedToolCallStatus = "running" | "completed" | "failed" | "canceled";
 
 const FAILED_STATUS_VOCAB = new Set([

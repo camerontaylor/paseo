@@ -197,6 +197,7 @@ function toolFromV2(tool: SessionMessageAssistantTool): AgentTimelineItem | null
     toolName: tool.name,
     callId: tool.id,
     input: state.input,
+    title: "title" in state ? state.title : undefined,
     status: state.status === "error" ? "failed" : state.status,
     output,
     error: state.status === "error" ? state.error : undefined,
