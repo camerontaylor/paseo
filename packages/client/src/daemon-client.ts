@@ -11,7 +11,11 @@ import { CreationClient } from "./creation/index.js";
 import type { CreationSnapshot } from "@getpaseo/protocol/messages";
 import type { z } from "zod";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
+// Split value/type imports: the desvio basket drops the value import once no
+// basket-side code uses CLIENT_CAPS, which orphans the fork's sideConversations
+// declaration at merge time. A separate value-import line survives that merge.
 import type { ClientCapability } from "@getpaseo/protocol/client-capabilities";
+import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import type { AgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
 import {
   AgentCreateFailedStatusPayloadSchema,
@@ -689,6 +693,18 @@ export type ProviderSubagentListPayload = Extract<
 export type ProviderSubagentTimelinePayload = Extract<
   SessionOutboundMessage,
   { type: "agent.provider_subagents.timeline.get.response" }
+>["payload"];
+export type SideConversationAskPayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.side_conversation.ask.response" }
+>["payload"];
+export type SideConversationTimelinePayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.side_conversation.timeline.get.response" }
+>["payload"];
+export type SideConversationListPayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.side_conversation.list.response" }
 >["payload"];
 export interface FetchProviderSubagentTimelineOptions {
   direction?: ProviderSubagentTimelinePayload["direction"];
@@ -3388,6 +3404,90 @@ export class DaemonClient {
       { type: "agent.timeline.set_subscription.request", agentIds },
       options,
     );
+  }
+
+  async askSideConversation(
+    parentAgentId: string,
+    threadId: string,
+    question: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<SideConversationAskPayload> {
+    this.requireSideConversationSupport();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.side_conversation.ask.request",
+      parentAgentId,
+      threadId,
+      question,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.side_conversation.ask.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async fetchSideConversationTimeline(
+    parentAgentId: string,
+    threadId: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<SideConversationTimelinePayload> {
+    this.requireSideConversationSupport();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.side_conversation.timeline.get.request",
+      parentAgentId,
+      threadId,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.side_conversation.timeline.get.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async listSideConversations(
+    parentAgentId: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<SideConversationListPayload> {
+    this.requireSideConversationSupport();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.side_conversation.list.request",
+      parentAgentId,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.side_conversation.list.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
   }
 
   subscribeAgentTimeline(
@@ -6135,6 +6235,13 @@ export class DaemonClient {
     }
   }
 
+  private requireSideConversationSupport(): void {
+    // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
+    if (this.lastServerInfoMessage?.features?.sideConversations !== true) {
+      throw new Error("Update the host to use side conversations.");
+    }
+  }
+
   private resolveTransportUrlForAttempt(): string {
     return this.config.url;
   }
@@ -6161,6 +6268,8 @@ export class DaemonClient {
         ...(auth ? { auth } : {}),
         capabilities: {
           ...DEFAULT_CLIENT_CAPABILITIES,
+          // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only.
+          [CLIENT_CAPS.sideConversations]: true,
           ...this.config.capabilities,
         },
         ...(this.config.appVersion ? { appVersion: this.config.appVersion } : {}),

@@ -34,6 +34,7 @@ export interface SubagentsTrackProps {
   rows: SubagentRow[];
   onOpenSubagent: (id: string) => void;
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
+  onOpenSideConversation: (parentAgentId: string, threadId: string) => void;
   onArchiveSubagent: (id: string) => void;
   onArchiveFinished?: () => void;
   archiveFinishedStatus?: ArchiveFinishedStatus;
@@ -61,6 +62,7 @@ export function SubagentsTrack({
   rows,
   onOpenSubagent,
   onOpenProviderSubagent,
+  onOpenSideConversation,
   onArchiveSubagent,
   onArchiveFinished,
   archiveFinishedStatus = IDLE_ARCHIVE_FINISHED_STATUS,
@@ -101,6 +103,7 @@ export function SubagentsTrack({
           serverId={serverId}
           onOpenSubagent={onOpenSubagent}
           onOpenProviderSubagent={onOpenProviderSubagent}
+          onOpenSideConversation={onOpenSideConversation}
           onArchiveSubagent={onArchiveSubagent}
           onDetachSubagent={onDetachSubagent}
         />
@@ -172,6 +175,7 @@ interface SubagentsTrackRowProps {
   row: SubagentRow;
   onOpenSubagent: (id: string) => void;
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
+  onOpenSideConversation: (parentAgentId: string, threadId: string) => void;
   onArchiveSubagent: (id: string) => void;
   onDetachSubagent?: (id: string) => void;
 }
@@ -181,6 +185,7 @@ function SubagentsTrackRow({
   row,
   onOpenSubagent,
   onOpenProviderSubagent,
+  onOpenSideConversation,
   onArchiveSubagent,
   onDetachSubagent,
 }: SubagentsTrackRowProps): ReactElement {
@@ -192,10 +197,12 @@ function SubagentsTrackRow({
   const handlePress = useCallback(() => {
     if (row.kind === "provider") {
       onOpenProviderSubagent(row.parentAgentId, row.id);
+    } else if (row.kind === "side_conversation") {
+      onOpenSideConversation(row.parentAgentId, row.id);
     } else {
       onOpenSubagent(row.id);
     }
-  }, [onOpenProviderSubagent, onOpenSubagent, row]);
+  }, [onOpenProviderSubagent, onOpenSideConversation, onOpenSubagent, row]);
   const handleArchivePress = useCallback(() => {
     onArchiveSubagent(row.id);
   }, [onArchiveSubagent, row.id]);

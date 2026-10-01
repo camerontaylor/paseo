@@ -1,0 +1,39 @@
+context platform=android timeout=180000 retries=1
+env APP_ID=sh.paseo.debug
+
+open "${APP_ID}"
+# A cold deep link into a workspace the app has no cached checkpoints for never hydrates on
+# compact: the workspace route waits for directory data, but nothing on that entry path sets
+# directory demand — only the sidebar hooks do, and the sidebar is an overlay that mounts when
+# opened. Opening the menu once fetches the directory and the deep link's open intent resolves.
+# Drop this dance only when the app fetches on this entry path by itself.
+wait "label=\"Open menu\"" 30000
+press "label=\"Open menu\""
+wait "label=\"side-conversations-mobile\"" 30000
+press "label=\"Close sidebar\""
+wait "id=\"workspace-tab-switcher-trigger\"" 60000
+press "id=\"workspace-tab-switcher-trigger\""
+wait "id=\"workspace-tab-menu-${AGENT_TAB_ID}-trigger\"" 20000
+press "id=\"workspace-tab-menu-${AGENT_TAB_ID}-trigger\""
+wait "id=\"workspace-tab-menu-${AGENT_TAB_ID}-copy-agent-id\"" 20000
+press "id=\"workspace-tab-menu-${AGENT_TAB_ID}-new-side-conversation\""
+wait "label=\"Side conversation\"" 20000
+press "label=\"Side conversation\""
+wait "id=\"side-conversation-panel\"" 30000
+fill "id=\"side-conversation-input\"" "What did you change?"
+is text "id=\"side-conversation-input\"" "What did you change?"
+press "id=\"side-conversation-send\""
+wait "text" "mock-side-answer 0: What did you change?" 60000
+fill "id=\"side-conversation-input\"" "And why?"
+is text "id=\"side-conversation-input\"" "And why?"
+press "id=\"side-conversation-send\""
+wait "text" "mock-side-answer 1: And why?" 60000
+press "id=\"workspace-tab-switcher-trigger\""
+wait "label=\"Side conversation parent\"" 20000
+press "label=\"Side conversation parent\""
+wait "id=\"subagents-track-header\"" 30000
+is visible "text=\"Start chatting with this agent...\""
+press "id=\"subagents-track-header\""
+wait "id=\"subagents-track-header-panel-content\"" 20000
+is visible "role=\"button\" label=\"What did you change?\""
+close
