@@ -25,6 +25,8 @@ vi.mock("./acp-agent.js", () => ({
       this.provider = "acp";
       mockState.superConstructorOptions.push(options);
     }
+
+    async createSession(): Promise<{ provider: string }> { return { provider: this.provider }; }
   },
 }));
 
@@ -65,5 +67,43 @@ describe("GenericACPAgentClient", () => {
         waitForInitialCommands: true,
       },
     ]);
+  });
+
+  test("uses provider options to wait for asynchronously published slash commands", async () => {
+    const client = new GenericACPAgentClient({
+      logger: createTestLogger(),
+      command: ["zcode-acp-server"],
+    });
+
+    await client.createSession({
+      provider: "acp",
+      cwd: "/tmp",
+      providerOptions: {
+        waitForInitialCommands: true,
+        initialCommandsWaitTimeoutMs: 2_000,
+      },
+    });
+
+    expect(mockState.superConstructorOptions.at(-1)).toMatchObject({
+      waitForInitialCommands: true,
+      initialCommandsWaitTimeoutMs: 2_000,
+    });
+  });
+
+  test("allows a custom ACP provider to disable initial command waiting", async () => {
+    const client = new GenericACPAgentClient({
+      logger: createTestLogger(),
+      command: ["no-commands-acp"],
+    });
+
+    await client.createSession({
+      provider: "acp",
+      cwd: "/tmp",
+      providerOptions: { waitForInitialCommands: false },
+    });
+
+    expect(mockState.superConstructorOptions.at(-1)).toMatchObject({
+      waitForInitialCommands: false,
+    });
   });
 });
