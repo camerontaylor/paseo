@@ -12,6 +12,7 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
 import { PlanCopyActions } from "@/components/plan-copy-actions";
+import { PlanHandoffButton } from "@/components/plan-handoff-button";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { ChevronRight } from "lucide-react-native";
 import { isWeb } from "@/constants/platform";
@@ -273,6 +274,7 @@ function PlanCardContent({
         </View>
       ) : null}
       {footer ? <View style={styles.footer}>{footer}</View> : null}
+      {source ? <PlanHandoffButton source={source} text={text} /> : null}
     </View>
   );
 }
