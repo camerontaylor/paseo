@@ -147,6 +147,7 @@ const GitHubIssueSummarySchema = z.object({
 });
 
 const GitHubPullRequestSummarySchema = z.object({
+  statusCheckRollup: z.unknown().optional(),
   number: z.number(),
   title: z.string().catch(""),
   url: z.string().catch(""),
@@ -2015,21 +2016,41 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
         args: { query: input.query ?? "", limit: input.limit ?? 20 },
         readOptions: input,
         load: async () => {
-          const items = await runGhJson(
-            [
-              "pr",
-              "list",
-              "--search",
-              input.query ?? "",
-              "--json",
-              "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
-              "--limit",
-              String(input.limit ?? 20),
-            ],
-            { cwd: input.cwd },
-            z.array(GitHubPullRequestSummarySchema),
-            "[]",
-          );
+          // gh may resolve a fork checkout to its parent; pin the listing to
+          // the checkout's origin so fork-local PRs remain visible.
+          const repoSlug = await resolveRepoSlugCached(input.cwd);
+          const args = [
+            "pr",
+            "list",
+            ...(repoSlug ? ["--repo", repoSlug] : []),
+            "--search",
+            input.query ?? "",
+            "--json",
+            "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
+            "--limit",
+            String(input.limit ?? 20),
+          ];
+          let items: z.infer<typeof GitHubPullRequestSummarySchema>[];
+          try {
+            items = await runGhJson(
+              args,
+              { cwd: input.cwd },
+              z.array(GitHubPullRequestSummarySchema),
+              "[]",
+            );
+          } catch (error) {
+            if (!isStatusCheckRollupPermissionError(error)) throw error;
+            // A token without Checks permission can still list PRs. Omit CI facts.
+            const retryArgs = [...args];
+            retryArgs[retryArgs.indexOf("--json") + 1] =
+              "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt";
+            items = await runGhJson(
+              retryArgs,
+              { cwd: input.cwd },
+              z.array(GitHubPullRequestSummarySchema),
+              "[]",
+            );
+          }
           return items.map(toPullRequestSummary);
         },
       });
@@ -2440,6 +2461,7 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
       if (shouldFetchPullRequests && prsResult.status === "fulfilled") {
         for (const item of prsResult.value ?? []) {
           items.push({
+            ...(item.checks !== undefined ? { checks: item.checks } : {}),
             kind: "change_request",
             number: item.number,
             title: item.title,
@@ -3567,6 +3589,9 @@ function toPullRequestSummary(
   item: z.infer<typeof GitHubPullRequestSummarySchema>,
 ): PullRequestSummary {
   return {
+    ...(item.statusCheckRollup !== undefined
+      ? { checks: parseStatusCheckRollup(item.statusCheckRollup) }
+      : {}),
     number: item.number,
     title: item.title,
     url: item.url,

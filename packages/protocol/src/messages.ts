@@ -2443,6 +2443,16 @@ export const BranchSuggestionsRequestSchema = z.object({
 });
 
 export const GitHubSearchItemSchema = z.object({
+  checks: z
+    .array(
+      z.object({
+        name: z.string(),
+        status: z.string(),
+        url: z.string().nullable(),
+        workflow: z.string().optional(),
+      }),
+    )
+    .optional(),
   kind: z.enum(["issue", "pr"]),
   forge: z.string().optional(),
   number: z.number(),
@@ -3625,6 +3635,8 @@ export const ServerInfoStatusPayloadSchema = z
         // and github_search fallback after 2027-01-17 once the supported daemon
         // floor is >= v0.2.0.
         forgeSearch: z.boolean().optional(),
+        // COMPAT(forgeSearchChecks): added in v0.10.1-fork, remove after 2027-09-30.
+        forgeSearchChecks: z.boolean().optional(),
         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
         daemonStatusRpc: z.boolean().optional(),
         // COMPAT(daemonConfigReload): added in v0.4.0, remove gate after 2027-02-14.
