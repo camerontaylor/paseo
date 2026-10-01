@@ -3,7 +3,7 @@ import { router, type Href } from "expo-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { withUnistyles } from "react-native-unistyles";
-import { getProviderIcon, type ProviderIconComponent } from "@/components/provider-icons";
+import { useProviderIcon, type ProviderIconComponent } from "@/components/provider-icons";
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -75,10 +75,10 @@ function RecentlyClosedAgentItem({
   onSelect: (agent: AggregatedAgent) => void;
 }) {
   const { t } = useTranslation();
+  const Icon = useProviderIcon(agent.provider, agent.serverId);
   const leading = useMemo(() => {
-    const Icon = getProviderIcon(agent.provider, agent.serverId);
     return <ThemedRecentlyClosedAgentIconGlyph Icon={Icon} uniProps={mutedColorMapping} />;
-  }, [agent.provider, agent.serverId]);
+  }, [Icon]);
   const handleSelect = useCallback(() => onSelect(agent), [agent, onSelect]);
   const archivedAt = agent.archivedAt;
 
