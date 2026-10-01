@@ -780,6 +780,8 @@ export const es: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "Raíz",
+      searchPlaceholder: "Buscar scripts o paquetes…",
       title: "Scripts",
       actions: {
         chooseUrl: "Elegir URL",
@@ -807,6 +809,8 @@ export const es: TranslationResources = {
         direct: "Directa",
       },
       states: {
+        empty: "No se encontraron scripts",
+        noMatches: "No hay scripts coincidentes",
         exitCode: "salir de{{code}}",
         startFailed: "No se pudo iniciar{{scriptName}}",
         stopFailed: "No se pudo detener{{scriptName}}",
@@ -1274,6 +1278,7 @@ export const es: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "Script {{name}} en ejecución",
         serviceRunning: "Servicio {{name}} en ejecución",
         serviceUnhealthy: "Servicio {{name}} con fallos",
         creating: "Creando...",
