@@ -266,6 +266,7 @@ export const fr: TranslationResources = {
     scrollToBottom: "Faire défiler vers le bas",
     historyLoadFailed: "Impossible de charger l’historique de l’agent",
     messageCapped: "Ce message a été tronqué ({{bytes}} octets).",
+    pinnedPrompt: { jump: "Faire défiler jusqu’à ce message" },
     permission: {
       rejectedPlan: "Plan refusé",
       approvedPlan: "Plan approuvé",
