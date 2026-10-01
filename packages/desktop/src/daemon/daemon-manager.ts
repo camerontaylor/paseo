@@ -131,11 +131,17 @@ function logFilePath(): string {
   return path.join(getPaseoHome(), DAEMON_LOG_FILENAME);
 }
 
+// FORK(daemon-shutdown-confirmation): also count a desktop-managed daemon started by an
+// earlier app session, so quitting can offer to stop it after "Just quit" kept it alive.
 export function isDesktopManagedDaemonRunningSync(): boolean {
-  if (!ownedLaunch) return false;
   try {
-    const lock = JSON.parse(readFileSync(path.join(ownedLaunch.home, "paseo.pid"), "utf8"));
-    return isSameDaemonInstance(lock, ownedLaunch.instance) && isProcessRunning(lock.pid);
+    const lock = JSON.parse(readFileSync(path.join(getPaseoHome(), "paseo.pid"), "utf8")) as {
+      pid?: unknown;
+      desktopManaged?: unknown;
+    };
+    if (lock.desktopManaged !== true) return false;
+    if (typeof lock.pid !== "number" || !Number.isInteger(lock.pid)) return false;
+    return isProcessRunning(lock.pid);
   } catch {
     return false;
   }
@@ -347,7 +353,10 @@ export async function stopDesktopDaemon(
     throw new Error(
       "Daemon changed since confirmation; inspect its current home and PID before stopping it.",
     );
-  if (!instance || (!owned && !explicit)) return resolveDesktopDaemonStatus();
+  // FORK(daemon-shutdown-confirmation): the quit dialog is the confirmation for stopping a
+  // desktop-managed daemon this app process did not launch.
+  const confirmedQuit = reason === "quit" && instance?.desktopManaged === true;
+  if (!instance || (!owned && !explicit && !confirmedQuit)) return resolveDesktopDaemonStatus();
   logDesktopDaemonLifecycle("stopping captured supervisor", { reason, pid: instance.pid, owned });
   await stopDaemonInstance(home, {
     instance,

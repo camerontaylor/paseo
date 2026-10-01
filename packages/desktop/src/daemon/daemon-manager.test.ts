@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_DESKTOP_SETTINGS } from "../settings/desktop-settings";
-import { createDaemonCommandHandlers } from "./daemon-manager";
+import {
+  createDaemonCommandHandlers,
+  isDesktopManagedDaemonRunningSync,
+  stopDesktopDaemon,
+} from "./daemon-manager";
 
 const mocks = vi.hoisted(() => ({
   paseoHome: "",
@@ -153,6 +157,52 @@ describe("daemon-manager commands", () => {
 
     expect(status).toMatchObject({ serverId: "", status: "errored", pid: null });
     expect(status.error).toBeTruthy();
+  });
+
+  it("detects a desktop-managed daemon this app process did not launch", () => {
+    mkdirSync(mocks.paseoHome);
+    const lock = {
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      hostname: hostname(),
+      uid: process.getuid?.() ?? 0,
+      listen: null,
+      desktopManaged: true,
+    };
+    const lockPath = path.join(mocks.paseoHome, "paseo.pid");
+    writeFileSync(lockPath, JSON.stringify(lock));
+    expect(isDesktopManagedDaemonRunningSync()).toBe(true);
+    writeFileSync(lockPath, JSON.stringify({ ...lock, desktopManaged: false }));
+    expect(isDesktopManagedDaemonRunningSync()).toBe(false);
+  });
+
+  it("only stops an unowned desktop-managed daemon for a confirmed quit", async () => {
+    mkdirSync(mocks.paseoHome);
+    writeFileSync(
+      path.join(mocks.paseoHome, "paseo.pid"),
+      JSON.stringify({
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        hostname: hostname(),
+        uid: process.getuid?.() ?? 0,
+        listen: null,
+        desktopManaged: true,
+      }),
+    );
+
+    await stopDesktopDaemon("settings");
+    expect(mocks.logInfo).not.toHaveBeenCalledWith(
+      "[desktop daemon]",
+      "stopping captured supervisor",
+      expect.anything(),
+    );
+
+    await stopDesktopDaemon("quit").catch(() => undefined);
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      "[desktop daemon]",
+      "stopping captured supervisor",
+      expect.objectContaining({ reason: "quit", owned: false }),
+    );
   });
 
   it("returns a local credential only for its live managed daemon listen", async () => {

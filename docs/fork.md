@@ -111,8 +111,9 @@ Commits are the fork commits that built the feature (`git show --stat <sha>` for
 
 - Commits: `884ac282d`
 - Owns: nothing new
-- Wires into: `packages/desktop/src/main.ts`, `packages/desktop/src/daemon/quit-lifecycle.ts`, `paseo.json`
+- Wires into: `packages/desktop/src/main.ts`, `packages/desktop/src/daemon/quit-lifecycle.ts`, `packages/desktop/src/daemon/daemon-manager.ts`, `paseo.json`
 - Confirms before quitting the desktop app when that would stop the daemon.
+- Covers any running desktop-managed daemon in the home, not only one this app process launched. Upstream narrowed `isDesktopManagedDaemonRunningSync` and `stopDesktopDaemon` to the owned launch in #4575; the fork keeps the pid-file fallback and lets a confirmed `quit` stop an unowned desktop-managed daemon.
 
 ### package.json script discovery
 
