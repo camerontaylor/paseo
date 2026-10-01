@@ -74,6 +74,12 @@ type ClaudeLimit = z.infer<typeof ClaudeLimitSchema>;
 
 const SCOPED_WEEKLY_KIND = "weekly_scoped";
 
+// A 403 is not a stale token, so refreshing cannot clear it, and refreshing anyway rewrites
+// the credentials on every poll. What causes the refusal is not visible from here, so the
+// message names the refusal rather than guessing at a reason.
+const CLAUDE_USAGE_FORBIDDEN_MESSAGE =
+  "Usage request was refused (HTTP 403). Check the daemon's network access to api.anthropic.com.";
+
 interface ClaudeCredentialRecord {
   oauth: { accessToken: string } & NonNullable<ClaudeCredentials["claudeAiOauth"]>;
 }
@@ -409,7 +415,9 @@ export async function fetchUsage(
     return parsed;
   }
 
-  async function callClaudeApi(token: string): Promise<ClaudeUsageResponse | "NEEDS_AUTH"> {
+  async function callClaudeApi(
+    token: string,
+  ): Promise<ClaudeUsageResponse | "NEEDS_AUTH" | "FORBIDDEN"> {
     const res = await fetchApi("https://api.anthropic.com/api/oauth/usage", {
       signal: AbortSignal.timeout(15_000),
       headers: {
@@ -418,7 +426,8 @@ export async function fetchUsage(
         "anthropic-beta": CLAUDE_OAUTH_BETA,
       },
     });
-    if (res.status === 401 || res.status === 403) return "NEEDS_AUTH";
+    if (res.status === 401) return "NEEDS_AUTH";
+    if (res.status === 403) return "FORBIDDEN";
     if (!res.ok) throw new Error(`Claude usage API returned ${res.status}`);
     return ClaudeUsageResponseSchema.parse(await res.json());
   }
@@ -431,6 +440,10 @@ export async function fetchUsage(
   const { oauth } = credentials;
   const plan = buildClaudePlan(oauth.subscriptionType, oauth.rateLimitTier);
   const resp = await callClaudeApi(oauth.accessToken);
+
+  if (resp === "FORBIDDEN") {
+    return { ...unavailableUsage(), error: CLAUDE_USAGE_FORBIDDEN_MESSAGE };
+  }
 
   if (resp === "NEEDS_AUTH") {
     // Read-only on credentials; the Claude CLI owns refresh. See docs/providers.md.
