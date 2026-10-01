@@ -277,6 +277,11 @@ export const es: TranslationResources = {
       implement: "Implementar",
       question: "¿Cómo le gustaría proceder?",
       proposedPlan: "Plan propuesto",
+      copyContent: "Copiar contenido",
+      copyLink: "Copiar enlace",
+      contentCopied: "Plan copiado",
+      linkCopied: "Enlace de sesión copiado",
+      copyFailed: "No se pudo copiar el plan.",
     },
   },
   agentPanel: {

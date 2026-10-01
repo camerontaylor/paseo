@@ -43,6 +43,7 @@ import {
   type InlinePathTarget,
 } from "@/components/message";
 import { PlanCard } from "@/components/plan-card";
+import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
 import type { StreamItem } from "@/types/stream";
 import type { PendingMessageSubmission } from "@/composer/submission/model";
 import type { TurnPresentation } from "@/timeline/turn-liveness";
@@ -190,6 +191,7 @@ function BottomOverlayInset({ height }: { height: number }) {
 
 function renderPendingPermissionsNode(input: {
   pendingPermissions: PendingPermission[];
+  serverId: string;
   client: DaemonClient | null;
 }): ReactNode {
   if (input.pendingPermissions.length === 0) {
@@ -198,7 +200,12 @@ function renderPendingPermissionsNode(input: {
   return (
     <View style={stylesheet.permissionsContainer}>
       {input.pendingPermissions.map((permission) => (
-        <PermissionRequestCard key={permission.key} permission={permission} client={input.client} />
+        <PermissionRequestCard
+          key={permission.key}
+          permission={permission}
+          serverId={input.serverId}
+          client={input.client}
+        />
       ))}
     </View>
   );
@@ -454,6 +461,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const workspaceRoot = context.cwd.trim();
     const destinationRoot = useWorkspaceDirectory(resolvedServerId, context.workspaceId ?? null);
+    const planSource = useMemo(
+      () => (resolvedServerId ? { serverId: resolvedServerId, agentId } : undefined),
+      [resolvedServerId, agentId],
+    );
     const { requestDirectoryListing } = useFileExplorerActions({
       serverId: resolvedServerId,
       workspaceId: context.workspaceId,
@@ -848,6 +859,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           return (
             <ToolCallSlot
               itemId={item.id}
+              source={planSource}
               onInlineDetailsExpandedChangeByItemId={setInlineDetailsExpanded}
               toolName={data.name}
               error={data.error}
@@ -866,6 +878,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         return (
           <ToolCallSlot
             itemId={item.id}
+            source={planSource}
             onInlineDetailsExpandedChangeByItemId={setInlineDetailsExpanded}
             toolName={data.toolName}
             args={data.arguments}
@@ -877,7 +890,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [context.cwd, setInlineDetailsExpanded, handleToolCallOpenFile],
+      [context.cwd, setInlineDetailsExpanded, handleToolCallOpenFile, planSource],
     );
 
     // Read through a stable event so live group updates do not change the renderer identity
@@ -1002,9 +1015,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () =>
         renderPendingPermissionsNode({
           pendingPermissions: pendingPermissionItems,
+          serverId: resolvedServerId,
           client,
         }),
-      [client, pendingPermissionItems],
+      [client, pendingPermissionItems, resolvedServerId],
     );
     const turnFooterNode = useMemo(
       () =>
@@ -1352,6 +1366,7 @@ interface ToolCallSlotProps extends Omit<
   "onInlineDetailsExpandedChange"
 > {
   itemId: string;
+  source?: AgentDeepLinkTarget;
   onInlineDetailsExpandedChangeByItemId: (itemId: string, expanded: boolean) => void;
 }
 
@@ -1390,6 +1405,7 @@ function ThoughtSlot({
 
 function ToolCallSlot({
   itemId,
+  source,
   onInlineDetailsExpandedChangeByItemId,
   ...rest
 }: ToolCallSlotProps) {
@@ -1397,7 +1413,9 @@ function ToolCallSlot({
     (expanded: boolean) => onInlineDetailsExpandedChangeByItemId(itemId, expanded),
     [onInlineDetailsExpandedChangeByItemId, itemId],
   );
-  return <ToolCall {...rest} onInlineDetailsExpandedChange={handleExpandedChange} />;
+  return (
+    <ToolCall {...rest} source={source} onInlineDetailsExpandedChange={handleExpandedChange} />
+  );
 }
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
@@ -1466,15 +1484,21 @@ function PermissionActionButton({
 
 function PermissionRequestCard({
   permission,
+  serverId,
   client,
 }: {
   permission: PendingPermission;
+  serverId: string;
   client: DaemonClient | null;
 }) {
   const { t } = useTranslation();
   const isMobile = useIsCompactFormFactor();
 
   const { request } = permission;
+  const permissionPlanSource = useMemo(
+    () => (serverId ? { serverId, agentId: permission.agentId } : undefined),
+    [serverId, permission.agentId],
+  );
   const isPlanRequest = request.kind === "plan";
   const title = isPlanRequest
     ? t("agentStream.permission.plan")
@@ -1649,6 +1673,7 @@ function PermissionRequestCard({
         title={title}
         description={description}
         text={planMarkdown}
+        source={permissionPlanSource}
         outcome="pending"
         footer={footer}
         testID="permission-plan-card"
@@ -1667,6 +1692,7 @@ function PermissionRequestCard({
         <PlanCard
           title={t("agentStream.permission.proposedPlan")}
           text={planMarkdown}
+          source={permissionPlanSource}
           testID="permission-plan-card"
           disableOuterSpacing
         />
