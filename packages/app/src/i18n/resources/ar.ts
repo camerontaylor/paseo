@@ -548,6 +548,9 @@ export const ar: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "فشل في سرد ​​الدليل",
+        pathUnavailable: "لا يمكن تحديد هذا المسار من دليل عمل المحادثة.",
+        outsideWorkspaceDirectory:
+          "هذا المجلد خارج مساحة العمل الحالية. افتحه من مساحة العمل المصدر.",
         createFailed: "فشل إنشاء العنصر",
         renameFailed: "فشل إعادة تسمية العنصر",
         duplicateFailed: "فشل تكرار العنصر",
