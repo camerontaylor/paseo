@@ -391,7 +391,7 @@ function getDefaultEnablePullRequestAutoMergeActionId(
   );
 }
 
-function buildPrAction(input: BuildGitActionsInput): GitAction {
+export function buildPrAction(input: BuildGitActionsInput): GitAction {
   if (input.hasPullRequest && input.pullRequestUrl) {
     return {
       id: "pr",

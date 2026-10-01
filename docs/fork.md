@@ -79,6 +79,19 @@ Commits are the fork commits that built the feature (`git show --stat <sha>` for
 - Wires into: daemon config schemas, resolution, store and bootstrap; `websocket-server.ts`; app agent-form resolution, project settings and host Agents settings.
 - Shared defaults for new composers, with project overrides that follow worktree membership. See [default agents](data-model.md#default-agents).
 
+### Linked Linear issues in the workspace header
+
+- Owns: `packages/app/src/linear/`, `packages/server/src/services/linear-service.ts`, `packages/protocol/src/linear.ts`.
+- Wires into: workspace actions, checkout session RPC dispatch, daemon capability reporting, client requests, and English resources.
+- Uses the host's `linear` CLI and its existing workspace credentials. The daemon must have the CLI on its PATH; no credentials enter the app. Linking adds the PR URL as a Linear attachment. Creating an issue opens Linear's form, after which you can link its identifier.
+- PR URLs are the lookup identity; a shared short-lived daemon cache prevents each connected client from launching another CLI process.
+
+### Workspace PR toolbar button
+
+- Owns: `packages/app/src/git/workspace-pull-request-button.tsx`
+- Wires into: Git action policy and hook, `git/workspace-actions.tsx`, and the workspace header.
+- Keeps the current PR directly accessible from the toolbar; branches without a PR offer creation from the grey icon's menu.
+
 ### Project PR browser
 
 - Commits: `80c69f95c`

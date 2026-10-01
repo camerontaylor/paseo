@@ -1,3 +1,5 @@
+import { linearService } from "../../../services/linear-service.js";
+import type { LinearGetIssuesRequest, LinearLinkIssueRequest } from "@getpaseo/protocol/linear";
 import type pino from "pino";
 import type { SessionDelivery } from "../owned-subscriptions/index.js";
 import { isAbsolute } from "node:path";
@@ -1374,6 +1376,41 @@ export class CheckoutSession {
           },
           requestId,
         },
+      });
+    }
+  }
+
+  // FORK(linear-toolbar): keep CLI integration out of the forge adapters.
+  async handleLinearGetIssuesRequest(msg: LinearGetIssuesRequest): Promise<void> {
+    try {
+      const issues = await linearService.getIssues({ cwd: expandTilde(msg.cwd), prUrl: msg.prUrl });
+      this.host.emit({
+        type: "checkout.linear.get_issues.response",
+        payload: { issues, error: null, requestId: msg.requestId },
+      });
+    } catch (error) {
+      this.host.emit({
+        type: "checkout.linear.get_issues.response",
+        payload: { issues: [], error: getErrorMessage(error), requestId: msg.requestId },
+      });
+    }
+  }
+
+  async handleLinearLinkIssueRequest(msg: LinearLinkIssueRequest): Promise<void> {
+    try {
+      await linearService.linkIssue({
+        cwd: expandTilde(msg.cwd),
+        prUrl: msg.prUrl,
+        identifier: msg.identifier,
+      });
+      this.host.emit({
+        type: "checkout.linear.link_issue.response",
+        payload: { success: true, error: null, requestId: msg.requestId },
+      });
+    } catch (error) {
+      this.host.emit({
+        type: "checkout.linear.link_issue.response",
+        payload: { success: false, error: getErrorMessage(error), requestId: msg.requestId },
       });
     }
   }

@@ -3845,29 +3845,29 @@ function WorkspaceScreenContent({
     () => (
       <View style={styles.headerRight}>
         <PluginHeaderButtons serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
-        {!isMobile && workspaceDescriptor ? (
-          <WorkspaceScriptsButton
-            serverId={normalizedServerId}
-            workspaceId={normalizedWorkspaceId}
-            scripts={workspaceDescriptor.scripts}
-            liveTerminalIds={liveTerminalIds}
-            onScriptTerminalStarted={handleScriptTerminalStarted}
-            onViewTerminal={handleViewScriptTerminal}
-            onOpenUrlInBrowserTab={handleOpenUrlInBrowserTab}
-            hideLabels
-          />
-        ) : null}
-        {!isMobile && workspaceDirectory ? (
-          <WorkspaceOpenInEditorButton
-            serverId={normalizedServerId}
-            cwd={workspaceDirectory}
-            activeFile={activeFileLocation}
-            hideLabels
-          />
-        ) : null}
         {!isMobile && workspaceDirectory ? (
           <>
-            <WorkspaceActions serverId={normalizedServerId} cwd={workspaceDirectory} />
+            {/* FORK(pr-toolbar): keep the PR shortcut before the run/editor controls. */}
+            <WorkspaceActions serverId={normalizedServerId} cwd={workspaceDirectory}>
+              {workspaceDescriptor ? (
+                <WorkspaceScriptsButton
+                  serverId={normalizedServerId}
+                  workspaceId={normalizedWorkspaceId}
+                  scripts={workspaceDescriptor.scripts}
+                  liveTerminalIds={liveTerminalIds}
+                  onScriptTerminalStarted={handleScriptTerminalStarted}
+                  onViewTerminal={handleViewScriptTerminal}
+                  onOpenUrlInBrowserTab={handleOpenUrlInBrowserTab}
+                  hideLabels
+                />
+              ) : null}
+              <WorkspaceOpenInEditorButton
+                serverId={normalizedServerId}
+                cwd={workspaceDirectory}
+                activeFile={activeFileLocation}
+                hideLabels
+              />
+            </WorkspaceActions>
             <WorkspaceHeaderExplorerToggle
               owner={explorerToggleOwner}
               onPress={handleToggleExplorerSidebar}

@@ -2999,6 +2999,11 @@ export class Session {
         return this.checkoutSession.handleCheckoutPrStatusRequest(msg);
       case "pull_request_timeline_request":
         return this.checkoutSession.handlePullRequestTimelineRequest(msg);
+      // FORK(linear-toolbar): resolve and link Linear issues via the host CLI.
+      case "checkout.linear.get_issues.request":
+        return this.checkoutSession.handleLinearGetIssuesRequest(msg);
+      case "checkout.linear.link_issue.request":
+        return this.checkoutSession.handleLinearLinkIssueRequest(msg);
       case "forge.search.request":
       case "github_search_request":
         return this.checkoutSession.handleForgeSearchRequest(msg);

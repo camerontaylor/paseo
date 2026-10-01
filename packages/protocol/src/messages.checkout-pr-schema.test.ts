@@ -1,5 +1,6 @@
 import { ForgeSearchItemSchema } from "./messages";
 import { describe, expect, test } from "vitest";
+import { WSOutboundMessageSchema as GeneratedOutboundSchema } from "./generated/validation/ws-outbound.aot.js";
 
 import {
   CheckoutGithubGetCheckDetailsRequestSchema,
@@ -11,9 +12,70 @@ import {
   ForgeSearchResponseSchema,
   GitHubSearchResponseSchema,
   ServerInfoStatusPayloadSchema,
+  SessionInboundMessageSchema,
 } from "./messages.js";
 
 describe("checkout PR schemas", () => {
+  test("round-trips linked Linear issue requests and generated responses", () => {
+    const request = {
+      type: "checkout.linear.get_issues.request",
+      cwd: "/repo",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      requestId: "linear-1",
+    };
+    expect(SessionInboundMessageSchema.parse(request)).toEqual(request);
+    const response = {
+      type: "session",
+      message: {
+        type: "checkout.linear.get_issues.response",
+        payload: {
+          issues: [
+            {
+              id: "issue-1",
+              identifier: "CMS-664",
+              title: "Search",
+              url: "https://linear.app/acme/issue/CMS-664",
+              state: { name: "Ready for QA", type: "started", color: "#eb5757", progress: 0.6 },
+            },
+          ],
+          error: null,
+          requestId: "linear-1",
+        },
+      },
+    };
+    expect(GeneratedOutboundSchema.safeParse(response)).toMatchObject({
+      success: true,
+      data: response,
+    });
+    expect(
+      ServerInfoStatusPayloadSchema.parse({
+        status: "server_info",
+        serverId: "host",
+        features: { linearIssues: true },
+      }).features,
+    ).toEqual({ linearIssues: true });
+  });
+
+  test("routes Linear linking and accepts its error response", () => {
+    const request = {
+      type: "checkout.linear.link_issue.request",
+      cwd: "/repo",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      identifier: "CMS-664",
+      requestId: "linear-2",
+    };
+    expect(SessionInboundMessageSchema.parse(request)).toEqual(request);
+    expect(
+      GeneratedOutboundSchema.safeParse({
+        type: "session",
+        message: {
+          type: "checkout.linear.link_issue.response",
+          payload: { success: false, error: "Unavailable", requestId: "linear-2" },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   test("defaults missing forge identity for old daemon payloads", () => {
     const parsed = CheckoutPrStatusSchema.parse({
       url: "https://github.com/getpaseo/paseo/pull/42",

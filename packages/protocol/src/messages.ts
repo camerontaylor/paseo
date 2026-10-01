@@ -1,3 +1,10 @@
+// FORK(linear-toolbar): host CLI-backed linked issue actions.
+import {
+  LinearGetIssuesRequestSchema,
+  LinearGetIssuesResponseSchema,
+  LinearLinkIssueRequestSchema,
+  LinearLinkIssueResponseSchema,
+} from "./linear.js";
 import {
   CodeDocumentRequestSchema,
   CodeDocumentResponseSchema,
@@ -3522,6 +3529,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ValidateBranchRequestSchema,
   BranchSuggestionsRequestSchema,
   ForgeSearchRequestSchema,
+  LinearGetIssuesRequestSchema,
+  LinearLinkIssueRequestSchema,
   GitHubSearchRequestSchema,
   DirectorySuggestionsRequestSchema,
   PaseoWorktreeListRequestSchema,
@@ -3814,6 +3823,7 @@ export const ServerInfoStatusPayloadSchema = z
         // and github_search fallback after 2027-01-17 once the supported daemon
         // floor is >= v0.2.0.
         forgeSearch: z.boolean().optional(),
+        linearIssues: z.boolean().optional(),
         forgeSearchChecks: z.boolean().optional(),
         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
         daemonStatusRpc: z.boolean().optional(),
@@ -7198,6 +7208,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ValidateBranchResponseSchema,
   BranchSuggestionsResponseSchema,
   ForgeSearchResponseSchema,
+  LinearGetIssuesResponseSchema,
+  LinearLinkIssueResponseSchema,
   GitHubSearchResponseSchema,
   DirectorySuggestionsResponseSchema,
   PaseoWorktreeListResponseSchema,

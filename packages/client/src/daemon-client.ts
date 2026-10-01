@@ -1,3 +1,9 @@
+import type {
+  LinearGetIssuesRequest,
+  LinearGetIssuesResponse,
+  LinearLinkIssueRequest,
+  LinearLinkIssueResponse,
+} from "@getpaseo/protocol/linear";
 import type { ChapterComparison, ChapterStory, ChapterState } from "@getpaseo/protocol/messages";
 import type { CodeDocument, CodeQuery, CodeLocation } from "@getpaseo/protocol/code-language";
 import { subscribeTimeline, type TimelineMessage } from "./timeline-subscription/index.js";
@@ -4638,6 +4644,27 @@ export class DaemonClient {
         limit: options.limit,
       },
       responseType: "branch_suggestions_response",
+    });
+  }
+
+  // FORK(linear-toolbar): use the daemon's Linear CLI and credentials.
+  async getLinearIssues(
+    options: Omit<LinearGetIssuesRequest, "type" | "requestId">,
+  ): Promise<LinearGetIssuesResponse["payload"]> {
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "checkout.linear.get_issues.request", ...options },
+      responseType: "checkout.linear.get_issues.response",
+      timeout: 20_000,
+    });
+  }
+
+  async linkLinearIssue(
+    options: Omit<LinearLinkIssueRequest, "type" | "requestId">,
+  ): Promise<LinearLinkIssueResponse["payload"]> {
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "checkout.linear.link_issue.request", ...options },
+      responseType: "checkout.linear.link_issue.response",
+      timeout: 35_000,
     });
   }
 

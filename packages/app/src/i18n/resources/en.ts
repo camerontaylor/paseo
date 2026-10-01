@@ -546,6 +546,20 @@ export const en = {
     },
   },
   workspace: {
+    linear: {
+      title: "Linear issues",
+      link: "Link issue",
+      linking: "Linking issue…",
+      identifier: "Issue identifier, e.g. CMS-664",
+      create: "Create issue in Linear",
+      refresh: "Refresh linked issues",
+      loading: "Loading Linear issues…",
+      noPr: "Create a PR to link Linear issues",
+      updateHost: "Update the host to show Linear issues",
+      unavailable: "Connect to the host and open a PR to use Linear",
+      linkFailed: "Could not link the Linear issue. Try again",
+      openFailed: "Could not open Linear. Try again",
+    },
     route: {
       loading: "Loading workspace",
       connecting: "Connecting",

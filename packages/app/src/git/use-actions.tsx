@@ -10,8 +10,10 @@ import { ForgeBrandIcon, getForgeBrandColorMapping } from "@/git/forge-icon";
 import { type CheckoutGitActionStatus, useCheckoutGitActionsStore } from "@/git/actions-store";
 import { type CheckoutStatusPayload, useCheckoutStatusQuery } from "@/git/use-status-query";
 import { type CheckoutPrStatusPayload, useCheckoutPrStatusQuery } from "@/git/use-pr-status-query";
+import { selectPrHintFromStatus, type PrHint } from "@/git/pr-hint";
 import {
   buildGitActions,
+  buildPrAction,
   narrowPullRequestState,
   type BuildGitActionsInput,
   type GitAction,
@@ -203,6 +205,9 @@ interface UseGitActionsInput {
 
 interface UseGitActionsResult {
   gitActions: GitActions;
+  pullRequestAction: GitAction | null;
+  pullRequest: PrHint | null;
+  hasPullRequest: boolean;
   branchLabel: string;
   isGit: boolean;
 }
@@ -865,7 +870,23 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     [gitActionsInput, baseRefLabel, hasPullRequest, forge, t],
   );
 
-  return { gitActions, branchLabel, isGit };
+  // FORK(pr-toolbar): expose the PR action even on branches where it is absent from the Git menu.
+  const pullRequestAction = useMemo(
+    () =>
+      isGit
+        ? translateGitAction(buildPrAction(gitActionsInput), {
+            baseRefLabel,
+            hasPullRequest,
+            forge,
+            t,
+          })
+        : null,
+    [isGit, gitActionsInput, baseRefLabel, hasPullRequest, forge, t],
+  );
+
+  const pullRequest = useMemo(() => selectPrHintFromStatus(prStatus, forge), [prStatus, forge]);
+
+  return { gitActions, pullRequestAction, pullRequest, hasPullRequest, branchLabel, isGit };
 }
 
 function translateGitActions(
