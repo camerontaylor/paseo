@@ -4,6 +4,18 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.11.0-beta.1 base decision — 2026-10-01
+
+Advance `custom` and the Desvio base to upstream `v0.11.0-beta.1`. Preserve
+the ACP cancellation boundary while adopting upstream provider options. Rebuild
+the ordered external carries before deploying the fleet.
+
+## 0.10.2 base decision — 2026-10-01
+
+Advance `custom` and the Desvio base to upstream `v0.10.2`. This release fixes
+OpenCode v2 long-running turns, edit details, question cards, and context usage.
+Rebuild the full basket so the infi-pc intake ports remain above `custom`.
+
 ## 0.10.1 base decision — 2026-09-29
 
 Advance `custom` to upstream `v0.10.1`, the latest published release including
