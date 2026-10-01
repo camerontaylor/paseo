@@ -140,8 +140,9 @@ Commits are the fork commits that built the feature (`git show --stat <sha>` for
 
 - Commits: `4f9a6f739`, `59ed3d0cb`, `fb4f42001`
 - Owns: `packages/server/src/server/sleep-inhibitor/`, `packages/app/src/hooks/use-sleep-prevention.ts`, `packages/app/src/components/desktop/keep-awake-indicator.tsx`, `packages/app/src/screens/settings/prevent-sleep-card.tsx`
-- Wires into: `packages/server/src/server/bootstrap.ts`, `packages/server/src/server/websocket-server.ts`, `packages/app/src/stores/session-store.ts`, `packages/app/src/app/_layout.tsx`, `packages/server/src/server/config.ts`, `packages/server/src/server/persisted-config.ts`, `packages/app/src/screens/settings/host-page.tsx`
+- Wires into: `packages/server/src/server/bootstrap.ts`, `packages/server/src/server/websocket-server.ts`, `packages/server/src/server/session.ts`, `packages/app/src/stores/session-store.ts`, `packages/app/src/app/_layout.tsx`, `packages/server/src/server/config.ts`, `packages/server/src/server/persisted-config.ts`, `packages/app/src/screens/settings/host-page.tsx`
 - Keeps the host awake while agents run, with a settings card and indicator.
+- `sleep_prevention_changed` travels on the `status.server_info` event feed (see `sessionEventCategory` in `packages/server/src/server/session.ts`), and `Session` replays the current state when a client subscribes. Owned-subscription clients drop status messages that no subscription owns, so a raw socket send never reaches them.
 
 ### Pinned prompts
 

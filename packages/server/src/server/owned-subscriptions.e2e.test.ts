@@ -865,6 +865,36 @@ test("config changes require their own event demand and cannot escape to an idle
   }
 });
 
+test("server info subscribers receive the sleep prevention state", async () => {
+  const daemon = await createTestPaseoDaemon({ mcpEnabled: false });
+  const peers: SubscriptionPeer[] = [];
+  try {
+    const idle = await SubscriptionPeer.connect(daemon.port, "sleep-session");
+    peers.push(idle);
+    const observer = await SubscriptionPeer.connect(daemon.port, "sleep-session");
+    peers.push(observer);
+    await observer.request({
+      type: "session.events.set_subscription.request",
+      requestId: "server-info-feed",
+      events: ["status.server_info"],
+    });
+    await expect
+      .poll(() =>
+        observer.frames.some(
+          (frame) =>
+            frame.type === "session" &&
+            frame.message.type === "status" &&
+            frame.message.payload.status === "sleep_prevention_changed",
+        ),
+      )
+      .toBe(true);
+    expect(idle.frames).toEqual([]);
+  } finally {
+    for (const peer of peers) peer.close();
+    await daemon.close();
+  }
+});
+
 test("status-shaped operation replies use actual source request provenance", async () => {
   const daemon = await createTestPaseoDaemon({ mcpEnabled: false });
   const peers: SubscriptionPeer[] = [];

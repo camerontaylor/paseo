@@ -541,6 +541,8 @@ export interface SessionOptions {
     newBranch: string | null,
   ) => void;
   getDaemonTcpPort?: () => number | null;
+  // FORK(sleep-prevention): current inhibitor state, replayed when a client subscribes.
+  getSleepPreventionState?: () => { active: boolean; supported: boolean; agentCount: number };
   getDaemonTcpHost?: () => string | null;
   serviceProxyPublicBaseUrl?: string | null;
   resolveScriptHealth?: (hostname: string) => ScriptHealthState | null;
@@ -779,6 +781,7 @@ export class Session {
   private readonly serviceProxy: ServiceProxySubsystem | null;
   private readonly scriptRuntimeStore: WorkspaceScriptRuntimeStore | null;
   private readonly getDaemonTcpPort: (() => number | null) | null;
+  private readonly getSleepPreventionState: SessionOptions["getSleepPreventionState"];
   private readonly getDaemonTcpHost: (() => string | null) | null;
   private readonly serviceProxyPublicBaseUrl: string | null;
   private readonly resolveScriptHealth: ((hostname: string) => ScriptHealthState | null) | null;
@@ -850,6 +853,7 @@ export class Session {
       workspaceSetupRuntime,
       onBranchChanged,
       getDaemonTcpPort,
+      getSleepPreventionState,
       getDaemonTcpHost,
       serviceProxyPublicBaseUrl,
       resolveScriptHealth,
@@ -1143,6 +1147,7 @@ export class Session {
     this.workspaceSetupSnapshots = workspaceSetupSnapshots ?? new Map();
     this.workspaceSetupRuntime = resolveWorkspaceSetupRuntime(workspaceSetupRuntime);
     this.getDaemonTcpPort = getDaemonTcpPort ?? null;
+    this.getSleepPreventionState = getSleepPreventionState;
     this.getDaemonTcpHost = getDaemonTcpHost ?? null;
     this.serviceProxyPublicBaseUrl = serviceProxyPublicBaseUrl ?? null;
     this.resolveScriptHealth = resolveScriptHealth ?? null;
@@ -2770,6 +2775,16 @@ export class Session {
           source,
         );
         this.refreshObservationProducers();
+        // FORK(sleep-prevention): sleep state only broadcasts on change, so replay it on subscribe.
+        const sleepPrevention = this.getSleepPreventionState?.();
+        if (sleepPrevention && msg.events.includes("status.server_info")) {
+          const sleepMessage: SessionOutboundMessage = {
+            type: "status",
+            payload: { status: "sleep_prevention_changed", ...sleepPrevention },
+          };
+          if (source) this.publishToSource(source, sleepMessage);
+          else this.emit(sleepMessage);
+        }
         if (!msg.events.includes("checkout_status_update")) return undefined;
         return this.reconcileWorkspaceGitObservers().catch(async (error) => {
           await owner.release();
@@ -8667,6 +8682,8 @@ function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubs
     case "status":
       switch (message.payload.status) {
         case "server_info":
+        // FORK(sleep-prevention): rides the host-status stream the app already subscribes to.
+        case "sleep_prevention_changed":
           return "status.server_info";
         case "daemon_config_changed":
           return "status.daemon_config_changed";

@@ -316,6 +316,7 @@ interface SessionForTestOptions {
   scriptRuntimeStore?: SessionOptions["scriptRuntimeStore"];
   getDaemonTcpPort?: () => number | null;
   getDaemonTcpHost?: () => string | null;
+  getSleepPreventionState?: SessionOptions["getSleepPreventionState"];
   providerSnapshotManager?: ProviderSnapshotManager;
   hubExecutionAgents?: SessionOptions["hubExecutionAgents"];
   stt?: SessionOptions["stt"];
@@ -434,6 +435,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
     serviceProxy: options.serviceProxy,
     scriptRuntimeStore: options.scriptRuntimeStore,
     getDaemonTcpPort: options.getDaemonTcpPort,
+    getSleepPreventionState: options.getSleepPreventionState,
     getDaemonTcpHost: options.getDaemonTcpHost,
     voice: options.voice,
     serverId: options.serverId,
@@ -481,6 +483,34 @@ test("routes host-scoped agent skills requests through the daemon owner", async 
     type: "agent.skills.save_selection.response",
     payload: { requestId: "save-skills", ...status, confirmationRequired: null },
   });
+});
+
+test("delivers sleep prevention state on the server info event feed", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    getSleepPreventionState: () => ({ active: true, supported: true, agentCount: 2 }),
+  });
+
+  await session.handleMessage({
+    type: "session.events.set_subscription.request",
+    requestId: "events",
+    events: ["status.server_info"],
+  });
+  session.publish({
+    type: "status",
+    payload: { status: "sleep_prevention_changed", active: false, supported: true, agentCount: 0 },
+  });
+
+  const sleepPayloads = messages.flatMap((message) =>
+    message.type === "status" && message.payload.status === "sleep_prevention_changed"
+      ? [message.payload]
+      : [],
+  );
+  expect(sleepPayloads).toEqual([
+    { status: "sleep_prevention_changed", active: true, supported: true, agentCount: 2 },
+    { status: "sleep_prevention_changed", active: false, supported: true, agentCount: 0 },
+  ]);
 });
 
 test("routes plugin requests and releases its owned catalog subscription on cleanup", async () => {

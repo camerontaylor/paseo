@@ -1515,6 +1515,7 @@ export class VoiceAssistantWebSocketServer {
       workspaceSetupRuntime: this.workspaceSetupRuntime,
       onBranchChanged: this.onBranchChanged ?? undefined,
       getDaemonTcpPort: this.getDaemonTcpPort ?? undefined,
+      getSleepPreventionState: this.getSleepPreventionState,
       getDaemonTcpHost: this.getDaemonTcpHost ?? undefined,
       serviceProxyPublicBaseUrl: this.serviceProxyPublicBaseUrl,
       resolveScriptHealth: this.resolveScriptHealth ?? undefined,
@@ -1644,7 +1645,6 @@ export class VoiceAssistantWebSocketServer {
     }
     pending.identity.sessionId = connection.session.getSessionId();
     this.sendToClient(ws, this.createServerInfoMessage(connection.session));
-    this.sendSleepPreventionState(ws);
     connection.connectionLogger.info(
       {
         ...toConnectionLogFields(pending.identity),
@@ -1774,7 +1774,6 @@ export class VoiceAssistantWebSocketServer {
     this.sessions.set(ws, existing);
     pending.identity.sessionId = existing.session.getSessionId();
     this.sendToClient(ws, this.createServerInfoMessage(existing.session));
-    this.sendSleepPreventionState(ws);
     pending.connectionLogger.info(
       {
         ...toConnectionLogFields(pending.identity),
@@ -1839,6 +1838,8 @@ export class VoiceAssistantWebSocketServer {
         // and legacy fallback after 2027-01-17 once the supported daemon floor
         // is >= v0.2.0.
         forgeSearch: true,
+        // FORK(linear-toolbar): CLI availability and login failures are reported by the operation.
+        linearIssues: true,
         forgeSearchChecks: true,
         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
         ...(this.advertiseDaemonStatusRpc ? { daemonStatusRpc: true } : {}),
@@ -2006,31 +2007,20 @@ export class VoiceAssistantWebSocketServer {
     this.broadcast(this.createDaemonConfigChangedMessage(config));
   }
 
-  private createSleepPreventionMessage(state: SleepInhibitorState): WSOutboundMessage {
-    return wrapSessionMessage({
-      type: "status",
-      payload: {
-        status: "sleep_prevention_changed",
-        active: state.active,
-        supported: state.supported,
-        agentCount: state.agentCount,
-      },
-    });
-  }
-
+  // FORK(sleep-prevention): published through each session so owned-subscription clients
+  // receive it on their status.server_info feed; Session replays it on subscribe.
   broadcastSleepPrevention(state: SleepInhibitorState): void {
-    this.broadcast(this.createSleepPreventionMessage(state));
-  }
-
-  /**
-   * Clients learn the inhibitor state from broadcasts, which only fire on
-   * change — a session attaching between transitions would otherwise render
-   * nothing until the next agent starts.
-   */
-  private sendSleepPreventionState(ws: WebSocketLike): void {
-    const state = this.getSleepPreventionState?.();
-    if (!state) return;
-    this.sendToClient(ws, this.createSleepPreventionMessage(state));
+    for (const connection of new Set(this.sessions.values())) {
+      connection.session.publish({
+        type: "status",
+        payload: {
+          status: "sleep_prevention_changed",
+          active: state.active,
+          supported: state.supported,
+          agentCount: state.agentCount,
+        },
+      });
+    }
   }
 
   private bindSocketHandlers(ws: WebSocketLike): void {
