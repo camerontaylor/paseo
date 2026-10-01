@@ -4806,6 +4806,52 @@ test("renames a branch via RPC", async () => {
   });
 });
 
+test("sets a checkout base ref via RPC", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen();
+  await connectPromise;
+
+  const promise = client.setCheckoutBaseRef({
+    cwd: "/tmp/project",
+    baseRef: "origin/develop",
+    requestId: "req-base-ref",
+  });
+  const request = JSON.parse(assertStr(mock.sent[0])) as {
+    message: { type: string; cwd: string; baseRef: string; requestId: string };
+  };
+  expect(request.message).toEqual({
+    type: "checkout.base_ref.set.request",
+    cwd: "/tmp/project",
+    baseRef: "origin/develop",
+    requestId: "req-base-ref",
+  });
+
+  const payload = {
+    requestId: "req-base-ref",
+    success: true,
+    cwd: "/tmp/project",
+    baseRef: "develop",
+    error: null,
+  };
+  mock.triggerMessage(
+    JSON.stringify({
+      type: "session",
+      message: { type: "checkout.base_ref.set.response", payload },
+    }),
+  );
+  await expect(promise).resolves.toEqual(payload);
+});
+
 test("returns renameBranch business failures", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();
