@@ -1,0 +1,163 @@
+# Fork-only CI. Upstream has no file by this name, so it cannot land in a
+# rebase conflict — see fork/README.md for the namespace convention.
+#
+# Runs on the self-hosted runner on makemake. Read the `if:` on the job below
+# before changing anything here: this repository is public, and a self-hosted
+# runner on a public repository will execute a stranger's pull request unless
+# something stops it.
+name: Fork CI
+
+on:
+  pull_request:
+  push:
+    branches: [custom]
+  workflow_dispatch:
+
+# makemake is one persistent runner and the suite is not safe to run twice at
+# once on a single box: packages/server/src/server/agent/providers/claude/
+# project-dir.test.ts:17 uses a fixed ~/.paseo-claude-parity-tests, and 15 CLI
+# tests pick ports with `10000 + Math.random() * 50000` rather than
+# getAvailablePort(). Serialise rather than rely on luck.
+concurrency:
+  group: fork-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # ci.yml's `changes` job requests pull-requests: read for dorny/paths-filter.
+  # A called workflow cannot exceed the caller's grant, so it has to be here.
+  pull-requests: read
+
+env:
+  # Matches .github/workflows/ci.yml: the onnxruntime-node postinstall pulls a
+  # large CUDA payload from NuGet that makes npm ci flaky.
+  ONNXRUNTIME_NODE_INSTALL: skip
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  # Keep the ~1 GB Parakeet/Kokoro model download off the runner.
+  PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
+  PASEO_DICTATION_ENABLED: "0"
+  PASEO_VOICE_MODE_ENABLED: "0"
+  # packages/server/src/terminal/terminal.ts:245 resolves the default shell from
+  # $SHELL. On makemake that is the owner's zsh, which loads powerlevel10k's
+  # instant prompt, mise activation and a secrets loader before it will accept
+  # typed input — and tests like worker-terminal-manager's "starts the default
+  # shell through the worker" allow 10s for a PTY spawn plus a round trip. Run 1
+  # of 34396878560 timed out on exactly those two tests; run 2 passed. A
+  # GitHub-hosted runner gets a dotfile-free /bin/bash, so give this one the
+  # same and take the variance out. Tests that specifically exercise zsh spawn
+  # it explicitly and are unaffected.
+  SHELL: /bin/bash
+
+jobs:
+  fork-checks:
+    name: fork-checks (makemake)
+    # ---------------------------------------------------------------------
+    # The gate. Do not weaken either clause.
+    #
+    #   github.actor == github.repository_owner
+    #       Nobody else's push or pull request reaches the runner.
+    #
+    #   head.repo.full_name == github.repository
+    #       The pull request branch lives in this repository, not in someone
+    #       else's fork of it. A fork PR carries attacker-controlled code.
+    #
+    # A job whose `if` is false is skipped before a runner is ever assigned,
+    # so untrusted code never lands on makemake. And because `pull_request`
+    # runs the workflow file from the BASE branch, a pull request cannot edit
+    # this gate to let itself through.
+    #
+    # Never add `pull_request_target` to this file. It runs fork code with a
+    # write-scoped token, which defeats everything above.
+    # ---------------------------------------------------------------------
+    if: &fork_owner_only >-
+      github.actor == github.repository_owner &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, paseo-makemake]
+    timeout-minutes: 45
+    steps:
+      # makemake is somebody's workstation and carries a personal ~/.gitconfig:
+      # diff.mnemonicprefix rewrites diff prefixes from a/ b/ to i/ w/, and
+      # diff.algorithm=histogram changes hunk output. Both break
+      # packages/server/src/utils/checkout-git.test.ts, which parses real git
+      # output — 3 failures out of 5451 that reproduce nowhere else. A
+      # GitHub-hosted runner has no global config; give this one the same. The
+      # file is writable rather than /dev/null so actions/checkout can still
+      # record safe.directory. Runs before checkout so checkout is covered too.
+      - name: Isolate git from the host's global config
+        run: |
+          : > "$RUNNER_TEMP/fork-ci-gitconfig"
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/fork-ci-gitconfig" >> "$GITHUB_ENV"
+          echo "GIT_CONFIG_SYSTEM=/dev/null" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          # packages/server's worktree tests resolve against origin/main.
+          fetch-depth: 0
+          # The runner is persistent. Do not leave a token in .git/config
+          # between jobs; the repo is public, so fetches work without one.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # npm's own cache under $HOME survives between jobs on a persistent
+      # runner, so actions/cache would only add upload time.
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Fetch origin/main (worktree tests)
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      # Package imports resolve through `exports` to compiled dist/, not
+      # sibling src/, so the build has to precede typecheck and tests.
+      - name: Build server stack
+        run: npm run build:server
+
+      - name: Typecheck all packages
+        run: npm run typecheck
+
+      - name: Run protocol tests
+        run: npm run test --workspace=@getpaseo/protocol
+
+      - name: Run client tests
+        run: npm run test --workspace=@getpaseo/client
+
+      - name: Run highlight tests
+        run: npm run test --workspace=@getpaseo/highlight
+
+      - name: Run relay tests
+        run: npm run test --workspace=@getpaseo/relay
+
+      # models.e2e.test.ts:47 is not gated on the binary being present and
+      # will fail without it. No credentials needed: the provider suites skip
+      # themselves via canRunRealProvider() when OPENROUTER_API_KEY is absent.
+      - name: Install agent CLIs for provider tests
+        run: node scripts/npm-retry.mjs install -g @anthropic-ai/claude-code opencode-ai
+
+      - name: Run server tests
+        run: npm run test --workspace=@getpaseo/server
+
+  # The full 18-job matrix on GitHub-hosted runners: Playwright, desktop E2E,
+  # the CLI shards and Windows — none of which belong on one 4-core box. Free
+  # and unmetered because this repository is public.
+  #
+  # ci.yml's own triggers only cover main, so without this call a pull request
+  # into custom would get the makemake tier and nothing else.
+  full-matrix:
+    name: full matrix
+    # Same gate, same anchor. GitHub-hosted runners are not at risk from a fork
+    # pull request, but secrets: inherit below is, so the gate stays.
+    if: *fork_owner_only
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+    permissions:
+      contents: read
+      pull-requests: read
