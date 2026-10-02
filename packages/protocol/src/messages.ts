@@ -963,6 +963,28 @@ export const UpdateCompanionEntryRequestMessageSchema = z.object({
   requestId: z.string(),
 });
 
+export const AgentArtifactsScanRequestMessageSchema = z.object({
+  type: z.literal("agent.artifacts.scan.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+  /** Overrides the daemon's default retention ceiling for this scan. */
+  limit: z.number().int().positive().optional(),
+});
+
+export const AgentArtifactsScanResponseMessageSchema = z.object({
+  type: z.literal("agent.artifacts.scan.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+    /** Files newly recorded or refreshed by this scan. */
+    addedOrUpdated: z.number().int().nonnegative(),
+    /** Size of the agent's artifact list after the scan. */
+    total: z.number().int().nonnegative(),
+  }),
+});
+
 // The daemon accepts only image bytes chosen or acquired by the client. It must
 // never fetch a user-provided URL on the host's network.
 export const ProjectIconSourceSchema = z.discriminatedUnion("type", [
@@ -3207,6 +3229,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   CloseItemsRequestMessageSchema,
   UpdateAgentRequestMessageSchema,
   UpdateCompanionEntryRequestMessageSchema,
+  AgentArtifactsScanRequestMessageSchema,
   ProjectRenameRequestSchema,
   ProjectIconSetRequestSchema,
   ProjectRemoveRequestSchema,
@@ -3658,6 +3681,7 @@ export const ServerInfoStatusPayloadSchema = z
         workspaceFileEditing: z.boolean().optional(),
         // COMPAT(artifactFeed): added in v0.2.0, remove after 2027-01-22 once daemon floor >= v0.2.0.
         artifactFeed: z.boolean().optional(),
+        // COMPAT(companionStream): fork feature, added in fork v0.10.0-beta.1, drop the gate after 2027-03-28.
         companionStream: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: z.boolean().optional(),
@@ -6810,6 +6834,7 @@ export const AgentSkillsImportLegacySelectionResponseSchema = z.object({
 });
 
 export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
+  AgentArtifactsScanResponseMessageSchema,
   BrowserHostRegisterResponseSchema,
   SubscriptionReleaseResponseSchema,
   SessionEventsSetSubscriptionResponseSchema,
@@ -7284,6 +7309,12 @@ export type DeleteAgentRequestMessage = z.infer<typeof DeleteAgentRequestMessage
 export type UpdateAgentRequestMessage = z.infer<typeof UpdateAgentRequestMessageSchema>;
 export type UpdateCompanionEntryRequestMessage = z.infer<
   typeof UpdateCompanionEntryRequestMessageSchema
+>;
+export type AgentArtifactsScanRequestMessage = z.infer<
+  typeof AgentArtifactsScanRequestMessageSchema
+>;
+export type AgentArtifactsScanResponseMessage = z.infer<
+  typeof AgentArtifactsScanResponseMessageSchema
 >;
 export type ProjectIconSource = z.infer<typeof ProjectIconSourceSchema>;
 export type ProjectRenameRequest = z.infer<typeof ProjectRenameRequestSchema>;

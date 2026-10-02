@@ -3030,6 +3030,29 @@ export class DaemonClient {
     this.sendSessionMessage(message);
   }
 
+  /**
+   * Backfills an agent's artifact feed from files already on disk. Needed for
+   * agents whose work predates the artifact feed, whose feeds are otherwise
+   * permanently empty.
+   */
+  async scanAgentArtifacts(
+    agentId: string,
+    options?: { limit?: number },
+  ): Promise<{ addedOrUpdated: number; total: number }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.artifacts.scan.response">({
+        message: {
+          type: "agent.artifacts.scan.request",
+          agentId,
+          ...(options?.limit !== undefined ? { limit: options.limit } : {}),
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "scanAgentArtifacts rejected");
+    }
+    return { addedOrUpdated: payload.addedOrUpdated, total: payload.total };
+  }
+
   async renameProject(
     projectId: string,
     customName: string | null,

@@ -3063,6 +3063,9 @@ export class Session {
       case "update_companion_entry_request":
         await this.handleUpdateCompanionEntryRequest(msg);
         return;
+      case "agent.artifacts.scan.request":
+        await this.handleAgentArtifactsScanRequest(msg.agentId, msg.requestId, msg.limit);
+        return;
       case "list_commands_request":
         await this.handleListCommandsRequest(msg);
         return;
@@ -3368,6 +3371,53 @@ export class Session {
       didUnarchive,
       originalArchivedAt: matched.archivedAt ?? null,
     };
+  }
+
+  private async handleAgentArtifactsScanRequest(
+    agentId: string,
+    requestId: string,
+    limit: number | undefined,
+  ): Promise<void> {
+    this.sessionLogger.info(
+      { agentId, requestId, limit },
+      "Scanning agent working dir for artifacts",
+    );
+    try {
+      // Backfill targets are usually closed agents, which are not resident in
+      // the manager until something loads them.
+      await ensureAgentLoaded(agentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      const result = await this.agentManager.scanAgentArtifacts(
+        agentId,
+        limit !== undefined ? { limit } : {},
+      );
+      this.emit({
+        type: "agent.artifacts.scan.response",
+        payload: {
+          requestId,
+          agentId,
+          accepted: true,
+          error: null,
+          addedOrUpdated: result.addedOrUpdated,
+          total: result.total,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.artifacts.scan.response",
+        payload: {
+          requestId,
+          agentId,
+          accepted: false,
+          error: error instanceof Error ? error.message : String(error),
+          addedOrUpdated: 0,
+          total: 0,
+        },
+      });
+    }
   }
 
   private async handleUpdateCompanionEntryRequest(

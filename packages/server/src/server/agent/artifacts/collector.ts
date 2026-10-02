@@ -1,4 +1,3 @@
-import { watch, type FSWatcher } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -17,6 +16,8 @@ const IGNORED_DIRECTORIES = new Set([
   "node_modules",
 ]);
 const MAX_SCANNED_ENTRIES = 20_000;
+/** Backfill ceiling. A repo with committed build output can match thousands. */
+const DEFAULT_BACKFILL_LIMIT = 200;
 
 interface ArtifactFormat {
   kind: AgentArtifactKind;
@@ -43,7 +44,6 @@ interface ActiveTurn {
   cwd: string;
   startedAt: number;
   candidates: Set<string>;
-  watcher: FSWatcher | null;
 }
 
 export interface ArtifactCollectionResult {
@@ -62,17 +62,11 @@ export class AgentArtifactCollector {
       cwd: path.resolve(cwd),
       startedAt: Date.now(),
       candidates: new Set(),
-      watcher: null,
     };
-    try {
-      turn.watcher = watch(turn.cwd, { recursive: true }, (_eventType, fileName) => {
-        if (fileName) {
-          this.addCandidate(turn, fileName.toString());
-        }
-      });
-    } catch {
-      turn.watcher = null;
-    }
+    // No live watcher: tool-call paths plus the end-of-turn mtime scan already find every
+    // file the turn touched, and a raw recursive fs.watch is what docs/file-observation.md
+    // forbids on Linux (Node walks the tree in JS and throws an uncaught ENOENT when a
+    // directory vanishes mid-scan, which upstream's hub tests do while deleting temp repos).
     this.activeTurns.set(agentId, turn);
   }
 
@@ -98,42 +92,37 @@ export class AgentArtifactCollector {
       return null;
     }
     this.activeTurns.delete(agentId);
-    turn.watcher?.close();
 
     const recentPaths = await findRecentlyModifiedArtifacts(turn.cwd, turn.startedAt);
     for (const recentPath of recentPaths) {
       turn.candidates.add(recentPath);
     }
 
-    const artifactsByPath = new Map(existingArtifacts.map((artifact) => [artifact.path, artifact]));
-    let addedOrUpdated = 0;
-    for (const candidate of turn.candidates) {
-      const artifact = await inspectArtifact(turn.cwd, candidate, artifactsByPath.get(candidate));
-      if (!artifact) {
-        continue;
-      }
-      const previous = artifactsByPath.get(candidate);
-      if (
-        !previous ||
-        previous.updatedAt !== artifact.updatedAt ||
-        previous.size !== artifact.size
-      ) {
-        artifactsByPath.set(candidate, artifact);
-        addedOrUpdated += 1;
-      }
-    }
-    if (addedOrUpdated === 0) {
-      return null;
-    }
+    return mergeArtifactCandidates(turn.cwd, turn.candidates, existingArtifacts, null);
+  }
 
-    const artifacts = Array.from(artifactsByPath.values());
-    artifacts.sort((left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt));
-    return { artifacts, addedOrUpdated };
+  /**
+   * Collects artifacts that already exist under `cwd`, whatever their age.
+   *
+   * Turn-scoped collection only ever sees files touched while a turn was
+   * running, so an agent whose work predates this feature — or predates the
+   * daemon build that carries it — shows an empty feed forever. This is the
+   * backfill for that case, and it is deliberately explicit rather than
+   * automatic: a full walk of a large working directory is not something to run
+   * behind the user's back on every agent load.
+   */
+  async scanExisting(
+    cwd: string,
+    existingArtifacts: readonly AgentArtifact[],
+    options?: { limit?: number },
+  ): Promise<ArtifactCollectionResult | null> {
+    // A zero cutoff makes the recency filter match everything.
+    const candidates = await findRecentlyModifiedArtifacts(cwd, 0);
+    const limit = options?.limit ?? DEFAULT_BACKFILL_LIMIT;
+    return mergeArtifactCandidates(cwd, candidates, existingArtifacts, limit);
   }
 
   cancelTurn(agentId: string): void {
-    const turn = this.activeTurns.get(agentId);
-    turn?.watcher?.close();
     this.activeTurns.delete(agentId);
   }
 
@@ -143,6 +132,45 @@ export class AgentArtifactCollector {
       turn.candidates.add(relativePath);
     }
   }
+}
+
+/**
+ * Merges freshly inspected candidates into an agent's existing artifact list.
+ *
+ * `limit` caps the retained list, keeping the most recently modified — a
+ * backfill over a repo with a committed build directory can otherwise bury the
+ * handful of files the user actually cares about. `null` keeps everything,
+ * which is right for a single turn's output.
+ */
+async function mergeArtifactCandidates(
+  cwd: string,
+  candidates: Iterable<string>,
+  existingArtifacts: readonly AgentArtifact[],
+  limit: number | null,
+): Promise<ArtifactCollectionResult | null> {
+  const artifactsByPath = new Map(existingArtifacts.map((artifact) => [artifact.path, artifact]));
+  let addedOrUpdated = 0;
+  for (const candidate of candidates) {
+    const artifact = await inspectArtifact(cwd, candidate, artifactsByPath.get(candidate));
+    if (!artifact) {
+      continue;
+    }
+    const previous = artifactsByPath.get(candidate);
+    if (!previous || previous.updatedAt !== artifact.updatedAt || previous.size !== artifact.size) {
+      artifactsByPath.set(candidate, artifact);
+      addedOrUpdated += 1;
+    }
+  }
+  if (addedOrUpdated === 0) {
+    return null;
+  }
+
+  let artifacts = Array.from(artifactsByPath.values());
+  artifacts.sort((left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt));
+  if (limit !== null && artifacts.length > limit) {
+    artifacts = artifacts.slice(artifacts.length - limit);
+  }
+  return { artifacts, addedOrUpdated };
 }
 
 async function findRecentlyModifiedArtifacts(cwd: string, startedAt: number): Promise<string[]> {
