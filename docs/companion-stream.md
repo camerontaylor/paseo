@@ -41,7 +41,7 @@ characters per entry. Longer content is explicitly marked as an excerpt; full co
 Chat. The bounded snapshot is independent of how much chat history the phone has paged in.
 It survives reconnects and host reloads; an unfinished final response is not yet a captured moment.
 
-`server_info.features.companionStream` gates the new feature once in the panel. Older hosts show an
+`server_info.features.companionStreamPortV1` gates the new feature once in the panel. Older hosts show an
 upgrade message while preserving their existing file-artifact view. The client does not reconstruct
 an approximate stream from legacy RPCs. Cached cards remain reviewable while disconnected, with a
 notice that pending statuses may be stale.
