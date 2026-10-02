@@ -157,6 +157,7 @@ function renderStreamItemWithTurnFooter(input: {
   strategy: TurnContentStrategy;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
+  onPin?: (text: string) => void;
 }): ReactNode {
   if (!input.content) {
     return null;
@@ -171,6 +172,7 @@ function renderStreamItemWithTurnFooter(input: {
       startIndex={footerHost.startIndex}
       supportsTimelineCursor={input.supportsTimelineCursor}
       onForkAssistantTurn={input.onForkAssistantTurn}
+      onPin={input.onPin}
     />
   ) : null;
   const content = (
@@ -688,6 +690,29 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       });
     }, []);
 
+    const handlePin = useCallback(
+      (text: string) => {
+        if (!agentId || !client) return;
+        client.updateCompanionEntry({ agentId, action: "add_pin", text }).catch(() => {});
+      },
+      [agentId, client],
+    );
+
+    const handleQAndA = useCallback(
+      (text: string, messageId?: string) => {
+        if (!agentId || !client) return;
+        client
+          .updateCompanionEntry({
+            agentId,
+            action: "add_q_and_a",
+            text,
+            sourceId: messageId ? `msg:${messageId}` : undefined,
+          })
+          .catch(() => {});
+      },
+      [agentId, client],
+    );
+
     const renderUserMessageItem = useCallback(
       (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "user_message" }>) => {
         return (
@@ -699,6 +724,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             images={item.images}
             attachments={item.attachments}
             timestamp={item.timestamp.getTime()}
+            onPin={handlePin}
+            onQAndA={handleQAndA}
             capabilities={context.capabilities}
             client={client}
             isFirstInGroup={layoutItem.isFirstInUserGroup}
@@ -710,7 +737,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [context.capabilities, agentId, client, pendingClientMessageIds, resolvedServerId],
+      [
+        context.capabilities,
+        agentId,
+        client,
+        handlePin,
+        handleQAndA,
+        pendingClientMessageIds,
+        resolvedServerId,
+      ],
     );
 
     const renderAssistantMessageItem = useCallback(
@@ -919,10 +954,12 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           strategy: streamRenderStrategy,
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
+          onPin: handlePin,
         });
       },
       [
         handleForkAssistantTurn,
+        handlePin,
         readOnly,
         renderStreamItemContent,
         streamRenderStrategy,
@@ -954,11 +991,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             supportsTimelineCursor={supportsAgentForkContextCursor}
             onForkAssistantTurn={readOnly ? undefined : handleForkAssistantTurn}
             onForkInFlightTurn={readOnly ? undefined : handleForkInFlightTurn}
+            onPin={handlePin}
           />
         ) : null,
       [
         handleForkAssistantTurn,
         handleForkInFlightTurn,
+        handlePin,
         readOnly,
         isTurnActive,
         baseRenderModel.turnTiming.runningStartedAt,

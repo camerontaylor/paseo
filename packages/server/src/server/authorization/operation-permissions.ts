@@ -190,6 +190,7 @@ const INBOUND_PERMISSION = {
   unsubscribe_terminal_request: "workspace.read",
   unsubscribe_terminals_request: "workspace.read",
   update_agent_request: "workspace.write",
+  update_companion_entry_request: "workspace.write",
   validate_branch_request: "workspace.read",
   voice_audio_chunk: "workspace.write",
   wait_for_finish_request: "workspace.read",
