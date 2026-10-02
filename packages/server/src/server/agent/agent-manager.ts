@@ -3,6 +3,9 @@ import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
+import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
+import { CompanionStreamCollector, restoreCompanionEntries } from "./companion-stream.js";
+import { AgentArtifactCollector } from "./artifacts/collector.js";
 import { basename, resolve } from "node:path";
 import { stat } from "node:fs/promises";
 import {
@@ -309,6 +312,8 @@ export interface CreateAgentOptions {
   // undefined is an explicit decision: the agent never appears in the sidebar.
   workspaceId: string | undefined;
   owner?: AgentOwner;
+  artifacts?: AgentArtifact[];
+  companionEntries?: CompanionEntry[];
 }
 
 export interface AgentManagerOptions {
@@ -368,6 +373,10 @@ export type AttentionState =
       attentionReason: "finished" | "error" | "permission";
       attentionTimestamp: Date;
     };
+
+function resolveInitialArtifacts(artifacts: AgentArtifact[] | undefined): AgentArtifact[] {
+  return artifacts ? [...artifacts] : [];
+}
 
 function resolveInitialAttention(input: AttentionState | undefined): AttentionState {
   if (input == null || !input.requiresAttention) {
@@ -436,6 +445,8 @@ interface ManagedAgentBase {
    * User-defined labels for categorizing agents (e.g., { surface: "workspace" }).
    */
   labels: Record<string, string>;
+  artifacts: AgentArtifact[];
+  companionEntries?: CompanionEntry[];
 }
 
 type ManagedAgentWithSession = ManagedAgentBase & {
@@ -542,6 +553,7 @@ interface WriteLabelsResult {
 interface AgentMetadataPatch {
   title?: string;
   labels?: AgentLabelPatch;
+  companionEntries?: CompanionEntry[];
 }
 
 const SYSTEM_ERROR_PREFIX = "[System Error]";
@@ -735,6 +747,8 @@ export class AgentManager {
   private readonly reloadedSessionCloses = new WeakMap<AgentSession, Promise<void>>();
   private readonly lifecycleMutationTails = new Map<string, Promise<void>>();
   private readonly agentStreamCoalescer: AgentStreamCoalescer;
+  private readonly artifactCollector = new AgentArtifactCollector();
+  private readonly companionCollector = new CompanionStreamCollector();
   private mcpBaseUrl: string | null;
   private readonly mcpAuthToken: string | null;
   private paseoToolsEnabled = true;
@@ -1273,6 +1287,8 @@ export class AgentManager {
       initialTitle: options.initialTitle,
       workspaceId: options.workspaceId,
       owner: options.owner,
+      artifacts: options.artifacts,
+      companionEntries: options.companionEntries,
       historyPrimed: true,
     });
     if (!agent.internal) {
@@ -1304,6 +1320,8 @@ export class AgentManager {
       labels?: Record<string, string>;
       workspaceId?: string;
       owner?: AgentOwner;
+      artifacts?: AgentArtifact[];
+      companionEntries?: CompanionEntry[];
       attention?: AttentionState;
     },
     resumeOptions?: AgentResumeSessionOptions,
@@ -1586,6 +1604,8 @@ export class AgentManager {
         historyPrimed: rehydrateFromDisk ? false : preservedHistoryPrimed,
         lastUsage: preservedLastUsage,
         lastError: preservedLastError,
+        artifacts: existing.artifacts,
+        companionEntries: existing.companionEntries,
         attention: preservedAttention,
         restoring: true,
       });
@@ -1904,6 +1924,8 @@ export class AgentManager {
         attention,
         internal: record.internal,
         labels: record.labels,
+        artifacts: record.artifacts ?? [],
+        companionEntries: restoreCompanionEntries(record),
       },
     });
   }
@@ -3453,6 +3475,8 @@ export class AgentManager {
       publishWhenReady?: boolean;
       workspaceId?: string;
       owner?: AgentOwner;
+      artifacts?: AgentArtifact[];
+      companionEntries?: CompanionEntry[];
     },
   ): Promise<ManagedAgent> {
     let registered = false;
@@ -3629,6 +3653,8 @@ export class AgentManager {
           persistence?: AgentPersistenceHandle;
           workspaceId?: string;
           owner?: AgentOwner;
+          artifacts?: AgentArtifact[];
+          companionEntries?: CompanionEntry[];
         }
       | undefined;
   }): ActiveManagedAgent {
@@ -3669,6 +3695,8 @@ export class AgentManager {
       attention: resolveInitialAttention(options?.attention),
       internal: config.internal ?? false,
       labels: options?.labels ?? {},
+      artifacts: resolveInitialArtifacts(options?.artifacts),
+      companionEntries: restoreCompanionEntries(options),
     } as ActiveManagedAgent;
   }
 
@@ -3721,6 +3749,8 @@ export class AgentManager {
   }
 
   private discardRetainedAgentState(agentId: string): void {
+    this.artifactCollector.cancelTurn(agentId);
+    this.companionCollector.clear(agentId);
     this.timelineStore.delete(agentId);
     this.paseoToolPolicies.delete(agentId);
     for (const event of this.providerSubagents.deleteParent(agentId)) {
@@ -4198,6 +4228,13 @@ export class AgentManager {
       await dispatchPromise;
     }
 
+    // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+    // Capture runs after the coalescer above, so Stream only ever sees accepted events.
+    // History replay is skipped: it cannot reconstruct decisions the provider never made.
+    if (!options?.fromHistory && event.type !== "timeline") {
+      this.collectCompanionEvent(agent, event);
+    }
+
     if (!options?.fromHistory) {
       if (isTurnTerminalEvent(event)) {
         this.runs.settleTerminalRun(agent.id, eventTurnId);
@@ -4554,6 +4591,9 @@ export class AgentManager {
     flags: StreamEventFlags;
   }): void {
     const { agent, eventTurnId, isForegroundEvent, flags } = params;
+    // COMPAT(companionStreamPortV1): artifact collection is bounded to one turn; a turn that
+    // never starts leaves no candidate set behind.
+    this.artifactCollector.beginTurn(agent.id, agent.cwd);
     this.logger.trace(
       {
         agentId: agent.id,
