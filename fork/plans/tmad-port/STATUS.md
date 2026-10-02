@@ -10,7 +10,7 @@ local checkout on the host running the work. `~/.paseo-fork/manifest.txt` is fro
 | P0 | `tmad-port/baseline-assembly` | frozen manifest SHAs in `evidence/P0-inputs.txt` | DONE (pluto, evidence/P0.md): baseline tree == frozen mine `4cc94e07e` (empty diff), 24-merge first-parent chain verified, build/typecheck/lint green, 11 focused test files 320/320 pass, licensing = identical Apache-2.0 (no extra attribution). Exit criteria met. **Awaiting muse review** (gates P2). |
 | TM-01 Stream | `intake/tmad-stream-flow` | `v0.11.0-beta.3` | One WIP commit (`--no-verify`): source core files at PR #19 (`af247e4f4`, blobs verified) plus partial protocol/agent-manager/authorization seams. Not typechecked. Remaining: finish PR19 commit, the PR19→#21 rehearsal commit, contract fixes, tests, report. |
 | TM-07 Native Find | `intake/tmad-native-find` | `v0.11.0-beta.3` | Complete per worker (`evidence/TM-07.md`), unreviewed. Needs independent review and native device evidence. |
-| TM-02 queue daemon | `intake/tmad-message-queue` | custom `cbd1210c7` | Protocol wire contract committed (`6f76c621e`). Server store/service/wiring and tests not started; see `evidence/TM-02.md`. |
+| TM-02 queue daemon | `intake/tmad-message-queue` | custom `cbd1210c7` | DONE (pluto, evidence/TM-02.md): HEAD `91392d6be`, 6 commits (+3792/−20). Queue contract implemented per plan (intent-gated admission, receipts, uncertain/failed, recovery, bounds, 0600 journal); 49 queue tests + auth 7 + agent-manager 210 + ACP 130 + GJC 43 pass; ancestry verified (custom floor only). Gaps: daemon e2e needs provider creds (defer to TM-03/P4); one pre-existing side-conversation test failure at its base needs an owner on neptune. **Awaiting muse review** (gates TM-03/TM-04). |
 | P2, TM-03, TM-04 | — | — | Not started; briefs ready. |
 
 Orchestration continues on pluto per `briefs/ORCHESTRATOR.md`.
@@ -36,6 +36,13 @@ Orchestration continues on pluto per `briefs/ORCHESTRATOR.md`.
   - P0 remainder: agent `c1c7b820`, workspace `wks_4c44bb8d08811ddb` (local workspace at
     `/tmp/tmad-port/baseline-clone`); brief-P0 steps 2, 4, 6 + report.
 - TM-07 review: BLOCKED on muse (branch complete per `evidence/TM-07.md`, awaiting muse review).
+- TM-02 worker finished (pluto, evidence/TM-02.md): lease complete except the provider-cred e2e
+  (documented). Coordinator verified: HEAD `91392d6be`, custom floor is the only extra ancestry,
+  source integration NOT an ancestor, queue/auth test logs match the report. muse re-checked at this
+  gate: still "not found on PATH". TM-03/TM-04 stay unstarted until TM-02 has a muse APPROVE.
+  Handoff blocker resolved: the truncated typecheck failure was stale protocol `dist` — all commits
+  since pass hooks; no branch-caused failures. Pre-existing: `session.test.ts` side-conversation
+  event test fails at the floor (needs neptune owner).
 - P0 worker finished (`evidence/P0.md`): all four exit criteria met, no pre-existing failures in the
   focused set. Note for P2: the clone's rr-cache is now empty (entries apparently pruned by `git rerere
   gc`), so P2 merges must budget fresh resolutions. P2 start is gated on muse approving P0 + TM-01.
