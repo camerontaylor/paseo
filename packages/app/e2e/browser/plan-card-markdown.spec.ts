@@ -11,7 +11,7 @@ import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-
 // Nothing here is provider-specific: the mock provider drives it, and the
 // behavior is the same for every agent.
 test.describe("Plan card markdown", () => {
-  test("renders plan text verbatim", async ({ page }) => {
+  test("renders plan text verbatim and copies plan content and session link", async ({ page }) => {
     test.setTimeout(180_000);
 
     const session = await seedMockAgentWorkspace({
@@ -30,6 +30,12 @@ test.describe("Plan card markdown", () => {
       await expect(planCard).toContainText("---buzz");
       await expect(planCard).not.toContainText("©");
       await expect(planCard).not.toContainText("—buzz");
+      await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+      const readClipboard = () => page.evaluate("navigator.clipboard.readText()");
+      await planCard.getByTestId("plan-copy-content").click();
+      await expect.poll(readClipboard).toContain("(c)");
+      await planCard.getByTestId("plan-copy-link").click();
+      await expect.poll(readClipboard).toContain(`/agent/${session.agentId}`);
     } finally {
       await session.cleanup();
     }
