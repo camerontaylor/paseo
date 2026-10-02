@@ -8,7 +8,7 @@ local checkout on the host running the work. `~/.paseo-fork/manifest.txt` is fro
 | ID | Branch (origin) | Base | State |
 | --- | --- | --- | --- |
 | P0 | `tmad-port/baseline-assembly` | frozen manifest SHAs in `evidence/P0-inputs.txt` | DONE (pluto, evidence/P0.md): baseline tree == frozen mine `4cc94e07e` (empty diff), 24-merge first-parent chain verified, build/typecheck/lint green, 11 focused test files 320/320 pass, licensing = identical Apache-2.0 (no extra attribution). Exit criteria met. **Awaiting muse review** (gates P2). |
-| TM-01 Stream | `intake/tmad-stream-flow` | `v0.11.0-beta.3` | One WIP commit (`--no-verify`): source core files at PR #19 (`af247e4f4`, blobs verified) plus partial protocol/agent-manager/authorization seams. Not typechecked. Remaining: finish PR19 commit, the PR19→#21 rehearsal commit, contract fixes, tests, report. |
+| TM-01 Stream | `intake/tmad-stream-flow` | `v0.11.0-beta.3` | DONE (pluto, evidence/TM-01.md): HEAD `2197619bc`, 9 commits (+4129/−51) — PR#19 import, PR19→#21 rehearsal, 7 contract-fix commits. 11/15 core files blob-identical to `51fb7693d`, 4 intentional deltas listed with reasons; rehearsal found source #21 itself removed recursive fs.watch. Ancestry clean (no custom/mine/source). All focused suites pass incl. new bounds/renamed-RPC/capability-absent tests; scoped lint clean (baseline lint failures in untouched files recorded). TM-01B bridge: NOT NEEDED. UI capture evidence deferred to P1 step 6 as briefed. **Awaiting muse review** (gates P2 with P0). |
 | TM-07 Native Find | `intake/tmad-native-find` | `v0.11.0-beta.3` | Complete per worker (`evidence/TM-07.md`), unreviewed. Needs independent review and native device evidence. |
 | TM-02 queue daemon | `intake/tmad-message-queue` | custom `cbd1210c7` | DONE (pluto, evidence/TM-02.md): HEAD `91392d6be`, 6 commits (+3792/−20). Queue contract implemented per plan (intent-gated admission, receipts, uncertain/failed, recovery, bounds, 0600 journal); 49 queue tests + auth 7 + agent-manager 210 + ACP 130 + GJC 43 pass; ancestry verified (custom floor only). Gaps: daemon e2e needs provider creds (defer to TM-03/P4); one pre-existing side-conversation test failure at its base needs an owner on neptune. **Awaiting muse review** (gates TM-03/TM-04). |
 | P2, TM-03, TM-04 | — | — | Not started; briefs ready. |
@@ -36,6 +36,25 @@ Orchestration continues on pluto per `briefs/ORCHESTRATOR.md`.
   - P0 remainder: agent `c1c7b820`, workspace `wks_4c44bb8d08811ddb` (local workspace at
     `/tmp/tmad-port/baseline-clone`); brief-P0 steps 2, 4, 6 + report.
 - TM-07 review: BLOCKED on muse (branch complete per `evidence/TM-07.md`, awaiting muse review).
+- TM-01 worker finished (pluto, evidence/TM-01.md). Coordinator verified: HEAD `2197619bc`, custom
+  and mine NOT ancestors (both local and origin refs), source integration not an ancestor, 5/5
+  spot-checked core blobs equal `51fb7693d`, import/rehearsal trailers present, test logs match
+  (73 tm01-* logs; final protocol suite 6/6).
+
+## BLOCKED — everything left needs muse (as of 2026-10-03 00:53 AEST)
+
+All implementable work inside the orchestrator's limits is done; 0 workers running. muse re-checked
+at every gate, most recently 2026-10-03 00:53 AEST: still "not found on PATH". Per
+`briefs/ORCHESTRATOR.md` no substitute reviewer is allowed. Pending, in order:
+
+1. muse review of TM-07 (branch done).
+2. muse review of P0 evidence (gates P2).
+3. muse review of TM-02 (gates TM-03 + TM-04 starts).
+4. muse review of TM-01 (with P0 approval, gates P2).
+5. After approvals: P2 removal proof; TM-03; TM-04; then the work-items ledger + manifest block.
+6. Human-only regardless of muse: native device evidence (TM-07 list in evidence/TM-07.md; voice
+   list comes with TM-04), the neptune check of the pre-existing session.test.ts side-conversation
+   failure at the custom floor, and the two TM-01 naming/ceiling decisions recorded in its report.
 - TM-02 worker finished (pluto, evidence/TM-02.md): lease complete except the provider-cred e2e
   (documented). Coordinator verified: HEAD `91392d6be`, custom floor is the only extra ancestry,
   source integration NOT an ancestor, queue/auth test logs match the report. muse re-checked at this
