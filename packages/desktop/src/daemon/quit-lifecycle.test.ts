@@ -34,7 +34,7 @@ describe("quit-lifecycle", () => {
     const listeners = new Map<NodeJS.Signals, () => void>();
     const quits: string[] = [];
 
-    registerExternalQuitSignals({
+    const quitSignal = registerExternalQuitSignals({
       signals: {
         on: (signal, listener) => {
           listeners.set(signal, listener);
@@ -47,6 +47,78 @@ describe("quit-lifecycle", () => {
     listeners.get("SIGTERM")?.();
     listeners.get("SIGHUP")?.();
     expect(quits).toEqual(["quit"]);
+    expect(quitSignal.aborted).toBe(true);
+  });
+
+  it("dismisses a pending confirmation and follows the stop preference on an OS signal", async () => {
+    const listeners = new Map<NodeJS.Signals, () => void>();
+    const events: string[] = [];
+    const confirmationOpened = deferred<void>();
+    let quitLifecycle: ReturnType<typeof createQuitLifecycle>;
+    const quitSignal = registerExternalQuitSignals({
+      signals: {
+        on: (signal, listener) => listeners.set(signal, listener),
+      },
+      quit: () => {
+        events.push("signal-quit");
+        quitLifecycle.handleBeforeQuit({
+          preventDefault: () => events.push("prevent-repeated-quit"),
+        });
+      },
+    });
+    quitLifecycle = createQuitLifecycle({
+      app: { exit: (code) => events.push(`exit:${code}`) },
+      closeTransportSessions: () => events.push("close-transports"),
+      stopDesktopManagedDaemonIfNeeded: () =>
+        stopDesktopManagedDaemonOnQuitIfNeeded({
+          settingsStore: { get: async () => SETTINGS_STOP_ON_QUIT },
+          isDesktopManagedDaemonRunning: () => true,
+          quitSignal,
+          confirmStopDaemon: (_stopByDefault, signal) =>
+            new Promise((resolve) => {
+              events.push("confirmation-open");
+              confirmationOpened.resolve();
+              signal.addEventListener(
+                "abort",
+                () => {
+                  events.push("confirmation-dismissed");
+                  resolve(false);
+                },
+                { once: true },
+              );
+            }),
+          stopDaemon: async () => events.push("stop-daemon"),
+          showShutdownFeedback: () => events.push("shutdown-feedback"),
+        }),
+      installAppUpdateOnQuit: async () => {
+        events.push("check-update");
+        return false;
+      },
+      createUpdateDeadlineSignal: () => new AbortController().signal,
+      onStopError: () => events.push("stop-error"),
+      onUpdateError: () => events.push("update-error"),
+    });
+
+    quitLifecycle.handleBeforeQuit({
+      preventDefault: () => events.push("prevent-initial-quit"),
+    });
+    await confirmationOpened.promise;
+    listeners.get("SIGTERM")?.();
+    await waitForQuitLifecycle();
+
+    expect(events).toEqual([
+      "close-transports",
+      "prevent-initial-quit",
+      "confirmation-open",
+      "confirmation-dismissed",
+      "signal-quit",
+      "close-transports",
+      "prevent-repeated-quit",
+      "shutdown-feedback",
+      "stop-daemon",
+      "check-update",
+      "exit:0",
+    ]);
   });
 
   it("stops by default and only keeps running when keepRunningAfterQuit is enabled", () => {
@@ -54,13 +126,18 @@ describe("quit-lifecycle", () => {
     expect(shouldStopDesktopManagedDaemonOnQuit(SETTINGS_KEEP_RUNNING)).toBe(false);
   });
 
-  it("short-circuits without inspecting the daemon when keep-running is on", async () => {
+  it("keeps the daemon running without confirmation when keep-running is on", async () => {
     const events: string[] = [];
 
     const stopped = await stopDesktopManagedDaemonOnQuitIfNeeded({
       settingsStore: { get: async () => SETTINGS_KEEP_RUNNING },
+      quitSignal: new AbortController().signal,
       isDesktopManagedDaemonRunning: () => {
         events.push("inspect");
+        return true;
+      },
+      confirmStopDaemon: async () => {
+        events.push("confirm");
         return true;
       },
       stopDaemon: async () => {
@@ -72,7 +149,7 @@ describe("quit-lifecycle", () => {
     });
 
     expect(stopped).toBe(false);
-    expect(events).toEqual([]);
+    expect(events).toEqual(["inspect"]);
   });
 
   it("does not stop a manually started daemon on quit", async () => {
@@ -80,7 +157,9 @@ describe("quit-lifecycle", () => {
 
     const stopped = await stopDesktopManagedDaemonOnQuitIfNeeded({
       settingsStore: { get: async () => SETTINGS_STOP_ON_QUIT },
+      quitSignal: new AbortController().signal,
       isDesktopManagedDaemonRunning: () => false,
+      confirmStopDaemon: async () => true,
       stopDaemon: async () => {
         events.push("stop");
       },
@@ -93,12 +172,71 @@ describe("quit-lifecycle", () => {
     expect(events).toEqual([]);
   });
 
+  it("keeps the daemon running when the shutdown confirmation is canceled", async () => {
+    const events: string[] = [];
+
+    const stopped = await stopDesktopManagedDaemonOnQuitIfNeeded({
+      settingsStore: { get: async () => SETTINGS_STOP_ON_QUIT },
+      quitSignal: new AbortController().signal,
+      isDesktopManagedDaemonRunning: () => true,
+      confirmStopDaemon: async (stopByDefault) => {
+        events.push(`confirm:${stopByDefault}`);
+        return false;
+      },
+      stopDaemon: async () => {
+        events.push("stop");
+      },
+      showShutdownFeedback: () => {
+        events.push("feedback");
+      },
+    });
+
+    expect(stopped).toBe(false);
+    expect(events).toEqual(["confirm:true"]);
+  });
+
+  it("continues an ordinary quit after the shutdown confirmation is canceled", async () => {
+    const events: string[] = [];
+    const quitLifecycle = createQuitLifecycle({
+      app: { exit: (code) => events.push(`exit:${code}`) },
+      closeTransportSessions: () => events.push("close-transports"),
+      stopDesktopManagedDaemonIfNeeded: async () => {
+        const stopped = await stopDesktopManagedDaemonOnQuitIfNeeded({
+          settingsStore: { get: async () => SETTINGS_STOP_ON_QUIT },
+          quitSignal: new AbortController().signal,
+          isDesktopManagedDaemonRunning: () => true,
+          confirmStopDaemon: async () => {
+            events.push("confirm-canceled");
+            return false;
+          },
+          stopDaemon: async () => events.push("stop-daemon"),
+          showShutdownFeedback: () => events.push("shutdown-feedback"),
+        });
+        return stopped;
+      },
+      installAppUpdateOnQuit: async () => false,
+      createUpdateDeadlineSignal: () => new AbortController().signal,
+      onStopError: () => events.push("stop-error"),
+      onUpdateError: () => events.push("update-error"),
+    });
+
+    quitLifecycle.handleBeforeQuit({ preventDefault: () => events.push("prevent-default") });
+    await waitForQuitLifecycle();
+
+    expect(events).toEqual(["close-transports", "prevent-default", "confirm-canceled", "exit:0"]);
+  });
+
   it("shows feedback then stops a desktop-managed daemon", async () => {
     const events: string[] = [];
 
     const stopped = await stopDesktopManagedDaemonOnQuitIfNeeded({
       settingsStore: { get: async () => SETTINGS_STOP_ON_QUIT },
+      quitSignal: new AbortController().signal,
       isDesktopManagedDaemonRunning: () => true,
+      confirmStopDaemon: async (stopByDefault) => {
+        events.push(`confirm:${stopByDefault}`);
+        return true;
+      },
       stopDaemon: async () => {
         events.push("stop");
       },
@@ -108,7 +246,7 @@ describe("quit-lifecycle", () => {
     });
 
     expect(stopped).toBe(true);
-    expect(events).toEqual(["feedback", "stop"]);
+    expect(events).toEqual(["confirm:true", "feedback", "stop"]);
   });
 
   it("revalidates updates after daemon shutdown before exiting", async () => {
@@ -190,6 +328,30 @@ describe("quit-lifecycle", () => {
     await waitForQuitLifecycle();
 
     expect(exits).toEqual([]);
+  });
+
+  it("does not stop the daemon when an updater starts the quit directly", () => {
+    const events: string[] = [];
+    const quitLifecycle = createQuitLifecycle({
+      app: { exit: (code) => events.push(`exit:${code}`) },
+      closeTransportSessions: () => events.push("close-transports"),
+      stopDesktopManagedDaemonIfNeeded: async () => {
+        events.push("stop-daemon");
+        return false;
+      },
+      installAppUpdateOnQuit: async () => {
+        events.push("check-update");
+        return false;
+      },
+      createUpdateDeadlineSignal: () => new AbortController().signal,
+      onStopError: () => {},
+      onUpdateError: () => {},
+    });
+
+    quitLifecycle.handleBeforeQuitForUpdate();
+    quitLifecycle.handleBeforeQuit({ preventDefault: () => events.push("prevent-default") });
+
+    expect(events).toEqual(["close-transports"]);
   });
 
   it("recognizes a repeated quit as updater handoff", async () => {
