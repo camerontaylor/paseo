@@ -33,7 +33,9 @@ test.each(["codex-usage-source", "unrelated-plugin"])(
         startBuiltinPlugin: async () => {},
         getProviderRegistrations: () => [],
         getUsageSourceRegistrations: () => [{ id: "codex", label: "Codex" }],
-        discoverUsage: async () => [{}],
+        discoverUsage: async () => [
+          { key: "default", input: { route: { store: "codex", path: "/default/auth.json" } } },
+        ],
         identifyUsage: async (
           _plugin: string,
           _source: string,
@@ -55,7 +57,7 @@ test.each(["codex-usage-source", "unrelated-plugin"])(
       const first = await service.listUsageReports();
       if (pluginId === "unrelated-plugin") {
         expect(first).toHaveLength(1);
-        expect(fetched).toEqual([{}]);
+        expect(fetched).toEqual([{ route: { store: "codex", path: "/default/auth.json" } }]);
         return;
       }
       expect(first.map((entry) => entry.id)).toEqual([

@@ -78,7 +78,10 @@ export async function readAuth(
 ): Promise<Auth | null> {
   if ("providerId" in input) {
     if (!input.codexHome) return null;
-    return readAuth({ route: { store: "codex", path: join(input.codexHome, "auth.json") } }, lookup);
+    return readAuth(
+      { route: { store: "codex", path: join(input.codexHome, "auth.json") } },
+      lookup,
+    );
   }
   if (!("route" in input)) {
     const env = lookup.env ?? process.env;
@@ -88,7 +91,7 @@ export async function readAuth(
       join(home, ".config", "codex", "auth.json"),
       join(home, ".codex", "auth.json"),
     ];
-    for (const path of [...new Set(paths)]) {
+    for (const path of new Set(paths)) {
       const auth = await readAuth({ route: { store: "codex", path } }, lookup);
       if (auth) return auth;
     }
@@ -239,7 +242,7 @@ export async function identify(
   if ("providerId" in input) return { key: `provider.${input.providerId}`, label: input.label };
   const auth = await readAuth(input, lookup);
   if (!auth) return null;
-  if ("route" in input) return accountIdentity(auth, input);
+  if ("route" in input) return accountIdentity(auth, { route: input.route });
   return accountIdentity(auth, {
     route: { store: "codex", path: join(lookup.home ?? homedir(), ".codex", "auth.json") },
   });

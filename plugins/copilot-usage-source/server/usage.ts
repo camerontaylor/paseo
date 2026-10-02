@@ -66,12 +66,10 @@ export async function fetchUsage(
   input: UsageInput,
   fetchApi: typeof fetch = fetch,
 ): Promise<UsageReport> {
-  const token =
-    "providerId" in input
-      ? input.accessToken
-      : "store" in input
-        ? await readToken(input)
-        : await readDefaultToken();
+  let token: string | undefined;
+  if ("providerId" in input) token = input.accessToken;
+  else if ("store" in input) token = await readToken(input);
+  else token = await readDefaultToken();
   if (!token) {
     if ("providerId" in input)
       return unavailable({
@@ -113,6 +111,9 @@ export async function fetchUsage(
 
 export async function identify(input: UsageInput | Record<string, never> = {}) {
   if ("providerId" in input) return { key: `provider.${input.providerId}`, label: input.label };
-  const token = "store" in input ? await readToken(input) : await readDefaultToken();
+  const token =
+    "store" in input
+      ? await readToken({ store: input.store, locator: input.locator })
+      : await readDefaultToken();
   return token ? { key: "default" } : null;
 }
