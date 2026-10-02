@@ -341,10 +341,13 @@ interface ClaudeCredentialLookup extends StoreLookup {
   claudeHome?: string;
 }
 
+type RoutedInput = Extract<UsageInput, { route: unknown }>;
+
 function claudeCredentialPath(lookup: ClaudeCredentialLookup): string {
   const home = lookup.home ?? homedir();
   const env = lookup.env ?? process.env;
-  const claudeHome = lookup.claudeHome ?? env.CLAUDE_CONFIG_DIR ?? join(home, ".claude");
+  const claudeHome =
+    lookup.claudeHome ?? env.CLAUDE_CONFIG_DIR ?? env.CLAUDE_HOME ?? join(home, ".claude");
   return join(claudeHome, ".credentials.json");
 }
 
@@ -363,10 +366,10 @@ export async function discover(
   fetchApi: typeof fetch = fetch,
 ): Promise<UsageAccount[]> {
   // Claude Code only reads the file when its Keychain login is empty.
-  const primary: UsageInput = (await keychainCredentialRecord(lookup))
+  const primary: RoutedInput = (await keychainCredentialRecord(lookup))
     ? { route: { store: "keychain" } }
     : { route: { store: "claude", path: claudeCredentialPath(lookup) } };
-  const candidates: UsageInput[] = [
+  const candidates: RoutedInput[] = [
     primary,
     { route: { store: "pi", path: piAuthPath(lookup) } },
     ...discoverOmp(lookup).map((route) => ({ route })),
@@ -397,9 +400,15 @@ export async function discover(
 
 /** Re-read the selected login; the harness owns token refresh. */
 export async function resolveClaudeCredentials(
-  input: UsageInput,
+  input: UsageInput | Record<string, never>,
   lookup: ClaudeCredentialLookup = {},
 ): Promise<ClaudeCredentialRecord | null> {
+  if ("providerId" in input)
+    return input.configDir ? readCredentialFile(join(input.configDir, ".credentials.json")) : null;
+  if (!("route" in input)) {
+    const primary = await keychainCredentialRecord(lookup);
+    return primary ?? readCredentialFile(claudeCredentialPath(lookup));
+  }
   const route = input.route;
   if (route.store === "claude") return readCredentialFile(route.path);
   if (route.store === "keychain") return keychainCredentialRecord(lookup);
@@ -475,7 +484,7 @@ export async function fetchUsage(
   const credentials = await resolveClaudeCredentials(input, credentialLookup);
   if (!credentials) throw new Error("Claude login store no longer exists");
   const refreshedBy =
-    input.route.store === "claude" || input.route.store === "keychain"
+    !("route" in input) || input.route.store === "claude" || input.route.store === "keychain"
       ? "claude"
       : input.route.store;
   if (
@@ -593,4 +602,16 @@ async function readProfile(
     if (profileCache.get(tokenHash)?.result === request) profileCache.delete(tokenHash);
     throw error;
   }
+}
+
+export async function identify(
+  input: UsageInput | Record<string, never>,
+  fetchApi: typeof fetch = fetch,
+  now: () => number = Date.now,
+  credentialLookup: ClaudeCredentialLookup = {},
+) {
+  if ("providerId" in input) return { key: `provider.${input.providerId}`, label: input.label };
+  const credentials = await resolveClaudeCredentials(input, credentialLookup);
+  if (!credentials) return null;
+  return readProfile(credentials.oauth.accessToken, fetchApi, now);
 }

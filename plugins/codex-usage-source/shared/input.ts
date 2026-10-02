@@ -10,5 +10,12 @@ export const routeSchema = z.discriminatedUnion("store", [
     })
     .strict(),
 ]);
-export const inputSchema = z.object({ route: routeSchema }).strict();
+export const inputSchema = z.union([
+  z.object({ route: routeSchema }).strict(),
+  z.strictObject({
+    providerId: z.string().min(1),
+    label: z.string(),
+    codexHome: z.string().optional(),
+  }),
+]);
 export type CodexUsageInput = z.infer<typeof inputSchema>;
