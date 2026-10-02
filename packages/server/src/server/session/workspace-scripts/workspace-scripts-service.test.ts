@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pino } from "pino";
@@ -168,6 +168,64 @@ describe("buildSnapshot", () => {
     expect(
       service.buildSnapshot({ workspaceId: "ws-1", cwd: dir } as PersistedWorkspaceRecord),
     ).toEqual([]);
+  });
+
+  test("discovers package scripts without paseo.json and refreshes the cached snapshot", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "workspace-packages-"));
+    tempDirs.push(directory);
+    const workspace = { workspaceId: "ws-1", cwd: directory } as PersistedWorkspaceRecord;
+    const { service } = buildService({ workspace });
+    const manifest = join(directory, "package.json");
+    writeFileSync(manifest, JSON.stringify({ scripts: { build: "echo build" } }));
+    const scripts = await service.list("ws-1");
+    expect(scripts).toEqual([
+      expect.objectContaining({
+        scriptName: "package.json:package.json:build",
+        type: "script",
+        port: null,
+        proxyUrl: null,
+        packageJson: { path: "package.json", script: "build" },
+        lifecycle: "stopped",
+      }),
+    ]);
+    expect(service.buildSnapshot(workspace)).toEqual(scripts);
+    writeFileSync(manifest, JSON.stringify({ scripts: { test: "echo test" } }));
+    expect((await service.list("ws-1")).map((script) => script.packageJson?.script)).toEqual([
+      "test",
+    ]);
+    expect(service.buildSnapshot(workspace).map((script) => script.packageJson?.script)).toEqual([
+      "test",
+    ]);
+  });
+
+  test("keeps configured and healthy package scripts when another manifest is invalid", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "workspace-partial-packages-"));
+    tempDirs.push(directory);
+    writeFileSync(
+      join(directory, "paseo.json"),
+      JSON.stringify({ scripts: { configured: { command: "echo configured" } } }),
+    );
+    writeFileSync(join(directory, "package.json"), "{");
+    mkdirSync(join(directory, "healthy"));
+    writeFileSync(
+      join(directory, "healthy/package.json"),
+      JSON.stringify({ scripts: { build: "echo build" } }),
+    );
+    const workspace = { workspaceId: "ws-1", cwd: directory } as PersistedWorkspaceRecord;
+    const { service } = buildService({ workspace });
+    expect((await service.list("ws-1")).map((script) => script.scriptName).sort()).toEqual([
+      "configured",
+      "package.json:healthy%2Fpackage.json:build",
+    ]);
+    writeFileSync(
+      join(directory, "package.json"),
+      JSON.stringify({ scripts: { restored: "echo restored" } }),
+    );
+    expect((await service.list("ws-1")).map((script) => script.scriptName).sort()).toEqual([
+      "configured",
+      "package.json:healthy%2Fpackage.json:build",
+      "package.json:package.json:restored",
+    ]);
   });
 
   test("projects service hostnames without a Git snapshot", async () => {

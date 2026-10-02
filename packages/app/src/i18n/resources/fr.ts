@@ -779,6 +779,8 @@ export const fr: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "Racine",
+      searchPlaceholder: "Rechercher des scripts ou des packages…",
       title: "Scripts",
       actions: {
         chooseUrl: "Choisir l’URL",
@@ -806,6 +808,8 @@ export const fr: TranslationResources = {
         direct: "Directe",
       },
       states: {
+        empty: "Aucun script trouvé",
+        noMatches: "Aucun script correspondant",
         exitCode: "quitter{{code}}",
         startFailed: "Échec du démarrage de{{scriptName}}",
         stopFailed: "Échec de l'arrêt de{{scriptName}}",
@@ -1273,6 +1277,7 @@ export const fr: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "Script {{name}} en cours",
         serviceRunning: "Service {{name}} en cours",
         serviceUnhealthy: "Service {{name}} en échec",
         creating: "Création...",
