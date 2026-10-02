@@ -15,6 +15,7 @@ import {
   ArrowLeftToLine,
   ArrowRightToLine,
   Copy,
+  MessageCirclePlus,
   Pencil,
   RotateCw,
   Columns2,
@@ -56,6 +57,7 @@ import {
   type WorkspaceTabPresentation,
 } from "@/screens/workspace/workspace-tab-presentation";
 import { buildDeterministicWorkspaceTabId } from "@/workspace-tabs/identity";
+import { useStartSideConversation } from "@/side-conversations/start";
 import {
   buildWorkspaceDesktopTabActions,
   type WorkspaceDesktopTabActions,
@@ -121,6 +123,7 @@ const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedArrowLeftToLine = withUnistyles(ArrowLeftToLine);
 const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
+const ThemedMessageCirclePlus = withUnistyles(MessageCirclePlus);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedPlus = withUnistyles(Plus);
 const ThemedColumns2 = withUnistyles(Columns2);
@@ -406,6 +409,8 @@ function TabContextMenuItem({
         return <ThemedArrowRightToLine size={16} uniProps={mutedColorMapping} />;
       case "copy-x":
         return <ThemedCopyX size={16} uniProps={mutedColorMapping} />;
+      case "message-circle-plus":
+        return <ThemedMessageCirclePlus size={16} uniProps={mutedColorMapping} />;
       case "pencil":
         return <ThemedPencil size={16} uniProps={mutedColorMapping} />;
       case "x":
@@ -1072,6 +1077,10 @@ function ResolvedWorkspaceDesktopTabsRow({
     }),
     [t],
   );
+  const startSideConversation = useStartSideConversation({
+    serverId: normalizedServerId,
+    workspaceId: normalizedWorkspaceId,
+  });
   const tabMenuLabels = useMemo<WorkspaceTabMenuLabels>(
     () => ({
       copyResumeCommand: t("workspace.tabs.menu.copyResumeCommand"),
@@ -1086,6 +1095,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       closeOthers: t("workspace.tabs.menu.closeOthers"),
       reloadAgent: t("workspace.tabs.menu.reloadAgent"),
       reloadAgentTooltip: t("workspace.tabs.menu.reloadAgentTooltip"),
+      newSideConversation: t("sideConversations.actions.new"),
       close: t("workspace.tabs.menu.close"),
     }),
     [t],
@@ -1257,6 +1267,7 @@ function ResolvedWorkspaceDesktopTabsRow({
           onCopyTerminalId={onCopyTerminalId}
           onCopyFilePath={onCopyFilePath}
           onReloadAgent={onReloadAgent}
+          onStartSideConversation={startSideConversation ?? undefined}
           onRenameTab={onRenameTab}
           onCloseTabsToLeft={onCloseTabsToLeft}
           onCloseTabsToRight={onCloseTabsToRight}
@@ -1292,6 +1303,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       onReloadAgent,
       onRenameTab,
       setHoveredCloseTabKey,
+      startSideConversation,
       tabMenuLabels,
       tabDropPreviewIndex,
       displayedTabs.length,
@@ -1404,6 +1416,7 @@ function ResolvedDesktopTabChip({
   onCopyTerminalId,
   onCopyFilePath,
   onReloadAgent,
+  onStartSideConversation,
   onRenameTab,
   onCloseTabsToLeft,
   onCloseTabsToRight,
@@ -1430,6 +1443,7 @@ function ResolvedDesktopTabChip({
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  onStartSideConversation?: (agentId: string, options: { parentTabId: string }) => void;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTabsToLeft: (tabId: string) => Promise<void> | void;
   onCloseTabsToRight: (tabId: string) => Promise<void> | void;
@@ -1458,6 +1472,7 @@ function ResolvedDesktopTabChip({
         onCopyTerminalId,
         onCopyFilePath,
         onReloadAgent,
+        onStartSideConversation,
         onRenameTab,
         onCloseTab,
         onCloseTabsToLeft,
@@ -1479,6 +1494,7 @@ function ResolvedDesktopTabChip({
       labels,
       onReloadAgent,
       onRenameTab,
+      onStartSideConversation,
       tabCount,
     ],
   );

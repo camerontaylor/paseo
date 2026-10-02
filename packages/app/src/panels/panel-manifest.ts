@@ -33,6 +33,11 @@ const manifests = {
     supportedHosts: ["main", "explorer"],
     resourceKey: (target) => `${target.parentAgentId}:${target.subagentId}`,
   },
+  side_conversation: {
+    kind: "side_conversation",
+    supportedHosts: ["main", "explorer"],
+    resourceKey: (target) => `${target.parentAgentId}:${target.threadId}`,
+  },
   terminal: {
     kind: "terminal",
     supportedHosts: ["main", "explorer"],
