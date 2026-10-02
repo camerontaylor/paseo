@@ -14,6 +14,7 @@ export const ru: TranslationResources = {
 
     title: "Найти",
     placeholder: "Найти в панели",
+    updateHost: "Обновите хост, чтобы использовать поиск",
     close: "Закрыть поиск",
     matches: "Совпадения",
     previous: "Предыдущее совпадение",
@@ -648,6 +649,7 @@ export const ru: TranslationResources = {
         reloadAgent: "Перезагрузить агента",
         reloadAgentTooltip: "Перезагрузите агента, чтобы обновить навыки, MCP или статус входа.",
         close: "Закрыть",
+        findInChat: "Найти в чате",
         renameTerminal: "Переименовать терминал",
         renameAgent: "Переименовать агента",
       },

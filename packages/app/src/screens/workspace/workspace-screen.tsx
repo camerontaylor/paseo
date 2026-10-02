@@ -87,6 +87,7 @@ import type {
   WorkspacePanelTarget,
 } from "@/keyboard/keyboard-action-dispatcher";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
+import { useAgentViewStore } from "@/stores/agent-view-store";
 import { normalizeWorkspaceTabTarget, workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
 import { useVisibleAgentIds } from "./visible-agent-ids";
 import {
@@ -420,6 +421,7 @@ interface MobileWorkspaceTabSwitcherProps {
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
   onCloseTabsBelow: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
+  onFindInChat: (agentId: string) => void;
 }
 
 function MobileActiveTabTrigger({
@@ -527,6 +529,7 @@ function MobileWorkspaceTabOption({
   onCloseTabsAbove,
   onCloseTabsBelow,
   onCloseOtherTabs,
+  onFindInChat,
 }: {
   tab: WorkspaceTabDescriptor;
   tabIndex: number;
@@ -546,6 +549,7 @@ function MobileWorkspaceTabOption({
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
   onCloseTabsBelow: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
+  onFindInChat: (agentId: string) => void;
 }) {
   const { t } = useTranslation();
   const tabMenuLabels = useMemo<WorkspaceTabMenuLabels>(
@@ -563,6 +567,7 @@ function MobileWorkspaceTabOption({
       reloadAgent: t("workspace.tabs.menu.reloadAgent"),
       reloadAgentTooltip: t("workspace.tabs.menu.reloadAgentTooltip"),
       close: t("workspace.tabs.menu.close"),
+      findInChat: t("workspace.tabs.menu.findInChat"),
     }),
     [t],
   );
@@ -583,6 +588,7 @@ function MobileWorkspaceTabOption({
     onCloseTabsBefore: onCloseTabsAbove,
     onCloseTabsAfter: onCloseTabsBelow,
     onCloseOtherTabs,
+    onFindInChat,
     labels: tabMenuLabels,
   });
 
@@ -655,6 +661,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
   onCloseTabsAbove,
   onCloseTabsBelow,
   onCloseOtherTabs,
+  onFindInChat,
 }: MobileWorkspaceTabSwitcherProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -712,6 +719,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
           onCloseTabsAbove={onCloseTabsAbove}
           onCloseTabsBelow={onCloseTabsBelow}
           onCloseOtherTabs={onCloseOtherTabs}
+          onFindInChat={onFindInChat}
         />
       );
     },
@@ -731,6 +739,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
       onCloseTabsAbove,
       onCloseTabsBelow,
       onCloseOtherTabs,
+      onFindInChat,
     ],
   );
 
@@ -2700,6 +2709,21 @@ function WorkspaceScreenContent({
     [toast, t],
   );
 
+  const setFindOpen = useAgentViewStore((state) => state.setFindOpen);
+  const handleFindInChat = useCallback(
+    (agentId: string) => {
+      setFindOpen(normalizedServerId, agentId, true);
+      if (persistenceKey) {
+        const tabTarget = { kind: "agent", agentId } as WorkspaceTabTarget;
+        const tabId = openWorkspaceTabFocused(persistenceKey, tabTarget);
+        if (tabId) {
+          navigateToTabId(tabId);
+        }
+      }
+    },
+    [normalizedServerId, persistenceKey, openWorkspaceTabFocused, navigateToTabId, setFindOpen],
+  );
+
   const handleCopyFilePath = useCallback(
     async (path: string) => {
       if (!path) return;
@@ -4059,6 +4083,7 @@ function WorkspaceScreenContent({
           onCloseTabsAbove={handleCloseTabsToLeft}
           onCloseTabsBelow={handleCloseTabsToRight}
           onCloseOtherTabs={handleCloseOtherTabs}
+          onFindInChat={handleFindInChat}
         />
       ) : null}
 

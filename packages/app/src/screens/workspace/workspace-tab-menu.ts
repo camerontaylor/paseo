@@ -19,6 +19,7 @@ export interface WorkspaceTabMenuLabels {
   reloadAgent: string;
   reloadAgentTooltip: string;
   close: string;
+  findInChat: string;
 }
 
 export const DEFAULT_WORKSPACE_TAB_MENU_LABELS: WorkspaceTabMenuLabels = {
@@ -35,6 +36,7 @@ export const DEFAULT_WORKSPACE_TAB_MENU_LABELS: WorkspaceTabMenuLabels = {
   reloadAgent: i18n.t("workspace.tabs.menu.reloadAgent"),
   reloadAgentTooltip: i18n.t("workspace.tabs.menu.reloadAgentTooltip"),
   close: i18n.t("workspace.tabs.menu.close"),
+  findInChat: i18n.t("workspace.tabs.menu.findInChat", { defaultValue: "Find in chat" }),
 };
 
 export type WorkspaceTabMenuEntry =
@@ -49,7 +51,8 @@ export type WorkspaceTabMenuEntry =
         | "arrow-right-to-line"
         | "copy-x"
         | "pencil"
-        | "x";
+        | "x"
+        | "search";
       hint?: string;
       tooltip?: string;
       disabled?: boolean;
@@ -78,6 +81,7 @@ interface BuildWorkspaceTabMenuEntriesInput {
   onCloseTabsBefore: (tabId: string) => Promise<void> | void;
   onCloseTabsAfter: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
+  onFindInChat?: (agentId: string) => void;
   labels?: WorkspaceTabMenuLabels;
 }
 
@@ -191,6 +195,24 @@ export function buildWorkspaceTabMenuEntries(
 
   if (tab.target.kind === "agent") {
     const { agentId } = tab.target;
+    // Native has no Cmd+F equivalent, so the tab menu is how Find is reached.
+    // Web opens it from the keyboard shortcut in `chat-find/index.web.tsx`.
+    if (surface === "mobile" && input.onFindInChat) {
+      entries.push({
+        kind: "item",
+        key: "find-in-chat",
+        label: labels.findInChat,
+        icon: "search",
+        testID: `${menuTestIDBase}-find-in-chat`,
+        onSelect: () => {
+          input.onFindInChat?.(agentId);
+        },
+      });
+      entries.push({
+        kind: "separator",
+        key: "find-in-chat-separator",
+      });
+    }
     entries.push({
       kind: "item",
       key: "copy-resume-command",
