@@ -42,6 +42,8 @@ interface Auth {
   expires?: number;
 }
 
+type RoutedInput = Extract<CodexUsageInput, { route: unknown }>;
+
 export async function discover(lookup: StoreLookup = {}): Promise<UsageAccount[]> {
   const env = lookup.env ?? process.env;
   const home = lookup.home ?? homedir();
@@ -49,7 +51,7 @@ export async function discover(lookup: StoreLookup = {}): Promise<UsageAccount[]
     ...(env.CODEX_HOME ? [join(env.CODEX_HOME, "auth.json")] : []),
     join(home, ".codex", "auth.json"),
   ];
-  const candidates: CodexUsageInput[] = [...new Set(paths)].map((path) => ({
+  const candidates: RoutedInput[] = [...new Set(paths)].map((path) => ({
     route: { store: "codex", path },
   }));
   candidates.push(
@@ -71,9 +73,27 @@ export async function discover(lookup: StoreLookup = {}): Promise<UsageAccount[]
 }
 
 export async function readAuth(
-  input: CodexUsageInput,
+  input: CodexUsageInput | Record<string, never>,
   lookup: StoreLookup = {},
 ): Promise<Auth | null> {
+  if ("providerId" in input) {
+    if (!input.codexHome) return null;
+    return readAuth({ route: { store: "codex", path: join(input.codexHome, "auth.json") } }, lookup);
+  }
+  if (!("route" in input)) {
+    const env = lookup.env ?? process.env;
+    const home = lookup.home ?? homedir();
+    const paths = [
+      ...(env.CODEX_HOME ? [join(env.CODEX_HOME, "auth.json")] : []),
+      join(home, ".config", "codex", "auth.json"),
+      join(home, ".codex", "auth.json"),
+    ];
+    for (const path of [...new Set(paths)]) {
+      const auth = await readAuth({ route: { store: "codex", path } }, lookup);
+      if (auth) return auth;
+    }
+    return null;
+  }
   const route = input.route;
   if (route.store !== "codex") {
     const oauth = await readHarness(route, lookup);
@@ -111,7 +131,7 @@ export async function fetchUsage(
 ): Promise<UsageReport> {
   const auth = await readAuth(input, lookup);
   if (!auth) throw new Error("Codex login store no longer exists");
-  const refreshedBy = input.route.store;
+  const refreshedBy = "route" in input ? input.route.store : "codex";
   if (auth.expires !== undefined && auth.expires <= (lookup.now ?? Date.now)())
     return unavailable({
       kind: "expired",
@@ -193,7 +213,7 @@ function claimString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function accountIdentity(auth: Auth, input: CodexUsageInput): { key: string; label?: string } {
+function accountIdentity(auth: Auth, input: RoutedInput): { key: string; label?: string } {
   const access = jwtClaims(auth.token);
   const id = jwtClaims(auth.idToken);
   const accessAuth = claimObject(access, "https://api.openai.com/auth");
@@ -210,4 +230,17 @@ function accountIdentity(auth: Auth, input: CodexUsageInput): { key: string; lab
     claimString(claimObject(id, "https://api.openai.com/profile")?.["email"]) ??
     claimString(id?.["email"]);
   return { key: key ?? hashAccountKey(JSON.stringify(input.route)), ...(label ? { label } : {}) };
+}
+
+export async function identify(
+  input: CodexUsageInput | Record<string, never>,
+  lookup: StoreLookup = {},
+) {
+  if ("providerId" in input) return { key: `provider.${input.providerId}`, label: input.label };
+  const auth = await readAuth(input, lookup);
+  if (!auth) return null;
+  if ("route" in input) return accountIdentity(auth, input);
+  return accountIdentity(auth, {
+    route: { store: "codex", path: join(lookup.home ?? homedir(), ".codex", "auth.json") },
+  });
 }

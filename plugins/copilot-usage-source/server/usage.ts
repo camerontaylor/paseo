@@ -20,7 +20,9 @@ const CopilotUsageResponseSchema = z.object({
   quota_reset_date: ApiOptionalStringSchema,
 });
 
-async function readToken(input: UsageInput): Promise<string | undefined> {
+type RoutedInput = Extract<UsageInput, { store: string }>;
+
+async function readToken(input: RoutedInput): Promise<string | undefined> {
   if (input.store === "env") return process.env[input.locator];
   try {
     const raw = await fs.readFile(input.locator, "utf8");
@@ -31,7 +33,7 @@ async function readToken(input: UsageInput): Promise<string | undefined> {
 }
 
 export async function discover(): Promise<UsageAccount[]> {
-  const candidates: UsageInput[] = ["COPILOT_TOKEN", "GITHUB_TOKEN", "GITHUB_PAT"].map(
+  const candidates: RoutedInput[] = ["COPILOT_TOKEN", "GITHUB_TOKEN", "GITHUB_PAT"].map(
     (locator) => ({ store: "env", locator }),
   );
   if (process.env.APPDATA)
@@ -44,12 +46,40 @@ export async function discover(): Promise<UsageAccount[]> {
   return [];
 }
 
+async function readDefaultToken(): Promise<string | undefined> {
+  for (const locator of ["COPILOT_TOKEN", "GITHUB_TOKEN", "GITHUB_PAT"]) {
+    const token = process.env[locator];
+    if (token) return token;
+  }
+  const paths = [
+    ...(process.env.APPDATA ? [join(process.env.APPDATA, "GitHub CLI", "hosts.yml")] : []),
+    join(homedir(), ".config", "gh", "hosts.yml"),
+  ];
+  for (const locator of paths) {
+    const token = await readToken({ store: "file", locator });
+    if (token) return token;
+  }
+  return undefined;
+}
+
 export async function fetchUsage(
   input: UsageInput,
   fetchApi: typeof fetch = fetch,
 ): Promise<UsageReport> {
-  const token = await readToken(input);
-  if (!token) throw new Error("Copilot login store no longer exists");
+  const token =
+    "providerId" in input
+      ? input.accessToken
+      : "store" in input
+        ? await readToken(input)
+        : await readDefaultToken();
+  if (!token) {
+    if ("providerId" in input)
+      return unavailable({
+        kind: "no_quota",
+        detail: "No Copilot token is configured for this provider account.",
+      });
+    throw new Error("Copilot login store no longer exists");
+  }
 
   const res = await fetchApi("https://api.github.com/copilot_internal/user", {
     signal: AbortSignal.timeout(15_000),
@@ -79,4 +109,10 @@ export async function fetchUsage(
     balances: [],
     details,
   };
+}
+
+export async function identify(input: UsageInput | Record<string, never> = {}) {
+  if ("providerId" in input) return { key: `provider.${input.providerId}`, label: input.label };
+  const token = "store" in input ? await readToken(input) : await readDefaultToken();
+  return token ? { key: "default" } : null;
 }
