@@ -16,8 +16,12 @@ const IGNORED_DIRECTORIES = new Set([
   "node_modules",
 ]);
 const MAX_SCANNED_ENTRIES = 20_000;
-/** Backfill ceiling. A repo with committed build output can match thousands. */
-const DEFAULT_BACKFILL_LIMIT = 200;
+/**
+ * Explicit per-agent ceiling on retained artifact metadata. A repo with
+ * committed build output can match thousands of files; each retained entry
+ * lives in the persisted agent record, so the list itself must stay bounded.
+ */
+const MAX_RETAINED_ARTIFACTS = 200;
 
 interface ArtifactFormat {
   kind: AgentArtifactKind;
@@ -98,7 +102,12 @@ export class AgentArtifactCollector {
       turn.candidates.add(recentPath);
     }
 
-    return mergeArtifactCandidates(turn.cwd, turn.candidates, existingArtifacts, null);
+    return mergeArtifactCandidates(
+      turn.cwd,
+      turn.candidates,
+      existingArtifacts,
+      MAX_RETAINED_ARTIFACTS,
+    );
   }
 
   /**
@@ -118,7 +127,7 @@ export class AgentArtifactCollector {
   ): Promise<ArtifactCollectionResult | null> {
     // A zero cutoff makes the recency filter match everything.
     const candidates = await findRecentlyModifiedArtifacts(cwd, 0);
-    const limit = options?.limit ?? DEFAULT_BACKFILL_LIMIT;
+    const limit = options?.limit ?? MAX_RETAINED_ARTIFACTS;
     return mergeArtifactCandidates(cwd, candidates, existingArtifacts, limit);
   }
 

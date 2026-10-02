@@ -4,6 +4,13 @@ import type { AgentPermissionRequest, AgentStreamEvent } from "./agent-sdk-types
 
 export const COMPANION_ENTRY_LIMIT = 50;
 export const COMPANION_TEXT_LIMIT = 4000;
+/**
+ * Explicit ceiling for user-created entries (Stream pins and tracked Q&A).
+ * Captured moments churn against COMPANION_ENTRY_LIMIT; manual entries are
+ * never evicted by that churn, so they need a bound of their own. Adding
+ * past the cap is refused so an old note is never silently dropped.
+ */
+export const COMPANION_MANUAL_ENTRY_LIMIT = 100;
 
 interface ResponseDraft {
   text: string;
@@ -208,10 +215,69 @@ function mapChanged(
   return changed ? next : entries;
 }
 
+function isManualEntry(entry: CompanionEntry): boolean {
+  return entry.kind === "pin" || entry.kind === "q_and_a";
+}
+
 function upsert(entries: CompanionEntry[], entry: CompanionEntry): CompanionEntry[] {
   const existing = entries.find((item) => item.id === entry.id);
   const next = existing
     ? entries.map((item) => (item.id === entry.id ? { ...entry, timestamp: item.timestamp } : item))
     : [...entries, entry];
-  return next.slice(-COMPANION_ENTRY_LIMIT);
+  return evictCapturedSurplus(next);
+}
+
+/**
+ * Enforces COMPANION_ENTRY_LIMIT over captured moments only. Stream pins and
+ * tracked Q&A are user data: moment churn trims the oldest captured entries
+ * and never touches them.
+ */
+function evictCapturedSurplus(entries: CompanionEntry[]): CompanionEntry[] {
+  if (entries.length <= COMPANION_ENTRY_LIMIT) {
+    return entries;
+  }
+  const surplus = entries.length - COMPANION_ENTRY_LIMIT;
+  let remaining = surplus;
+  const next: CompanionEntry[] = [];
+  for (const entry of entries) {
+    if (remaining > 0 && !isManualEntry(entry)) {
+      remaining -= 1;
+      continue;
+    }
+    next.push(entry);
+  }
+  return next;
+}
+
+export interface ManualEntryAppendResult {
+  entries: CompanionEntry[];
+  error?: string;
+}
+
+/**
+ * Appends a user-created pin or Q&A under the explicit manual-entry bounds:
+ * the text is excerpt-clipped like captured moments, and the append is
+ * refused once COMPANION_MANUAL_ENTRY_LIMIT is reached.
+ */
+export function appendManualCompanionEntry(
+  entries: CompanionEntry[],
+  entry: CompanionEntry,
+): ManualEntryAppendResult {
+  const manualCount = entries.filter(isManualEntry).length;
+  if (manualCount >= COMPANION_MANUAL_ENTRY_LIMIT) {
+    return {
+      entries,
+      error: `Stream pin limit reached (${COMPANION_MANUAL_ENTRY_LIMIT}). Remove one to add another.`,
+    };
+  }
+  let clipped: CompanionEntry =
+    entry.text.length > COMPANION_TEXT_LIMIT ? { ...entry, ...excerpt(entry.text) } : entry;
+  if (
+    clipped.kind === "q_and_a" &&
+    clipped.answer &&
+    clipped.answer.length > COMPANION_TEXT_LIMIT
+  ) {
+    clipped = { ...clipped, answer: clipped.answer.slice(0, COMPANION_TEXT_LIMIT) };
+  }
+  return { entries: [...entries, clipped] };
 }

@@ -36,6 +36,26 @@ describe("AgentArtifactCollector", () => {
     );
   });
 
+  it("caps the retained artifact list at the per-agent ceiling during a turn", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "paseo-artifacts-"));
+    temporaryDirectories.push(cwd);
+    await mkdir(path.join(cwd, "out"));
+    const collector = new AgentArtifactCollector();
+    collector.beginTurn("agent-3", cwd);
+    const total = 210;
+    for (let index = 0; index < total; index += 1) {
+      await writeFile(path.join(cwd, "out", `page-${String(index).padStart(3, "0")}.html`), "<p>");
+    }
+
+    const collection = await collector.finishTurn("agent-3", []);
+
+    expect(collection?.artifacts).toHaveLength(200);
+    // The kept set is the most recently modified, so the oldest pages drop.
+    expect(collection?.artifacts.every((artifact) => artifact.path > "out/page-009.html")).toBe(
+      true,
+    );
+  });
+
   it("uses completed write tool calls when the recursive watcher is unavailable", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "paseo-artifacts-"));
     temporaryDirectories.push(cwd);

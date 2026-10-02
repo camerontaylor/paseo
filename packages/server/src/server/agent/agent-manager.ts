@@ -3,7 +3,11 @@ import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
-import { CompanionStreamCollector, restoreCompanionEntries } from "./companion-stream.js";
+import {
+  appendManualCompanionEntry,
+  CompanionStreamCollector,
+  restoreCompanionEntries,
+} from "./companion-stream.js";
 import { AgentArtifactCollector } from "./artifacts/collector.js";
 import type { AgentArtifact } from "@getpaseo/protocol/agent-types";
 import { randomUUID } from "node:crypto";
@@ -2108,7 +2112,7 @@ export class AgentManager {
       );
     } else if (input.action === "add_pin") {
       const pinId = `pin:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      next.push({
+      const appended = appendManualCompanionEntry(next, {
         id: pinId,
         kind: "pin",
         timestamp: new Date().toISOString(),
@@ -2116,11 +2120,15 @@ export class AgentManager {
         truncated: false,
         sourceId: input.sourceId,
       });
+      if (appended.error) {
+        throw new Error(appended.error);
+      }
+      next = appended.entries;
     } else if (input.action === "remove_pin" && input.entryId) {
       next = next.filter((e) => !(e.id === input.entryId && e.kind === "pin"));
     } else if (input.action === "add_q_and_a") {
       const qnaId = `qa:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      next.push({
+      const appended = appendManualCompanionEntry(next, {
         id: qnaId,
         kind: "q_and_a",
         timestamp: new Date().toISOString(),
@@ -2128,6 +2136,10 @@ export class AgentManager {
         answer: input.answerText,
         truncated: false,
       });
+      if (appended.error) {
+        throw new Error(appended.error);
+      }
+      next = appended.entries;
     }
 
     if (liveAgent) {

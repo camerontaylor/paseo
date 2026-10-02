@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 import {
+  appendManualCompanionEntry,
   CompanionStreamCollector,
   restoreCompanionEntries,
   COMPANION_ENTRY_LIMIT,
+  COMPANION_MANUAL_ENTRY_LIMIT,
   COMPANION_TEXT_LIMIT,
 } from "./companion-stream.js";
 
@@ -47,6 +49,81 @@ describe("conversation companion stream", () => {
       timestamp,
     );
     expect(afterUnrelatedResolution).toBe(settled);
+  });
+
+  it("never evicts pins or tracked Q&A when captured moments churn", () => {
+    const collector = new CompanionStreamCollector();
+    const timestamp = "2026-09-21T12:00:00.000Z";
+    const pin: CompanionEntry = {
+      id: "pin:keep",
+      kind: "pin",
+      timestamp,
+      text: "user note",
+      truncated: false,
+    };
+    let entries: CompanionEntry[] = [pin];
+    for (let turn = 0; turn < COMPANION_ENTRY_LIMIT + 5; turn += 1) {
+      entries = collector.observe(
+        "agent",
+        entries,
+        {
+          type: "turn_completed",
+          provider: "codex",
+          turnId: `t${turn}`,
+        } as never,
+        timestamp,
+      );
+    }
+    expect(entries).toContain(pin);
+    expect(entries.filter((entry) => entry.kind === "outcome").length).toBeLessThanOrEqual(
+      COMPANION_ENTRY_LIMIT,
+    );
+  });
+
+  it("clips manual entry text to the shared excerpt limit", () => {
+    const appended = appendManualCompanionEntry([], {
+      id: "pin:long",
+      kind: "pin",
+      timestamp: "2026-09-21T12:00:00.000Z",
+      text: "x".repeat(COMPANION_TEXT_LIMIT + 1),
+      truncated: false,
+    });
+    expect(appended.error).toBeUndefined();
+    expect(appended.entries[0]?.text).toHaveLength(COMPANION_TEXT_LIMIT);
+    expect(appended.entries[0]?.truncated).toBe(true);
+  });
+
+  it("clips a manual Q&A answer and refuses appends past the manual ceiling", () => {
+    const timestamp = "2026-09-21T12:00:00.000Z";
+    const appended = appendManualCompanionEntry([], {
+      id: "qa:long",
+      kind: "q_and_a",
+      timestamp,
+      text: "q",
+      answer: "a".repeat(COMPANION_TEXT_LIMIT + 1),
+      truncated: false,
+    });
+    expect(appended.entries[0]).toMatchObject({ answer: "a".repeat(COMPANION_TEXT_LIMIT) });
+
+    const full: CompanionEntry[] = Array.from(
+      { length: COMPANION_MANUAL_ENTRY_LIMIT },
+      (_, index): CompanionEntry => ({
+        id: `pin:${index}`,
+        kind: "pin",
+        timestamp,
+        text: `note ${index}`,
+        truncated: false,
+      }),
+    );
+    const refused = appendManualCompanionEntry(full, {
+      id: "pin:one-too-many",
+      kind: "pin",
+      timestamp,
+      text: "overflow",
+      truncated: false,
+    });
+    expect(refused.error).toBeTruthy();
+    expect(refused.entries).toBe(full);
   });
 
   it("keeps a question open until the provider resolves its permission request", () => {
