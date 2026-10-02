@@ -16,6 +16,8 @@ _"restore X dropped during upstream merge"_, and `yooztech` invented a
 | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md)                             | Research into upstream, its 1,546 forks, 490 open PRs and 467 open issues — features built, pain points, and the PR grab basket setup. Point-in-time; upstream merges ~30 community PRs a week.                                                      |
 | [upstream-prs-2026-09-07.md](upstream-prs-2026-09-07.md)               | Evaluation of the 430 upstream PRs opened in the last month — corrections to the basket, the grab-now pass with a ready-to-paste manifest block, grab-next clusters, watch triggers, and sync hazards. Point-in-time. |
+| [infi-pc-intake-2026-09-30.md](infi-pc-intake-2026-09-30.md) | Feature-level intake of `infi-pc/paseo` for the Desvio basket: current-base compatibility, first ports, dependencies, and the reason not to carry its whole branch. |
+| [feature-ledger.md](feature-ledger.md) | The work owned by `custom`: where each feature lives, its shared wiring, and the tests to revisit after an upstream sync. External PR carries remain in the Desvio manifest. |
 | [upstream-candidates.md](upstream-candidates.md)                                               | Changes we could write that fit upstream's code and philosophy. Bug-shaped, layer-correct, one concern each. Offered upstream, carried either way.                                                                                                   |
 | [local-fork-candidates.md](local-fork-candidates.md)                                           | Changes we would build and keep. Upstream has declined them or would build them differently. Permanent carries, with their maintenance cost stated.                                                                                                  |
 | [side-conversations-2026-08-23.md](side-conversations-2026-08-23.md)                           | Research into the `/btw` side-question mechanism — what it is in Claude Code, the Codex and OpenCode equivalents, why upstream #2056 was closed unevaluated, and what building it here would cost. Backs the Side conversations candidate.           |
@@ -44,21 +46,23 @@ should do, it is ours, because upstream has said that decision is the maintainer
 under a non-interactive `bash -c` with no shell init — was closed NOT_PLANNED as a
 feature request and is open as a defect. Framing decides the outcome.
 
-## Branches
+## Build sources
 
-Two-branch discipline, borrowed from `UnbrokenHunter/paseo`'s `docs/fork-workflow.md`:
+The build has three inputs and one disposable output. Do not infer ownership
+from `mine`: Desvio recreates that branch and merge commits obscure provenance.
 
-| Branch   |                                                                                                                                                                                                                    |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `main`   | **Mirrors upstream 1:1. Never commit here.** Tracks `origin/main`, which follows `getpaseo/paseo`. Sync with `git fetch upstream && git switch main && git merge --ff-only upstream/main && git push origin main`. |
-| `custom` | Everything of ours, including this directory. Rebase or merge `main` into it when upstream moves.                                                                                                                  |
-| `mine`   | The build branch: `custom` plus the desvio grab basket, assembled by `desvio build` and pushed. **Every push publishes** — `fork-npm-publish.yml` cuts `@camerontaylor/paseo-*@<base>-fork.N` from it. Nothing is authored here; fix on `custom` or in the manifest and rebuild.                                    |
-| `chore/pnpm-migration` | **Reference only — pushed, never carried.** Complete, locally verified npm→pnpm migration (workspace settings, CI, patches, docs); the nix port was deliberately left broken — headers in `nix/*.nix` describe the rewrite. Shelved 2026-09-07: upstream stays npm, so the per-sync lockfile tax outweighs pnpm's convenience. Revive only if upstream migrates. |
+| Source | Owns | Change here when... |
+| --- | --- | --- |
+| `upstream/main` and the release tag pinned by `DESVIO_BASE` | Upstream code. The tag is the Desvio build base; `upstream/main` is the reference for new upstream PRs. | Moving to a newer release: update the pin, sync `custom`, then rebuild the basket. See [upstream-sync.md](upstream-sync.md). |
+| `custom` | Our permanent code, fork tooling, `fork/` docs, and changes we have deliberately absorbed from other branches. [The feature ledger](feature-ledger.md) records the owned behavior. | Fixing or extending something we maintain ourselves. |
+| `~/.paseo-fork/manifest.txt` | The ordered external PR branches and any separate local carry branches. The author remains the source for an external branch even when we repeatedly resolve it against newer upstream. | Adding, removing, or updating a carry. The manifest owns the active list and its reasons. |
+| `mine` | Disposable result of the pinned base plus every active manifest entry, including `custom`. A push triggers [`fork-npm-publish.yml`](../.github/workflows/fork-npm-publish.yml). | Never author here; change the owning source and rebuild. |
 
-Why it matters: a mirror branch stays a fast-forward only while it has no local
-commits. Put `fork/` on `main` and every sync becomes a merge — and the first
-`git reset --hard upstream/main` deletes it. Fork `lzm04521` has the commit
-`"docs: restore fork README on main (lost when main was reset to v0.4.0 base)"`.
+There is no local `main` branch in this checkout. `origin/main` is an old
+upstream snapshot (2026-08-22), not a live mirror. Use `upstream/main` when
+branching for an upstream PR, and use the pinned release tag when comparing the
+current Desvio build base. `chore/pnpm-migration` is a shelved reference branch;
+it is not in the basket.
 
 `custom` is named that, not `fork`, because git refs are paths: `refs/heads/fork`
 cannot coexist with `refs/heads/fork/mobile-fork-icon`.
@@ -91,14 +95,15 @@ invisible day to day but fully visible to anything reading
 until it was excluded. Check for other such directories before they trip
 something else.
 
-**Opening an upstream PR:** branch from `upstream/main`, not from local `main`,
-or the diff will include this directory.
+**Opening an upstream PR:** branch from `upstream/main`. Branching from
+`custom` would include our fork changes in the PR diff.
 
-## The PR grab basket
+## The Desvio grab basket
 
-A personal build carrying upstream PRs that have not merged yet, assembled by
-[desvio](https://github.com/cleiter/desvio) — written by `cleiter`, Paseo's top
-non-core contributor, and shipping a working Paseo example config.
+[Desvio](https://github.com/cleiter/desvio) assembles our pinned upstream base,
+external PR branches, and `custom`. Some PR branches stay in the basket for
+multiple upstream releases; those changes are part of `mine` without becoming
+commits owned by `custom`.
 
 It lives **outside this checkout**, at `~/.paseo-fork`. It holds the build tree,
 state and manifest, none of which belongs in a repo we also send PRs from.
@@ -109,9 +114,16 @@ $EDITOR manifest.txt     # one branch or PR ref per line
 desvio build             # ~1 min warm; several minutes if the lockfile moved
 ```
 
-Full setup, the intake rule, the current carries, and the four Linux portability
-fixes are in [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md)
-§4. The short version:
+The live manifest is the only list of active carries. Its order is part of the
+build: append new entries, and do not reorder existing ones merely to group
+them by owner. Each active line says why it is carried; disabled lines say what
+must change before they can return. Keep the current base pin in `desvio.conf`.
+`git log --first-parent --oneline <pinned-tag>..mine` shows the merge sequence
+for a built result; the manifest still owns which entries should be in it.
+The setup history and Linux portability fixes are in
+[upstream-research-2026-08-22.md](upstream-research-2026-08-22.md) §4.
+
+Use this intake rule:
 
 - **Carry** fixes, and features adding a capability upstream has no answer for.
 - **Refuse** a second answer to a question upstream already answered differently
@@ -124,9 +136,10 @@ fixes are in [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md)
   markers.
 
 **`desvio build` green means typecheck and lint passed. Nothing was executed.**
-The build uses the base pinned in `~/.paseo-fork/desvio.conf` plus unmerged PRs.
-Check the base before building, and run your own QA before using the result as
-a daily driver.
+The build uses the pinned base plus every active manifest branch, including
+`custom`. Run targeted tests and app/daemon QA before using the result as a
+daily driver. [upstream-sync.md](upstream-sync.md) records failures that a clean
+merge missed.
 
 `desvio run start` swaps the daemon on the real `~/.paseo` and kills every
 running agent, including any agent session running on this machine. It prompts

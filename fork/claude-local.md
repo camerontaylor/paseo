@@ -7,8 +7,9 @@ file never conflicts on rebase and is never committed.
 
 `origin` is `camerontaylor/paseo`. `upstream` is `getpaseo/paseo`.
 
-- **Branch from `upstream/main` when opening an upstream PR**, not from local
-  `main` — local `main` carries the untracked-upstream `fork/` directory.
+- **Branch from `upstream/main` when opening an upstream PR.** This checkout has
+  no local `main`; `origin/main` is an old snapshot. Branching from `custom`
+  would include fork changes in the PR.
 - PR refs (`refs/pull/N/head`) only resolve against `upstream`. A GitHub fork
   does not mirror its parent's PR refs.
 
