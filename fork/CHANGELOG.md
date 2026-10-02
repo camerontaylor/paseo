@@ -4,6 +4,13 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.11.0-beta.3 base decision — 2026-10-02
+
+Advance `custom` and the Desvio base to upstream `v0.11.0-beta.3`. The two
+intervening betas fix packaged plugin startup and usage source discovery and
+authentication. Rebuild the ordered carries, including every infi-pc intake
+branch, before deploying the fleet.
+
 ## 0.11.0-beta.1 base decision — 2026-10-01
 
 Advance `custom` and the Desvio base to upstream `v0.11.0-beta.1`. Preserve
