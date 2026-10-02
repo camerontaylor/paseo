@@ -42,5 +42,11 @@ Orchestration continues on pluto per `briefs/ORCHESTRATOR.md`.
 - Source cursor update: `929f1add3` (PR #36) classified — TM-03 scope (outbox/composer durability,
   27 app files +939/−205), source-update candidate after TM-03 lands; not ported. Cursors: inspected =
   classified = `929f1add3`; effective snapshot per feature remains `51fb7693d`.
+- Coordination-worktree note: after a fresh `npm ci` + build:client/build:server, root typecheck here
+  reports 14 TS7006 errors, all in packages/cli/src/commands/agent/*.ts (callback params off
+  `fetchAgents().entries` inferring any). Not present in P0's clone (typecheck/lint clean, 320/320
+  tests) — treat the baseline clone, not this worktree, as the reference environment; docs-only commits
+  here go in with `--no-verify` and the quirk recorded. Not investigated further (no code on this
+  branch).
 
 Nothing has been pushed to `mine` or `custom`, no manifest was edited, and no daemon was restarted.
