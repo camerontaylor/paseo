@@ -281,6 +281,7 @@ export const ar: TranslationResources = {
       read: "قراءة",
       replyInChat: "الرد في المحادثة",
       viewStream: "عرض الموجز",
+      mutationFailed: "تعذّر حفظ التغيير",
       queueTab: "قائمة الانتظار",
       pinnedTab: "المثبّتة",
       filterAll: "الكل",

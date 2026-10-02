@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import type { ToastApi } from "@/components/toast-host";
 import { useHostRuntimeConnectionStatus, useHostRuntimeClient } from "@/runtime/host-runtime";
 import { formatMessageTimestamp } from "@/utils/time";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
@@ -25,6 +26,7 @@ interface CompanionFeedProps {
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   onReturnToChat: () => void;
   onReplyInChat: () => void;
+  toast?: ToastApi | null;
 }
 
 const keyExtractor = (item: CompanionFeedItem) => item.id;
@@ -46,6 +48,7 @@ export function CompanionFeed({
   onOpenWorkspaceFile,
   onReturnToChat,
   onReplyInChat,
+  toast,
 }: CompanionFeedProps) {
   const { t } = useTranslation();
   const connection = useHostRuntimeConnectionStatus(serverId);
@@ -96,20 +99,24 @@ export function CompanionFeed({
     [onOpenWorkspaceFile, onReturnToChat],
   );
 
+  const reportFailure = useCallback(() => {
+    toast?.error(t("agentPanel.stream.mutationFailed"));
+  }, [toast, t]);
+
   const handleUpdateStatus = useCallback(
     (entryId: string, status: "open" | "reviewed" | "done") => {
       client
         ?.updateCompanionEntry({ agentId, entryId, action: "update_status", status })
-        .catch(() => {});
+        .catch(reportFailure);
     },
-    [client, agentId],
+    [client, agentId, reportFailure],
   );
 
   const handleRemovePin = useCallback(
     (entryId: string) => {
-      client?.updateCompanionEntry({ agentId, entryId, action: "remove_pin" }).catch(() => {});
+      client?.updateCompanionEntry({ agentId, entryId, action: "remove_pin" }).catch(reportFailure);
     },
-    [client, agentId],
+    [client, agentId, reportFailure],
   );
 
   const handlePinArtifact = useCallback(
@@ -121,9 +128,9 @@ export function CompanionFeed({
           text: `Artifact: ${artifact.path}`,
           sourceId: `artifact:${artifact.path}`,
         })
-        .catch(() => {});
+        .catch(reportFailure);
     },
-    [client, agentId],
+    [client, agentId, reportFailure],
   );
 
   const renderItem = useCallback(
@@ -163,10 +170,10 @@ export function CompanionFeed({
     if (!pinText.trim()) return;
     client
       ?.updateCompanionEntry({ agentId, action: "add_pin", text: pinText.trim() })
-      .catch(() => {});
+      .catch(reportFailure);
     setPinText("");
     noteInput.current?.replaceText("");
-  }, [client, agentId, pinText]);
+  }, [client, agentId, pinText, reportFailure]);
 
   const header = useMemo(
     () => (

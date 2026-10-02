@@ -279,6 +279,7 @@ export const en = {
       read: "Read",
       replyInChat: "Reply in chat",
       viewStream: "View stream",
+      mutationFailed: "Couldn't save that change",
       queueTab: "Queue",
       pinnedTab: "Pinned",
       filterAll: "All",

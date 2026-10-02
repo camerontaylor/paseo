@@ -283,6 +283,7 @@ export const ru: TranslationResources = {
       read: "Читать",
       replyInChat: "Ответить в чате",
       viewStream: "Открыть ленту",
+      mutationFailed: "Не удалось сохранить изменение",
       queueTab: "Очередь",
       pinnedTab: "Закреплённые",
       filterAll: "Все",

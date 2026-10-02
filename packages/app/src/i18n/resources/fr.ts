@@ -288,6 +288,7 @@ export const fr: TranslationResources = {
       read: "Lire",
       replyInChat: "Répondre dans le chat",
       viewStream: "Voir le fil",
+      mutationFailed: "Impossible d'enregistrer cette modification",
       queueTab: "File",
       pinnedTab: "Épinglés",
       filterAll: "Tout",

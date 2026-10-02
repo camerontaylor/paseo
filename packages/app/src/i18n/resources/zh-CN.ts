@@ -280,6 +280,7 @@ export const zhCN: TranslationResources = {
       read: "阅读",
       replyInChat: "在聊天中回复",
       viewStream: "查看动态",
+      mutationFailed: "无法保存该更改",
       queueTab: "队列",
       pinnedTab: "已固定",
       filterAll: "全部",

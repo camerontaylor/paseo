@@ -285,6 +285,7 @@ export const ptBR: TranslationResources = {
       read: "Ler",
       replyInChat: "Responder na conversa",
       viewStream: "Ver fluxo",
+      mutationFailed: "Não foi possível salvar a alteração",
       queueTab: "Fila",
       pinnedTab: "Fixados",
       filterAll: "Tudo",

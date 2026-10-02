@@ -283,6 +283,7 @@ export const ko: TranslationResources = {
       read: "읽기",
       replyInChat: "대화에서 답장",
       viewStream: "스트림 보기",
+      mutationFailed: "변경을 저장하지 못했습니다",
       queueTab: "큐",
       pinnedTab: "고정됨",
       filterAll: "전체",

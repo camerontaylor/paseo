@@ -693,9 +693,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const handlePin = useCallback(
       (text: string) => {
         if (!agentId || !client) return;
-        client.updateCompanionEntry({ agentId, action: "add_pin", text }).catch(() => {});
+        client
+          .updateCompanionEntry({ agentId, action: "add_pin", text })
+          .catch(() => toast?.error(t("agentPanel.stream.mutationFailed")));
       },
-      [agentId, client],
+      [agentId, client, t, toast],
     );
 
     const handleQAndA = useCallback(
@@ -708,9 +710,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             text,
             sourceId: messageId ? `msg:${messageId}` : undefined,
           })
-          .catch(() => {});
+          .catch(() => toast?.error(t("agentPanel.stream.mutationFailed")));
       },
-      [agentId, client],
+      [agentId, client, t, toast],
     );
 
     const renderUserMessageItem = useCallback(

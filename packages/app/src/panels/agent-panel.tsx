@@ -1357,6 +1357,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           onOpenWorkspaceFile={onOpenWorkspaceFile}
           onReturnToChat={handleReturnToChat}
           onReplyInChat={handleReplyInChat}
+          toast={toastApi}
         />
       ) : null}
 

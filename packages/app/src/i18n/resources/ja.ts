@@ -283,6 +283,7 @@ export const ja: TranslationResources = {
       read: "読む",
       replyInChat: "チャットで返信",
       viewStream: "ストリームを表示",
+      mutationFailed: "変更を保存できませんでした",
       queueTab: "キュー",
       pinnedTab: "ピン留め",
       filterAll: "すべて",
