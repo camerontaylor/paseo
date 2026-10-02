@@ -1189,8 +1189,10 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     handleReturnToChat();
     streamViewRef.current?.scrollToBottom("jump-to-bottom");
   }, [handleReturnToChat, streamViewRef]);
-  const companionStreamSupported = useHostFeature(serverId, "companionStream");
-  const artifactFeedSupported = useHostFeature(serverId, "artifactFeed");
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  // One gate covers the entry feed and the artifact list: both ship through this
+  // port's snapshot fields and its renamed companion RPC.
+  const companionStreamSupported = useHostFeature(serverId, "companionStreamPortV1");
   const isCompact = useIsCompactFormFactor();
   const subagentRows = useSubagentsForParent({ serverId, parentAgentId: agentId });
   const tasks = useSessionStore((state): TodoEntry[] | undefined =>
@@ -1351,7 +1353,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           entries={agentState.companionEntries ?? EMPTY_COMPANION_ENTRIES}
           artifacts={agentState.artifacts ?? []}
           isSupported={companionStreamSupported}
-          artifactsSupported={artifactFeedSupported}
+          artifactsSupported={companionStreamSupported}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
           onReturnToChat={handleReturnToChat}
           onReplyInChat={handleReplyInChat}

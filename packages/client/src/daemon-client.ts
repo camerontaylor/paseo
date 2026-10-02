@@ -3015,19 +3015,22 @@ export class DaemonClient {
     answerText?: string;
     sourceId?: string;
   }): Promise<void> {
-    const requestId = this.createRequestId();
-    const message = SessionInboundMessageSchema.parse({
-      type: "update_companion_entry_request",
-      agentId: input.agentId,
-      entryId: input.entryId,
-      action: input.action,
-      status: input.status,
-      text: input.text,
-      answerText: input.answerText,
-      sourceId: input.sourceId,
-      requestId,
-    });
-    this.sendSessionMessage(message);
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.companion.update_entry.response">({
+        message: {
+          type: "agent.companion.update_entry.request",
+          agentId: input.agentId,
+          entryId: input.entryId,
+          action: input.action,
+          status: input.status,
+          text: input.text,
+          answerText: input.answerText,
+          sourceId: input.sourceId,
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "updateCompanionEntry rejected");
+    }
   }
 
   /**

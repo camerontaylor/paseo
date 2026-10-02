@@ -951,8 +951,11 @@ export const UpdateAgentRequestMessageSchema = z.object({
   requestId: z.string(),
 });
 
-export const UpdateCompanionEntryRequestMessageSchema = z.object({
-  type: z.literal("update_companion_entry_request"),
+// COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+// Ported from the source fork's flat `update_companion_entry_request`; renamed to the
+// dotted namespace so the two contracts stay distinct on the wire.
+export const AgentCompanionUpdateEntryRequestMessageSchema = z.object({
+  type: z.literal("agent.companion.update_entry.request"),
   agentId: z.string(),
   entryId: z.string().optional(),
   action: z.enum(["update_status", "add_pin", "remove_pin", "add_q_and_a"]),
@@ -961,6 +964,16 @@ export const UpdateCompanionEntryRequestMessageSchema = z.object({
   answerText: z.string().optional(),
   sourceId: z.string().optional(),
   requestId: z.string(),
+});
+
+export const AgentCompanionUpdateEntryResponseMessageSchema = z.object({
+  type: z.literal("agent.companion.update_entry.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+  }),
 });
 
 export const AgentArtifactsScanRequestMessageSchema = z.object({
@@ -3228,7 +3241,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ArchiveAgentRequestMessageSchema,
   CloseItemsRequestMessageSchema,
   UpdateAgentRequestMessageSchema,
-  UpdateCompanionEntryRequestMessageSchema,
+  AgentCompanionUpdateEntryRequestMessageSchema,
   AgentArtifactsScanRequestMessageSchema,
   ProjectRenameRequestSchema,
   ProjectIconSetRequestSchema,
@@ -3679,10 +3692,11 @@ export const ServerInfoStatusPayloadSchema = z
         workspaceRecovery: z.boolean().optional(),
         // COMPAT(workspaceFileEditing): added in v0.2.0, remove after 2027-01-18 once daemon floor >= v0.2.0.
         workspaceFileEditing: z.boolean().optional(),
-        // COMPAT(artifactFeed): added in v0.2.0, remove after 2027-01-22 once daemon floor >= v0.2.0.
-        artifactFeed: z.boolean().optional(),
-        // COMPAT(companionStream): fork feature, added in fork v0.10.0-beta.1, drop the gate after 2027-03-28.
-        companionStream: z.boolean().optional(),
+        // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+        // Deliberately not the source fork's `companionStream`/`artifactFeed` flags: a client
+        // that saw those names would expect the source's flat companion RPC, which this
+        // daemon does not accept.
+        companionStreamPortV1: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: z.boolean().optional(),
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
@@ -6834,6 +6848,7 @@ export const AgentSkillsImportLegacySelectionResponseSchema = z.object({
 });
 
 export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
+  AgentCompanionUpdateEntryResponseMessageSchema,
   AgentArtifactsScanResponseMessageSchema,
   BrowserHostRegisterResponseSchema,
   SubscriptionReleaseResponseSchema,
@@ -7307,8 +7322,11 @@ export type LoopStopRequest = z.infer<typeof LoopStopRequestSchema>;
 export type ResumeAgentRequestMessage = z.infer<typeof ResumeAgentRequestMessageSchema>;
 export type DeleteAgentRequestMessage = z.infer<typeof DeleteAgentRequestMessageSchema>;
 export type UpdateAgentRequestMessage = z.infer<typeof UpdateAgentRequestMessageSchema>;
-export type UpdateCompanionEntryRequestMessage = z.infer<
-  typeof UpdateCompanionEntryRequestMessageSchema
+export type AgentCompanionUpdateEntryRequestMessage = z.infer<
+  typeof AgentCompanionUpdateEntryRequestMessageSchema
+>;
+export type AgentCompanionUpdateEntryResponseMessage = z.infer<
+  typeof AgentCompanionUpdateEntryResponseMessageSchema
 >;
 export type AgentArtifactsScanRequestMessage = z.infer<
   typeof AgentArtifactsScanRequestMessageSchema

@@ -46,6 +46,11 @@ export const CLIENT_CAPS = {
   // COMPAT(workspaceSetupBlocked): added in v0.8.0, remove after 2027-03-07 once client floor >= v0.8.0.
   workspaceSetupBlocked: "workspace_setup_blocked",
   browserHost: "browser_host",
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  // Clients declaring this get the optional `artifacts` / `companionEntries`
+  // agent-snapshot fields. Paired with the `agent.companion.update_entry.*`
+  // operations; not the source fork's `companionStream` capability name.
+  companionStreamPortV1: "companion_stream_port_v1",
 } as const;
 
 export type ClientCapability = (typeof CLIENT_CAPS)[keyof typeof CLIENT_CAPS];

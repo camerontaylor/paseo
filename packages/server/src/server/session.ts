@@ -2,6 +2,7 @@ import { searchTimeline } from "./agent/chat-search/index.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type {
+  AgentCompanionUpdateEntryRequestMessage,
   SessionEventSubscription,
   UsageReportEntry,
   ProviderUsage,
@@ -36,7 +37,6 @@ import {
   type ProjectPlacementPayload,
   type WorkspaceSetupSnapshot,
   type WorkspaceDescriptorPayload,
-  type UpdateCompanionEntryRequestMessage,
 } from "./messages.js";
 import type {
   TerminalManager,
@@ -3060,8 +3060,8 @@ export class Session {
 
   private async dispatchMiscMessage(msg: SessionInboundMessage): Promise<void> {
     switch (msg.type) {
-      case "update_companion_entry_request":
-        await this.handleUpdateCompanionEntryRequest(msg);
+      case "agent.companion.update_entry.request":
+        await this.handleCompanionUpdateEntryRequest(msg);
         return;
       case "agent.artifacts.scan.request":
         await this.handleAgentArtifactsScanRequest(msg.agentId, msg.requestId, msg.limit);
@@ -3420,8 +3420,9 @@ export class Session {
     }
   }
 
-  private async handleUpdateCompanionEntryRequest(
-    msg: UpdateCompanionEntryRequestMessage,
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  private async handleCompanionUpdateEntryRequest(
+    msg: AgentCompanionUpdateEntryRequestMessage,
   ): Promise<void> {
     this.sessionLogger.info(
       {
@@ -3429,9 +3430,11 @@ export class Session {
         requestId: msg.requestId,
         action: msg.action,
       },
-      "session: update_companion_entry_request",
+      "session: agent.companion.update_entry.request",
     );
 
+    let accepted = true;
+    let error: string | null = null;
     try {
       const result = await updateCompanionEntryCommand(
         { agentManager: this.agentManager },
@@ -3445,13 +3448,25 @@ export class Session {
           sourceId: msg.sourceId,
         },
       );
-
       if (!result.accepted) {
-        this.sessionLogger.warn({ error: result.error }, "Failed to update companion entry");
+        accepted = false;
+        error = result.error ?? "Failed to update companion entry";
+        this.sessionLogger.warn({ error }, "Failed to update companion entry");
       }
-    } catch (error) {
-      this.sessionLogger.error({ err: error }, "session: update_companion_entry_request error");
+    } catch (err) {
+      accepted = false;
+      error = err instanceof Error ? err.message : String(err);
+      this.sessionLogger.error({ err }, "session: agent.companion.update_entry.request error");
     }
+    this.emit({
+      type: "agent.companion.update_entry.response",
+      payload: {
+        requestId: msg.requestId,
+        agentId: msg.agentId,
+        accepted,
+        error,
+      },
+    });
   }
 
   private async handleUpdateAgentRequest(

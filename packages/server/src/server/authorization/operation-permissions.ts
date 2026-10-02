@@ -191,7 +191,8 @@ const INBOUND_PERMISSION = {
   unsubscribe_terminal_request: "workspace.read",
   unsubscribe_terminals_request: "workspace.read",
   update_agent_request: "workspace.write",
-  update_companion_entry_request: "workspace.write",
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  "agent.companion.update_entry.request": "workspace.write",
   validate_branch_request: "workspace.read",
   voice_audio_chunk: "workspace.write",
   wait_for_finish_request: "workspace.read",
@@ -217,6 +218,8 @@ const INBOUND_PERMISSION = {
 } as const satisfies Record<InboundOperation, PermissionRequirement>;
 
 const OUTBOUND_PERMISSION = {
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  "agent.companion.update_entry.response": "workspace.write",
   "agent.artifacts.scan.response": "workspace.read",
   "agent.create.response": ["workspace.write", "hub.execute"],
   "agent.create.update": ["workspace.write", "hub.execute"],
