@@ -55,6 +55,32 @@ at every gate, most recently 2026-10-03 00:53 AEST: still "not found on PATH". P
 6. Human-only regardless of muse: native device evidence (TM-07 list in evidence/TM-07.md; voice
    list comes with TM-04), the neptune check of the pre-existing session.test.ts side-conversation
    failure at the custom floor, and the two TM-01 naming/ceiling decisions recorded in its report.
+
+## Finish state per branch (2026-10-03 00:53 AEST)
+
+| ID | Branch | HEAD | Review verdict | Remaining human checks |
+| --- | --- | --- | --- | --- |
+| TM-01 | `intake/tmad-stream-flow` | `2197619bc` (base 6166a7aca) | awaiting muse review | Matched source/port UI captures (desktop + compact web), native captures, locale parity incl. ko; TM-01's two informational decisions ("Queue" tab label; pin/artifact ceilings 100/200). |
+| TM-02 | `intake/tmad-message-queue` | `91392d6be` (floor cbd1210c7) | awaiting muse review | neptune owner: pre-existing `session.test.ts` side-conversation failure at the custom floor; daemon e2e needs a host with provider creds (or a fake-provider harness). |
+| TM-07 | `intake/tmad-native-find` | `5f3634ad4` (base 6166a7aca) | awaiting muse review | Native device evidence: 10-point list in evidence/TM-07.md (iOS sim + Android; reachability, historical match reveal, wrap-around, cleanup, older-host, keyboard, rotation, non-Latin locales). |
+| P0 | `tmad-port/baseline-assembly` | `2bfcd2e19` | awaiting muse review (evidence) | None. |
+| TM-01B | — | — | NOT NEEDED (TM-01 compiles/tests green on beta.3 alone) | — |
+| TM-03/TM-04 | — | — | not started, gated on TM-02 APPROVE | device/provider evidence lists come with their reports |
+
+## Proposed manifest append block (DRAFT — nothing live edited; valid only after each line passes its muse review)
+
+```text
+# Existing community, custom and infi lines retain their current order. APPEND BELOW THEM.
+intake/tmad-stream-flow       # TM-01 2197619bc; source snapshot 51fb7693d reconciled; base v0.11.0-beta.3; removal group Stream (no bridge needed).
+intake/tmad-message-queue     # TM-02 91392d6be; custom floor cbd1210c7 (recorded); removal group Queue+Voice (with TM-03/TM-04 when they land).
+intake/tmad-native-find       # TM-07 5f3634ad4; source snapshot 51fb7693d; base v0.11.0-beta.3; removal group Native Find (independent of Stream and queue).
+# TM-03 (intake/tmad-queue-ui, base TM-02) and TM-04 (intake/tmad-voice-flow, base TM-02) lines are added
+# in dependency order only after their own gates; voice device evidence is a promotion gate.
+```
+
+Nothing was pushed to `mine` or `custom`; no live manifest was edited; the intake branches are not
+pushed to origin yet (that is allowed only after a reviewed milestone); the 6767 daemon was never
+touched. This coordination branch carries all evidence and is pushed.
 - TM-02 worker finished (pluto, evidence/TM-02.md): lease complete except the provider-cred e2e
   (documented). Coordinator verified: HEAD `91392d6be`, custom floor is the only extra ancestry,
   source integration NOT an ancestor, queue/auth test logs match the report. muse re-checked at this
