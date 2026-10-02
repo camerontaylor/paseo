@@ -148,6 +148,9 @@ import {
 } from "./workspace-registry.js";
 import { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import { ScheduleService } from "./schedule/service.js";
+import { AgentQueueService } from "./agent-queue/service.js";
+import { AgentQueueStore } from "./agent-queue/store.js";
+import { MessageReceipts } from "./message-receipts/index.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
 import { createOrchestrationSkills } from "./orchestration-skills/index.js";
 import { resolveConfigFromPersisted, type CliConfigOverrides } from "./config.js";
@@ -1361,6 +1364,17 @@ export async function createPaseoDaemon(
     }
   });
   logger.info({ elapsed: elapsed() }, "Schedule service initialized");
+  // The durable agent message queue: constructed here so it loads persisted
+  // state, but activated only once the server accepts connections — loading
+  // and dispatching stay separate phases (AgentQueueService.activate).
+  const agentQueueService = new AgentQueueService({
+    store: new AgentQueueStore(path.join(config.paseoHome, "queues")),
+    agentManager,
+    agentStorage,
+    logger,
+    receipts: new MessageReceipts(path.join(config.paseoHome, "agent-requests")),
+  });
+  logger.info({ elapsed: elapsed() }, "Agent message queue initialized");
   logger.info({ elapsed: elapsed() }, "Loading persisted agent registry");
   const persistedRecords = await agentStorage.list();
   logger.info(
@@ -1731,11 +1745,13 @@ export async function createPaseoDaemon(
               pluginRuntime,
               orchestrationSkills,
               workspaceLabelService,
+              agentQueueService,
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();
             providerSnapshotManager.settlePluginProviders();
             wsServer.beginAcceptingConnections();
+            await agentQueueService.activate();
             relayRuntime = createRelayRuntime({
               config: {
                 enabled: relayEnabled,
@@ -1815,6 +1831,7 @@ export async function createPaseoDaemon(
     terminalManager.killAll();
     await speechService.stop();
     await scheduleService.stop().catch(() => undefined);
+    agentQueueService.stop();
     await relayRuntime?.stop().catch(() => undefined);
     if (wsServer) {
       await wsServer.close();
