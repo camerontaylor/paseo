@@ -16,4 +16,25 @@ local checkout on the host running the work. `~/.paseo-fork/manifest.txt` is fro
 Orchestration continues on pluto per `briefs/ORCHESTRATOR.md`.
 | TM-05, TM-06, TM-08+ | — | — | Product decisions for the user; do not start. Typed-send default is also the user's call. |
 
+## Pluto orchestration log (2026-10-02)
+
+- Scratch dir `/tmp/tmad-port/` populated from this branch (plan.md, COMMON.md, flat briefs, evidence/,
+  logs/, prompts/). Baseline clone created at `/tmp/tmad-port/baseline-clone` (own index, rerere on) on
+  `tmad-port/baseline-assembly` = 2bfcd2e19. Coordinator check: `git diff --stat 2bfcd2e19 4cc94e07e`
+  (frozen mine) is EMPTY — the baseline tree reproduces frozen mine exactly.
+- Reviewer provider `muse` re-checked on pluto: `paseo provider diagnostic muse` → "muse not found on
+  PATH", still unavailable. No substitute reviewer per the brief. All review gates are blocked until it
+  is installed; re-checking before each gate.
+- tmad-main-latest = 929f1add3 (source PR #36 "preserve queued messages until host acknowledgement",
+  queue-adjacent). Classified at ledger time; not ported.
+- Workers dispatched (provider claude-zai/glm-5.3-flash, thinking high, bypassPermissions, one per
+  branch/worktree):
+  - TM-01 finish: agent `59933eac`, workspace `wks_3919834322096f66` (checkout-branch
+    `intake/tmad-stream-flow`).
+  - TM-02 continue: agent `124d824b`, workspace `wks_b6b4404597f90c74` (checkout-branch
+    `intake/tmad-message-queue`); first reproduces the truncated typecheck failure with full output.
+  - P0 remainder: agent `c1c7b820`, workspace `wks_4c44bb8d08811ddb` (local workspace at
+    `/tmp/tmad-port/baseline-clone`); brief-P0 steps 2, 4, 6 + report.
+- TM-07 review: BLOCKED on muse (branch complete per `evidence/TM-07.md`, awaiting muse review).
+
 Nothing has been pushed to `mine` or `custom`, no manifest was edited, and no daemon was restarted.
