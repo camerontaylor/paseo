@@ -689,6 +689,7 @@ export const ar: TranslationResources = {
       actions: {
         newTab: "علامة تبويب جديدة",
         newAgent: "وكيل جديد",
+        recentlyClosed: "المغلقة مؤخرًا",
         newTerminal: "محطة جديدة",
         preparingTerminal: "إعداد علامة التبويب المحطة الطرفية",
         preparingTerminalTooltip: "جارٍ تحضير المحطة...",
@@ -704,6 +705,12 @@ export const ar: TranslationResources = {
         pullRequest: "طلب السحب",
         terminalProfilesMenu: "Terminal profiles",
         editTerminalProfiles: "Edit profiles",
+      },
+      recentAgents: {
+        title: "المغلقة مؤخرًا",
+        loading: "جارٍ التحميل…",
+        empty: "لا توجد وكلاء مغلقة في مساحة العمل هذه",
+        showAll: "عرض الكل في السجل",
       },
       explorerSidebar: {
         open: "افتح اللوحة الجانبية",

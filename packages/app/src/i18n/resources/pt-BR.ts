@@ -695,6 +695,7 @@ export const ptBR: TranslationResources = {
       actions: {
         newTab: "Nova aba",
         newAgent: "Novo agente",
+        recentlyClosed: "Fechados recentemente",
         newTerminal: "Novo terminal",
         preparingTerminal: "Preparando aba de terminal",
         preparingTerminalTooltip: "Preparando terminal...",
@@ -710,6 +711,12 @@ export const ptBR: TranslationResources = {
         pullRequest: "Pull request",
         terminalProfilesMenu: "Perfis de terminal",
         editTerminalProfiles: "Editar perfis",
+      },
+      recentAgents: {
+        title: "Fechados recentemente",
+        loading: "Carregando…",
+        empty: "Não há agentes fechados neste espaço de trabalho",
+        showAll: "Mostrar tudo no Histórico",
       },
       explorerSidebar: {
         open: "Abrir painel lateral",
