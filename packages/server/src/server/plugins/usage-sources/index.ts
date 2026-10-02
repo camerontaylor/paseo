@@ -24,6 +24,7 @@ interface KnownReport {
 
 /** Owns account identity, ordered logins for each account, and the five-minute fetch cache. */
 export class UsageSourceRegistry {
+  private generation = 0;
   private readonly sources = new Map<string, UsageSource>();
   private readonly known = new Map<string, KnownReport>();
   private readonly cache = new Map<string, { at: number; entry: UsageReportEntry }>();
@@ -42,43 +43,69 @@ export class UsageSourceRegistry {
 
   unregister(id: string): void {
     this.sources.delete(id);
-    for (const key of this.known.keys()) if (key.startsWith(`${id}:`)) this.known.delete(key);
-    for (const key of this.cache.keys()) if (key.startsWith(`${id}:`)) this.cache.delete(key);
+    this.invalidateReports((key) => key.startsWith(`${id}:`));
+  }
+
+  invalidateReports(predicate: (id: string) => boolean): void {
+    this.generation++;
+    for (const map of [this.known, this.cache, this.pending]) {
+      for (const id of map.keys()) if (predicate(id)) map.delete(id);
+    }
   }
 
   async listReports(
     options: { forceRefresh?: boolean; reportIds?: string[] } = {},
   ): Promise<UsageReportEntry[]> {
-    const ids = options.reportIds ?? (await this.discoverReportIds());
-    return Promise.all(
+    const generation = this.generation;
+    const discovered =
+      !options.reportIds ||
+      options.reportIds.some((id) => !this.known.has(id) && !this.cache.has(id))
+        ? await this.discoverReportIds()
+        : undefined;
+    if (generation !== this.generation) return this.listReports(options);
+    const ids = options.reportIds ?? discovered!;
+    const reports = await Promise.all(
       [...new Set(ids)].flatMap((id) => {
         const known = this.known.get(id);
         return known ? [this.fetchId(id, known, options.forceRefresh)] : [];
       }),
     );
+    return generation === this.generation ? reports : this.listReports(options);
   }
 
   private async discoverReportIds(): Promise<string[]> {
+    const generation = this.generation;
     const discovered = await Promise.all(
       [...this.sources.values()].map(async (source) => {
         try {
           const accounts = z
             .array(
-              z.object({
-                key: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/),
-                label: z.string().optional(),
-                input: z.json(),
-              }),
+              z.union([
+                z.object({
+                  key: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/),
+                  label: z.string().optional(),
+                  input: z.json(),
+                }),
+                z
+                  .object({
+                    providerId: z.string().regex(/^[A-Za-z0-9._-]{1,119}$/),
+                    label: z.string(),
+                  })
+                  .catchall(z.json()),
+              ]),
             )
             .parse(await source.discover());
+          if (generation !== this.generation) return [];
           const knownReports = new Map<string, KnownReport>();
           const ids: string[] = [];
           for (const account of accounts) {
-            const id = `${source.id}:${account.key}`;
+            const key = "providerId" in account ? `provider.${account.providerId}` : account.key;
+            const input = "providerId" in account ? account : account.input;
+            const id = `${source.id}:${key}`;
             ids.push(id);
             const known = knownReports.get(id);
-            if (known) known.inputs.push(account.input);
-            else knownReports.set(id, { source, inputs: [account.input], label: account.label });
+            if (known) known.inputs.push(input);
+            else knownReports.set(id, { source, inputs: [input], label: account.label });
           }
           for (const key of this.known.keys()) {
             if (key.startsWith(`${source.id}:`)) this.known.delete(key);
@@ -86,6 +113,7 @@ export class UsageSourceRegistry {
           for (const [id, known] of knownReports) this.known.set(id, known);
           return ids;
         } catch (error) {
+          if (generation !== this.generation) return [];
           for (const key of this.known.keys()) {
             if (key.startsWith(`${source.id}:`)) this.known.delete(key);
           }
@@ -94,7 +122,16 @@ export class UsageSourceRegistry {
         }
       }),
     );
-    return discovered.flat();
+    const ids = discovered.flat();
+    if (generation !== this.generation) return [];
+    const current = new Set(ids);
+    for (const id of this.known.keys())
+      if (!current.has(id)) {
+        this.known.delete(id);
+        this.cache.delete(id);
+        this.pending.delete(id);
+      }
+    return ids;
   }
 
   // COMPAT(providerUsageList): added in v0.1.98, remove after 2027-03-26.
@@ -107,18 +144,25 @@ export class UsageSourceRegistry {
             reports[0]!.fetchedAt,
           )
         : new Date(this.now()).toISOString(),
-      providers: reports.map((entry) => ({
-        providerId: entry.sourceId,
-        displayName: entry.account.label
-          ? `${entry.sourceLabel} (${entry.account.label})`
-          : entry.sourceLabel,
-        status: entry.report.status,
-        planLabel: entry.report.status === "available" ? (entry.report.planLabel ?? null) : null,
-        windows: entry.report.status === "available" ? entry.report.windows : [],
-        balances: entry.report.status === "available" ? (entry.report.balances ?? []) : [],
-        details: entry.report.status === "available" ? (entry.report.details ?? []) : [],
-        error: legacyError(entry.report, this.now()),
-      })),
+      providers: reports.map((entry) => {
+        const prefix = `${entry.sourceId}:provider.`;
+        const custom = entry.id.startsWith(prefix);
+        let displayName = entry.sourceLabel;
+        if (entry.account.label) displayName = `${entry.sourceLabel} (${entry.account.label})`;
+        if (custom) displayName = entry.account.label ?? entry.sourceLabel;
+        const provider: ProviderUsage = {
+          providerId: custom ? entry.id.slice(prefix.length) : entry.sourceId,
+          displayName,
+          status: entry.report.status,
+          planLabel: entry.report.status === "available" ? (entry.report.planLabel ?? null) : null,
+          windows: entry.report.status === "available" ? entry.report.windows : [],
+          balances: entry.report.status === "available" ? (entry.report.balances ?? []) : [],
+          details: entry.report.status === "available" ? (entry.report.details ?? []) : [],
+          error: legacyError(entry.report, this.now()),
+        };
+        if (custom) provider.baseProviderId = entry.sourceId;
+        return provider;
+      }),
     };
   }
 
@@ -128,6 +172,7 @@ export class UsageSourceRegistry {
       return Promise.resolve(cached.entry);
     const pending = this.pending.get(id);
     if (pending) return pending;
+    const generation = this.generation;
     const request = (async () => {
       const entry: UsageReportEntry = {
         id,
@@ -138,7 +183,8 @@ export class UsageSourceRegistry {
         fetchedAt: new Date(this.now()).toISOString(),
         report: await this.fetchWithFallback(known),
       };
-      this.writeCache(id, entry);
+      if (generation === this.generation && this.known.get(id) === known)
+        this.writeCache(id, entry);
       return entry;
     })();
     this.pending.set(id, request);
