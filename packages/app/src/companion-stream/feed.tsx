@@ -218,7 +218,9 @@ export function CompanionFeed({
               onPress={handleToggleOnlyOpen}
               testID="companion-stream-pending"
             >
-              {onlyOpen ? "Show All" : "Show Open Only"}
+              {onlyOpen
+                ? t("agentPanel.stream.showAllAction")
+                : t("agentPanel.stream.showOpenOnlyAction")}
             </Button>
           </View>
         )}
@@ -245,7 +247,9 @@ export function CompanionFeed({
     () => (
       <View style={styles.empty} testID="companion-stream-empty">
         <Text style={styles.title}>
-          {viewTab === "pinned" ? "No pinned items" : "No items found"}
+          {viewTab === "pinned"
+            ? t("agentPanel.stream.noPinnedItems")
+            : t("agentPanel.stream.noItemsFound")}
         </Text>
         <Button variant="outline" style={styles.touchTarget} onPress={onReturnToChat}>
           {t("agentPanel.stream.backToChat")}
@@ -346,7 +350,7 @@ function EntryCard({
     title = t("agentPanel.stream.question");
     status = entry.status;
   } else if (entry.kind === "feature_request") {
-    title = "Feature Request";
+    title = t("agentPanel.stream.featureRequest");
     status = entry.status;
   } else if (entry.kind === "permission") {
     const titles = {
@@ -363,9 +367,9 @@ function EntryCard({
         : `agentPanel.stream.${entry.status}`,
     );
   } else if (entry.kind === "pin") {
-    title = "Pinned Note";
+    title = t("agentPanel.stream.streamPin");
   } else if (entry.kind === "q_and_a") {
-    title = "Q&A";
+    title = t("agentPanel.stream.qAndA");
   } else {
     title = t(`agentPanel.stream.${entry.status}`);
   }
@@ -446,13 +450,13 @@ function EntryCard({
         {(entry.kind === "question" || entry.kind === "feature_request") && (
           <View style={styles.statusActionsRow}>
             <Button variant="outline" onPress={handleSetOpen}>
-              Open
+              {t("agentPanel.stream.statusOpen")}
             </Button>
             <Button variant="outline" onPress={handleSetReviewed}>
-              Reviewed
+              {t("agentPanel.stream.statusReviewed")}
             </Button>
             <Button variant="outline" onPress={handleSetDone}>
-              Done
+              {t("agentPanel.stream.statusDone")}
             </Button>
           </View>
         )}
