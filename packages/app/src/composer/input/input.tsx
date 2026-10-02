@@ -85,6 +85,7 @@ import {
 } from "./labels";
 import {
   applyDictationTranscript,
+  queueInputMessage,
   computeCanStartDictation,
   resolveComposerSurfacePresentation,
   runAlternateSendAction,
@@ -119,7 +120,7 @@ export interface ComposerKeyPressEvent {
 export interface MessageInputProps {
   value: string;
   onChangeText: (text: string) => void;
-  onSubmit: (payload: MessagePayload) => void;
+  onSubmit: (payload: MessagePayload) => void | Promise<void>;
   /** When true, the submit button is enabled even without text or images (e.g. external attachment selected). */
   hasExternalContent?: boolean;
   /** When true, the submit button stays visible and can submit even with no content. */
@@ -166,7 +167,7 @@ export interface MessageInputProps {
    *  lives only in DEFAULT_CLIENT_SETTINGS. */
   defaultSendBehavior: "interrupt" | "steer" | "queue";
   /** Callback for queue button when agent is running */
-  onQueue?: (payload: MessagePayload) => void;
+  onQueue?: (payload: MessagePayload) => void | Promise<void>;
   /** Optional handler used when submit button is in loading state. */
   onSubmitLoadingPress?: () => void;
   /** Intercept key press events before default handling. Return true to prevent default. */
@@ -409,7 +410,7 @@ interface DesktopKeyPressContext {
   input: ComposerKeyPressEvent["input"];
   submitOnEnter: boolean;
   isAgentRunning: boolean;
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => void | Promise<void>) | undefined;
   isSubmitDisabled: boolean;
   isSubmitLoading: boolean;
   disabled: boolean;
@@ -1076,7 +1077,7 @@ interface SendMessageContext {
   cwd: string;
   isAgentRunning: boolean;
   activeTurnBehavior?: MessagePayload["activeTurnBehavior"];
-  onSubmit: (payload: MessagePayload) => void;
+  onSubmit: (payload: MessagePayload) => void | Promise<void>;
   onMinimizeHeight: () => void;
   preserveHeightOnSubmit: boolean;
 }
@@ -1109,18 +1110,27 @@ interface QueueMessageContext {
   value: string;
   attachments: ComposerAttachment[];
   cwd: string;
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => void | Promise<void>) | undefined;
   replaceText: (text: string) => void;
   onMinimizeHeight: () => void;
+  getLiveText: () => string;
 }
 
 function queueMessageImpl(ctx: QueueMessageContext): void {
   if (!ctx.onQueue) return;
   const trimmed = ctx.value.trim();
   if (!trimmed && ctx.attachments.length === 0) return;
-  ctx.onQueue({ text: trimmed, attachments: ctx.attachments, cwd: ctx.cwd });
-  ctx.replaceText("");
-  ctx.onMinimizeHeight();
+  void queueInputMessage({ text: trimmed, attachments: ctx.attachments, cwd: ctx.cwd }, ctx.onQueue)
+    .then(() => {
+      if (ctx.getLiveText() === ctx.value) {
+        ctx.replaceText("");
+        ctx.onMinimizeHeight();
+      } else if (ctx.getLiveText().length === 0) {
+        ctx.onMinimizeHeight();
+      }
+      return undefined;
+    })
+    .catch(() => {});
 }
 
 function computeIsRealtimeVoiceForAgent(
@@ -1207,7 +1217,7 @@ function computeSendButtonState(input: SendButtonStateInput): SendButtonStateOut
 interface ResolvedMessageInputProps {
   value: string;
   onChangeText: (text: string) => void;
-  onSubmit: (payload: MessagePayload) => void;
+  onSubmit: (payload: MessagePayload) => void | Promise<void>;
   hasExternalContent: boolean;
   allowEmptySubmit: boolean;
   submitButtonAccessibilityLabel: string | undefined;
@@ -1237,7 +1247,7 @@ interface ResolvedMessageInputProps {
   isAgentRunning: boolean;
   supportsVoiceConcurrentInput: boolean;
   defaultSendBehavior: "interrupt" | "steer" | "queue";
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => void | Promise<void>) | undefined;
   onSubmitLoadingPress: (() => void) | undefined;
   onKeyPressCallback: ((event: ComposerKeyPressEvent) => boolean) | undefined;
   onSelectionChangeCallback: ((selection: { start: number; end: number }) => void) | undefined;
@@ -1489,6 +1499,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           onQueue,
           onSubmit,
           replaceText,
+          getLiveText: () => textInputRef.current?.getText() ?? valueRef.current,
           attachments,
           cwd,
           autoSend,
@@ -1713,6 +1724,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           onQueue,
           replaceText,
           onMinimizeHeight: minimizeInputHeight,
+          getLiveText: () => textInputRef.current?.getText() ?? valueRef.current,
         }),
       [attachments, cwd, onQueue, replaceText, minimizeInputHeight],
     );

@@ -11,7 +11,7 @@ export interface AgentInputSubmitActionInput<TAttachment> {
   forceSend?: boolean;
   isAgentRunning: boolean;
   canSubmit: boolean;
-  queueMessage: (input: { message: string; attachments: TAttachment[] }) => void;
+  queueMessage: (input: { message: string; attachments: TAttachment[] }) => void | Promise<void>;
   submitMessage: (input: { message: string; attachments: TAttachment[] }) => Promise<void>;
   clearDraft: (lifecycle: "sent" | "abandoned") => void;
   setUserInput: (text: string) => void;
@@ -43,10 +43,16 @@ export async function submitAgentInput<TAttachment>(
   }
 
   if (input.isAgentRunning && !input.forceSend) {
-    input.queueMessage({ message: trimmedMessage, attachments });
-    if (shouldClearOnSubmit) {
-      input.setUserInput("");
-      input.setAttachments([]);
+    input.setIsProcessing(true);
+    try {
+      await input.queueMessage({ message: trimmedMessage, attachments });
+    } catch (error) {
+      input.setSendError(
+        error instanceof Error ? error.message : i18n.t("composer.errors.failedToSend"),
+      );
+      return "failed";
+    } finally {
+      input.setIsProcessing(false);
     }
     return "queued";
   }

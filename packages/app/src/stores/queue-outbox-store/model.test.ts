@@ -130,23 +130,93 @@ describe("flushQueueOutbox", () => {
     expect(harness.entries.get("item-1")?.attempts).toBe(1);
   });
 
-  test("an entry that exhausts its attempts is dropped and reported", async () => {
+  test("repeated failures retain the payload and report the retry threshold once", async () => {
     const harness = createOutbox([pendingEntry({ attempts: QUEUE_OUTBOX_MAX_ATTEMPTS - 1 })]);
-    const dropped: string[] = [];
+    const alerts: string[] = [];
+    const failingClient = {
+      enqueueAgentMessage: async () => {
+        throw new Error("still broken");
+      },
+    };
 
     await flushQueueOutbox({
       serverId: "server-1",
       outbox: harness.outbox,
-      client: {
-        enqueueAgentMessage: async () => {
-          throw new Error("still broken");
-        },
-      },
+      client: failingClient,
       applySnapshot: () => {},
-      onDropEntry: (entry) => dropped.push(entry.itemId),
+      onRetryLimit: (entry) => alerts.push(entry.itemId),
     });
 
+    expect(harness.entries.get("item-1")?.text).toBe("hello");
+    expect(harness.entries.get("item-1")?.attempts).toBe(QUEUE_OUTBOX_MAX_ATTEMPTS);
+    expect(alerts).toEqual(["item-1"]);
+
+    await flushQueueOutbox({
+      serverId: "server-1",
+      outbox: harness.outbox,
+      client: failingClient,
+      applySnapshot: () => {},
+      onRetryLimit: (entry) => alerts.push(entry.itemId),
+    });
+    expect(harness.entries.get("item-1")?.attempts).toBe(QUEUE_OUTBOX_MAX_ATTEMPTS + 1);
+    expect(alerts).toEqual(["item-1"]);
+
+    await flushQueueOutbox({
+      serverId: "server-1",
+      outbox: harness.outbox,
+      client: { enqueueAgentMessage: async () => snapshotWith("item-1") },
+      applySnapshot: () => {},
+    });
     expect(harness.entries.size).toBe(0);
-    expect(dropped).toEqual(["item-1"]);
+  });
+});
+
+describe("ordered dispatch", () => {
+  test("failed A blocks B while another agent proceeds, including a fresh enqueue", async () => {
+    const harness = createOutbox([
+      pendingEntry({ itemId: "A" }),
+      pendingEntry({ itemId: "other", agentId: "agent-2" }),
+    ]);
+    const calls: string[] = [];
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const input = {
+      serverId: "server-1",
+      outbox: harness.outbox,
+      applySnapshot: () => {},
+      client: {
+        enqueueAgentMessage: async (entry: { itemId: string; agentId: string }) => {
+          calls.push(entry.itemId);
+          if (entry.itemId === "A") {
+            await waiting;
+            throw new Error("offline");
+          }
+          return { ...snapshotWith(entry.itemId), agentId: entry.agentId };
+        },
+      },
+    };
+    const first = flushQueueOutbox(input);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    harness.entries.set("B", pendingEntry({ itemId: "B", createdAt: 2 }));
+    const fresh = flushQueueOutbox(input);
+    release();
+    await Promise.all([first, fresh]);
+    expect(calls.filter((id) => id !== "other")).toEqual(["A", "A"]);
+    expect(calls).toContain("other");
+    expect([...harness.entries.keys()]).toEqual(["A", "B"]);
+    const recovered: string[] = [];
+    await flushQueueOutbox({
+      ...input,
+      client: {
+        enqueueAgentMessage: async (entry) => {
+          recovered.push(entry.itemId);
+          return snapshotWith(entry.itemId);
+        },
+      },
+    });
+    expect(recovered).toEqual(["A", "B"]);
+    expect(harness.entries.size).toBe(0);
   });
 });

@@ -1,0 +1,140 @@
+import { describe, expect, it, vi } from "vitest";
+
+const storage = vi.hoisted(() => ({
+  values: new Map<string, string>(),
+  hold: undefined as Promise<void> | undefined,
+}));
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: async (key: string) => storage.values.get(key) ?? null,
+    setItem: async (key: string, value: string) => {
+      await storage.hold;
+      storage.values.set(key, value);
+    },
+    removeItem: async (key: string) => {
+      storage.values.delete(key);
+    },
+  },
+}));
+
+describe("durable outbox acceptance", () => {
+  it("confirms storage before returning and restores the payload in a fresh store", async () => {
+    storage.values.clear();
+    const { useQueueOutboxStore } = await import("./index");
+    await useQueueOutboxStore.persist.rehydrate();
+    let release!: () => void;
+    storage.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let accepted = false;
+    const entry = {
+      serverId: "server",
+      agentId: "agent",
+      itemId: "stable-id",
+      text: "restart recovery",
+      images: [{ data: "aW1hZ2U=", mimeType: "image/png" }],
+      attachments: [],
+      composerAttachments: [],
+    };
+    const adding = useQueueOutboxStore
+      .getState()
+      .add(entry)
+      .then(() => {
+        accepted = true;
+        return undefined;
+      });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(accepted).toBe(false);
+    expect(storage.values.has("paseo-queue-outbox")).toBe(false);
+    release();
+    await adding;
+    storage.hold = undefined;
+    vi.resetModules();
+    const restarted = (await import("./index")).useQueueOutboxStore;
+    await restarted.persist.rehydrate();
+    expect(restarted.getState().entriesForAgent("server", "agent")).toEqual([
+      { ...entry, attempts: 0, createdAt: expect.any(Number) },
+    ]);
+  });
+});
+
+it("cannot dispatch an entry while its write is pending or after that write fails", async () => {
+  vi.resetModules();
+  storage.values.clear();
+  storage.hold = undefined;
+  const { useQueueOutboxStore, flushQueueOutboxForServer } = await import("./index");
+  await useQueueOutboxStore.persist.rehydrate();
+  let reject!: (error: Error) => void;
+  storage.hold = new Promise<void>((_, rejectWrite) => {
+    reject = rejectWrite;
+  });
+  const adding = useQueueOutboxStore.getState().add({
+    serverId: "server",
+    agentId: "agent",
+    itemId: "unsaved",
+    text: "draft",
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  const failed = adding.catch((error: Error) => error.message);
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  const enqueueAgentMessage = vi.fn(async () => ({ agentId: "agent", revision: 1, items: [] }));
+  await flushQueueOutboxForServer({
+    serverId: "server",
+    client: { enqueueAgentMessage },
+    applySnapshot: () => {},
+  });
+  expect(enqueueAgentMessage).not.toHaveBeenCalled();
+  storage.hold = undefined;
+  reject(new Error("storage full"));
+  expect(await failed).toBe("storage full");
+  await flushQueueOutboxForServer({
+    serverId: "server",
+    client: { enqueueAgentMessage },
+    applySnapshot: () => {},
+  });
+  expect(enqueueAgentMessage).not.toHaveBeenCalled();
+  expect(useQueueOutboxStore.getState().entriesForAgent("server", "agent")).toEqual([]);
+});
+
+it("keeps durable entries for other agents eligible during a pending write", async () => {
+  vi.resetModules();
+  storage.values.clear();
+  storage.hold = undefined;
+  const { useQueueOutboxStore } = await import("./index");
+  await useQueueOutboxStore.persist.rehydrate();
+  const store = useQueueOutboxStore.getState();
+  await store.add({
+    serverId: "server",
+    agentId: "agent-b",
+    itemId: "durable-b",
+    text: "ready",
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  let release!: () => void;
+  storage.hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = useQueueOutboxStore.getState().add({
+    serverId: "server",
+    agentId: "agent-a",
+    itemId: "pending-a",
+    text: "saving",
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  expect(
+    useQueueOutboxStore
+      .getState()
+      .entriesForServer("server")
+      .map((entry) => entry.itemId),
+  ).toEqual(["durable-b"]);
+  release();
+  await pending;
+  storage.hold = undefined;
+});

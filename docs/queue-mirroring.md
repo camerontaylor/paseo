@@ -170,19 +170,20 @@ the images fetched back from the daemon.
 
 ## Reconciliation
 
-The server is authoritative. The client keeps its optimistic write and lets the next snapshot
-replace it:
+The server is authoritative. Session state stores only daemon snapshots; the composer overlays
+durable local outbox entries until the daemon acknowledges them:
 
-1. On enqueue the client generates the item id, writes the item into its local list immediately, and
-   sends `agent.queue.enqueue.request` — the composer clears without waiting for a round trip.
-2. `agent.queue.update` replaces the whole local list for that agent whenever `revision` is newer.
-   An optimistic item that the server accepted survives because the ids match; one the server
-   rejected disappears on the next snapshot.
+1. Before clearing the composer or attempting delivery, enqueue persists a full local outbox entry.
+   The composer shows it as waiting to sync until an authoritative snapshot includes its id.
+2. `agent.queue.update` replaces the stored list for that agent whenever its revision is current or
+   newer. Outbox rows stay visible as a separate overlay and become daemon-accepted queue items only
+   when a snapshot confirms their ids.
 3. On reconnect the client calls `agent.queue.list.request` for visible agents, or takes the snapshot
    the daemon pushes on subscribe. Reconnect and mutation take the same path, so there is no separate
    resync path to keep correct.
 
-Do not merge local and server lists. Last snapshot wins.
+Keep the overlay out of session snapshot state so removing an acknowledged outbox entry also removes
+its local row.
 
 ## The un-acked window
 
@@ -192,17 +193,18 @@ mid-request, the item exists only in app memory — kill the app and it is gone,
 and the daemon never knew. This is the client-side mirror of upstream #3464 /
 #4477: the write itself has to be durable, not just the queue.
 
-The fix is an outbox (`packages/app/src/stores/queue-outbox-store/`), persisted
-the same way drafts are. `queueComposerMessageOnServer` writes the full wire
-payload — image bytes included — into the outbox before the request goes out and
-removes it on ack. A send that fails keeps its entry and its optimistic row
-instead of rolling back; nothing is surfaced as an error, because delivery is
-now deferred, not dead.
+The outbox (`packages/app/src/stores/queue-outbox-store/`) persists the full wire
+payload — image bytes included — before clearing the draft or attempting delivery.
+Encoding or storage failure keeps the draft and attachments and displays an error.
+A failed send keeps its durable entry and visible row for retry; after repeated
+failures the client shows one attention message and continues retrying.
 
 On every (re)connect that advertises `agentMessageQueue` (the `server_info`
 status message, which is exactly the re-established-transport signal), the
 session flushes the outbox: each entry is re-sent through the ordinary enqueue
-RPC, oldest first. Re-sending is safe because the daemon treats an enqueue with
+RPC, oldest first within each agent. Fresh enqueues use the same dispatch path;
+a failed predecessor blocks later items for that agent while other agents proceed.
+Re-sending is safe because the daemon treats an enqueue with
 a known item id as a retry:
 
 - an id already in the queue is a no-op (this existed from the start), and
@@ -212,10 +214,18 @@ a known item id as a retry:
   item stays sendable.
 
 Snapshots still replace the local list wholesale, with one exception:
-`appendPendingQueueRows` re-appends un-acked outbox rows a snapshot would
-otherwise erase, since they are writes the server does not know about yet. An
-entry that keeps failing gives up after `QUEUE_OUTBOX_MAX_ATTEMPTS` reconnects
-and drops its row rather than retrying forever.
+The composer uses `appendPendingQueueRows` to overlay un-acked outbox rows on
+the stored snapshot. Keep that overlay out of session snapshot state so removing
+an acknowledged outbox entry also removes its local row. Equal-revision snapshots
+reconcile optimistic rows; older revisions remain ignored. An
+entry that keeps failing stays in the device's durable outbox and visible queue.
+At `QUEUE_OUTBOX_MAX_ATTEMPTS` failed reconnects, the client shows an attention
+message once; future reconnects keep retrying. Only an acknowledgement removes
+the payload. Rows absent from the latest authoritative snapshot are labeled
+"Waiting to sync with host" and cannot be edited or sent from the daemon queue.
+Inclusion in an authoritative snapshot also acknowledges the enqueue and removes
+its outbox payload before editing is available. A lost response therefore cannot
+leave an obsolete retry payload after an accepted item is edited.
 
 ## Known edges
 
@@ -231,6 +241,7 @@ next running → idle edge or the next enqueue rather than resuming the agent at
 agents when the daemon comes up is a bigger behavior change than mirroring, and it belongs in its
 own decision.
 
-Send-now on a daemon-backed queue takes the message off the queue before sending, because the daemon
-drains the same queue and leaving it there would risk sending twice. If that send then fails, the
-message is requeued at the end rather than where it was — the queue has no insert-at-position.
+With delivery receipts, send-now claims the stored item in place and removes it only
+after confirmed dispatch. A failed or unsupported steer leaves it at its original
+position for recovery. Older hosts without receipts temporarily claim and restore
+the item around a send attempt.

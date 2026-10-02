@@ -30,16 +30,16 @@ export const PendingQueueEnqueueSchema = z.object({
 export type PendingQueueEnqueue = z.infer<typeof PendingQueueEnqueueSchema>;
 
 /**
- * A retry cap, not a timeout: attempts only accrue on reconnects that fail, so
- * a healthy daemon clears the outbox on the first flush and a poisoned entry
- * (one the daemon keeps rejecting) cannot retry forever.
+ * Alert threshold for a persistently failing enqueue. The payload remains in
+ * the outbox and is retried on future reconnects until the daemon acknowledges
+ * it; a retry limit must never discard a user's queued message.
  */
 export const QUEUE_OUTBOX_MAX_ATTEMPTS = 8;
 
 export interface QueueOutboxAccess {
   list: (serverId: string) => PendingQueueEnqueue[];
-  remove: (itemId: string) => void;
-  bumpAttempts: (itemId: string) => void;
+  remove: (itemId: string) => void | Promise<void>;
+  bumpAttempts: (itemId: string) => void | Promise<void>;
 }
 
 export interface QueueOutboxFlushClient {
@@ -58,35 +58,58 @@ export interface FlushQueueOutboxInput {
   outbox: QueueOutboxAccess;
   client: QueueOutboxFlushClient;
   applySnapshot: (snapshot: AgentQueueSnapshot) => void;
-  /** Called when an entry exhausts its attempts and is dropped for good. */
-  onDropEntry?: (entry: PendingQueueEnqueue) => void;
+  /** Called once when an entry first reaches the retry alert threshold. */
+  onRetryLimit?: (entry: PendingQueueEnqueue) => void;
 }
 
 /**
  * Re-sends every un-acked enqueue for one server, oldest first so queue order
- * survives the retry. Success removes the entry; failure bumps its attempt
- * count and drops it permanently once the cap is reached.
+ * survives the retry. Only an acknowledgement removes the durable entry.
  */
-export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<void> {
-  for (const entry of input.outbox.list(input.serverId)) {
-    try {
-      const snapshot = await input.client.enqueueAgentMessage({
-        agentId: entry.agentId,
-        itemId: entry.itemId,
-        text: entry.text,
-        images: entry.images,
-        attachments: entry.attachments,
-        composerAttachments: entry.composerAttachments,
-      });
-      input.outbox.remove(entry.itemId);
-      input.applySnapshot(snapshot);
-    } catch {
-      if (entry.attempts + 1 >= QUEUE_OUTBOX_MAX_ATTEMPTS) {
-        input.outbox.remove(entry.itemId);
-        input.onDropEntry?.(entry);
-      } else {
-        input.outbox.bumpAttempts(entry.itemId);
-      }
-    }
+const queueOperations = new Map<string, Promise<unknown>>();
+
+export async function serializeQueueOperation<T>(
+  key: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = queueOperations.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  queueOperations.set(key, current);
+  try {
+    return await current;
+  } finally {
+    if (queueOperations.get(key) === current) queueOperations.delete(key);
   }
+}
+
+export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<void> {
+  const agents = new Set(input.outbox.list(input.serverId).map((entry) => entry.agentId));
+  await Promise.all(
+    [...agents].map((agentId) =>
+      serializeQueueOperation(JSON.stringify(["dispatch", input.serverId, agentId]), async () => {
+        for (const entry of input.outbox
+          .list(input.serverId)
+          .filter((item) => item.agentId === agentId)) {
+          if (!input.outbox.list(input.serverId).some((pending) => pending.itemId === entry.itemId))
+            continue;
+          try {
+            const snapshot = await input.client.enqueueAgentMessage({
+              agentId: entry.agentId,
+              itemId: entry.itemId,
+              text: entry.text,
+              images: entry.images,
+              attachments: entry.attachments,
+              composerAttachments: entry.composerAttachments,
+            });
+            await input.outbox.remove(entry.itemId);
+            input.applySnapshot(snapshot);
+          } catch {
+            await input.outbox.bumpAttempts(entry.itemId);
+            if (entry.attempts + 1 === QUEUE_OUTBOX_MAX_ATTEMPTS) input.onRetryLimit?.(entry);
+            break;
+          }
+        }
+      }),
+    ),
+  );
 }

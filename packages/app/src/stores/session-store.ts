@@ -43,12 +43,8 @@ import type {
   WorkspaceDescriptorPayload,
   WorkspaceProjectDescriptorPayload,
 } from "@getpaseo/protocol/messages";
-import {
-  appendPendingQueueRows,
-  shouldApplyAgentQueueSnapshot,
-  toQueuedComposerMessages,
-} from "@/composer/queue-sync";
 import { useQueueOutboxStore } from "@/stores/queue-outbox-store";
+import { shouldApplyAgentQueueSnapshot, toQueuedComposerMessages } from "@/composer/queue-sync";
 import {
   normalizeWorkspaceOpaqueId,
   normalizeWorkspacePath,
@@ -437,6 +433,7 @@ export interface SessionState {
    * cannot erase a newer state. See docs/queue-mirroring.md.
    */
   queuedMessageRevisions: Map<string, number>;
+  acceptedQueueMessageIds: Map<string, ReadonlySet<string>>;
 }
 
 // Global store state
@@ -672,6 +669,7 @@ function createInitialSessionState(
     fileExplorer: new Map(),
     queuedMessages: new Map(),
     queuedMessageRevisions: new Map(),
+    acceptedQueueMessageIds: new Map(),
   };
 }
 
@@ -1817,13 +1815,26 @@ export const useSessionStore = create<SessionStore>()(
         });
       },
 
-      applyAgentQueueSnapshot: (serverId, snapshot) => {
+      applyAgentQueueSnapshot: async (serverId, snapshot) => {
+        const outbox = useQueueOutboxStore.getState();
+        const acceptedIds = new Set(snapshot.items.map((item) => item.id));
+        const acknowledged = outbox
+          .entriesForAgent(serverId, snapshot.agentId)
+          .filter((entry) => acceptedIds.has(entry.itemId));
+        if (acknowledged.length > 0) {
+          try {
+            await Promise.all(acknowledged.map((entry) => outbox.removeDurably(entry.itemId)));
+          } catch {
+            return;
+          }
+        }
         set((prev) => {
           const session = prev.sessions[serverId];
           if (!session) {
             return prev;
           }
           if (
+            snapshot.revision !== session.queuedMessageRevisions.get(snapshot.agentId) &&
             !shouldApplyAgentQueueSnapshot({
               incomingRevision: snapshot.revision,
               appliedRevision: session.queuedMessageRevisions.get(snapshot.agentId),
@@ -1832,12 +1843,11 @@ export const useSessionStore = create<SessionStore>()(
             return prev;
           }
           const queuedMessages = new Map(session.queuedMessages);
-          queuedMessages.set(
+          queuedMessages.set(snapshot.agentId, toQueuedComposerMessages(snapshot));
+          const acceptedQueueMessageIds = new Map(session.acceptedQueueMessageIds);
+          acceptedQueueMessageIds.set(
             snapshot.agentId,
-            appendPendingQueueRows(
-              toQueuedComposerMessages(snapshot),
-              useQueueOutboxStore.getState().entriesForAgent(serverId, snapshot.agentId),
-            ),
+            new Set(snapshot.items.map((item) => item.id)),
           );
           const queuedMessageRevisions = new Map(session.queuedMessageRevisions);
           queuedMessageRevisions.set(snapshot.agentId, snapshot.revision);
@@ -1845,7 +1855,12 @@ export const useSessionStore = create<SessionStore>()(
             ...prev,
             sessions: {
               ...prev.sessions,
-              [serverId]: { ...session, queuedMessages, queuedMessageRevisions },
+              [serverId]: {
+                ...session,
+                queuedMessages,
+                queuedMessageRevisions,
+                acceptedQueueMessageIds,
+              },
             },
           };
         });
