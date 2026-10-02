@@ -1,5 +1,12 @@
 import type { Logger } from "pino";
+import { z } from "zod";
 
+import type {
+  AgentLaunchContext,
+  AgentPersistenceHandle,
+  AgentSession,
+  AgentSessionConfig,
+} from "../agent-sdk-types.js";
 import { checkProviderLaunchAvailable, resolveProviderLaunch } from "../provider-launch-config.js";
 import {
   ACPAgentClient,
@@ -15,6 +22,11 @@ import {
   type DiagnosticEntry,
   toDiagnosticErrorMessage,
 } from "./diagnostic-utils.js";
+
+const GenericACPCommandWaitOptionsSchema = z.object({
+  waitForInitialCommands: z.boolean().optional(),
+  initialCommandsWaitTimeoutMs: z.number().int().positive().optional(),
+});
 
 interface GenericACPAgentClientOptions {
   logger: Logger;
@@ -33,6 +45,7 @@ interface GenericACPAgentClientOptions {
 }
 
 export class GenericACPAgentClient extends ACPAgentClient {
+  private readonly genericOptions: GenericACPAgentClientOptions;
   private readonly command: [string, ...string[]];
   private readonly providerId?: string;
   private readonly label?: string;
@@ -58,10 +71,73 @@ export class GenericACPAgentClient extends ACPAgentClient {
       now: options.now,
     });
 
+    this.genericOptions = options;
     this.command = options.command;
     this.providerId = options.providerId;
     this.label = options.label;
     this.diagnosticPhaseTimeoutMs = options.diagnosticPhaseTimeoutMs;
+  }
+
+  override async createSession(
+    config: AgentSessionConfig,
+    launchContext?: AgentLaunchContext,
+  ): Promise<AgentSession> {
+    return this.forSessionOptions(config.providerOptions).createSessionWithConfiguredWait(
+      config,
+      launchContext,
+    );
+  }
+
+  override async resumeSession(
+    handle: AgentPersistenceHandle,
+    overrides?: Partial<AgentSessionConfig>,
+    launchContext?: AgentLaunchContext,
+  ): Promise<AgentSession> {
+    const storedOptions = (handle.metadata as Partial<AgentSessionConfig> | undefined)?.providerOptions;
+    return this.forSessionOptions(overrides?.providerOptions ?? storedOptions).resumeSessionWithConfiguredWait(
+      handle,
+      overrides,
+      launchContext,
+    );
+  }
+
+  private forSessionOptions(
+    providerOptions: AgentSessionConfig["providerOptions"],
+  ): GenericACPAgentClient {
+    const waitOptions = GenericACPCommandWaitOptionsSchema.parse(providerOptions ?? {});
+    const waitForInitialCommands =
+      this.genericOptions.waitForInitialCommands ?? waitOptions.waitForInitialCommands ?? true;
+    const initialCommandsWaitTimeoutMs =
+      this.genericOptions.initialCommandsWaitTimeoutMs ?? waitOptions.initialCommandsWaitTimeoutMs;
+
+    if (
+      waitForInitialCommands === (this.genericOptions.waitForInitialCommands ?? true) &&
+      initialCommandsWaitTimeoutMs === this.genericOptions.initialCommandsWaitTimeoutMs
+    ) {
+      return this;
+    }
+
+    // The ACP base reads wait settings at construction, so configure a client for this session.
+    return new GenericACPAgentClient({
+      ...this.genericOptions,
+      waitForInitialCommands,
+      initialCommandsWaitTimeoutMs,
+    });
+  }
+
+  private createSessionWithConfiguredWait(
+    config: AgentSessionConfig,
+    launchContext?: AgentLaunchContext,
+  ): Promise<AgentSession> {
+    return super.createSession(config, launchContext);
+  }
+
+  private resumeSessionWithConfiguredWait(
+    handle: AgentPersistenceHandle,
+    overrides?: Partial<AgentSessionConfig>,
+    launchContext?: AgentLaunchContext,
+  ): Promise<AgentSession> {
+    return super.resumeSession(handle, overrides, launchContext);
   }
 
   protected override async resolveLaunchCommand(): Promise<{ command: string; args: string[] }> {
