@@ -1168,13 +1168,10 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
-  const selectedViewRaw = useAgentViewStore(
+  const selectedView = useAgentViewStore(
     (state) => state.selectedViews[`${serverId}:${agentId}`] || "chat",
   );
   const setSelectedView = useAgentViewStore((state) => state.setSelectedView);
-  // "find" stays in the store union for the source schema; this branch has no
-  // native Find (TM-07), so it resolves to Chat.
-  const selectedView = selectedViewRaw === "find" ? "chat" : selectedViewRaw;
   const isChatVisible = selectedView !== "artifacts";
   const handleSetSelectedView = useCallback(
     (view: "chat" | "artifacts") => {
