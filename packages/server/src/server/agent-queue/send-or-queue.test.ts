@@ -57,7 +57,7 @@ describe("sendOrQueuePromptToAgent", () => {
     const service = new AgentQueueService({
       store: new AgentQueueStore(join(dir, "queues")),
       agentManager: manager,
-      agentStorage: {} as AgentStorage,
+      agentStorage: { get: async () => undefined } as unknown as AgentStorage,
       logger: createTestLogger(),
       // Drains never fire in these tests (no lifecycle events), but the send
       // is stubbed anyway so a drain could not reach a real agent.
@@ -72,7 +72,7 @@ describe("sendOrQueuePromptToAgent", () => {
     return { manager, service, sends, send };
   }
 
-  test("queues the message when the agent has a turn in flight", async () => {
+  test("queues the message when an explicit intent targets a busy agent", async () => {
     const state: FakeManagerState = { inFlight: true, outOfBandAccepts: false, modeChanges: [] };
     const harness = createHarness(state);
 
@@ -82,6 +82,7 @@ describe("sendOrQueuePromptToAgent", () => {
       queueService: harness.service,
       agentId: AGENT_ID,
       text: "follow-up while busy",
+      intent: "queue",
       messageId: "msg-1",
       logger: createTestLogger(),
       send: harness.send,
@@ -94,6 +95,28 @@ describe("sendOrQueuePromptToAgent", () => {
     expect(snapshot.items[0]?.text).toBe("follow-up while busy");
   });
 
+  test("a busy agent without queue intent keeps the legacy direct send", async () => {
+    const state: FakeManagerState = { inFlight: true, outOfBandAccepts: false, modeChanges: [] };
+    const harness = createHarness(state);
+
+    const result = await sendOrQueuePromptToAgent({
+      agentManager: harness.manager,
+      agentStorage: {} as AgentStorage,
+      queueService: harness.service,
+      agentId: AGENT_ID,
+      text: "legacy busy send",
+      messageId: "msg-1",
+      logger: createTestLogger(),
+      send: harness.send,
+    });
+
+    // Admission is explicit: no intent, no queue. This is the seam that keeps
+    // the legacy send path on its released behavior.
+    expect(result).toEqual({ queued: false, outOfBand: false });
+    expect(harness.sends).toHaveLength(1);
+    expect((await harness.service.list(AGENT_ID)).items).toHaveLength(0);
+  });
+
   test("interrupt: true bypasses the queue and sends immediately", async () => {
     const state: FakeManagerState = { inFlight: true, outOfBandAccepts: false, modeChanges: [] };
     const harness = createHarness(state);
@@ -104,6 +127,7 @@ describe("sendOrQueuePromptToAgent", () => {
       queueService: harness.service,
       agentId: AGENT_ID,
       text: "explicit interruption",
+      intent: "queue",
       interrupt: true,
       logger: createTestLogger(),
       send: harness.send,
@@ -124,6 +148,7 @@ describe("sendOrQueuePromptToAgent", () => {
       queueService: harness.service,
       agentId: AGENT_ID,
       text: "normal send",
+      intent: "queue",
       logger: createTestLogger(),
       send: harness.send,
     });
@@ -143,6 +168,7 @@ describe("sendOrQueuePromptToAgent", () => {
       queueService: harness.service,
       agentId: AGENT_ID,
       text: "/goal pause",
+      intent: "queue",
       logger: createTestLogger(),
       send: harness.send,
     });
@@ -162,6 +188,7 @@ describe("sendOrQueuePromptToAgent", () => {
       queueService: harness.service,
       agentId: AGENT_ID,
       text: "queued with mode",
+      intent: "steer_strict",
       sessionMode: "plan",
       logger: createTestLogger(),
       send: harness.send,
@@ -181,6 +208,7 @@ describe("sendOrQueuePromptToAgent", () => {
       queueService: null,
       agentId: AGENT_ID,
       text: "no queue configured",
+      intent: "queue",
       logger: createTestLogger(),
       send: harness.send,
     });

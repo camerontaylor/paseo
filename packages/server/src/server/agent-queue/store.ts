@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -25,13 +25,16 @@ const StoredQueuedImageSchema = z.object({
 const StoredQueuedMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
-  // TM-02 adaptation: the landed wire contract carries delivery bookkeeping on
-  // every queued item; the source store did not track it yet. Optional here so
-  // the verbatim service still compiles — the adaptation commit makes them
-  // authoritative.
-  intent: QueuedAgentDeliveryIntentSchema.optional(),
-  deliveryState: QueuedAgentMessageDeliveryStateSchema.optional(),
-  attempts: z.number().int().nonnegative().optional(),
+  // TM-02 adaptation: delivery bookkeeping is part of the durable record, so a
+  // restart can tell a never-dispatched item from an ambiguous one. The source
+  // store did not track it; every item this daemon writes carries all of these.
+  // `attempts` is the user-visible streak and resets on retry; `attemptSeq`
+  // never resets, so each dispatch gets its own receipt key and a retry can
+  // never collide with the previous attempt's receipt.
+  intent: QueuedAgentDeliveryIntentSchema,
+  deliveryState: QueuedAgentMessageDeliveryStateSchema,
+  attempts: z.number().int().nonnegative(),
+  attemptSeq: z.number().int().nonnegative(),
   lastError: z.string().nullable().optional(),
   attachments: z.array(AgentAttachmentWireSchema).optional(),
   composerAttachments: z.array(QueuedComposerAttachmentSchema).optional(),
@@ -68,6 +71,23 @@ export function recordDrainedId(ids: readonly string[] | undefined, id: string):
   return next.slice(-MAX_REMEMBERED_DRAINED_IDS);
 }
 
+/**
+ * Thrown by {@link AgentQueueStore.mutateWithExpectedRevision} when a client
+ * mutation names a revision it has not seen. The queue is left untouched so a
+ * stale device can never overwrite another device's edit.
+ */
+export class QueueRevisionConflictError extends Error {
+  readonly code = "queue_revision_conflict";
+
+  constructor(
+    readonly expectedRevision: number,
+    readonly actualRevision: number,
+  ) {
+    super(`Queue revision conflict: expected ${expectedRevision}, current ${actualRevision}`);
+    this.name = "QueueRevisionConflictError";
+  }
+}
+
 /** Projects the stored queue onto the wire, replacing image bytes with descriptors. */
 export function toAgentQueueSnapshot(queue: StoredAgentQueue): AgentQueueSnapshot {
   return {
@@ -76,12 +96,9 @@ export function toAgentQueueSnapshot(queue: StoredAgentQueue): AgentQueueSnapsho
     items: queue.items.map((item) => ({
       id: item.id,
       text: item.text,
-      // TM-02 adaptation: fallbacks only satisfy the landed wire type until the
-      // adaptation commit stores real delivery state on every item. No queue
-      // file predates this port, so the fallbacks are unreachable in practice.
-      intent: item.intent ?? "queue",
-      deliveryState: item.deliveryState ?? "pending",
-      attempts: item.attempts ?? 0,
+      intent: item.intent,
+      deliveryState: item.deliveryState,
+      attempts: item.attempts,
       ...(item.lastError !== undefined ? { lastError: item.lastError } : {}),
       createdAt: item.createdAt,
       ...(item.attachments?.length ? { attachments: item.attachments } : {}),
@@ -119,10 +136,57 @@ export interface AgentQueueMutationResult {
   changed: boolean;
 }
 
+/** Each record retains both sides of a mutation for manual recovery. */
+export interface AgentQueueJournalEntry {
+  recordedAt: string;
+  before: StoredAgentQueue;
+  after: StoredAgentQueue;
+}
+
+/**
+ * Journal entries describe images instead of copying their bytes: the queue
+ * file already holds the payload, and the journal is the recovery aid, not a
+ * second copy of user data.
+ */
+function elideJournalImageBytes(queue: StoredAgentQueue): StoredAgentQueue {
+  return {
+    ...queue,
+    items: queue.items.map((item) =>
+      item.images?.length
+        ? {
+            ...item,
+            images: item.images.map(({ data, ...descriptor }) => ({
+              ...descriptor,
+              data: `<elided ${data.length} base64 chars>`,
+            })),
+          }
+        : item,
+    ),
+  };
+}
+
 export class AgentQueueStore {
   private readonly mutations = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly dir: string) {}
+  constructor(
+    private readonly dir: string,
+    /**
+     * Appends stop rotating once the current journal passes this size; the
+     * previous generation is kept so a rotation itself cannot lose both copies.
+     * Queue payloads can be large, so the default stays well above any honest
+     * queue while still bounding disk use.
+     */
+    private readonly maxJournalBytes = 64 * 1024 * 1024,
+  ) {}
+
+  /** Every agent id that has a persisted queue file. Startup recovery walks it. */
+  async ids(): Promise<string[]> {
+    await this.ensureDir();
+    const entries = await readdir(this.dir);
+    return entries
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => name.slice(0, -".json".length));
+  }
 
   async get(agentId: string): Promise<StoredAgentQueue> {
     await this.ensureDir();
@@ -149,17 +213,26 @@ export class AgentQueueStore {
   async mutate(agentId: string, mutate: QueueMutator): Promise<AgentQueueMutationResult> {
     return this.serialize(agentId, async () => {
       const current = await this.get(agentId);
-      const next = mutate(current);
-      if (next === current) {
-        return { queue: current, changed: false };
+      return this.apply(agentId, current, mutate(current));
+    });
+  }
+
+  /**
+   * {@link mutate} guarded by the revision the caller last saw. Used by every
+   * client-facing mutation; internal queue mechanics (claim, recovery) use the
+   * unguarded form because they act on the state they just read.
+   */
+  async mutateWithExpectedRevision(
+    agentId: string,
+    expectedRevision: number,
+    mutate: QueueMutator,
+  ): Promise<AgentQueueMutationResult> {
+    return this.serialize(agentId, async () => {
+      const current = await this.get(agentId);
+      if (current.revision !== expectedRevision) {
+        throw new QueueRevisionConflictError(expectedRevision, current.revision);
       }
-      const updated = StoredAgentQueueSchema.parse({
-        ...next,
-        agentId,
-        revision: current.revision + 1,
-      });
-      await this.write(updated);
-      return { queue: updated, changed: true };
+      return this.apply(agentId, current, mutate(current));
     });
   }
 
@@ -167,11 +240,45 @@ export class AgentQueueStore {
     await this.serialize(agentId, async () => {
       await this.ensureDir();
       await rm(this.filePath(agentId), { force: true });
+      await rm(this.journalPath(agentId), { force: true });
+      await rm(this.previousJournalPath(agentId), { force: true });
     });
+  }
+
+  private async apply(
+    agentId: string,
+    current: StoredAgentQueue,
+    next: StoredAgentQueue,
+  ): Promise<AgentQueueMutationResult> {
+    if (next === current) {
+      return { queue: current, changed: false };
+    }
+    const updated = StoredAgentQueueSchema.parse({
+      ...next,
+      agentId,
+      revision: current.revision + 1,
+    });
+    // Record the recoverable state before replacing the queue file. If the
+    // journal cannot be written, leave the existing queue untouched.
+    await this.appendJournal({
+      recordedAt: new Date().toISOString(),
+      before: current,
+      after: updated,
+    });
+    await this.write(updated);
+    return { queue: updated, changed: true };
   }
 
   private filePath(agentId: string): string {
     return join(this.dir, `${agentId}.json`);
+  }
+
+  private journalPath(agentId: string): string {
+    return join(this.dir, `${agentId}.journal.jsonl`);
+  }
+
+  private previousJournalPath(agentId: string): string {
+    return join(this.dir, `${agentId}.journal.previous.jsonl`);
   }
 
   private async ensureDir(): Promise<void> {
@@ -180,7 +287,36 @@ export class AgentQueueStore {
 
   private async write(queue: StoredAgentQueue): Promise<void> {
     await this.ensureDir();
-    await writeJsonFileAtomic(this.filePath(queue.agentId), queue);
+    // Queue text, attachments and image payloads are user data; they get the
+    // same 0600 treatment as the daemon keypair and receipts.
+    await writeJsonFileAtomic(this.filePath(queue.agentId), queue, { mode: 0o600 });
+  }
+
+  private async appendJournal(entry: AgentQueueJournalEntry): Promise<void> {
+    const journalPath = this.journalPath(entry.after.agentId);
+    const line = `${JSON.stringify({
+      recordedAt: entry.recordedAt,
+      before: elideJournalImageBytes(entry.before),
+      after: elideJournalImageBytes(entry.after),
+    })}\n`;
+    let size = 0;
+    try {
+      size = (await stat(journalPath)).size;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (size > 0 && size + Buffer.byteLength(line) > this.maxJournalBytes) {
+      const previousPath = this.previousJournalPath(entry.after.agentId);
+      await rm(previousPath, { force: true });
+      await rename(journalPath, previousPath);
+    }
+    const file = await open(journalPath, "a", 0o600);
+    try {
+      await file.writeFile(line);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
   }
 
   private async serialize<T>(agentId: string, mutation: () => Promise<T>): Promise<T> {

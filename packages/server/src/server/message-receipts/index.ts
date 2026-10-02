@@ -38,6 +38,24 @@ export class MessageReceipts {
     return result;
   }
 
+  /**
+   * The persisted outcome of a send, without sending: `null` when no receipt
+   * exists. Startup recovery for queued dispatch claims reads this to tell a
+   * never-dispatched attempt from one whose provider acceptance is unknown.
+   */
+  async outcome(agentId: string, messageId: string): Promise<"pending" | "completed" | null> {
+    const key = digest(["send", agentId, messageId]);
+    const file = path.join(this.directory, `${key}.json`);
+    try {
+      const existing = await readReceipt(file);
+      return existing?.state ?? null;
+    } catch {
+      // An unreadable receipt is no evidence; the caller holds the claim as
+      // ambiguous instead of resending.
+      return null;
+    }
+  }
+
   private async sendOnce(key: string, input: SendMessageInput): Promise<void> {
     const file = path.join(this.directory, `${key}.json`);
     const fingerprint = digest(input.request);

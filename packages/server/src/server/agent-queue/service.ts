@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import type {
   AgentAttachment,
   AgentQueueSnapshot,
+  QueuedAgentDeliveryIntent,
   QueuedComposerAttachment,
 } from "@getpaseo/protocol/messages";
 import type { AgentLifecycleStatus } from "@getpaseo/protocol/agent-lifecycle";
@@ -12,8 +13,10 @@ import type { AgentManager } from "../agent/agent-manager.js";
 import type { AgentPromptInput } from "../agent/agent-sdk-types.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import { buildAgentPrompt } from "../agent/prompt-attachments.js";
-import { sendPromptToAgent } from "../agent/agent-prompt.js";
+import { sendPromptToAgent, waitForAgentRunStartWithTimeout } from "../agent/agent-prompt.js";
+import type { MessageReceipts } from "../message-receipts/index.js";
 import {
+  QueueRevisionConflictError,
   recordDrainedId,
   toAgentQueueSnapshot,
   type AgentQueueMutationResult,
@@ -22,11 +25,79 @@ import {
   type StoredQueuedMessage,
 } from "./store.js";
 
+/**
+ * A dispatch that fails with a known pre-start error is retried on the next
+ * wakeup until the limit; the attempt that passes the limit leaves the item in
+ * the visible `failed` state with an explicit retry or discard.
+ */
+export const DELIVERY_ATTEMPT_LIMIT = 8;
+
+/**
+ * Admission bounds. A queue is a holding area for follow-ups, not an archive:
+ * past these limits the client gets a machine-readable rejection instead of an
+ * unbounded record.
+ */
+export const MAX_ITEMS_PER_QUEUE = 50;
+export const MAX_ITEM_IMAGE_BASE64_CHARS = 16 * 1024 * 1024;
+
+export class QueueFullError extends Error {
+  readonly code = "queue_full";
+
+  constructor(readonly limit: number) {
+    super(`Agent queue holds at most ${limit} items`);
+    this.name = "QueueFullError";
+  }
+}
+
+export class QueueImagePayloadTooLargeError extends Error {
+  readonly code = "image_payload_too_large";
+
+  constructor(readonly limit: number) {
+    super(`Queued images exceed ${limit} base64 characters per item`);
+    this.name = "QueueImagePayloadTooLargeError";
+  }
+}
+
+export class QueueItemDispatchingError extends Error {
+  readonly code = "queue_item_dispatching";
+
+  constructor(itemId: string) {
+    super(`Queued message ${itemId} is being dispatched`);
+    this.name = "QueueItemDispatchingError";
+  }
+}
+
+export class QueueItemUncertainError extends Error {
+  readonly code = "queue_item_uncertain";
+
+  constructor(itemId: string) {
+    super(`Queued message ${itemId} needs an explicit retry or discard first`);
+    this.name = "QueueItemUncertainError";
+  }
+}
+
+/** A strict steer the provider would not absorb. Never interrupts the turn. */
+class QueueSteerRefusedError extends Error {
+  constructor(itemId: string) {
+    super(`Queued message ${itemId} was not steered into the active turn`);
+    this.name = "QueueSteerRefusedError";
+  }
+}
+
 export type AgentQueueMutationListener = (snapshot: AgentQueueSnapshot) => void;
 
 export interface EnqueueAgentMessageInput {
   agentId: string;
   itemId: string;
+  text: string;
+  /** Admission is explicit: the daemon never infers a delivery intent. */
+  intent: QueuedAgentDeliveryIntent;
+  images?: Array<{ data: string; mimeType: string }>;
+  attachments?: AgentAttachment[];
+  composerAttachments?: QueuedComposerAttachment[];
+}
+
+export interface UpdateQueuedMessageInput {
   text: string;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: AgentAttachment[];
@@ -39,11 +110,16 @@ export interface SendQueuedPromptInput {
   messageId: string;
 }
 
+/** The queue drains through the same receipt service the legacy send path uses. */
+export type AgentQueueReceiptController = Pick<MessageReceipts, "send" | "outcome">;
+
 export interface AgentQueueServiceOptions {
   store: AgentQueueStore;
   agentManager: AgentQueueAgentController;
   agentStorage: AgentStorage;
   logger: Logger;
+  /** Correlates dispatch attempts across restarts. Absent only in unit tests. */
+  receipts?: AgentQueueReceiptController | null;
   /**
    * Injected so tests can substitute the send without module mocks; defaults to
    * the same sendPromptToAgent the send_agent_message_request handler uses.
@@ -51,18 +127,35 @@ export interface AgentQueueServiceOptions {
   sendPrompt?: (input: SendQueuedPromptInput) => Promise<unknown>;
 }
 
-export type AgentQueueAgentController = Pick<AgentManager, "subscribe" | "getAgent">;
+export type AgentQueueAgentController = Pick<
+  AgentManager,
+  "subscribe" | "getAgent" | "steerAgentRun" | "waitForAgentRunStart"
+>;
+
+/**
+ * The receipt key of one dispatch attempt. Attempts are keyed individually so a
+ * retry after a known failure is not blocked by the previous attempt's receipt.
+ */
+function attemptReceiptId(itemId: string, attempt: number): string {
+  return `${itemId}#${attempt}`;
+}
 
 /**
  * Owns the per-agent message queue for the whole daemon: one instance, shared by
  * every connected session, so the queue mirrors across devices and drains even
- * when nothing is connected. See docs/queue-mirroring.md.
+ * when nothing is connected.
+ *
+ * Delivery is claim -> provider dispatch -> correlated receipt -> removal. A
+ * claimed item stays in the queue in the `dispatching` state, so a crash leaves
+ * the state on disk for startup recovery instead of silently dropping or
+ * resending the prompt.
  */
 export class AgentQueueService {
   private readonly store: AgentQueueStore;
   private readonly agentManager: AgentQueueAgentController;
   private readonly agentStorage: AgentStorage;
   private readonly logger: Logger;
+  private readonly receipts: AgentQueueReceiptController | null;
   private readonly sendPrompt: (input: SendQueuedPromptInput) => Promise<unknown>;
 
   private readonly listeners = new Set<AgentQueueMutationListener>();
@@ -75,6 +168,7 @@ export class AgentQueueService {
     this.agentManager = options.agentManager;
     this.agentStorage = options.agentStorage;
     this.logger = options.logger.child({ module: "agent", component: "agent-queue" });
+    this.receipts = options.receipts ?? null;
     this.sendPrompt =
       options.sendPrompt ??
       ((input) =>
@@ -84,8 +178,105 @@ export class AgentQueueService {
           agentId: input.agentId,
           prompt: input.prompt,
           messageId: input.messageId,
+          // A queued follow-up must never cancel and replace a turn that
+          // started after the claim; losing the race is a failed attempt.
+          replaceRunning: false,
+          unarchive: false,
           logger: this.logger,
         }));
+  }
+
+  /**
+   * Startup recovery: resolve claims left in `dispatching` state, then start
+   * lifecycle delivery. Items whose provider acceptance is unknown become
+   * `uncertain` and are never dispatched again without an explicit retry.
+   *
+   * Call once after agents and providers are ready — never during daemon
+   * initialization, so loading state and deciding outcomes stay separate.
+   */
+  async activate(): Promise<void> {
+    for (const agentId of await this.store.ids()) {
+      const recovered = await this.recoverDispatchingClaims(agentId);
+      if (recovered.changed) {
+        this.publish(recovered);
+      }
+    }
+    this.start();
+    // Wake agents that are already loaded and idle so never-dispatched items
+    // resume. Agents that load on demand later drain through their own
+    // running-to-idle transition instead of being loaded here.
+    for (const agentId of await this.store.ids()) {
+      if (this.agentManager.getAgent(agentId)?.lifecycle === "idle") {
+        this.scheduleDrain(agentId);
+      }
+    }
+    await this.flushDrains();
+  }
+
+  /**
+   * Resolves one agent's `dispatching` claims against the receipt record:
+   * completed means the provider took the prompt (remove the item), pending
+   * means the attempt may have landed (hold as `uncertain`), and no receipt
+   * means the attempt never dispatched for `queue` intent — while a strict
+   * steer may have reached the provider mid-admission, so it holds as
+   * `uncertain` too.
+   */
+  private async recoverDispatchingClaims(agentId: string): Promise<AgentQueueMutationResult> {
+    const queue = await this.store.get(agentId);
+    const claimed = queue.items.filter((item) => item.deliveryState === "dispatching");
+    if (claimed.length === 0) {
+      return { queue, changed: false };
+    }
+    const outcomes = new Map<string, "pending" | "completed" | null>();
+    for (const item of claimed) {
+      outcomes.set(
+        item.id,
+        this.receipts
+          ? await this.receipts.outcome(agentId, attemptReceiptId(item.id, item.attemptSeq))
+          : null,
+      );
+    }
+    return this.store.mutate(agentId, (current) => {
+      const items: StoredQueuedMessage[] = [];
+      let drainedIds = current.drainedIds;
+      let changed = false;
+      for (const item of current.items) {
+        if (item.deliveryState !== "dispatching") {
+          items.push(item);
+          continue;
+        }
+        changed = true;
+        const outcome = outcomes.get(item.id);
+        if (outcome === "completed") {
+          drainedIds = recordDrainedId(drainedIds, item.id);
+          continue;
+        }
+        if (outcome === "pending") {
+          items.push({
+            ...item,
+            deliveryState: "uncertain",
+            lastError: "agent_request_outcome_unknown",
+          });
+          continue;
+        }
+        // No receipt for the in-flight attempt: the send never happened for
+        // queue intent, while a strict steer may have reached the provider
+        // mid-admission, so only the steer holds as uncertain.
+        if (item.intent === "steer_strict") {
+          items.push({
+            ...item,
+            deliveryState: "uncertain",
+            lastError: "queue_claim_interrupted",
+          });
+          continue;
+        }
+        items.push({ ...item, deliveryState: "pending" });
+      }
+      if (!changed) {
+        return current;
+      }
+      return { ...current, items, drainedIds };
+    });
   }
 
   start(): void {
@@ -125,10 +316,15 @@ export class AgentQueueService {
     if (!text && attachments.length === 0 && images.length === 0) {
       throw new Error("Cannot queue an empty message");
     }
+    this.assertImagePayloadWithinLimit(images);
 
     const item: StoredQueuedMessage = {
       id: input.itemId,
       text,
+      intent: input.intent,
+      deliveryState: "pending",
+      attempts: 0,
+      attemptSeq: 0,
       createdAt: new Date().toISOString(),
       ...(attachments.length ? { attachments } : {}),
       ...(input.composerAttachments?.length
@@ -146,47 +342,206 @@ export class AgentQueueService {
         : {}),
     };
 
-    const result = await this.store.mutate(input.agentId, (current) =>
+    const result = await this.store.mutate(input.agentId, (current) => {
       // Re-enqueueing the same id is a retry, not a duplicate — including a
       // retry that lands after the item was already drained and delivered.
-      current.items.some((existing) => existing.id === item.id) ||
-      current.drainedIds?.includes(item.id)
-        ? current
-        : { ...current, items: [...current.items, item] },
-    );
+      if (
+        current.items.some((existing) => existing.id === item.id) ||
+        current.drainedIds?.includes(item.id)
+      ) {
+        return current;
+      }
+      if (current.items.length >= MAX_ITEMS_PER_QUEUE) {
+        throw new QueueFullError(MAX_ITEMS_PER_QUEUE);
+      }
+      return { ...current, items: [...current.items, item] };
+    });
     this.publish(result);
     this.scheduleDrain(input.agentId);
     return toAgentQueueSnapshot(result.queue);
   }
 
-  async remove(agentId: string, itemId: string): Promise<AgentQueueSnapshot> {
-    const result = await this.store.mutate(agentId, (current) =>
-      current.items.some((item) => item.id === itemId)
-        ? { ...current, items: current.items.filter((item) => item.id !== itemId) }
-        : current,
+  /**
+   * Replaces one item's content. The replacement is a new admission of the same
+   * identity: attempts reset, and a `failed` item becomes deliverable again.
+   * A `dispatching` item refuses the edit (the dispatch is in flight) and an
+   * `uncertain` item demands an explicit retry or discard first, because
+   * rewriting the content cannot tell the user whether the old one arrived.
+   */
+  async update(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+    patch: UpdateQueuedMessageInput,
+  ): Promise<AgentQueueSnapshot> {
+    const text = patch.text.trim();
+    const attachments = patch.attachments ?? [];
+    const images = patch.images ?? [];
+    if (!text && attachments.length === 0 && images.length === 0) {
+      throw new Error("Cannot queue an empty message");
+    }
+    this.assertImagePayloadWithinLimit(images);
+
+    const result = await this.store.mutateWithExpectedRevision(
+      agentId,
+      expectedRevision,
+      (current) => {
+        if (!current.items.some((item) => item.id === itemId)) {
+          throw new Error(`Queued message ${itemId} is no longer queued`);
+        }
+        return {
+          ...current,
+          items: current.items.map((item) => {
+            if (item.id !== itemId) {
+              return item;
+            }
+            if (item.deliveryState === "dispatching") {
+              throw new QueueItemDispatchingError(itemId);
+            }
+            if (item.deliveryState === "uncertain") {
+              throw new QueueItemUncertainError(itemId);
+            }
+            return {
+              ...item,
+              text,
+              deliveryState: "pending",
+              attempts: 0,
+              // Re-admission with new content: the sequence keeps increasing
+              // so the new dispatch never reuses an old attempt's receipt key.
+              attemptSeq: item.attemptSeq + 1,
+              lastError: undefined,
+              ...(attachments.length ? { attachments } : { attachments: undefined }),
+              ...(images.length
+                ? {
+                    images: images.map((image) => ({
+                      id: randomUUID(),
+                      mimeType: image.mimeType,
+                      fileName: null,
+                      data: image.data,
+                    })),
+                  }
+                : { images: undefined }),
+              ...(patch.composerAttachments?.length
+                ? { composerAttachments: patch.composerAttachments }
+                : { composerAttachments: undefined }),
+            };
+          }),
+        };
+      },
+    );
+    this.publish(result);
+    this.scheduleDrain(agentId);
+    return toAgentQueueSnapshot(result.queue);
+  }
+
+  /**
+   * Deletes one item. A `dispatching` item refuses deletion because the provider
+   * dispatch is in flight; `uncertain` and `failed` items are deletable — that
+   * is the explicit discard.
+   */
+  async remove(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    const result = await this.store.mutateWithExpectedRevision(
+      agentId,
+      expectedRevision,
+      (current) => {
+        const item = current.items.find((candidate) => candidate.id === itemId);
+        if (!item) {
+          return current;
+        }
+        if (item.deliveryState === "dispatching") {
+          throw new QueueItemDispatchingError(itemId);
+        }
+        return { ...current, items: current.items.filter((candidate) => candidate.id !== itemId) };
+      },
     );
     this.publish(result);
     return toAgentQueueSnapshot(result.queue);
   }
 
-  async reorder(agentId: string, itemIds: string[]): Promise<AgentQueueSnapshot> {
-    const result = await this.store.mutate(agentId, (current) => {
-      const byId = new Map(current.items.map((item) => [item.id, item]));
-      const ordered: StoredQueuedMessage[] = [];
-      for (const id of itemIds) {
-        const item = byId.get(id);
-        if (item) {
-          ordered.push(item);
-          byId.delete(id);
+  async reorder(
+    agentId: string,
+    itemIds: string[],
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    const result = await this.store.mutateWithExpectedRevision(
+      agentId,
+      expectedRevision,
+      (current) => {
+        const byId = new Map(current.items.map((item) => [item.id, item]));
+        const ordered: StoredQueuedMessage[] = [];
+        for (const id of itemIds) {
+          const item = byId.get(id);
+          if (item) {
+            ordered.push(item);
+            byId.delete(id);
+          }
         }
-      }
-      // Ids the caller did not mention keep their relative order at the end.
-      ordered.push(...current.items.filter((item) => byId.has(item.id)));
-      const unchanged = ordered.every((item, index) => current.items[index]?.id === item.id);
-      return unchanged ? current : { ...current, items: ordered };
-    });
+        // Ids the caller did not mention keep their relative order at the end.
+        ordered.push(...current.items.filter((item) => byId.has(item.id)));
+        const unchanged = ordered.every((item, index) => current.items[index]?.id === item.id);
+        return unchanged ? current : { ...current, items: ordered };
+      },
+    );
     this.publish(result);
     return toAgentQueueSnapshot(result.queue);
+  }
+
+  /**
+   * Explicit user decision to attempt an `uncertain` or `failed` item again —
+   * the only path that resends an item whose provider acceptance is unknown.
+   */
+  async retry(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    const result = await this.store.mutateWithExpectedRevision(
+      agentId,
+      expectedRevision,
+      (current) => ({
+        ...current,
+        items: current.items.map((item) =>
+          item.id === itemId &&
+          (item.deliveryState === "failed" || item.deliveryState === "uncertain")
+            ? { ...item, deliveryState: "pending", attempts: 0, lastError: undefined }
+            : item,
+        ),
+      }),
+    );
+    this.publish(result);
+    this.scheduleDrain(agentId);
+    return toAgentQueueSnapshot(result.queue);
+  }
+
+  /**
+   * Attempts delivery of one item now instead of waiting for it to reach the
+   * head. The response carries the queue after the attempt, so the client can
+   * tell a delivered item from one the admission fence refused: a busy or
+   * archived agent, or an item that is not `pending`, leaves the queue
+   * unchanged.
+   */
+  async sendNow(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    const current = await this.store.get(agentId);
+    if (current.revision !== expectedRevision) {
+      throw new QueueRevisionConflictError(expectedRevision, current.revision);
+    }
+    const item = current.items.find((candidate) => candidate.id === itemId);
+    if (!item || item.deliveryState !== "pending") {
+      return toAgentQueueSnapshot(current);
+    }
+    // Dispatch work is serialized per agent with the drain loop, so a send-now
+    // cannot interleave with an in-flight drain dispatch; awaiting the tail is
+    // what lets the response describe the queue after the attempt.
+    await this.runOnAgentTail(agentId, () => this.dispatchPendingItem(agentId, itemId));
+    return this.list(agentId);
   }
 
   /**
@@ -208,6 +563,18 @@ export class AgentQueueService {
     this.lastLifecycle.delete(agentId);
   }
 
+  private assertImagePayloadWithinLimit(images: Array<{ data: string; mimeType: string }>): void {
+    const total = images.reduce((sum, image) => sum + image.data.length, 0);
+    if (total > MAX_ITEM_IMAGE_BASE64_CHARS) {
+      throw new QueueImagePayloadTooLargeError(MAX_ITEM_IMAGE_BASE64_CHARS);
+    }
+  }
+
+  private async isArchived(agentId: string): Promise<boolean> {
+    const record = await this.agentStorage.get(agentId);
+    return record?.archivedAt != null;
+  }
+
   private handleAgentState(agentId: string, lifecycle: AgentLifecycleStatus): void {
     const previous = this.lastLifecycle.get(agentId);
     this.lastLifecycle.set(agentId, lifecycle);
@@ -222,19 +589,24 @@ export class AgentQueueService {
    * the next item, and dropping it strands the rest of the queue.
    */
   private scheduleDrain(agentId: string): void {
+    void this.runOnAgentTail(agentId, () => this.drain(agentId)).catch((error) => {
+      this.logger.warn({ err: error, agentId }, "Failed to drain queued agent message");
+    });
+  }
+
+  /** Runs one work item on the per-agent tail, serialized with drains. */
+  private async runOnAgentTail<T>(agentId: string, work: () => Promise<T>): Promise<T> {
     const previous = this.drainTails.get(agentId) ?? Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(() => this.drain(agentId))
-      .catch((error) => {
-        this.logger.warn({ err: error, agentId }, "Failed to drain queued agent message");
-      });
-    this.drainTails.set(agentId, next);
-    void next.finally(() => {
-      if (this.drainTails.get(agentId) === next) {
+    const next = previous.catch(() => undefined).then(work);
+    const tail = next.catch(() => undefined);
+    this.drainTails.set(agentId, tail as Promise<void>);
+    try {
+      return await next;
+    } finally {
+      if (this.drainTails.get(agentId) === tail) {
         this.drainTails.delete(agentId);
       }
-    });
+    }
   }
 
   /** Awaits in-flight drains. Tests and shutdown use it; nothing else should need it. */
@@ -248,53 +620,194 @@ export class AgentQueueService {
   /**
    * Sends the head of the queue when the agent is free. Serialized per agent so a
    * burst of state events cannot send the same item twice.
+   *
+   * The queue is strictly FIFO: an item that is not `pending` (dispatching,
+   * uncertain, failed) holds the line — later items must not silently overtake
+   * the message they follow up on.
    */
   private async drain(agentId: string): Promise<void> {
+    if (await this.isArchived(agentId)) {
+      // Archived agents keep their queue but never auto-run.
+      return;
+    }
     const agent = this.agentManager.getAgent(agentId);
-    if (agent && agent.lifecycle !== "idle" && agent.lifecycle !== "closed") {
+    if (!agent) {
       return;
     }
     const queue = await this.store.get(agentId);
-    const next = queue.items[0];
-    if (!next) {
+    const head = queue.items[0];
+    if (!head || head.deliveryState !== "pending") {
+      return;
+    }
+    if (head.intent === "queue" && agent.lifecycle !== "idle" && agent.lifecycle !== "closed") {
+      return;
+    }
+    await this.dispatchPendingItem(agentId, head.id);
+  }
+
+  /**
+   * One delivery attempt for a `pending` item: claim, dispatch through the
+   * receipt service, then remove on success or record the outcome on failure.
+   * Callers reach this only through the per-agent work tail, so two attempts on
+   * one agent never overlap.
+   */
+  private async dispatchPendingItem(agentId: string, itemId: string): Promise<void> {
+    if (await this.isArchived(agentId)) {
+      return;
+    }
+    const agent = this.agentManager.getAgent(agentId);
+    if (!agent) {
+      return;
+    }
+    const queue = await this.store.get(agentId);
+    const item = queue.items.find((candidate) => candidate.id === itemId);
+    if (!item || item.deliveryState !== "pending") {
+      return;
+    }
+    // A queue-intent dispatch needs a free agent; this also refuses a send-now
+    // aimed at a busy agent instead of replacing the turn that won the race.
+    if (item.intent === "queue" && agent.lifecycle !== "idle" && agent.lifecycle !== "closed") {
       return;
     }
 
-    // Claim the head before sending so a concurrent drain cannot send it twice.
-    // Remembering the drained id makes a late enqueue retry of this item a no-op.
-    const claimed = await this.store.mutate(agentId, (current) =>
-      current.items[0]?.id === next.id
-        ? {
-            ...current,
-            items: current.items.slice(1),
-            drainedIds: recordDrainedId(current.drainedIds, next.id),
-          }
-        : // Someone else changed the head while we were reading; try again later.
-          current,
-    );
+    // Claim before sending so a concurrent drain cannot send the item twice.
+    // The claim persists `dispatching`, so a crash here is a recoverable state,
+    // not a lost or duplicated prompt.
+    const claimed = await this.store.mutate(agentId, (current) => {
+      const target = current.items.find((candidate) => candidate.id === itemId);
+      if (!target || target.deliveryState !== "pending") {
+        return current;
+      }
+      return {
+        ...current,
+        items: current.items.map((candidate) =>
+          candidate.id === itemId
+            ? {
+                ...candidate,
+                deliveryState: "dispatching",
+                attempts: candidate.attempts + 1,
+                attemptSeq: candidate.attemptSeq + 1,
+              }
+            : candidate,
+        ),
+      };
+    });
     if (!claimed.changed) {
       return;
     }
     this.publish(claimed);
+    const claimedItem = claimed.queue.items.find((candidate) => candidate.id === itemId);
+    if (!claimedItem) {
+      return;
+    }
+
+    const prompt = buildAgentPrompt(
+      claimedItem.text,
+      claimedItem.images?.map(({ data, mimeType }) => ({ data, mimeType })),
+      claimedItem.attachments as AgentAttachment[] | undefined,
+    );
 
     try {
-      await this.sendPrompt({
-        agentId,
-        prompt: buildAgentPrompt(next.text, next.images, next.attachments as AgentAttachment[]),
-        messageId: next.id,
-      });
+      if (claimedItem.intent === "steer_strict" && agent.lifecycle === "running") {
+        await this.deliverStrictSteer(agentId, claimedItem, prompt);
+      } else {
+        await this.deliverAsRun(agentId, claimedItem, prompt);
+      }
     } catch (error) {
-      this.logger.warn(
-        { err: error, agentId, itemId: next.id },
-        "Queued agent message failed to send; returning it to the front of the queue",
-      );
-      const restored = await this.store.mutate(agentId, (current) => ({
+      if (error instanceof QueueSteerRefusedError) {
+        // The provider would not absorb the prompt and the turn kept running:
+        // not a dispatch attempt. Un-claim without burning an attempt; the next
+        // wakeup tries again, and a later turn end delivers it as a new run.
+        const reverted = await this.store.mutate(agentId, (current) => ({
+          ...current,
+          items: current.items.map((candidate) =>
+            candidate.id === itemId && candidate.deliveryState === "dispatching"
+              ? { ...candidate, deliveryState: "pending", attempts: candidate.attempts - 1 }
+              : candidate,
+          ),
+        }));
+        this.publish(reverted);
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ err: error, agentId, itemId }, "Queued agent message failed to send");
+      const failed = await this.store.mutate(agentId, (current) => ({
         ...current,
-        items: [next, ...current.items],
-        // The item is queued again, so its id must not read as already-delivered.
-        drainedIds: (current.drainedIds ?? []).filter((id) => id !== next.id),
+        items: current.items.map((candidate) => {
+          if (candidate.id !== itemId || candidate.deliveryState !== "dispatching") {
+            return candidate;
+          }
+          if (candidate.attempts >= DELIVERY_ATTEMPT_LIMIT) {
+            return { ...candidate, deliveryState: "failed", lastError: message };
+          }
+          return { ...candidate, deliveryState: "pending", lastError: message };
+        }),
       }));
-      this.publish(restored);
+      this.publish(failed);
+      return;
+    }
+
+    const delivered = await this.store.mutate(agentId, (current) => {
+      if (!current.items.some((candidate) => candidate.id === itemId)) {
+        return current;
+      }
+      return {
+        ...current,
+        items: current.items.filter((candidate) => candidate.id !== itemId),
+        drainedIds: recordDrainedId(current.drainedIds, itemId),
+      };
+    });
+    this.publish(delivered);
+  }
+
+  /**
+   * Normal run delivery for a free agent. A run that was reported started but
+   * never confirmed within the start budget is `uncertain`, not failed: the
+   * provider may still be working on the prompt.
+   */
+  private async deliverAsRun(
+    agentId: string,
+    item: StoredQueuedMessage,
+    prompt: AgentPromptInput,
+  ): Promise<void> {
+    const send = async () => {
+      const result = (await this.sendPrompt({
+        agentId,
+        prompt,
+        messageId: item.id,
+      })) as { disposition?: string } | undefined;
+      if (result?.disposition === "turn_started") {
+        await waitForAgentRunStartWithTimeout(this.agentManager as AgentManager, agentId);
+      }
+    };
+    if (this.receipts) {
+      await this.receipts.send({
+        agentId,
+        messageId: attemptReceiptId(item.id, item.attemptSeq),
+        request: { prompt, intent: item.intent },
+        send,
+      });
+      return;
+    }
+    await send();
+  }
+
+  /**
+   * Strict steering for a running agent: the active turn is asked to absorb the
+   * prompt through the shared admission, and refusal leaves the turn untouched.
+   * Steer attempts write no receipt — a refused attempt un-claims instead, so
+   * only the ambiguous crash window lands in recovery as `uncertain`.
+   */
+  private async deliverStrictSteer(
+    agentId: string,
+    item: StoredQueuedMessage,
+    prompt: AgentPromptInput,
+  ): Promise<void> {
+    const result = await this.agentManager.steerAgentRun(agentId, prompt, {
+      clientMessageId: item.id,
+    });
+    if (result.status !== "accepted") {
+      throw new QueueSteerRefusedError(item.id);
     }
   }
 

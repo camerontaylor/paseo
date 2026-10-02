@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 
-import type { AgentAttachment } from "@getpaseo/protocol/messages";
+import type { AgentAttachment, QueuedAgentDeliveryIntent } from "@getpaseo/protocol/messages";
 
 import { sendPromptToAgent } from "../agent/agent-prompt.js";
 import type { AgentManager } from "../agent/agent-manager.js";
@@ -16,6 +16,12 @@ export interface SendOrQueuePromptParams {
   queueService: AgentQueueService | null;
   agentId: string;
   text: string;
+  /**
+   * Explicit queue admission. Without it this helper is a plain send: a busy
+   * agent keeps the platform's receipt-backed interrupt semantics, and no
+   * prompt is ever queued because a surface forgot to decide.
+   */
+  intent?: QueuedAgentDeliveryIntent;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: AgentAttachment[];
   messageId?: string;
@@ -38,18 +44,28 @@ export interface SendOrQueueResult {
 }
 
 /**
- * The busy policy for every prompt surface: a prompt aimed at an agent with an
- * in-flight turn is queued and delivered when the turn completes, because
- * interrupting the turn aborts its in-flight tool calls — including running
- * provider subagents. `interrupt: true` is the explicit opt-in for the old
- * cancel-and-replace behavior. Out-of-band commands (e.g. /goal pause) still
- * run immediately; they never touch the active turn.
+ * The busy policy for prompt surfaces that opt into the durable queue. A prompt
+ * with an explicit `intent` aimed at an agent with an in-flight turn is queued
+ * and delivered when the turn completes, because interrupting the turn aborts
+ * its in-flight tool calls — including running provider subagents.
+ * `interrupt: true` is the explicit opt-in for the old cancel-and-replace
+ * behavior. Out-of-band commands (e.g. /goal pause) still run immediately; they
+ * never touch the active turn.
+ *
+ * The legacy `send_agent_message_request` handler does NOT route through here:
+ * it keeps its own receipt-backed path so old clients see exactly the released
+ * behavior.
  */
 export async function sendOrQueuePromptToAgent(
   params: SendOrQueuePromptParams,
 ): Promise<SendOrQueueResult> {
   const { queueService } = params;
-  if (!params.interrupt && queueService && params.agentManager.hasInFlightRun(params.agentId)) {
+  if (
+    !params.interrupt &&
+    params.intent &&
+    queueService &&
+    params.agentManager.hasInFlightRun(params.agentId)
+  ) {
     const prompt = buildAgentPrompt(params.text, params.images, params.attachments);
     if (params.agentManager.tryRunOutOfBand(params.agentId, prompt, params.runOptions)) {
       return { queued: false, outOfBand: true };
@@ -63,6 +79,7 @@ export async function sendOrQueuePromptToAgent(
       agentId: params.agentId,
       itemId: params.messageId ?? randomUUID(),
       text: params.text,
+      intent: params.intent,
       ...(params.images?.length ? { images: params.images } : {}),
       ...(params.attachments?.length ? { attachments: params.attachments } : {}),
     });

@@ -7,10 +7,16 @@ import type { AgentQueueSnapshot } from "@getpaseo/protocol/messages";
 import type { AgentLifecycleStatus } from "@getpaseo/protocol/agent-lifecycle";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
+import type { SteerResult } from "../agent/agent-sdk-types.js";
+import { MessageReceipts } from "../message-receipts/index.js";
 import type { AgentManagerEvent, ManagedAgent } from "../agent/agent-manager.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import {
   AgentQueueService,
+  DELIVERY_ATTEMPT_LIMIT,
+  QueueImagePayloadTooLargeError,
+  QueueItemDispatchingError,
+  QueueItemUncertainError,
   type AgentQueueAgentController,
   type SendQueuedPromptInput,
 } from "./service.js";
@@ -19,11 +25,14 @@ import { AgentQueueStore } from "./store.js";
 const AGENT_ID = "agent-1";
 
 /**
- * Stands in for the shared AgentManager: the queue service only needs the state
- * subscription and the lifecycle of the agent it is draining for.
+ * Stands in for the shared AgentManager: the queue service needs the state
+ * subscription, the lifecycle of the agent it is draining for, the strict-steer
+ * admission, and the run-start wait.
  */
 class FakeAgentController implements AgentQueueAgentController {
   lifecycle: AgentLifecycleStatus = "idle";
+  steerResult: SteerResult = { status: "unavailable" };
+  steerPrompts: unknown[] = [];
   private readonly subscribers = new Set<(event: AgentManagerEvent) => void>();
 
   subscribe = ((callback: (event: AgentManagerEvent) => void) => {
@@ -39,6 +48,13 @@ class FakeAgentController implements AgentQueueAgentController {
       lifecycle: this.lifecycle,
     }) as ManagedAgent) as AgentQueueAgentController["getAgent"];
 
+  steerAgentRun = (async (_agentId: string, prompt: unknown) => {
+    this.steerPrompts.push(prompt);
+    return this.steerResult;
+  }) as AgentQueueAgentController["steerAgentRun"];
+
+  waitForAgentRunStart = (async () => {}) as AgentQueueAgentController["waitForAgentRunStart"];
+
   emitLifecycle(lifecycle: AgentLifecycleStatus, agentId = AGENT_ID): void {
     this.lifecycle = lifecycle;
     for (const subscriber of this.subscribers) {
@@ -49,6 +65,7 @@ class FakeAgentController implements AgentQueueAgentController {
 
 interface Harness {
   service: AgentQueueService;
+  store: AgentQueueStore;
   agents: FakeAgentController;
   /** Every send the service attempted, including the ones that threw. */
   attempts: SendQueuedPromptInput[];
@@ -68,10 +85,11 @@ describe("AgentQueueService", () => {
     const broadcasts: AgentQueueSnapshot[] = [];
     let sendError: Error | null = null;
 
+    const store = new AgentQueueStore(join(dir, "queues"));
     const service = new AgentQueueService({
-      store: new AgentQueueStore(join(dir, "queues")),
+      store,
       agentManager: agents,
-      agentStorage: {} as AgentStorage,
+      agentStorage: { get: async () => undefined } as unknown as AgentStorage,
       logger: createTestLogger(),
       sendPrompt: async (input) => {
         attempts.push(input);
@@ -84,10 +102,10 @@ describe("AgentQueueService", () => {
       },
     });
     service.subscribeToMutations((snapshot) => broadcasts.push(snapshot));
-    service.start();
 
     return {
       service,
+      store,
       agents,
       attempts,
       sent,
@@ -101,6 +119,7 @@ describe("AgentQueueService", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "paseo-agent-queue-"));
     harness = createHarness();
+    harness.service.start();
   });
 
   afterEach(async () => {
@@ -112,17 +131,33 @@ describe("AgentQueueService", () => {
   test("broadcasts the queue to subscribers when an item is enqueued while the agent is busy", async () => {
     harness.agents.lifecycle = "running";
 
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "first" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
 
     expect(harness.sent).toEqual([]);
     expect(harness.broadcasts).toHaveLength(1);
     expect(harness.broadcasts[0]?.items.map((item) => item.text)).toEqual(["first"]);
+    // Delivery bookkeeping rides on every snapshot an enqueuing client sees.
+    expect(harness.broadcasts[0]?.items[0]).toMatchObject({
+      intent: "queue",
+      deliveryState: "pending",
+      attempts: 0,
+    });
   });
 
   test("a second client reads the same queue the first client wrote", async () => {
     harness.agents.lifecycle = "running";
 
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "from the phone" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "from the phone",
+      intent: "queue",
+    });
 
     const asSeenElsewhere = await harness.service.list(AGENT_ID);
     expect(asSeenElsewhere.items.map((item) => item.text)).toEqual(["from the phone"]);
@@ -130,7 +165,12 @@ describe("AgentQueueService", () => {
 
   test("queue survives a service restart", async () => {
     harness.agents.lifecycle = "running";
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "persisted" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "persisted",
+      intent: "queue",
+    });
 
     harness.service.stop();
     const restarted = createHarness();
@@ -145,8 +185,18 @@ describe("AgentQueueService", () => {
 
   test("drains the head when the agent stops running, with no client involved", async () => {
     harness.agents.lifecycle = "running";
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "first" });
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-2", text: "second" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-2",
+      text: "second",
+      intent: "queue",
+    });
 
     harness.agents.emitLifecycle("running");
     harness.agents.emitLifecycle("idle");
@@ -157,17 +207,32 @@ describe("AgentQueueService", () => {
   });
 
   test("sends immediately when the agent is already idle", async () => {
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "now" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "now",
+      intent: "queue",
+    });
     await harness.service.flushDrains();
 
     expect(harness.sent.map((input) => input.messageId)).toEqual(["item-1"]);
     expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
   });
 
-  test("a send that fails leaves the message at the front of the queue", async () => {
+  test("a send that fails leaves the message pending at the front of the queue", async () => {
     harness.agents.lifecycle = "running";
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "first" });
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-2", text: "second" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-2",
+      text: "second",
+      intent: "queue",
+    });
 
     harness.failSends(new Error("provider exploded"));
     harness.agents.emitLifecycle("running");
@@ -176,19 +241,28 @@ describe("AgentQueueService", () => {
 
     expect(harness.sent).toEqual([]);
     expect(harness.attempts.length).toBeGreaterThan(0);
-    expect((await harness.service.list(AGENT_ID)).items.map((item) => item.id)).toEqual([
-      "item-1",
-      "item-2",
-    ]);
+    const items = (await harness.service.list(AGENT_ID)).items;
+    expect(items.map((item) => item.id)).toEqual(["item-1", "item-2"]);
+    expect(items[0]).toMatchObject({ deliveryState: "pending", lastError: "provider exploded" });
   });
 
   test("removing an item broadcasts the shorter queue", async () => {
     harness.agents.lifecycle = "running";
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "first" });
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-2", text: "second" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
+    const second = await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-2",
+      text: "second",
+      intent: "queue",
+    });
     harness.broadcasts.length = 0;
 
-    await harness.service.remove(AGENT_ID, "item-1");
+    await harness.service.remove(AGENT_ID, "item-1", second.revision);
 
     expect(harness.broadcasts).toHaveLength(1);
     expect(harness.broadcasts[0]?.items.map((item) => item.id)).toEqual(["item-2"]);
@@ -196,12 +270,46 @@ describe("AgentQueueService", () => {
 
   test("removing an unknown item changes nothing and broadcasts nothing", async () => {
     harness.agents.lifecycle = "running";
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "first" });
+    const first = await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
     harness.broadcasts.length = 0;
 
-    const snapshot = await harness.service.remove(AGENT_ID, "does-not-exist");
+    const snapshot = await harness.service.remove(AGENT_ID, "does-not-exist", first.revision);
 
     expect(snapshot.items.map((item) => item.id)).toEqual(["item-1"]);
+    expect(harness.broadcasts).toEqual([]);
+  });
+
+  test("a mutation carrying a stale revision is rejected, not applied", async () => {
+    harness.agents.lifecycle = "running";
+    const first = await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
+
+    // Another device adds its own item; the first device's view is now stale.
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-2",
+      text: "from the other device",
+      intent: "queue",
+    });
+    harness.broadcasts.length = 0;
+
+    await expect(harness.service.remove(AGENT_ID, "item-1", first.revision)).rejects.toMatchObject({
+      code: "queue_revision_conflict",
+    });
+
+    expect((await harness.service.list(AGENT_ID)).items.map((item) => item.id)).toEqual([
+      "item-1",
+      "item-2",
+    ]);
     expect(harness.broadcasts).toEqual([]);
   });
 
@@ -211,18 +319,21 @@ describe("AgentQueueService", () => {
       agentId: AGENT_ID,
       itemId: "item-1",
       text: "first",
+      intent: "queue",
     });
     const second = await harness.service.enqueue({
       agentId: AGENT_ID,
       itemId: "item-2",
       text: "second",
+      intent: "queue",
     });
-    const afterRemovingBoth = await harness.service.remove(AGENT_ID, "item-1");
-    const emptied = await harness.service.remove(AGENT_ID, "item-2");
+    const afterRemovingBoth = await harness.service.remove(AGENT_ID, "item-1", second.revision);
+    const emptied = await harness.service.remove(AGENT_ID, "item-2", afterRemovingBoth.revision);
     const refilled = await harness.service.enqueue({
       agentId: AGENT_ID,
       itemId: "item-3",
       text: "third",
+      intent: "queue",
     });
 
     expect(emptied.items).toEqual([]);
@@ -237,13 +348,29 @@ describe("AgentQueueService", () => {
 
   test("reorder moves an item to the front and leaves unmentioned ids at the end", async () => {
     harness.agents.lifecycle = "running";
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "first" });
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-2", text: "second" });
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-3", text: "third" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
+    const second = await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-2",
+      text: "second",
+      intent: "queue",
+    });
+    const third = await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-3",
+      text: "third",
+      intent: "queue",
+    });
 
-    const snapshot = await harness.service.reorder(AGENT_ID, ["item-3", "item-1"]);
+    const snapshot = await harness.service.reorder(AGENT_ID, ["item-3", "item-1"], third.revision);
 
     expect(snapshot.items.map((item) => item.id)).toEqual(["item-3", "item-1", "item-2"]);
+    expect(second.revision).toBe(2);
   });
 
   test("image bytes are stored but never broadcast", async () => {
@@ -253,6 +380,7 @@ describe("AgentQueueService", () => {
       agentId: AGENT_ID,
       itemId: "item-1",
       text: "look at this",
+      intent: "queue",
       images: [{ data: "AAAA", mimeType: "image/png" }],
     });
 
@@ -261,14 +389,19 @@ describe("AgentQueueService", () => {
     expect(JSON.stringify(snapshot)).not.toContain("AAAA");
   });
 
-  test("queued images reach the agent as prompt image blocks on drain", async () => {
+  test("queued images reach the agent as prompt image blocks on drain and round-trip on demand", async () => {
     harness.agents.lifecycle = "running";
     await harness.service.enqueue({
       agentId: AGENT_ID,
       itemId: "item-1",
       text: "look at this",
+      intent: "queue",
       images: [{ data: "AAAA", mimeType: "image/png" }],
     });
+
+    // A different device can pull the exact bytes back for its composer.
+    const images = await harness.service.getItemImages(AGENT_ID, "item-1");
+    expect(images.map((image) => image.data)).toEqual(["AAAA"]);
 
     harness.agents.emitLifecycle("running");
     harness.agents.emitLifecycle("idle");
@@ -278,28 +411,88 @@ describe("AgentQueueService", () => {
       { type: "text", text: "look at this" },
       { type: "image", data: "AAAA", mimeType: "image/png" },
     ]);
+    await expect(harness.service.getItemImages(AGENT_ID, "item-1")).rejects.toThrow(
+      /no longer queued/,
+    );
   });
 
   test("rejects an empty message", async () => {
     await expect(
-      harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "   " }),
+      harness.service.enqueue({
+        agentId: AGENT_ID,
+        itemId: "item-1",
+        text: "   ",
+        intent: "queue",
+      }),
     ).rejects.toThrow(/empty/i);
+  });
+
+  test("rejects an enqueue past the queue length bound", async () => {
+    harness.agents.lifecycle = "running";
+    let revision = 0;
+    for (let index = 0; index < 50; index += 1) {
+      const snapshot = await harness.service.enqueue({
+        agentId: AGENT_ID,
+        itemId: `item-${index}`,
+        text: `message ${index}`,
+        intent: "queue",
+      });
+      revision = snapshot.revision;
+    }
+    expect(revision).toBe(50);
+
+    await expect(
+      harness.service.enqueue({
+        agentId: AGENT_ID,
+        itemId: "item-over",
+        text: "one too many",
+        intent: "queue",
+      }),
+    ).rejects.toMatchObject({ code: "queue_full", limit: 50 });
+    expect((await harness.service.list(AGENT_ID)).items).toHaveLength(50);
+  });
+
+  test("rejects an item whose images exceed the payload bound", async () => {
+    harness.agents.lifecycle = "running";
+    const oversized = "A".repeat(16 * 1024 * 1024 + 1);
+
+    await expect(
+      harness.service.enqueue({
+        agentId: AGENT_ID,
+        itemId: "item-1",
+        text: "with a huge image",
+        intent: "queue",
+        images: [{ data: oversized, mimeType: "image/png" }],
+      }),
+    ).rejects.toBeInstanceOf(QueueImagePayloadTooLargeError);
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
   });
 
   test("re-enqueueing the same id is a retry, not a duplicate", async () => {
     harness.agents.lifecycle = "running";
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "first" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
     const snapshot = await harness.service.enqueue({
       agentId: AGENT_ID,
       itemId: "item-1",
       text: "first",
+      intent: "queue",
     });
 
     expect(snapshot.items.map((item) => item.id)).toEqual(["item-1"]);
   });
 
   test("an enqueue retry that lands after the item drained does not resend it", async () => {
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "once" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "once",
+      intent: "queue",
+    });
     await harness.service.flushDrains();
     expect(harness.sent.map((input) => input.messageId)).toEqual(["item-1"]);
 
@@ -310,6 +503,7 @@ describe("AgentQueueService", () => {
       agentId: AGENT_ID,
       itemId: "item-1",
       text: "once",
+      intent: "queue",
     });
     await harness.service.flushDrains();
 
@@ -317,9 +511,14 @@ describe("AgentQueueService", () => {
     expect(harness.sent.map((input) => input.messageId)).toEqual(["item-1"]);
   });
 
-  test("a send failure clears the drained marker so the item can drain again", async () => {
+  test("a failed delivery retries on the next wakeup and delivers once", async () => {
     harness.agents.lifecycle = "running";
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "flaky" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "flaky",
+      intent: "queue",
+    });
 
     harness.failSends(new Error("provider exploded"));
     harness.agents.emitLifecycle("running");
@@ -333,14 +532,482 @@ describe("AgentQueueService", () => {
     await harness.service.flushDrains();
 
     expect(harness.sent.map((input) => input.messageId)).toEqual(["item-1"]);
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+  });
+
+  test("repeated known failures end in a visible failed state at the attempt limit", async () => {
+    harness.agents.lifecycle = "running";
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "doomed",
+      intent: "queue",
+    });
+
+    harness.failSends(new Error("provider exploded"));
+    for (let attempt = 0; attempt < DELIVERY_ATTEMPT_LIMIT; attempt += 1) {
+      harness.agents.emitLifecycle("running");
+      harness.agents.emitLifecycle("idle");
+      await harness.service.flushDrains();
+    }
+
+    const items = (await harness.service.list(AGENT_ID)).items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      deliveryState: "failed",
+      attempts: DELIVERY_ATTEMPT_LIMIT,
+      lastError: "provider exploded",
+    });
+    expect(harness.attempts).toHaveLength(DELIVERY_ATTEMPT_LIMIT);
+
+    // An explicit retry is the only way back to deliverable.
+    harness.failSends(null);
+    const revision = (await harness.service.list(AGENT_ID)).revision;
+    const snapshot = await harness.service.retry(AGENT_ID, "item-1", revision);
+    expect(snapshot.items[0]).toMatchObject({ deliveryState: "pending", attempts: 0 });
+    await harness.service.flushDrains();
+    expect(harness.sent.map((input) => input.messageId)).toEqual(["item-1"]);
+  });
+
+  test("editing an item replaces its content and resets its delivery state", async () => {
+    harness.agents.lifecycle = "running";
+    const enqueued = await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "before the edit",
+      intent: "queue",
+    });
+
+    const snapshot = await harness.service.update(AGENT_ID, "item-1", enqueued.revision, {
+      text: "after the edit",
+      images: [{ data: "BBBB", mimeType: "image/jpeg" }],
+    });
+
+    expect(snapshot.items[0]).toMatchObject({
+      text: "after the edit",
+      deliveryState: "pending",
+      attempts: 0,
+    });
+    expect(snapshot.items[0]?.images?.[0]?.byteSize).toBe(3);
+
+    harness.agents.emitLifecycle("running");
+    harness.agents.emitLifecycle("idle");
+    await harness.service.flushDrains();
+    expect(harness.sent[0]?.prompt).toEqual([
+      { type: "text", text: "after the edit" },
+      { type: "image", data: "BBBB", mimeType: "image/jpeg" },
+    ]);
+  });
+
+  test("editing refuses a dispatching item and demands a decision on an uncertain item", async () => {
+    harness.agents.lifecycle = "running";
+    const now = new Date().toISOString();
+    await harness.store.mutate(AGENT_ID, (current) => ({
+      ...current,
+      items: [
+        {
+          id: "item-1",
+          text: "in flight",
+          intent: "queue",
+          deliveryState: "dispatching",
+          attempts: 1,
+          attemptSeq: 1,
+          createdAt: now,
+        },
+        {
+          id: "item-2",
+          text: "ambiguous",
+          intent: "queue",
+          deliveryState: "uncertain",
+          attempts: 1,
+          attemptSeq: 1,
+          lastError: "agent_request_outcome_unknown",
+          createdAt: now,
+        },
+      ],
+    }));
+    const revision = (await harness.service.list(AGENT_ID)).revision;
+
+    await expect(
+      harness.service.update(AGENT_ID, "item-1", revision, { text: "edited mid-flight" }),
+    ).rejects.toBeInstanceOf(QueueItemDispatchingError);
+    await expect(
+      harness.service.update(AGENT_ID, "item-2", revision, { text: "edited while uncertain" }),
+    ).rejects.toBeInstanceOf(QueueItemUncertainError);
+    // Deletion of an in-flight item is refused too; the ambiguous one is
+    // deletable — that is the explicit discard.
+    await expect(harness.service.remove(AGENT_ID, "item-1", revision)).rejects.toBeInstanceOf(
+      QueueItemDispatchingError,
+    );
+    const discarded = await harness.service.remove(AGENT_ID, "item-2", revision);
+    expect(discarded.items.map((item) => item.id)).toEqual(["item-1"]);
   });
 
   test("deleting an agent drops its queue", async () => {
     harness.agents.lifecycle = "running";
-    await harness.service.enqueue({ agentId: AGENT_ID, itemId: "item-1", text: "first" });
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
 
     await harness.service.deleteForAgent(AGENT_ID);
 
     expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+  });
+
+  test("send_now delivers a pending item from a free agent and reports the post-attempt queue", async () => {
+    harness.agents.lifecycle = "running";
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "first",
+      intent: "queue",
+    });
+    const second = await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-2",
+      text: "urgent second",
+      intent: "queue",
+    });
+
+    // An explicit send-now may deliver a later item to a free agent: the
+    // response shows it gone while the head remains queued. The enqueues armed
+    // drain attempts that were refused while busy, so settle them first.
+    await harness.service.flushDrains();
+    harness.agents.lifecycle = "idle";
+    const snapshot = await harness.service.sendNow(AGENT_ID, "item-2", second.revision);
+    expect(snapshot.items.map((item) => item.id)).toEqual(["item-1"]);
+    expect(harness.sent.map((input) => input.messageId)).toEqual(["item-2"]);
+  });
+
+  test("send_now on a busy agent refuses without touching the queue", async () => {
+    harness.agents.lifecycle = "running";
+    const enqueued = await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "wait your turn",
+      intent: "queue",
+    });
+    harness.broadcasts.length = 0;
+
+    const snapshot = await harness.service.sendNow(AGENT_ID, "item-1", enqueued.revision);
+
+    expect(snapshot.items.map((item) => item.id)).toEqual(["item-1"]);
+    expect(snapshot.items[0]).toMatchObject({ deliveryState: "pending" });
+    expect(harness.sent).toEqual([]);
+    expect(harness.broadcasts).toEqual([]);
+  });
+
+  test("a refused strict steer leaves the turn running, the item pending, and burns no attempt", async () => {
+    harness.agents.lifecycle = "running";
+    harness.agents.steerResult = { status: "unavailable" };
+
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "steer this",
+      intent: "steer_strict",
+    });
+    await harness.service.flushDrains();
+
+    // The admission was asked once, refused, and nothing was interrupted.
+    expect(harness.agents.steerPrompts).toHaveLength(1);
+    expect(harness.agents.lifecycle).toBe("running");
+    expect(harness.sent).toEqual([]);
+    const items = (await harness.service.list(AGENT_ID)).items;
+    expect(items[0]).toMatchObject({ deliveryState: "pending", attempts: 0 });
+
+    // When the turn later ends, the item is delivered as a normal run — the
+    // fallback that never interrupts anything.
+    harness.agents.emitLifecycle("running");
+    harness.agents.emitLifecycle("idle");
+    await harness.service.flushDrains();
+    expect(harness.sent.map((input) => input.messageId)).toEqual(["item-1"]);
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+  });
+
+  test("an accepted strict steer delivers into the running turn", async () => {
+    harness.agents.lifecycle = "running";
+    harness.agents.steerResult = { status: "accepted" };
+
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "steer this",
+      intent: "steer_strict",
+    });
+    await harness.service.flushDrains();
+
+    expect(harness.agents.steerPrompts).toHaveLength(1);
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+    expect(harness.sent).toEqual([]);
+  });
+
+  test("a steer_strict item on an idle agent is delivered as a normal run", async () => {
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "item-1",
+      text: "arrived after the turn ended",
+      intent: "steer_strict",
+    });
+    await harness.service.flushDrains();
+
+    expect(harness.sent.map((input) => input.messageId)).toEqual(["item-1"]);
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+  });
+});
+
+describe("AgentQueueService startup recovery", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "paseo-agent-queue-recovery-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  interface RecoveryHarness {
+    service: AgentQueueService;
+    agents: FakeAgentController;
+    store: AgentQueueStore;
+    receipts: MessageReceipts;
+    sent: SendQueuedPromptInput[];
+  }
+
+  async function createRecoveryHarness(): Promise<RecoveryHarness> {
+    const agents = new FakeAgentController();
+    const receipts = new MessageReceipts(join(dir, "agent-requests"));
+    const store = new AgentQueueStore(join(dir, "queues"));
+    const sent: SendQueuedPromptInput[] = [];
+    const service = new AgentQueueService({
+      store,
+      agentManager: agents,
+      agentStorage: { get: async () => undefined } as unknown as AgentStorage,
+      logger: createTestLogger(),
+      receipts,
+      sendPrompt: async (input) => {
+        sent.push(input);
+        agents.lifecycle = "running";
+      },
+    });
+    return { service, agents, store, receipts, sent };
+  }
+
+  test("activates without dispatching, then resumes only never-dispatched items", async () => {
+    const first = await createRecoveryHarness();
+    first.agents.lifecycle = "running";
+    await first.service.start();
+    await first.service.enqueue({
+      agentId: "agent-a",
+      itemId: "kept",
+      text: "queued before the restart",
+      intent: "queue",
+    });
+    await first.service.enqueue({
+      agentId: "agent-a",
+      itemId: "removed",
+      text: "deleted before the restart",
+      intent: "queue",
+    });
+    const before = await first.service.list("agent-a");
+    await first.service.remove("agent-a", "removed", before.revision);
+    await first.service.stop();
+
+    // A restarted daemon loads the queue without dispatching: construction and
+    // activation are separate, and agents that are not loaded stay untouched.
+    const second = await createRecoveryHarness();
+    expect((await second.service.list("agent-a")).items.map((item) => item.id)).toEqual(["kept"]);
+    expect(second.sent).toEqual([]);
+
+    // The agent is loaded and idle at activation time, so the never-dispatched
+    // item resumes exactly once.
+    second.agents.lifecycle = "idle";
+    await second.service.activate();
+    expect(second.sent.map((input) => input.messageId)).toEqual(["kept"]);
+    expect((await second.service.list("agent-a")).items).toEqual([]);
+    await second.service.stop();
+  });
+
+  test("a claim whose receipt completed is delivered, not resent", async () => {
+    const harness = await createRecoveryHarness();
+    const prompt = [{ type: "text", text: "crashed mid-dispatch" }];
+    // Simulate a crash after the provider took the prompt: the attempt's
+    // receipt reached `completed` but the queue still holds the claim.
+    await harness.receipts.send({
+      agentId: "agent-a",
+      messageId: "claimed#1",
+      request: { prompt, intent: "queue" },
+      send: async () => {},
+    });
+    await harness.store.mutate("agent-a", (current) => ({
+      ...current,
+      items: [
+        {
+          id: "claimed",
+          text: "crashed mid-dispatch",
+          intent: "queue",
+          deliveryState: "dispatching",
+          attempts: 1,
+          attemptSeq: 1,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    }));
+
+    await harness.service.activate();
+
+    expect((await harness.service.list("agent-a")).items).toEqual([]);
+    expect(harness.sent).toEqual([]);
+    await harness.service.stop();
+  });
+
+  test("a claim whose receipt is pending holds as uncertain and is never auto-resent", async () => {
+    const harness = await createRecoveryHarness();
+    const prompt = [{ type: "text", text: "crashed before the receipt" }];
+    // The receipt was committed but the send never completed: the provider may
+    // or may not have the prompt. The simulated crash rejects the send.
+    await harness.receipts
+      .send({
+        agentId: "agent-a",
+        messageId: "claimed#1",
+        request: { prompt, intent: "queue" },
+        send: async () => {
+          throw new Error("daemon restarted mid-send");
+        },
+      })
+      .catch(() => undefined);
+    await harness.store.mutate("agent-a", (current) => ({
+      ...current,
+      items: [
+        {
+          id: "claimed",
+          text: "crashed before the receipt",
+          intent: "queue",
+          deliveryState: "dispatching",
+          attempts: 1,
+          attemptSeq: 1,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    }));
+
+    await harness.service.activate();
+    await harness.service.flushDrains();
+
+    const items = (await harness.service.list("agent-a")).items;
+    expect(items[0]).toMatchObject({
+      deliveryState: "uncertain",
+      lastError: "agent_request_outcome_unknown",
+    });
+    expect(harness.sent).toEqual([]);
+
+    // The explicit user decision is the only path that resends it.
+    const snapshot = await harness.service.retry(
+      "agent-a",
+      "claimed",
+      (await harness.service.list("agent-a")).revision,
+    );
+    expect(snapshot.items[0]).toMatchObject({ deliveryState: "pending", attempts: 0 });
+    await harness.service.flushDrains();
+    expect(harness.sent.map((input) => input.messageId)).toEqual(["claimed"]);
+    await harness.service.stop();
+  });
+
+  test("a queue-intent claim with no receipt resumes as never dispatched", async () => {
+    const harness = await createRecoveryHarness();
+    // Crash between claim and dispatch: the receipt layer saw nothing, so the
+    // prompt never reached the provider.
+    await harness.store.mutate("agent-a", (current) => ({
+      ...current,
+      items: [
+        {
+          id: "claimed",
+          text: "claimed but never sent",
+          intent: "queue",
+          deliveryState: "dispatching",
+          attempts: 1,
+          attemptSeq: 1,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    }));
+
+    // Recovery returns the claim to `pending` instead of holding it, and the
+    // activation then delivers it exactly once to the loaded, idle agent.
+    await harness.service.activate();
+
+    expect(harness.sent.map((input) => input.messageId)).toEqual(["claimed"]);
+    expect((await harness.service.list("agent-a")).items).toEqual([]);
+    await harness.service.stop();
+  });
+
+  test("a steer_strict claim with no receipt holds as uncertain", async () => {
+    const harness = await createRecoveryHarness();
+    await harness.store.mutate("agent-a", (current) => ({
+      ...current,
+      items: [
+        {
+          id: "steered-maybe",
+          text: "steer interrupted by a crash",
+          intent: "steer_strict",
+          deliveryState: "dispatching",
+          attempts: 1,
+          attemptSeq: 1,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    }));
+
+    await harness.service.activate();
+    await harness.service.flushDrains();
+
+    expect((await harness.service.list("agent-a")).items[0]).toMatchObject({
+      deliveryState: "uncertain",
+      lastError: "queue_claim_interrupted",
+    });
+    expect(harness.sent).toEqual([]);
+    await harness.service.stop();
+  });
+
+  test("an archived agent keeps its queue and never auto-runs it", async () => {
+    const records = new Map<string, { archivedAt?: string }>([
+      ["agent-archived", { archivedAt: "2026-01-01T00:00:00.000Z" }],
+    ]);
+    const agents = new FakeAgentController();
+    const sent: SendQueuedPromptInput[] = [];
+    const service = new AgentQueueService({
+      store: new AgentQueueStore(join(dir, "queues")),
+      agentManager: agents,
+      agentStorage: {
+        get: async (agentId: string) => records.get(agentId),
+      } as unknown as AgentStorage,
+      logger: createTestLogger(),
+      sendPrompt: async (input) => {
+        sent.push(input);
+        agents.lifecycle = "running";
+      },
+    });
+
+    await service.enqueue({
+      agentId: "agent-archived",
+      itemId: "item-1",
+      text: "waiting for a restored agent",
+      intent: "queue",
+    });
+    await service.flushDrains();
+
+    agents.lifecycle = "idle";
+    agents.emitLifecycle("running");
+    agents.emitLifecycle("idle");
+    await service.activate();
+    await service.flushDrains();
+
+    expect(sent).toEqual([]);
+    expect((await service.list("agent-archived")).items.map((item) => item.id)).toEqual(["item-1"]);
+    await service.stop();
   });
 });
