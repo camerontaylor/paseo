@@ -77,9 +77,11 @@ every mutation so a client can drop a stale broadcast that arrives out of order.
 Editing uses `itemId`, `expectedText`, and the replacement text. The daemon rejects a stale edit
 or an item already claimed for delivery. It changes only the text, preserving the item's ID,
 `createdAt`, attachments, images, and position. Both clients receive the next full snapshot.
-If an edit fails while the item is still queued, the editor remains open so the user can copy or
-revise the draft. The capability flag
-`queueEdit` prevents a newer client from sending this RPC to an older daemon.
+The capability flag `queueEdit` prevents a newer client from sending this RPC to an older daemon.
+
+Remove cancels one queued item without interrupting a running turn or undoing a delivered message.
+An item already claimed for submission cannot be removed. For offline cancellation, see
+[The un-acked window](#the-un-acked-window).
 
 Send-now is a daemon operation gated by `queueSendNow`. It reads the authoritative stored item,
 blocks concurrent edits, and sends that content with strict steering. On daemons with delivery
@@ -161,17 +163,29 @@ pulls the item back into its composer.
 **The agent-side attachment form is lossy in reverse.** `splitComposerAttachmentsForSubmit` turns
 workspace attachments into text, reshapes forge items, and flattens browser-element screenshots into
 images. Nothing can turn that back into the pills the author saw. Storing only the agent-side form
-would make Edit on a second device silently drop attachments, so the item carries the composer-side
+would lose the original attachment metadata on a second device, so the item carries the composer-side
 view of its non-image attachments as well. That list is device-independent by construction: it holds
 uploaded-file handles, workspace file paths, and forge items, never a local storage key.
 
-Edit therefore restores the same content on every device: text, the composer-side attachments, and
-the images fetched back from the daemon.
+The inline editor changes only text; both attachment lists and image bytes stay on the daemon.
+
+## Composer controls
+
+Expand the queue, then tap a message to expand or collapse its full text. Scroll the queue to read
+long messages; the queue and multiline editor scroll within bounded heights.
+
+Save, Done, leaving the input, collapsing the queue, or leaving the workspace attempts to save
+changed text. The existing draft store retains the local text and host baseline until the host
+confirms the edit. A stale or failed edit stays recoverable; Done does not discard it.
+
+Remove is available for host-accepted rows and rows waiting to sync. While removal is unconfirmed,
+the row shows pending or failure feedback and cannot be edited or sent now. Tap Remove to retry a
+failed removal; reconnect also retries it.
 
 ## Reconciliation
 
 The server is authoritative. Session state stores only daemon snapshots; the composer overlays
-durable local outbox entries until the daemon acknowledges them:
+durable local outbox entries until the daemon acknowledges enqueue or removal:
 
 1. Before clearing the composer or attempting delivery, enqueue persists a full local outbox entry.
    The composer shows it as waiting to sync until an authoritative snapshot includes its id.
@@ -201,11 +215,11 @@ failures the client shows one attention message and continues retrying.
 
 On every (re)connect that advertises `agentMessageQueue` (the `server_info`
 status message, which is exactly the re-established-transport signal), the
-session flushes the outbox: each entry is re-sent through the ordinary enqueue
-RPC, oldest first within each agent. Fresh enqueues use the same dispatch path;
-a failed predecessor blocks later items for that agent while other agents proceed.
-Re-sending is safe because the daemon treats an enqueue with
-a known item id as a retry:
+session flushes the outbox oldest first within each agent. Enqueue entries use
+the ordinary enqueue RPC; removal intents use the remove RPC and are never
+re-enqueued. A failed predecessor blocks later items for that agent while other
+agents proceed. Re-sending an enqueue is safe because the daemon treats a
+known item id as a retry:
 
 - an id already in the queue is a no-op (this existed from the start), and
 - an id in the queue's `drainedIds` — a capped memory of recently delivered
@@ -213,28 +227,28 @@ a known item id as a retry:
   cannot deliver it twice. A failed drain removes the id again so the restored
   item stays sendable.
 
-Snapshots still replace the local list wholesale, with one exception:
-The composer uses `appendPendingQueueRows` to overlay un-acked outbox rows on
-the stored snapshot. Keep that overlay out of session snapshot state so removing
-an acknowledged outbox entry also removes its local row. Equal-revision snapshots
-reconcile optimistic rows; older revisions remain ignored. An
-entry that keeps failing stays in the device's durable outbox and visible queue.
-At `QUEUE_OUTBOX_MAX_ATTEMPTS` failed reconnects, the client shows an attention
-message once; future reconnects keep retrying. Only an acknowledgement removes
-the payload. Rows absent from the latest authoritative snapshot are labeled
-"Waiting to sync with host" and cannot be edited or sent from the daemon queue.
-Inclusion in an authoritative snapshot also acknowledges the enqueue and removes
-its outbox payload before editing is available. A lost response therefore cannot
-leave an obsolete retry payload after an accepted item is edited.
+Snapshots still replace the local list wholesale. The composer uses
+`appendPendingQueueRows` to overlay un-acked outbox rows on the stored snapshot.
+Keep that overlay out of session snapshot state so acknowledging an outbox entry
+also removes its local row. Equal-revision snapshots reconcile optimistic rows;
+older revisions remain ignored. An entry that keeps failing stays in the
+device's durable outbox and visible queue. At `QUEUE_OUTBOX_MAX_ATTEMPTS` failed
+reconnects, the client shows an attention message once; future reconnects keep
+retrying. Only a host acknowledgement removes an outbox entry. Rows absent from
+the latest authoritative snapshot are labeled "Waiting to sync with host" unless
+removal is pending, and cannot be edited or sent from the daemon queue. Inclusion in a snapshot
+acknowledges an enqueue only when no removal intent is pending. Persist removal intent
+before attempting the remove RPC. The intent survives snapshots that still include
+its item; after the RPC is acknowledged, persist its deletion from the outbox.
+This also reconciles a lost enqueue response without resending the canceled payload.
 
 ## Known edges
 
 `agent.queue.reorder.request` has a schema and a handler but no UI. Today's composer has no reorder
 affordance; adding one is a separate change.
 
-The inline editor currently changes text only. Attachments stay on the queued item. A message
-that is claimed for delivery while its editor is open disappears from the queue and cannot be
-edited afterward.
+A message that is claimed for delivery while its editor is open disappears from the queue and
+cannot be edited afterward.
 
 Nothing drains on daemon startup. Queues persist across a restart, but a leftover item waits for the
 next running → idle edge or the next enqueue rather than resuming the agent at boot. Auto-starting
