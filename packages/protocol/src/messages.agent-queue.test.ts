@@ -8,6 +8,8 @@ import {
   AgentQueueUpdateMessageSchema,
   SendAgentMessageRequestSchema,
   ServerInfoStatusPayloadSchema,
+  SessionEventSubscriptionSchema,
+  SessionEventsSetSubscriptionRequestSchema,
   SessionInboundMessageSchema,
   SessionOutboundMessageSchema,
 } from "./messages";
@@ -79,6 +81,19 @@ describe("durable agent queue wire contract", () => {
         SessionOutboundMessageSchema.options.map((option) => option.shape.type.value),
       ).toContain(type);
     }
+  });
+
+  it("lets a queue-aware client subscribe to the queue broadcast", () => {
+    // A client cannot mirror the queue without subscribing to it, and the
+    // daemon only delivers the event to durableAgentQueue-capable clients.
+    expect(SessionEventSubscriptionSchema.options).toContain("agent.queue.update");
+    expect(() =>
+      SessionEventsSetSubscriptionRequestSchema.parse({
+        type: "session.events.set_subscription.request",
+        requestId: "req-1",
+        events: ["agent.queue.update"],
+      }),
+    ).not.toThrow();
   });
 
   it("never sends image bytes in a queue snapshot", () => {

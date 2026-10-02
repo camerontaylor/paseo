@@ -3396,6 +3396,10 @@ export const SessionEventSubscriptionSchema = z.enum([
   "script_status_update",
   "workspace_setup_progress",
   "agent.provider_subagents.update",
+  // COMPAT(durableAgentQueue): fork addition (TM-02). Only sent by clients that
+  // saw features.durableAgentQueueV1; an old daemon parsing this enum rejects
+  // the subscription request, which is why the client gates before subscribing.
+  "agent.queue.update",
   "terminal_attention_required",
   "status.server_info",
   "status.daemon_config_changed",
