@@ -2035,6 +2035,15 @@ export const ar: TranslationResources = {
     emptyPane: {
       title: "لوحة فارغة",
     },
+    broadcast: {
+      title: "البث إلى العرض",
+      button: "بث",
+      placeholder: "رسالة إلى كل الوكلاء في هذا العرض",
+      send: "إرسال إلى الكل",
+      summary:
+        "سيستلمها {{send}} الآن، و{{queue}} مشغولون سيستلمونها في قائمة الانتظار، و{{skip}} غير متاحين.",
+      result: "البث: أُرسل {{sent}}، وفي الانتظار {{queued}}، وتُخطي {{skipped}}.",
+    },
     picker: {
       addTitle: "إضافة جلسة",
       splitTitle: "تقسيم مع جلسة",

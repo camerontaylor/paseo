@@ -12,7 +12,7 @@ import { formatTimeAgo } from "@/utils/time";
 
 export type ViewSessionPickerRequest =
   | { mode: "pane"; paneId: string | null }
-  | { mode: "split"; paneId: string | null };
+  | { mode: "split"; paneId: string | null; position?: "right" | "bottom" };
 
 export interface ViewSessionPickerRow {
   key: string;

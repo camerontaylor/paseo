@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { router, type Href } from "expo-router";
-import { ChevronLeft, ChevronRight, Columns2, Trash2 } from "lucide-react-native";
+import { ChevronLeft, ChevronRight, Columns2, Radio, Trash2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -9,7 +9,9 @@ import { NavigationBackButton } from "@/components/headers/navigation-back-butto
 import { ScreenHeader } from "@/components/headers/screen-header";
 import { AdaptiveRenameModal } from "@/components/rename-modal";
 import { Button } from "@/components/ui/button";
+import { useWorkspaceFields } from "@/stores/session-store-hooks";
 import { useViewsStore } from "@/stores/views-store";
+import type { WorkspaceTabScope } from "@/workspace-tabs/model";
 import { buildOpenProjectRoute } from "@/utils/host-routes";
 
 export interface ViewPanePager {
@@ -21,14 +23,30 @@ export interface ViewPanePager {
 export function ViewScreenHeader({
   viewId,
   pager,
+  focusedScope,
+  broadcastTargetCount,
+  onBroadcast,
   onSplitWithSession,
 }: {
   viewId: string;
   pager: ViewPanePager | null;
+  /** The project of the focused pane's tab; the header follows focus like iTerm's title. */
+  focusedScope: WorkspaceTabScope | null;
+  broadcastTargetCount: number;
+  onBroadcast: () => void;
   onSplitWithSession: () => void;
 }) {
   const { t } = useTranslation();
   const name = useViewsStore((state) => state.views[viewId]?.name ?? "");
+  const focusedProject = useWorkspaceFields(
+    focusedScope?.serverId ?? null,
+    focusedScope?.workspaceId ?? null,
+    (workspace) => {
+      const project = workspace.projectCustomName || workspace.projectDisplayName;
+      const branch = workspace.gitRuntime?.currentBranch ?? workspace.title ?? workspace.name;
+      return branch ? `${project} · ${branch}` : project;
+    },
+  );
   const [renaming, setRenaming] = useState(false);
   const startRename = useCallback(() => setRenaming(true), []);
   const stopRename = useCallback(() => setRenaming(false), []);
@@ -59,9 +77,14 @@ export function ViewScreenHeader({
             {name}
           </Text>
         </Pressable>
+        {focusedProject ? (
+          <Text numberOfLines={1} style={styles.subtitle} testID="view-header-focused-project">
+            {focusedProject}
+          </Text>
+        ) : null}
       </>
     ),
-    [name, startRename, t],
+    [focusedProject, name, startRename, t],
   );
   const right = useMemo(
     () => (
@@ -87,6 +110,18 @@ export function ViewScreenHeader({
             />
           </View>
         ) : null}
+        {broadcastTargetCount > 1 ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={Radio}
+            accessibilityLabel={t("views.broadcast.title")}
+            onPress={onBroadcast}
+            testID="view-broadcast"
+          >
+            {pager ? null : t("views.broadcast.button")}
+          </Button>
+        ) : null}
         <Button
           variant="ghost"
           size="sm"
@@ -106,7 +141,16 @@ export function ViewScreenHeader({
         />
       </View>
     ),
-    [deleteView, onSplitWithSession, pager, showNextPane, showPreviousPane, t],
+    [
+      broadcastTargetCount,
+      deleteView,
+      onBroadcast,
+      onSplitWithSession,
+      pager,
+      showNextPane,
+      showPreviousPane,
+      t,
+    ],
   );
 
   return (
@@ -134,6 +178,12 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
+  },
+  subtitle: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    flexShrink: 2,
+    minWidth: 0,
   },
   pager: {
     flexDirection: "row",

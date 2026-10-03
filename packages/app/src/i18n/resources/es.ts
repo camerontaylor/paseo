@@ -2088,6 +2088,15 @@ export const es: TranslationResources = {
     emptyPane: {
       title: "Panel vacío",
     },
+    broadcast: {
+      title: "Difundir a la vista",
+      button: "Difundir",
+      placeholder: "Mensaje para todos los agentes de esta vista",
+      send: "Enviar a todos",
+      summary:
+        "{{send}} lo recibirán ahora, {{queue}} ocupados lo recibirán en cola, {{skip}} no disponibles.",
+      result: "Difusión: {{sent}} enviados, {{queued}} en cola, {{skipped}} omitidos.",
+    },
     picker: {
       addTitle: "Añadir una sesión",
       splitTitle: "Dividir con sesión",

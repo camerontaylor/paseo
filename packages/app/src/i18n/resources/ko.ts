@@ -2048,6 +2048,15 @@ export const ko: TranslationResources = {
     emptyPane: {
       title: "빈 창",
     },
+    broadcast: {
+      title: "보기에 브로드캐스트",
+      button: "브로드캐스트",
+      placeholder: "이 보기의 모든 에이전트에게 보낼 메시지",
+      send: "모두에게 보내기",
+      summary:
+        "{{send}}개는 지금 받고, 작업 중인 {{queue}}개는 대기열에 추가되며, {{skip}}개는 사용할 수 없습니다.",
+      result: "브로드캐스트: {{sent}}개 전송, {{queued}}개 대기, {{skipped}}개 건너뜀.",
+    },
     picker: {
       addTitle: "세션 추가",
       splitTitle: "세션으로 분할",

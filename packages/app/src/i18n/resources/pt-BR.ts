@@ -2072,6 +2072,15 @@ export const ptBR: TranslationResources = {
     emptyPane: {
       title: "Painel vazio",
     },
+    broadcast: {
+      title: "Transmitir para a visão",
+      button: "Transmitir",
+      placeholder: "Mensagem para todos os agentes desta visão",
+      send: "Enviar para todos",
+      summary:
+        "{{send}} receberão agora, {{queue}} ocupados receberão na fila, {{skip}} indisponíveis.",
+      result: "Transmissão: {{sent}} enviados, {{queued}} na fila, {{skipped}} ignorados.",
+    },
     picker: {
       addTitle: "Adicionar uma sessão",
       splitTitle: "Dividir com sessão",

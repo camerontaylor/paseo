@@ -31,6 +31,9 @@ import { ViewPaneActionsProvider, type ViewPaneActions } from "@/views/view-pane
 import { ViewSessionPicker, type ViewSessionPickerRequest } from "@/views/view-session-picker";
 import { ViewScreenHeader } from "@/views/view-screen-header";
 import { useViewTimelineSync } from "@/views/use-view-timeline-sync";
+import { collectBroadcastTargets } from "@/views/broadcast-plan";
+import { ViewBroadcastModal } from "@/views/view-broadcast-modal";
+import { useViewKeyboard } from "@/views/use-view-keyboard";
 
 const EMPTY_TAB_IDS = new Set<string>();
 
@@ -284,15 +287,37 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
     [openPickerForPane, renderEmptyPane, t],
   );
 
+  const broadcastTargets = useMemo(() => collectBroadcastTargets(uiTabs), [uiTabs]);
+  const [broadcastOpen, setBroadcastOpen] = useState(false);
+  const openBroadcast = useCallback(() => setBroadcastOpen(true), []);
+  const closeBroadcast = useCallback(() => setBroadcastOpen(false), []);
+  const focusedScope = useMemo(() => {
+    const pane = panes.find((candidate) => candidate.id === focusedPaneId) ?? panes[0];
+    const tabId = pane?.focusedTabId;
+    return (tabId && uiTabs.find((tab) => tab.tabId === tabId)?.scope) || null;
+  }, [focusedPaneId, panes, uiTabs]);
+  const splitWithSessionAt = useCallback(
+    (position: "right" | "bottom", paneId: string) =>
+      setPickerRequest({ mode: "split", paneId, position }),
+    [],
+  );
+  useViewKeyboard({ viewId, onSplitWithSession: splitWithSessionAt });
   const handleSplitWithSession = useCallback(
     () => setPickerRequest({ mode: "split", paneId: focusedPaneId }),
     [focusedPaneId],
   );
   const renderMainHeader = useCallback(
     () => (
-      <ViewScreenHeader viewId={viewId} pager={pager} onSplitWithSession={handleSplitWithSession} />
+      <ViewScreenHeader
+        viewId={viewId}
+        pager={pager}
+        focusedScope={focusedScope}
+        broadcastTargetCount={broadcastTargets.length}
+        onBroadcast={openBroadcast}
+        onSplitWithSession={handleSplitWithSession}
+      />
     ),
-    [handleSplitWithSession, pager, viewId],
+    [broadcastTargets.length, focusedScope, handleSplitWithSession, openBroadcast, pager, viewId],
   );
   const handleExitFocusMode = useCallback(() => {}, []);
   const handleNavigateTab = useCallback(
@@ -381,7 +406,7 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
         store().openTabInNewSplit(viewId, {
           ...input,
           targetPaneId: request.paneId,
-          position: "right",
+          position: request.position ?? "right",
         });
         return;
       }
@@ -433,6 +458,11 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
               onReorderTabsInPane={handleReorderTabsInPane}
             />
           </View>
+          <ViewBroadcastModal
+            visible={broadcastOpen}
+            targets={broadcastTargets}
+            onClose={closeBroadcast}
+          />
           <ViewSessionPicker
             request={pickerRequest}
             onClose={handleClosePicker}
