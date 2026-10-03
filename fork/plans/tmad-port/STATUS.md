@@ -103,6 +103,13 @@ intake/tmad-native-find       # TM-07 5f3634ad4; source snapshot 51fb7693d; base
   now rebuilding `tmad-with-stream` from the updated branch (assembly fix `d17896891` should become
   redundant; rerere-replay of the old tab-menu resolution to be inspected before keeping), then the
   final manifest SHA and P2's own review.
+- 2026-10-03 (P2 rebuild): `tmad-with-stream` = `0ff83cbc5` (baseline 2bfcd2e19 + one merge of
+  a8241e535). Redundancy proven: `git diff d17896891 0ff83cbc5` empty — byte-identical tree, no
+  extra assembly commit; steer-fallback passes on the bare merge (210/210). rerere replay inspected
+  before keeping (identical resolution). Gates + seam-critical tests green (build:server, typecheck,
+  lint 0/0 on 4604 files, agent-manager 210, companion 12, collector 3, auth 7). Addendum 2 in
+  evidence/P2.md carries the FINAL manifest block (TM-01 at `a8241e535`, no bridge). P2 review
+  dispatched (Muse, `02ccfa7a`).
 
 ## Limits (unchanged)
 
