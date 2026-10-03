@@ -92,6 +92,7 @@ import type { WorkspaceTab } from "@/workspace-tabs/model";
 import { RenderProfile } from "@/utils/render-profiler";
 import { isNative } from "@/constants/platform";
 import { panelTargetSupportsHost } from "@/plugins/workspace-panels/locations";
+import { useViewPaneActions } from "@/views/view-pane-actions";
 
 interface SplitContainerProps {
   layout: WorkspaceLayout;
@@ -1176,6 +1177,8 @@ function SplitPaneView({
 }: SplitPaneViewProps) {
   const paneRef = useRef<View | null>(null);
   const stableOnFocusPane = useStableEvent(onFocusPane);
+  // Views dim panes you are not working in, like iTerm's inactive split panes.
+  const dimInactivePane = Boolean(useViewPaneActions()) && workspaceHasMultiplePanes && !isFocused;
   const paneState = useMemo(
     () =>
       deriveWorkspacePaneState({
@@ -1326,7 +1329,11 @@ function SplitPaneView({
           />
         </WindowChromeSafeArea>
 
-        <View style={styles.paneContent}>
+        <View
+          style={
+            dimInactivePane ? [styles.paneContent, styles.paneContentInactive] : styles.paneContent
+          }
+        >
           <WorkspacePanelHost
             paneId={pane.id}
             tabs={paneTabs}
@@ -1463,6 +1470,9 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
     minHeight: 0,
+  },
+  paneContentInactive: {
+    opacity: 0.72,
   },
   dragOverlayChip: {
     flexDirection: "row",

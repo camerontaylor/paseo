@@ -1,6 +1,6 @@
 # Cross-project Views (design)
 
-Status: phase 1 built on `feat/cross-project-views` (2026-10-03). Design decided with Jacob 2026-10-02.
+Status: phase 1 shipped in fork 0.10.0-beta.6; phase 2 (broadcast, keyboard, dimming, focus-following header) on `feat/views-phase-2` (2026-10-03). Design decided with Jacob 2026-10-02.
 
 ## Problem
 
@@ -76,6 +76,19 @@ existing workspaces stay as they are: effectively a View pinned to one project.
 | Timeline sync: agents in a View stay open and are reported as visible per host                                            | `views/use-view-timeline-sync.ts`, `contexts/session-context.tsx`                  |
 | Sidebar section and "Open in View" tab menu entries                                                                       | `views/sidebar-views-section.tsx`, `views/open-in-view-menu.ts`                    |
 | Phone: one pane at a time, header pager (‹ 1/2 ›)                                                                         | `views/view-screen.tsx`, `views/view-screen-header.tsx`                            |
+
+## Phase 2
+
+| Piece                                                                                                                                                                                       | Where                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Broadcast: one prompt to every agent in a View. Idle agents get it now; busy agents get it through the host's durable queue (never steers or interrupts); hosts without a queue are skipped | `views/broadcast-plan.ts`, `views/broadcast.ts`, `views/view-broadcast-modal.tsx` |
+| Workspace pane shortcuts inside a View (split opens the session picker, focus/move-tab by direction, close pane/tab)                                                                        | `views/use-view-keyboard.ts`                                                      |
+| Inactive panes dimmed (Views only)                                                                                                                                                          | `components/split-container.tsx` (`dimInactivePane`)                              |
+| Header shows the focused pane's project and branch                                                                                                                                          | `views/view-screen-header.tsx`                                                    |
+
+Dropped from the plan: dragging a session from the sidebar. The sidebar lists workspaces,
+not sessions, so there is nothing session-shaped to drag; "Open in View" on tab menus and the
+picker cover it.
 
 Gotchas:
 

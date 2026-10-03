@@ -2009,6 +2009,14 @@ export const zhCN: TranslationResources = {
     emptyPane: {
       title: "空窗格",
     },
+    broadcast: {
+      title: "向视图广播",
+      button: "广播",
+      placeholder: "发给此视图中所有代理的消息",
+      send: "全部发送",
+      summary: "{{send}} 个将立即收到，{{queue}} 个忙碌的将排队收到，{{skip}} 个不可用。",
+      result: "广播：已发送 {{sent}} 个，已排队 {{queued}} 个，已跳过 {{skipped}} 个。",
+    },
     picker: {
       addTitle: "添加会话",
       splitTitle: "与会话分屏",

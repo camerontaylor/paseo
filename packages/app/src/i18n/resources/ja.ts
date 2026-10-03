@@ -2056,6 +2056,15 @@ export const ja: TranslationResources = {
     emptyPane: {
       title: "空のペイン",
     },
+    broadcast: {
+      title: "ビューに一斉送信",
+      button: "一斉送信",
+      placeholder: "このビューのすべてのエージェントへのメッセージ",
+      send: "すべてに送信",
+      summary:
+        "{{send}} 件はすぐに受信、{{queue}} 件は実行中のためキューに追加、{{skip}} 件は利用不可。",
+      result: "一斉送信: {{sent}} 件送信、{{queued}} 件キュー、{{skipped}} 件スキップ。",
+    },
     picker: {
       addTitle: "セッションを追加",
       splitTitle: "セッションで分割",

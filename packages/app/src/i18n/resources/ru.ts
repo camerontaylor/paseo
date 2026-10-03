@@ -2070,6 +2070,15 @@ export const ru: TranslationResources = {
     emptyPane: {
       title: "Пустая панель",
     },
+    broadcast: {
+      title: "Рассылка в представление",
+      button: "Рассылка",
+      placeholder: "Сообщение всем агентам этого представления",
+      send: "Отправить всем",
+      summary:
+        "{{send}} получат сейчас, {{queue}} занятых получат через очередь, {{skip}} недоступны.",
+      result: "Рассылка: отправлено {{sent}}, в очереди {{queued}}, пропущено {{skipped}}.",
+    },
     picker: {
       addTitle: "Добавить сессию",
       splitTitle: "Разделить с сессией",

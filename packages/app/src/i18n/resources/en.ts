@@ -2062,6 +2062,15 @@ export const en = {
     emptyPane: {
       title: "Empty pane",
     },
+    broadcast: {
+      title: "Broadcast to View",
+      button: "Broadcast",
+      placeholder: "Message every agent in this View",
+      send: "Send to all",
+      summary:
+        "{{send}} will receive it now, {{queue}} busy will get it queued, {{skip}} unavailable.",
+      result: "Broadcast: {{sent}} sent, {{queued}} queued, {{skipped}} skipped.",
+    },
     picker: {
       addTitle: "Add a session",
       splitTitle: "Split with session",

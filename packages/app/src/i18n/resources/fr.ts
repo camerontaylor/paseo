@@ -2095,6 +2095,15 @@ export const fr: TranslationResources = {
     emptyPane: {
       title: "Panneau vide",
     },
+    broadcast: {
+      title: "Diffuser dans la vue",
+      button: "Diffuser",
+      placeholder: "Message pour tous les agents de cette vue",
+      send: "Envoyer à tous",
+      summary:
+        "{{send}} le recevront maintenant, {{queue}} occupés le recevront en file, {{skip}} indisponibles.",
+      result: "Diffusion : {{sent}} envoyés, {{queued}} en file, {{skipped}} ignorés.",
+    },
     picker: {
       addTitle: "Ajouter une session",
       splitTitle: "Diviser avec une session",
