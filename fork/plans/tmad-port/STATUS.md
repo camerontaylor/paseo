@@ -21,7 +21,7 @@ are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
 | TM-02 queue daemon | `intake/tmad-message-queue` (on origin) | custom floor `cbd1210c7` (recorded) | `91392d6be` | DONE + **APPROVED** (evidence/review-TM-02.md): legacy send contract, wire/auth, queue semantics, custom fences, provenance all verified; no blocking findings (2 non-blocking report-wording notes). Gaps carried: daemon e2e needs provider creds (defer to TM-03/P4). Gates for TM-03/TM-04: none left. |
 | TM-07 Native Find | `intake/tmad-native-find` (on origin) | `v0.11.0-beta.3` (6166a7aca) | `5f3634ad4` | DONE + **APPROVED** (evidence/review-TM-07.md, Muse Spark 1.3 Contributor via pi/OpenCode Go, 2026-10-03): no blocking findings, none non-blocking; provenance, blob parity, ancestry, diff correctness all verified by the reviewer. Promotion still wants the 10-point native device list in evidence/TM-07.md (human) and the known adapted merge with TM-01 on `agent-view-store.ts`/`workspace-tab-menu.ts` (integrator, P2). |
 | TM-01B bridge | — | — | — | NOT NEEDED (TM-01 compiles and tests green on beta.3 alone). |
-| P2, TM-03, TM-04 | — | — | — | Not started. P2 gated on P0+TM-01 APPROVE; TM-03/TM-04 gated on TM-02 APPROVE. Briefs ready. |
+| P2, TM-03, TM-04 | — | — | — | P2: run complete (evidence/P2.md) — assembly `tmad-with-stream` @ `d17896891` (baseline + merge `d238504cf` of TM-01 `2197619bc` + one seam fix); build/typecheck/lint green; 23 focused test files 411 tests 0 failures; removal proof clean (with-stream diff = exactly 53 TM-01 paths; baseline tree has zero Stream references); TM-01B confirmed NOT needed; rollback exercise done on copied data (procedure `evidence/stream-rollback.md`). **Found one TM-01 port defect** (see log) — TM-01 fix routed; P2 review + manifest SHA finalization follow it. TM-03/TM-04: workers running on `intake/tmad-queue-ui` / `intake/tmad-voice-flow` from TM-02 `91392d6be`. |
 | TM-05, TM-06, TM-08+ | — | — | — | Product decisions for the user; do not start. Typed-send default is also the user's call. |
 
 ## Source cursors
@@ -83,6 +83,19 @@ intake/tmad-native-find       # TM-07 5f3634ad4; source snapshot 51fb7693d; base
   unreviewed WIP are allowed by `briefs/ORCHESTRATOR.md`; nobody else builds on that tip). Next per
   the brief: P2 (baseline clone, reuse of the P0 worker's workspace), then TM-03 and TM-04
   (branch-off from the approved `intake/tmad-message-queue`), each followed by its review.
+- 2026-10-03 (P2 wave): P2 worker finished (evidence/P2.md, `tmad-with-stream` @ `d17896891`) and
+  **caught a real TM-01 port defect at the assembly**: the port made terminal-event artifact
+  collection `await` where source `51fb7693d` is fire-and-forget (`void ...collectArtifactsForTurn`
+  with rationale comment); under custom's steer-fallback fence the cwd-walk window let a steer
+  admission leave a ghost tracked run (agent-manager 209/210 on the assembly, green on baseline).
+  Coordinator verified the hunk against source and routed it back to a glm implementer as an ITERATE
+  finding (agent `e5a7006f`): cherry-pick the one-hunk fix onto `intake/tmad-stream-flow` (append
+  only, no history rewrite), retest, addendum in TM-01.md. Sequencing: TM-01 delta re-review (Muse,
+  `2197619bc..new HEAD`) → push → P2 worker follow-up rebuilds `tmad-with-stream` from the updated
+  branch (the assembly fix `d17896891` should then be redundant) and finalizes the manifest SHA →
+  P2 review. The worker's alternative (record the assembly-only resolution and ship a manifest line
+  at `2197619bc`) was rejected: it would ship the steer regression in a manifest-only assembly.
+  TM-03 (`4a09bc95`) and TM-04 (`82cd1481`) running in parallel.
 
 ## Limits (unchanged)
 
