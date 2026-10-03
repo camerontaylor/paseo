@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.0-beta.6 - 2026-10-03
+
+### Added
+
+- Views: split layouts that show agents and terminals from different projects and hosts side by side, with a Views section in the sidebar, "Split with session", and "Open in View" on tab menus. Phones show one pane at a time with a pane pager.
+
+### Fixed
+
+- Queued messages stay queued until the host acknowledges them, and in-place edits to a queued message are preserved.
+
 ## 0.10.0-beta.5 - 2026-09-30
 
 ### Added
