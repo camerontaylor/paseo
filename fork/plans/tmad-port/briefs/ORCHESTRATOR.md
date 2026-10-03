@@ -29,16 +29,20 @@ CLAUDE.md and docs it points to for the area at hand.
   existing branch (`intake/tmad-stream-flow`, `intake/tmad-native-find`, `intake/tmad-message-queue`), or
   branch-off from the declared base for new branches (`intake/tmad-queue-ui` and `intake/tmad-voice-flow`
   from `intake/tmad-message-queue`). Never point two workers at one branch at once.
-- Reviewers: provider `muse` (Muse Code), a `muse-spark` model (list models for `muse` to get the exact ID,
-  e.g. `meta/muse-spark-1.3`), read-only task: review the branch diff against its declared base for
-  correctness against the plan's contracts and the brief, and verify the worker's evidence claims (blob
-  matches, tests actually run, ancestry). Reviews return APPROVE or ITERATE with concrete findings; send
-  ITERATE findings back to an implementer on the same branch, then re-review. A phase is done only after an
-  APPROVE.
-- If `muse` is unavailable (on 2026-10-02 it was not installed on pluto: "muse not found on PATH"), do not
-  substitute another reviewer. Mark the branch "awaiting muse review" in STATUS.md, keep implementing
-  independent work, and re-check the provider before each review gate. If everything left is blocked on
-  review, stop and say so.
+- Reviewers: Muse Spark through Pi on OpenCode Go — provider `pi`, model
+  `opencode-go/muse-spark-1.3-contributor`, thinking `high`, feature `auto_accept: true` (pluto's saved
+  profile "Muse Spark 1.3 Contributor"). NOT the `muse` (Muse Code) provider; do not check or wait on
+  that one. Read-only task: review the branch diff against its declared base for correctness against
+  the plan's contracts and the brief, and verify the worker's evidence claims (blob matches, tests
+  actually run, ancestry). Tell reviewers explicitly: no edits, no commits, no pushes. Reviews return
+  APPROVE or ITERATE with concrete findings; send ITERATE findings back to an implementer on the same
+  branch, then re-review. A phase is done only after an APPROVE.
+- If the reviewer route is unavailable, do not substitute another reviewer. Mark the branch
+  "awaiting review" in STATUS.md, keep implementing independent work, and re-check availability
+  (`paseo provider models pi` must list `opencode-go/muse-spark-1.3-contributor`) before each review
+  gate. If everything left is blocked on review, stop and say so. (Historical note: on 2026-10-02 the
+  orchestration wrongly waited on the `muse` provider, which is not installed on pluto; corrected
+  2026-10-03 to the pi/OpenCode Go route.)
 - Workers die sometimes. On a dead or stalled worker: commit its partial state with a `wip(...)` commit
   (`--no-verify` allowed only for WIP), record it in STATUS.md, and start a fresh worker from the branch.
 - Keep at most 4 implementers running at once. Wait on finish notifications; do not poll in tight loops.

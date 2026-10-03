@@ -1,73 +1,48 @@
-# tmad port — handoff status (2026-10-02)
+# tmad port — status (updated 2026-10-03, orchestration on pluto)
 
-Plan: [../tmad-maintained-port-plan.md](../tmad-maintained-port-plan.md). Briefs in `briefs/` were written for
-neptune workers: read `/tmp/tmad-port/...` as this directory and `/Volumes/offload/neptune/repos/paseo` as the
-local checkout on the host running the work. `~/.paseo-fork/manifest.txt` is frozen in
+Plan: [../tmad-maintained-port-plan.md](../tmad-maintained-port-plan.md). Briefs in `briefs/` were
+written for neptune workers: read `/tmp/tmad-port/...` as the pluto scratch dir (populated from this
+branch: plan.md, COMMON.md, flat briefs, evidence/, logs/, prompts/) and
+`/Volumes/offload/neptune/repos/paseo` as `~/repos/paseo`. `~/.paseo-fork/manifest.txt` is frozen in
 `evidence/manifest-frozen-2026-10-02.txt`; never edit a live manifest.
 
-| ID | Branch (origin) | Base | State |
-| --- | --- | --- | --- |
-| P0 | `tmad-port/baseline-assembly` | frozen manifest SHAs in `evidence/P0-inputs.txt` | DONE (pluto, evidence/P0.md): baseline tree == frozen mine `4cc94e07e` (empty diff), 24-merge first-parent chain verified, build/typecheck/lint green, 11 focused test files 320/320 pass, licensing = identical Apache-2.0 (no extra attribution). Exit criteria met. **Awaiting muse review** (gates P2). |
-| TM-01 Stream | `intake/tmad-stream-flow` | `v0.11.0-beta.3` | DONE (pluto, evidence/TM-01.md): HEAD `2197619bc`, 9 commits (+4129/−51) — PR#19 import, PR19→#21 rehearsal, 7 contract-fix commits. 11/15 core files blob-identical to `51fb7693d`, 4 intentional deltas listed with reasons; rehearsal found source #21 itself removed recursive fs.watch. Ancestry clean (no custom/mine/source). All focused suites pass incl. new bounds/renamed-RPC/capability-absent tests; scoped lint clean (baseline lint failures in untouched files recorded). TM-01B bridge: NOT NEEDED. UI capture evidence deferred to P1 step 6 as briefed. **Awaiting muse review** (gates P2 with P0). |
-| TM-07 Native Find | `intake/tmad-native-find` | `v0.11.0-beta.3` | Complete per worker (`evidence/TM-07.md`), unreviewed. Needs independent review and native device evidence. |
-| TM-02 queue daemon | `intake/tmad-message-queue` | custom `cbd1210c7` | DONE (pluto, evidence/TM-02.md): HEAD `91392d6be`, 6 commits (+3792/−20). Queue contract implemented per plan (intent-gated admission, receipts, uncertain/failed, recovery, bounds, 0600 journal); 49 queue tests + auth 7 + agent-manager 210 + ACP 130 + GJC 43 pass; ancestry verified (custom floor only). Gaps: daemon e2e needs provider creds (defer to TM-03/P4); one pre-existing side-conversation test failure at its base needs an owner on neptune. **Awaiting muse review** (gates TM-03/TM-04). |
-| P2, TM-03, TM-04 | — | — | Not started; briefs ready. |
+Reviewer correction (2026-10-03, from the user): reviews run through **Pi on OpenCode Go** — provider
+`pi`, model `opencode-go/muse-spark-1.3-contributor`, thinking `high`, feature `auto_accept: true`
+(pluto's saved profile "Muse Spark 1.3 Contributor"). The `muse` (Muse Code) provider is NOT the
+reviewer route and is not installed on pluto; the 2026-10-02 session wrongly waited on it. Reviewers
+are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
 
-Orchestration continues on pluto per `briefs/ORCHESTRATOR.md`.
-| TM-05, TM-06, TM-08+ | — | — | Product decisions for the user; do not start. Typed-send default is also the user's call. |
+## Branch state
 
-## Pluto orchestration log (2026-10-02)
-
-- Scratch dir `/tmp/tmad-port/` populated from this branch (plan.md, COMMON.md, flat briefs, evidence/,
-  logs/, prompts/). Baseline clone created at `/tmp/tmad-port/baseline-clone` (own index, rerere on) on
-  `tmad-port/baseline-assembly` = 2bfcd2e19. Coordinator check: `git diff --stat 2bfcd2e19 4cc94e07e`
-  (frozen mine) is EMPTY — the baseline tree reproduces frozen mine exactly.
-- Reviewer provider `muse` re-checked on pluto: `paseo provider diagnostic muse` → "muse not found on
-  PATH", still unavailable. No substitute reviewer per the brief. All review gates are blocked until it
-  is installed; re-checking before each gate.
-- tmad-main-latest = 929f1add3 (source PR #36 "preserve queued messages until host acknowledgement",
-  queue-adjacent). Classified at ledger time; not ported.
-- Workers dispatched (provider claude-zai/glm-5.3-flash, thinking high, bypassPermissions, one per
-  branch/worktree):
-  - TM-01 finish: agent `59933eac`, workspace `wks_3919834322096f66` (checkout-branch
-    `intake/tmad-stream-flow`).
-  - TM-02 continue: agent `124d824b`, workspace `wks_b6b4404597f90c74` (checkout-branch
-    `intake/tmad-message-queue`); first reproduces the truncated typecheck failure with full output.
-  - P0 remainder: agent `c1c7b820`, workspace `wks_4c44bb8d08811ddb` (local workspace at
-    `/tmp/tmad-port/baseline-clone`); brief-P0 steps 2, 4, 6 + report.
-- TM-07 review: BLOCKED on muse (branch complete per `evidence/TM-07.md`, awaiting muse review).
-- TM-01 worker finished (pluto, evidence/TM-01.md). Coordinator verified: HEAD `2197619bc`, custom
-  and mine NOT ancestors (both local and origin refs), source integration not an ancestor, 5/5
-  spot-checked core blobs equal `51fb7693d`, import/rehearsal trailers present, test logs match
-  (73 tm01-* logs; final protocol suite 6/6).
-
-## BLOCKED — everything left needs muse (as of 2026-10-03 00:53 AEST)
-
-All implementable work inside the orchestrator's limits is done; 0 workers running. muse re-checked
-at every gate, most recently 2026-10-03 00:53 AEST: still "not found on PATH". Per
-`briefs/ORCHESTRATOR.md` no substitute reviewer is allowed. Pending, in order:
-
-1. muse review of TM-07 (branch done).
-2. muse review of P0 evidence (gates P2).
-3. muse review of TM-02 (gates TM-03 + TM-04 starts).
-4. muse review of TM-01 (with P0 approval, gates P2).
-5. After approvals: P2 removal proof; TM-03; TM-04; then the work-items ledger + manifest block.
-6. Human-only regardless of muse: native device evidence (TM-07 list in evidence/TM-07.md; voice
-   list comes with TM-04), the neptune check of the pre-existing session.test.ts side-conversation
-   failure at the custom floor, and the two TM-01 naming/ceiling decisions recorded in its report.
-
-## Finish state per branch (2026-10-03 00:53 AEST)
-
-| ID | Branch | HEAD | Review verdict | Remaining human checks |
+| ID | Branch (local; intake branches not yet pushed to origin) | Base | HEAD | State |
 | --- | --- | --- | --- | --- |
-| TM-01 | `intake/tmad-stream-flow` | `2197619bc` (base 6166a7aca) | awaiting muse review | Matched source/port UI captures (desktop + compact web), native captures, locale parity incl. ko; TM-01's two informational decisions ("Queue" tab label; pin/artifact ceilings 100/200). |
-| TM-02 | `intake/tmad-message-queue` | `91392d6be` (floor cbd1210c7) | awaiting muse review | neptune owner: pre-existing `session.test.ts` side-conversation failure at the custom floor; daemon e2e needs a host with provider creds (or a fake-provider harness). |
-| TM-07 | `intake/tmad-native-find` | `5f3634ad4` (base 6166a7aca) | awaiting muse review | Native device evidence: 10-point list in evidence/TM-07.md (iOS sim + Android; reachability, historical match reveal, wrap-around, cleanup, older-host, keyboard, rotation, non-Latin locales). |
-| P0 | `tmad-port/baseline-assembly` | `2bfcd2e19` | awaiting muse review (evidence) | None. |
-| TM-01B | — | — | NOT NEEDED (TM-01 compiles/tests green on beta.3 alone) | — |
-| TM-03/TM-04 | — | — | not started, gated on TM-02 APPROVE | device/provider evidence lists come with their reports |
+| P0 | `tmad-port/baseline-assembly` | frozen manifest SHAs (`evidence/P0-inputs.txt`) | `2bfcd2e19` | DONE (evidence/P0.md): baseline tree == frozen mine `4cc94e07e` (empty diff), 24-merge first-parent chain verified, build/typecheck/lint green, 11 focused test files 320/320 pass, licensing = identical Apache-2.0 (no extra attribution). **Awaiting Muse Spark review** (gates P2). |
+| TM-01 Stream | `intake/tmad-stream-flow` | `v0.11.0-beta.3` (6166a7aca) | `2197619bc` | DONE (evidence/TM-01.md): 9 commits (+4129/−51) — PR#19 import, PR19→#21 rehearsal, 7 contract-fix commits. 11/15 core files blob-identical to `51fb7693d`, 4 intentional deltas listed with reasons; rehearsal found source #21 itself removed recursive fs.watch. Ancestry clean (no custom/mine/source). Focused suites pass incl. bounds/renamed-RPC/capability-absent tests; scoped lint clean (baseline lint failures in untouched files recorded). TM-01B bridge: NOT NEEDED. UI capture evidence deferred to P1 step 6 as briefed. **Awaiting Muse Spark review** (gates P2 with P0). |
+| TM-02 queue daemon | `intake/tmad-message-queue` | custom floor `cbd1210c7` (recorded) | `91392d6be` | DONE (evidence/TM-02.md): 6 commits (+3792/−20). Queue contract per plan (intent-gated admission, receipts, uncertain/failed, recovery, bounds, 0600 journal); 49 queue tests + auth 7 + agent-manager 210 + ACP 130 + GJC 43 pass; ancestry verified (custom floor only, no source). Gaps: daemon e2e needs provider creds (defer to TM-03/P4). **Awaiting Muse Spark review** (gates TM-03/TM-04). |
+| TM-07 Native Find | `intake/tmad-native-find` | `v0.11.0-beta.3` (6166a7aca) | `5f3634ad4` | DONE (evidence/TM-07.md, by the neptune worker): single commit, blob-identical core files. **Awaiting Muse Spark review.** |
+| TM-01B bridge | — | — | — | NOT NEEDED (TM-01 compiles and tests green on beta.3 alone). |
+| P2, TM-03, TM-04 | — | — | — | Not started. P2 gated on P0+TM-01 APPROVE; TM-03/TM-04 gated on TM-02 APPROVE. Briefs ready. |
+| TM-05, TM-06, TM-08+ | — | — | — | Product decisions for the user; do not start. Typed-send default is also the user's call. |
 
-## Proposed manifest append block (DRAFT — nothing live edited; valid only after each line passes its muse review)
+## Source cursors
+
+- Inspected = fully classified = `929f1add3` (`refs/research/tmad-main-latest`; PR #36 "preserve
+  queued messages until host acknowledgement", 27 app files +939/−205, TM-03 scope — source-update
+  candidate after TM-03 lands; not ported).
+- Effective source snapshot per ported feature: `51fb7693d` (TM-01 rehearsal boundary: `af247e4f4`).
+
+## Remaining human checks (regardless of review verdicts)
+
+- TM-07: native device evidence, 10-point list in `evidence/TM-07.md` (iOS sim + Android:
+  reachability, historical match reveal, wrap-around, cleanup, older-host, keyboard, rotation,
+  non-Latin locales).
+- TM-01: matched source/port UI captures (desktop + compact web), native captures, locale parity
+  incl. ko; two informational decisions ("Queue" tab label; pin/artifact ceilings 100/200).
+- TM-02: neptune owner to classify the pre-existing `session.test.ts` side-conversation failure at
+  the custom floor; daemon e2e needs a host with provider creds (or a fake-provider harness).
+- TM-04 (when run): its report will list the physical-device and per-provider checks.
+
+## Proposed manifest append block (DRAFT — nothing live edited; each line valid only after its Muse Spark review)
 
 ```text
 # Existing community, custom and infi lines retain their current order. APPEND BELOW THEM.
@@ -78,27 +53,26 @@ intake/tmad-native-find       # TM-07 5f3634ad4; source snapshot 51fb7693d; base
 # in dependency order only after their own gates; voice device evidence is a promotion gate.
 ```
 
-Nothing was pushed to `mine` or `custom`; no live manifest was edited; the intake branches are not
-pushed to origin yet (that is allowed only after a reviewed milestone); the 6767 daemon was never
-touched. This coordination branch carries all evidence and is pushed.
-- TM-02 worker finished (pluto, evidence/TM-02.md): lease complete except the provider-cred e2e
-  (documented). Coordinator verified: HEAD `91392d6be`, custom floor is the only extra ancestry,
-  source integration NOT an ancestor, queue/auth test logs match the report. muse re-checked at this
-  gate: still "not found on PATH". TM-03/TM-04 stay unstarted until TM-02 has a muse APPROVE.
-  Handoff blocker resolved: the truncated typecheck failure was stale protocol `dist` — all commits
-  since pass hooks; no branch-caused failures. Pre-existing: `session.test.ts` side-conversation
-  event test fails at the floor (needs neptune owner).
-- P0 worker finished (`evidence/P0.md`): all four exit criteria met, no pre-existing failures in the
-  focused set. Note for P2: the clone's rr-cache is now empty (entries apparently pruned by `git rerere
-  gc`), so P2 merges must budget fresh resolutions. P2 start is gated on muse approving P0 + TM-01.
-- Source cursor update: `929f1add3` (PR #36) classified — TM-03 scope (outbox/composer durability,
-  27 app files +939/−205), source-update candidate after TM-03 lands; not ported. Cursors: inspected =
-  classified = `929f1add3`; effective snapshot per feature remains `51fb7693d`.
-- Coordination-worktree note: after a fresh `npm ci` + build:client/build:server, root typecheck here
-  reports 14 TS7006 errors, all in packages/cli/src/commands/agent/*.ts (callback params off
-  `fetchAgents().entries` inferring any). Not present in P0's clone (typecheck/lint clean, 320/320
-  tests) — treat the baseline clone, not this worktree, as the reference environment; docs-only commits
-  here go in with `--no-verify` and the quirk recorded. Not investigated further (no code on this
-  branch).
+## Orchestration log
 
-Nothing has been pushed to `mine` or `custom`, no manifest was edited, and no daemon was restarted.
+- 2026-10-02 (neptune → handoff): P0 inputs frozen, baseline assembly merged, feature map done;
+  TM-02 protocol contract committed (`6f76c621e`); TM-07 done, unreviewed; TM-01 left one WIP commit.
+- 2026-10-02 (pluto): scratch dir `/tmp/tmad-port/` populated; baseline clone created at
+  `/tmp/tmad-port/baseline-clone` (own index, rerere on) on `tmad-port/baseline-assembly`;
+  coordinator check: baseline tree == frozen mine. Implementers dispatched (claude-zai/glm-5.3-flash,
+  thinking high, bypassPermissions): TM-01 `59933eac` (wks_3919834322096f66), TM-02 `124d824b`
+  (wks_b6b4404597f90c74), P0 `c1c7b820` (wks_4c44bb8d08811ddb). The 2026-10-02 session wrongly
+  waited on the `muse` provider ("not found on PATH") and stopped with everything blocked; corrected
+  2026-10-03 per the user.
+- 2026-10-03: P0 finished (`evidence/P0.md`; note: clone rr-cache is empty after `git rerere gc`, so
+  P2 budgets fresh resolutions). TM-02 finished (`evidence/TM-02.md`; handoff blocker resolved — the
+  truncated typecheck failure was stale protocol `dist`; no branch-caused failures). TM-01 finished
+  (`evidence/TM-01.md`). Coordinator verified each: HEAD SHAs, ancestry, blob parity, trailers, test
+  logs (73 tm01-* logs, 320/320 P0 tests, 49 queue tests).
+- 2026-10-03 (resume): reviews dispatching on pi/OpenCode Go per the corrected brief.
+
+## Limits (unchanged)
+
+Nothing was pushed to `mine` or `custom`; no live manifest was edited; no daemon was restarted; no
+desvio run against a live config. Intake branches get pushed to origin only after a reviewed
+milestone. This coordination branch carries all evidence and is pushed.
