@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import type { WorkspaceDescriptorPayload } from "@getpaseo/protocol/messages";
+import type { AgentQueueSnapshot, WorkspaceDescriptorPayload } from "@getpaseo/protocol/messages";
+import { useQueueOutboxStore } from "./queue-outbox-store";
 
 import {
   normalizeWorkspaceDescriptor,
@@ -798,5 +799,132 @@ describe("removeWorkspace", () => {
     expect(after.sessions).toBe(before.sessions);
     expect(after.session).toBe(before.session);
     expect(after.workspaces).toBe(before.workspaces);
+  });
+});
+
+describe("durable agent queue snapshots", () => {
+  const agentId = "agent-1";
+
+  function queueSnapshot(overrides: Partial<AgentQueueSnapshot> = {}): AgentQueueSnapshot {
+    return {
+      agentId,
+      revision: 1,
+      items: [
+        {
+          id: "item-1",
+          text: "first",
+          intent: "queue",
+          deliveryState: "pending",
+          attempts: 0,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  function seedOutboxEntry(itemId: string): void {
+    useQueueOutboxStore.getState().add({
+      serverId: "test-server",
+      agentId,
+      itemId,
+      text: "not acked yet",
+      intent: "queue",
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+    });
+  }
+
+  beforeAll(async () => {
+    // Persist rehydration resolves after import and would otherwise replace
+    // entries added before it landed.
+    await useQueueOutboxStore.persist.rehydrate();
+  });
+
+  afterEach(() => {
+    for (const itemId of Object.keys(useQueueOutboxStore.getState().entries)) {
+      useQueueOutboxStore.getState().remove(itemId);
+    }
+  });
+
+  it("applies a snapshot as queue rows and records the revision", () => {
+    initializeTestSession();
+
+    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+
+    const session = useSessionStore.getState().sessions["test-server"];
+    expect(session?.queuedMessageRevisions.get(agentId)).toBe(1);
+    expect(session?.queuedMessages.get(agentId)).toEqual([
+      {
+        id: "item-1",
+        text: "first",
+        attachments: [],
+        deliveryState: "pending",
+        lastError: undefined,
+      },
+    ]);
+  });
+
+  it("re-appends an un-acked outbox row a snapshot would erase", () => {
+    initializeTestSession();
+    seedOutboxEntry("pending-1");
+
+    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+
+    const rows = useSessionStore.getState().sessions["test-server"]?.queuedMessages.get(agentId);
+    expect(rows?.map((row) => [row.id, row.syncState])).toEqual([
+      ["item-1", undefined],
+      ["pending-1", "pending"],
+    ]);
+  });
+
+  it("marks a re-appended row failed when its entry exhausted the retries", () => {
+    initializeTestSession();
+    seedOutboxEntry("pending-1");
+    useQueueOutboxStore.getState().bumpAttempts("pending-1");
+    useQueueOutboxStore.getState().markFailed("pending-1");
+
+    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+
+    const rows = useSessionStore.getState().sessions["test-server"]?.queuedMessages.get(agentId);
+    expect(rows?.at(-1)).toMatchObject({ id: "pending-1", syncState: "failed" });
+  });
+
+  it("drops a snapshot that is older than the applied revision", () => {
+    initializeTestSession();
+
+    useSessionStore
+      .getState()
+      .applyAgentQueueSnapshot("test-server", queueSnapshot({ revision: 4 }));
+    useSessionStore
+      .getState()
+      .applyAgentQueueSnapshot("test-server", queueSnapshot({ revision: 3 }));
+
+    const session = useSessionStore.getState().sessions["test-server"];
+    expect(session?.queuedMessageRevisions.get(agentId)).toBe(4);
+    expect(session?.queuedMessages.get(agentId)?.[0]?.id).toBe("item-1");
+  });
+
+  it("never creates a submitted timeline row: snapshots only touch the queue", () => {
+    initializeTestSession();
+
+    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+
+    const timeline = selectAgentTimelineState(
+      useSessionStore.getState().sessions["test-server"],
+      agentId,
+    );
+    expect(timeline.status).toBe("cold");
+    expect(
+      useSessionStore.getState().sessions["test-server"]?.agentStreamTail.get(agentId),
+    ).toBeUndefined();
+  });
+
+  it("is a no-op without a session, leaving local queues to their own meaning", () => {
+    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+
+    expect(useSessionStore.getState().sessions["test-server"]).toBeUndefined();
+    expect(Object.keys(useQueueOutboxStore.getState().entries).length).toBe(0);
   });
 });

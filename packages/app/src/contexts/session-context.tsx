@@ -18,6 +18,7 @@ import { requestTimelineReplacement } from "@/timeline/timeline-replacement";
 import { type ViewedTimelineOwner } from "@/timeline/viewed-timeline-sync";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import { parseServerInfoStatusPayload } from "@getpaseo/protocol/messages";
+import { flushQueueOutboxForServer } from "@/stores/queue-outbox-store";
 import {
   buildAgentAttentionNotificationPayload,
   type AgentAttentionReason,
@@ -508,6 +509,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         "agent_permission_request",
         "agent_permission_resolved",
         "agent.provider_subagents.update",
+        "agent.queue.update",
         "checkout_status_update",
         "workspace_setup_progress",
         "status.server_info",
@@ -538,6 +540,11 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       useProviderSubagentStore.getState().applyUpdate(serverId, message.payload);
     });
 
+    const unsubAgentQueueUpdate = client.on("agent.queue.update", (message) => {
+      if (message.type !== "agent.queue.update") return;
+      useSessionStore.getState().applyAgentQueueSnapshot(serverId, message.payload);
+    });
+
     const unsubSideConversationUpdate = client.on("agent.side_conversation.update", (message) => {
       if (message.type !== "agent.side_conversation.update") return;
       useSideConversationStore.getState().applySnapshot(serverId, message.payload);
@@ -566,6 +573,20 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       const serverInfo = parseServerInfoStatusPayload(message.payload);
       if (serverInfo) {
         updateSessionServerInfo(serverId, toDaemonServerInfo(serverInfo));
+        // COMPAT(durableAgentQueue): added in v0.11.0-beta.3+custom (TM-02/TM-03).
+        // Server info arrives on every (re)connect, which is exactly when an
+        // enqueue the daemon never acknowledged should be retried. Hosts without
+        // the flag keep the local queue path and their outbox entries wait; the
+        // local queue is in-memory and session-scoped, so nothing durable is
+        // implied about it either way.
+        if (serverInfo.features?.durableAgentQueueV1 === true) {
+          void flushQueueOutboxForServer({
+            serverId,
+            client,
+            applySnapshot: (snapshot) =>
+              useSessionStore.getState().applyAgentQueueSnapshot(serverId, snapshot),
+          });
+        }
         return;
       }
     });
@@ -717,6 +738,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         .release()
         .catch((error) => console.warn("[Session] Failed to release feeds", error));
       unsubProviderSubagentUpdate();
+      unsubAgentQueueUpdate();
       unsubSideConversationUpdate();
       unsubSideConversationRemoved();
       unsubAgentAttention();
