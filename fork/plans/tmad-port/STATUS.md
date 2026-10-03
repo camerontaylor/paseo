@@ -21,7 +21,7 @@ are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
 | TM-02 queue daemon | `intake/tmad-message-queue` (on origin) | custom floor `cbd1210c7` (recorded) | `91392d6be` | DONE + **APPROVED** (evidence/review-TM-02.md): legacy send contract, wire/auth, queue semantics, custom fences, provenance all verified; no blocking findings (2 non-blocking report-wording notes). Gaps carried: daemon e2e needs provider creds (defer to TM-03/P4). Gates for TM-03/TM-04: none left. |
 | TM-07 Native Find | `intake/tmad-native-find` (on origin) | `v0.11.0-beta.3` (6166a7aca) | `5f3634ad4` | DONE + **APPROVED** (evidence/review-TM-07.md, Muse Spark 1.3 Contributor via pi/OpenCode Go, 2026-10-03): no blocking findings, none non-blocking; provenance, blob parity, ancestry, diff correctness all verified by the reviewer. Promotion still wants the 10-point native device list in evidence/TM-07.md (human) and the known adapted merge with TM-01 on `agent-view-store.ts`/`workspace-tab-menu.ts` (integrator, P2). |
 | TM-01B bridge | — | — | — | NOT NEEDED (TM-01 compiles and tests green on beta.3 alone). |
-| P2, TM-03, TM-04 | — | — | — | P2: run complete (evidence/P2.md) — assembly `tmad-with-stream` @ `d17896891` (baseline + merge `d238504cf` of TM-01 `2197619bc` + one seam fix); build/typecheck/lint green; 23 focused test files 411 tests 0 failures; removal proof clean (with-stream diff = exactly 53 TM-01 paths; baseline tree has zero Stream references); TM-01B confirmed NOT needed; rollback exercise done on copied data (procedure `evidence/stream-rollback.md`). **Found one TM-01 port defect** (see log) — TM-01 fix routed; P2 review + manifest SHA finalization follow it. TM-03/TM-04: workers running on `intake/tmad-queue-ui` / `intake/tmad-voice-flow` from TM-02 `91392d6be`. |
+| P2, TM-03, TM-04 | — | — | — | P2: **DONE + APPROVED** (evidence/review-P2.md): final assembly `tmad-with-stream` = `0ff83cbc5` (baseline + one merge of TM-01 `a8241e535`), tree byte-identical to the fully-batteried interim assembly; steer-fence defect proven fixed in the TM-01 branch (no assembly-side commit); removal proof clean (with-stream delta = exactly the 53 TM-01 paths; Stream-free baseline); rollback procedure demonstrated on copied data; TM-01B correctly unneeded; final manifest block in P2.md Addendum 2. 2 non-blocking notes (stale draft SHA — fixed; "one textual conflict" wording). TM-03/TM-04: workers still running on `intake/tmad-queue-ui` / `intake/tmad-voice-flow`. |
 | TM-05, TM-06, TM-08+ | — | — | — | Product decisions for the user; do not start. Typed-send default is also the user's call. |
 
 ## Source cursors
@@ -46,7 +46,7 @@ are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
 
 ```text
 # Existing community, custom and infi lines retain their current order. APPEND BELOW THEM.
-intake/tmad-stream-flow       # TM-01 2197619bc; source snapshot 51fb7693d reconciled; base v0.11.0-beta.3; removal group Stream (no bridge needed).
+intake/tmad-stream-flow       # TM-01 a8241e535; source snapshot 51fb7693d reconciled; base v0.11.0-beta.3; removal group Stream (no bridge needed).
 intake/tmad-message-queue     # TM-02 91392d6be; custom floor cbd1210c7 (recorded); removal group Queue+Voice (with TM-03/TM-04 when they land).
 intake/tmad-native-find       # TM-07 5f3634ad4; source snapshot 51fb7693d; base v0.11.0-beta.3; removal group Native Find (independent of Stream and queue).
 # TM-03 (intake/tmad-queue-ui, base TM-02) and TM-04 (intake/tmad-voice-flow, base TM-02) lines are added
@@ -110,6 +110,12 @@ intake/tmad-native-find       # TM-07 5f3634ad4; source snapshot 51fb7693d; base
   lint 0/0 on 4604 files, agent-manager 210, companion 12, collector 3, auth 7). Addendum 2 in
   evidence/P2.md carries the FINAL manifest block (TM-01 at `a8241e535`, no bridge). P2 review
   dispatched (Muse, `02ccfa7a`).
+- 2026-10-03 (P2 review): **P2 APPROVED** (evidence/review-P2.md). Non-blocking: N1 draft-manifest
+  SHA staleness (fixed in this file — TM-01 line now `a8241e535`); N2 wording note on the
+  "one textual conflict" claim. The tmad port's Phase 0-2 are now fully approved end to end:
+  P0 baseline, P1/TM-01 Stream (twice), P2 removal proof, TM-02 queue daemon, TM-07 Native Find.
+  Remaining: TM-03/TM-04 (running) + their reviews; the work-items ledger; human evidence gates
+  (device lists, UI captures).
 
 ## Limits (unchanged)
 
