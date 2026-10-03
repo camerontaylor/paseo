@@ -16,6 +16,7 @@ import {
   ArrowRightToLine,
   Copy,
   FileCode2,
+  LayoutPanelLeft,
   Search,
   Pencil,
   RotateCw,
@@ -74,6 +75,8 @@ import { useCompactTimeAgo } from "@/hooks/use-compact-time-ago";
 import { buildWorkspaceKeyboardHandlerId } from "@/keyboard/handler-id";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import { WorkspaceNewTabMenuContent } from "@/screens/workspace/workspace-new-tab-menu";
+import { useViewPaneActions } from "@/views/view-pane-actions";
+import { useOpenInViewMenuEntries } from "@/views/open-in-view-menu";
 import {
   paneContentToolbarTrailingPadding,
   ToolbarButton,
@@ -118,6 +121,7 @@ const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedX = withUnistyles(X);
 const ThemedFileCode2 = withUnistyles(FileCode2);
 const ThemedSearch = withUnistyles(Search);
+const ThemedLayoutPanelLeft = withUnistyles(LayoutPanelLeft);
 const ThemedCopy = withUnistyles(Copy);
 
 const ThemedRotateCw = withUnistyles(RotateCw);
@@ -232,7 +236,29 @@ function WorkspaceNewTabButton({
   placement,
 }: WorkspaceNewTabButtonProps) {
   const { t } = useTranslation();
+  const viewPaneActions = useViewPaneActions();
   const tooltipText = t("workspace.tabs.actions.newTab");
+  const handleAddViewTab = useCallback(() => {
+    if (viewPaneActions && paneId) viewPaneActions.onAddTab(paneId);
+  }, [paneId, viewPaneActions]);
+  if (viewPaneActions && paneId) {
+    const addButton = (
+      <ToolbarButton
+        label={viewPaneActions.addTabLabel}
+        shortcut={shortcutKeys}
+        testID="view-add-tab-button"
+        style={placement === "inline" ? styles.inlineNewTabButton : undefined}
+        onPress={handleAddViewTab}
+      >
+        <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
+      </ToolbarButton>
+    );
+    return placement === "inline" ? (
+      <View style={styles.inlineAddButton}>{addButton}</View>
+    ) : (
+      addButton
+    );
+  }
   const menu = (
     <DropdownMenu>
       <ToolbarButton
@@ -423,6 +449,8 @@ function TabContextMenuItem({
         return <ThemedFileCode2 size={16} uniProps={mutedColorMapping} />;
       case "search":
         return <ThemedSearch size={16} uniProps={mutedColorMapping} />;
+      case "layout-panel-left":
+        return <ThemedLayoutPanelLeft size={16} uniProps={mutedColorMapping} />;
       default:
         return undefined;
     }
@@ -1010,8 +1038,8 @@ export function WorkspaceDesktopTabsRow(props: WorkspaceDesktopTabsRowProps) {
         <WorkspaceDesktopTabPresentationSlot
           key={`${tab.key}:${tab.kind}`}
           tab={tab}
-          serverId={props.normalizedServerId}
-          workspaceId={props.normalizedWorkspaceId}
+          serverId={tab.scope?.serverId ?? props.normalizedServerId}
+          workspaceId={tab.scope?.workspaceId ?? props.normalizedWorkspaceId}
           onResolve={handlePresentation}
         />
       ))}
@@ -1280,7 +1308,8 @@ function ResolvedWorkspaceDesktopTabsRow({
       return (
         <ResolvedDesktopTabChip
           key={`${item.tab.key}:${item.tab.kind}`}
-          serverId={normalizedServerId}
+          serverId={item.tab.scope?.serverId ?? normalizedServerId}
+          workspaceId={item.tab.scope?.workspaceId ?? normalizedWorkspaceId}
           item={item}
           isFocused={isFocused}
           isDragging={isActive}
@@ -1314,6 +1343,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       layout.closeButtonPolicy,
       layout.items,
       normalizedServerId,
+      normalizedWorkspaceId,
       onCloseOtherTabs,
       onCloseTab,
       onCloseTabsToLeft,
@@ -1428,6 +1458,7 @@ function ResolvedWorkspaceDesktopTabsRow({
 }
 function ResolvedDesktopTabChip({
   serverId,
+  workspaceId,
   item,
   isFocused,
   isDragging,
@@ -1454,6 +1485,7 @@ function ResolvedDesktopTabChip({
   showDropIndicatorAfter,
 }: {
   serverId: string;
+  workspaceId: string;
   item: ResolvedWorkspaceDesktopTabRowItem;
   isFocused: boolean;
   isDragging: boolean;
@@ -1481,7 +1513,7 @@ function ResolvedDesktopTabChip({
 }) {
   const { t } = useTranslation();
   const presentation = item.presentation;
-  const resolvedTab = useMemo(
+  const baseResolvedTab = useMemo(
     () =>
       buildWorkspaceDesktopTabActions({
         tab: item.tab,
@@ -1515,6 +1547,22 @@ function ResolvedDesktopTabChip({
       onRenameTab,
       tabCount,
     ],
+  );
+  const openInViewEntries = useOpenInViewMenuEntries({
+    tab: item.tab,
+    serverId,
+    workspaceId,
+    menuTestIDBase: baseResolvedTab.contextMenuTestId,
+  });
+  const resolvedTab = useMemo(
+    () =>
+      openInViewEntries.length === 0
+        ? baseResolvedTab
+        : {
+            ...baseResolvedTab,
+            menuEntries: [...openInViewEntries, ...baseResolvedTab.menuEntries],
+          },
+    [baseResolvedTab, openInViewEntries],
   );
 
   const rawTooltipLabel =

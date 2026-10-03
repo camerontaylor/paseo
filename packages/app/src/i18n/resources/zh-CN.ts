@@ -1999,6 +1999,32 @@ export const zhCN: TranslationResources = {
     },
     and: "并",
   },
+  views: {
+    sidebar: {
+      title: "视图",
+      newView: "新建视图",
+    },
+    notFound: "此视图已不存在。",
+    addSession: "添加会话",
+    emptyPane: {
+      title: "空窗格",
+    },
+    picker: {
+      addTitle: "添加会话",
+      splitTitle: "与会话分屏",
+      searchPlaceholder: "在所有项目中搜索会话",
+      empty: "没有匹配的会话",
+    },
+    actions: {
+      previousPane: "上一个窗格",
+      nextPane: "下一个窗格",
+      rename: "重命名视图",
+      splitWithSession: "与会话分屏",
+      delete: "删除视图",
+      openInView: "在视图中打开",
+      openInNewView: "在新视图中打开",
+    },
+  },
   renameModal: {
     rename: "重命名",
     saving: "正在保存...",

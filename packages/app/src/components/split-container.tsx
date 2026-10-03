@@ -789,8 +789,8 @@ function DragOverlayTabChip({
   return (
     <DragOverlayTabChipInner
       tab={descriptor}
-      normalizedServerId={normalizedServerId}
-      normalizedWorkspaceId={normalizedWorkspaceId}
+      normalizedServerId={tab?.scope?.serverId ?? normalizedServerId}
+      normalizedWorkspaceId={tab?.scope?.workspaceId ?? normalizedWorkspaceId}
     />
   );
 }

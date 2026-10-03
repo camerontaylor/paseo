@@ -9,6 +9,7 @@ import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-
 import { useMountedTabSet } from "@/screens/workspace/use-mounted-tab-set";
 import { workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
 import { RenderProfile } from "@/utils/render-profiler";
+import { useViewPaneActions } from "@/views/view-pane-actions";
 
 interface WorkspacePanelHostProps {
   paneId: string;
@@ -75,6 +76,8 @@ function useStableTabs(tabs: WorkspaceTabDescriptor[]) {
           cached.key === tab.key &&
           cached.kind === tab.kind &&
           cached.state === tab.state &&
+          cached.scope?.serverId === tab.scope?.serverId &&
+          cached.scope?.workspaceId === tab.scope?.workspaceId &&
           workspaceTabTargetsEqual(cached.target, tab.target)
           ? cached
           : tab,
@@ -100,6 +103,7 @@ export function WorkspacePanelHost({
   onFocusPane,
   buildPaneContentModel,
 }: WorkspacePanelHostProps) {
+  const viewPaneActions = useViewPaneActions();
   const tabIds = useMemo(() => tabs.map((tab) => tab.tabId), [tabs]);
   const retainedTabIds = useModifiedPanelTabIds({
     serverId: normalizedServerId,
@@ -117,6 +121,10 @@ export function WorkspacePanelHost({
     () => tabIds.filter((tabId) => mountedTabIds.has(tabId)),
     [mountedTabIds, tabIds],
   );
+
+  if (tabIds.length === 0 && viewPaneActions) {
+    return viewPaneActions.renderEmptyPane(paneId);
+  }
 
   return mountedIds.map((tabId) => {
     const tab = stableTabs.get(tabId);

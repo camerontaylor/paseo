@@ -59,6 +59,7 @@ function normalizeWorkspaceTab(tab: WorkspaceTab): WorkspaceTab | null {
     target,
     createdAt: tab.createdAt,
     state: tab.state,
+    ...(tab.scope ? { scope: tab.scope } : {}),
   };
 }
 
@@ -100,6 +101,7 @@ function normalizeWorkspacePaneTabs(tabs: WorkspaceTab[]): NormalizeWorkspacePan
         kind: normalizedTab.target.kind,
         target: normalizedTab.target,
         state: normalizedTab.state,
+        ...(normalizedTab.scope ? { scope: normalizedTab.scope } : {}),
       },
     });
   }

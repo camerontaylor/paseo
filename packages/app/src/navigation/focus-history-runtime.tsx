@@ -27,6 +27,7 @@ const TRACKED_APP_ROUTE_PREFIXES = [
   "/open-project",
   "/sessions",
   "/schedules",
+  "/views",
   "/pair-scan",
 ] as const;
 

@@ -2060,6 +2060,32 @@ export const ru: TranslationResources = {
     },
     and: "и",
   },
+  views: {
+    sidebar: {
+      title: "Представления",
+      newView: "Новое представление",
+    },
+    notFound: "Это представление больше не существует.",
+    addSession: "Добавить сессию",
+    emptyPane: {
+      title: "Пустая панель",
+    },
+    picker: {
+      addTitle: "Добавить сессию",
+      splitTitle: "Разделить с сессией",
+      searchPlaceholder: "Искать сессии во всех проектах",
+      empty: "Нет подходящих сессий",
+    },
+    actions: {
+      previousPane: "Предыдущая панель",
+      nextPane: "Следующая панель",
+      rename: "Переименовать представление",
+      splitWithSession: "Разделить с сессией",
+      delete: "Удалить представление",
+      openInView: "Открыть в представлении",
+      openInNewView: "Открыть в новом представлении",
+    },
+  },
   renameModal: {
     rename: "Переименовать",
     saving: "Сохранение...",

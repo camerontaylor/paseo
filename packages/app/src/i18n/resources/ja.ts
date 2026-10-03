@@ -2046,6 +2046,32 @@ export const ja: TranslationResources = {
     },
     and: "および",
   },
+  views: {
+    sidebar: {
+      title: "ビュー",
+      newView: "新しいビュー",
+    },
+    notFound: "このビューは存在しません。",
+    addSession: "セッションを追加",
+    emptyPane: {
+      title: "空のペイン",
+    },
+    picker: {
+      addTitle: "セッションを追加",
+      splitTitle: "セッションで分割",
+      searchPlaceholder: "すべてのプロジェクトのセッションを検索",
+      empty: "一致するセッションはありません",
+    },
+    actions: {
+      previousPane: "前のペイン",
+      nextPane: "次のペイン",
+      rename: "ビューの名前を変更",
+      splitWithSession: "セッションで分割",
+      delete: "ビューを削除",
+      openInView: "ビューで開く",
+      openInNewView: "新しいビューで開く",
+    },
+  },
   renameModal: {
     rename: "名前を変更",
     saving: "保存中...",

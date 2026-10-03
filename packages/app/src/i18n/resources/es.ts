@@ -2078,6 +2078,32 @@ export const es: TranslationResources = {
     },
     and: "y",
   },
+  views: {
+    sidebar: {
+      title: "Vistas",
+      newView: "Nueva vista",
+    },
+    notFound: "Esta vista ya no existe.",
+    addSession: "Añadir sesión",
+    emptyPane: {
+      title: "Panel vacío",
+    },
+    picker: {
+      addTitle: "Añadir una sesión",
+      splitTitle: "Dividir con sesión",
+      searchPlaceholder: "Buscar sesiones en todos los proyectos",
+      empty: "No hay sesiones coincidentes",
+    },
+    actions: {
+      previousPane: "Panel anterior",
+      nextPane: "Panel siguiente",
+      rename: "Renombrar vista",
+      splitWithSession: "Dividir con sesión",
+      delete: "Eliminar vista",
+      openInView: "Abrir en vista",
+      openInNewView: "Abrir en nueva vista",
+    },
+  },
   renameModal: {
     rename: "Rebautizar",
     saving: "Guardando...",

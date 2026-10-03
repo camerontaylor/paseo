@@ -48,11 +48,19 @@ export type WorkspaceTabTarget =
   | { kind: "setup"; workspaceId: string }
   | { kind: "commit_diff"; sha: string };
 
+/** The host and workspace a tab belongs to when it is shown outside that workspace (a View). */
+export interface WorkspaceTabScope {
+  serverId: string;
+  workspaceId: string;
+}
+
 export interface WorkspaceTab {
   tabId: string;
   target: WorkspaceTabTarget;
   createdAt: number;
   state?: JsonValue;
+  /** Set only by cross-workspace Views; workspace layouts never persist it. */
+  scope?: WorkspaceTabScope;
 }
 
 export function buildWorkspaceTabPersistenceKey(input: {

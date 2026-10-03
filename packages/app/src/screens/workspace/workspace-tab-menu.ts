@@ -55,7 +55,8 @@ export type WorkspaceTabMenuEntry =
         | "pencil"
         | "x"
         | "file-code-2"
-        | "search";
+        | "search"
+        | "layout-panel-left";
       hint?: string;
       tooltip?: string;
       disabled?: boolean;
