@@ -17,7 +17,7 @@ are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
 | ID | Branch (local; intake branches not yet pushed to origin) | Base | HEAD | State |
 | --- | --- | --- | --- | --- |
 | P0 | `tmad-port/baseline-assembly` (on origin) | frozen manifest SHAs (`evidence/P0-inputs.txt`) | `2bfcd2e19` | DONE + **APPROVED** (evidence/review-P0.md, 2026-10-03): all exit criteria reproduce read-only; 3 non-blocking findings dispositioned in the coordinator note at the bottom of evidence/P0.md (script verdict-string bug; "29"→"31" count fixed; rr-cache informational). Gates for P2: none left. |
-| TM-01 Stream | `intake/tmad-stream-flow` (on origin; force-updated `4dab8b364`→`2197619bc` with lease — the approved history rewrites the superseded unreviewed WIP, as the brief allows) | `v0.11.0-beta.3` (6166a7aca) | `2197619bc` | DONE + **APPROVED** (evidence/review-TM-01.md): ancestry clean, trailers correct, rehearsal converged then diverged only for contracted reasons, every Stream wire/behavior contract verified in file content, scope exclusions hold, TM-01B correctly unneeded. 2 non-blocking doc nits recorded (stale "11 of 15" prose — the ledger table is authoritative; evidence logs should echo commands). UI capture remains P1 step 6 (human). |
+| TM-01 Stream | `intake/tmad-stream-flow` (on origin; history: `4dab8b364` WIP → `2197619bc` approved → `a8241e535` post-P2 fix, appended) | `v0.11.0-beta.3` (6166a7aca) | `a8241e535` | DONE + **APPROVED twice**: full review at `2197619bc` (evidence/review-TM-01.md) and delta re-review of the post-P2 seam fix at `a8241e535` (evidence/review-TM-01-delta.md — routing as a TM-01 local fix CONFIRMED, "TM-01B would be wrong, assembly-only would ship the regression"). The fix restores the source's fire-and-forget artifact collection that the P2 assembly showed breaking custom's steer-fallback fence. 3 non-blocking nits recorded (commit-message sentence, trailer spacing, log echo). UI capture remains P1 step 6 (human). |
 | TM-02 queue daemon | `intake/tmad-message-queue` (on origin) | custom floor `cbd1210c7` (recorded) | `91392d6be` | DONE + **APPROVED** (evidence/review-TM-02.md): legacy send contract, wire/auth, queue semantics, custom fences, provenance all verified; no blocking findings (2 non-blocking report-wording notes). Gaps carried: daemon e2e needs provider creds (defer to TM-03/P4). Gates for TM-03/TM-04: none left. |
 | TM-07 Native Find | `intake/tmad-native-find` (on origin) | `v0.11.0-beta.3` (6166a7aca) | `5f3634ad4` | DONE + **APPROVED** (evidence/review-TM-07.md, Muse Spark 1.3 Contributor via pi/OpenCode Go, 2026-10-03): no blocking findings, none non-blocking; provenance, blob parity, ancestry, diff correctness all verified by the reviewer. Promotion still wants the 10-point native device list in evidence/TM-07.md (human) and the known adapted merge with TM-01 on `agent-view-store.ts`/`workspace-tab-menu.ts` (integrator, P2). |
 | TM-01B bridge | — | — | — | NOT NEEDED (TM-01 compiles and tests green on beta.3 alone). |
@@ -96,6 +96,13 @@ intake/tmad-native-find       # TM-07 5f3634ad4; source snapshot 51fb7693d; base
   P2 review. The worker's alternative (record the assembly-only resolution and ship a manifest line
   at `2197619bc`) was rejected: it would ship the steer regression in a manifest-only assembly.
   TM-03 (`4a09bc95`) and TM-04 (`82cd1481`) running in parallel.
+- 2026-10-03 (TM-01 fix round): fix implementer appended the seam fix → `intake/tmad-stream-flow`
+  `a8241e535` (no rewrite; `2197619bc` still an ancestor). Delta re-review **APPROVE**
+  (evidence/review-TM-01-delta.md): seam byte-equal to source, routing judgment confirmed, 192-vs-210
+  test-count delta independently sanity-checked. Branch pushed to origin (fast-forward). P2 worker
+  now rebuilding `tmad-with-stream` from the updated branch (assembly fix `d17896891` should become
+  redundant; rerere-replay of the old tab-menu resolution to be inspected before keeping), then the
+  final manifest SHA and P2's own review.
 
 ## Limits (unchanged)
 
