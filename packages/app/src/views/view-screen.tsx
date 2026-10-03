@@ -3,8 +3,7 @@ import * as Clipboard from "expo-clipboard";
 import { useTranslation } from "react-i18next";
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { SplitContainer } from "@/components/split-container";
-import { useIsCompactFormFactor } from "@/constants/layout";
+import { supportsDesktopPaneSplits, useIsCompactFormFactor } from "@/constants/layout";
 import { useToast } from "@/contexts/toast-context";
 import { DiffDocumentWorkspaceCacheProvider } from "@/git/diff-document/workspace-cache";
 import { getHostRuntimeStore, isHostRuntimeConnected } from "@/runtime/host-runtime";
@@ -34,6 +33,7 @@ import { useViewTimelineSync } from "@/views/use-view-timeline-sync";
 import { collectBroadcastTargets } from "@/views/broadcast-plan";
 import { ViewBroadcastModal } from "@/views/view-broadcast-modal";
 import { useViewKeyboard } from "@/views/use-view-keyboard";
+import { ViewPaneSurface } from "@/views/view-pane-surface";
 
 const EMPTY_TAB_IDS = new Set<string>();
 
@@ -241,8 +241,9 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
   );
 
   const focusedPaneId = view?.layout.focusedPaneId ?? null;
-  // Phones show one pane at a time; the header pages between them.
+  // Phones and native show one pane at a time; the header pages between them.
   const isCompact = useIsCompactFormFactor();
+  const usesPager = isCompact || !supportsDesktopPaneSplits();
   const panes = useMemo(
     () => (view ? collectAllPanes(view.layout.root).filter((pane) => !pane.hidden) : []),
     [view],
@@ -252,10 +253,10 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
     panes.findIndex((pane) => pane.id === focusedPaneId),
   );
   const displayedLayout = useMemo(() => {
-    if (!view || !isCompact || panes.length < 2) return view?.layout ?? null;
+    if (!view || !usesPager || panes.length < 2) return view?.layout ?? null;
     const pane = panes[focusedPaneIndex];
     return pane ? { ...view.layout, root: { kind: "pane" as const, pane } } : view.layout;
-  }, [focusedPaneIndex, isCompact, panes, view]);
+  }, [focusedPaneIndex, panes, usesPager, view]);
   const handleShowPane = useCallback(
     (offset: number) => {
       const next = panes[(focusedPaneIndex + offset + panes.length) % panes.length];
@@ -265,10 +266,10 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
   );
   const pager = useMemo(
     () =>
-      isCompact && panes.length > 1
+      usesPager && panes.length > 1
         ? { index: focusedPaneIndex, count: panes.length, onShow: handleShowPane }
         : null,
-    [focusedPaneIndex, handleShowPane, isCompact, panes.length],
+    [focusedPaneIndex, handleShowPane, panes.length, usesPager],
   );
   const openPickerForPane = useCallback(
     (paneId: string | null) => setPickerRequest({ mode: "pane", paneId }),
@@ -422,8 +423,9 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
       <DiffDocumentWorkspaceCacheProvider>
         <ViewPaneActionsProvider value={paneActions}>
           <View style={styles.container} testID="view-screen">
-            <SplitContainer
+            <ViewPaneSurface
               layout={displayedLayout}
+              renderEmptyPane={renderEmptyPane}
               renderMainHeader={renderMainHeader}
               onExitFocusMode={handleExitFocusMode}
               workspaceKey={layoutKey}

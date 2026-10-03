@@ -92,6 +92,12 @@ picker cover it.
 
 Gotchas:
 
+- Pane splits are web-only (`supportsDesktopPaneSplits()` is `isWeb`); workspaces never render
+  the split container on native. Views follow suit through platform files:
+  `views/view-pane-surface.web.tsx` uses `SplitContainer`, `views/view-pane-surface.tsx`
+  (iPhone/iPad) shows the focused pane with a tab strip and the header pager. A phone-width
+  browser window is not a native test.
+
 - Zustand selectors here must return stable references. `useShallow` over freshly built
   `{ id, name }` objects loops forever ("Maximum update depth exceeded"); select `order` and
   `views` and derive with `useMemo`.
