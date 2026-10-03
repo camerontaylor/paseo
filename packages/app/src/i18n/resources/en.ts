@@ -2052,6 +2052,32 @@ export const en = {
     },
     and: "and",
   },
+  views: {
+    sidebar: {
+      title: "Views",
+      newView: "New View",
+    },
+    notFound: "This View no longer exists.",
+    addSession: "Add session",
+    emptyPane: {
+      title: "Empty pane",
+    },
+    picker: {
+      addTitle: "Add a session",
+      splitTitle: "Split with session",
+      searchPlaceholder: "Search sessions across projects",
+      empty: "No matching sessions",
+    },
+    actions: {
+      previousPane: "Previous pane",
+      nextPane: "Next pane",
+      rename: "Rename View",
+      splitWithSession: "Split with session",
+      delete: "Delete View",
+      openInView: "Open in View",
+      openInNewView: "Open in new View",
+    },
+  },
   renameModal: {
     rename: "Rename",
     saving: "Saving...",

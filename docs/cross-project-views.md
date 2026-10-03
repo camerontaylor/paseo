@@ -1,6 +1,6 @@
 # Cross-project Views (design)
 
-Status: in progress on `feat/cross-project-views`. Design decided with Jacob 2026-10-02.
+Status: phase 1 built on `feat/cross-project-views` (2026-10-03). Design decided with Jacob 2026-10-02.
 
 ## Problem
 
@@ -62,3 +62,26 @@ existing workspaces stay as they are: effectively a View pinned to one project.
 1. View store + route, cross-project tabs, "Split with session…" picker, sidebar section (desktop).
 2. Drag-to-split, zoom, dimming, focus-following side panels; iPad two-up.
 3. Phone pager, broadcast input to all agents in a View, saved arrangement templates.
+
+## Implementation (phase 1)
+
+| Piece                                                                                                                     | Where                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Persisted store (`paseo-views` in AsyncStorage), split/tab ops reuse the pure workspace layout actions                    | `packages/app/src/stores/views-store.ts`                                           |
+| Route `/views/[viewId]`, registered in the root stack and the app-chrome allowlist                                        | `packages/app/src/app/views/[viewId].tsx`, `app/_layout.tsx`                       |
+| Screen: `SplitContainer` fed with scoped tabs; non-session targets (files, diffs) open in the tab's home workspace        | `packages/app/src/views/view-screen.tsx`                                           |
+| Per-tab scope: `WorkspaceTab.scope` / `WorkspaceTabDescriptor.scope`; tab titles, icons and drag chips resolve against it | `workspace-tabs/model.ts`, `workspace-desktop-tabs-row.tsx`, `split-container.tsx` |
+| "+" and empty panes open the session picker instead of the workspace launcher                                             | `views/view-pane-actions.tsx`                                                      |
+| Session picker (agents across all hosts and projects)                                                                     | `views/view-session-picker.tsx`                                                    |
+| Timeline sync: agents in a View stay open and are reported as visible per host                                            | `views/use-view-timeline-sync.ts`, `contexts/session-context.tsx`                  |
+| Sidebar section and "Open in View" tab menu entries                                                                       | `views/sidebar-views-section.tsx`, `views/open-in-view-menu.ts`                    |
+| Phone: one pane at a time, header pager (‹ 1/2 ›)                                                                         | `views/view-screen.tsx`, `views/view-screen-header.tsx`                            |
+
+Gotchas:
+
+- Zustand selectors here must return stable references. `useShallow` over freshly built
+  `{ id, name }` objects loops forever ("Maximum update depth exceeded"); select `order` and
+  `views` and derive with `useMemo`.
+- Only agents and terminals can join a View: their tab ids are globally unique, while
+  targets like `files` or `changes_tree` would collide across workspaces.
+- Tab ids are deterministic per target, so a View dedupes the same agent opened twice.

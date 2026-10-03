@@ -72,6 +72,7 @@ import { openHostOverview } from "@/navigation/settings-navigation";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
+import { SidebarViewsSection } from "@/views/sidebar-views-section";
 
 type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
 
@@ -941,7 +942,12 @@ function SidebarSortItem({
 
 // Stable element so the sidebar list's listHeaderComponent prop keeps identity across
 // renders (WorkspacesSectionHeader takes no props).
-const workspacesSectionHeaderElement = <WorkspacesSectionHeader />;
+const workspacesSectionHeaderElement = (
+  <>
+    <SidebarViewsSection />
+    <WorkspacesSectionHeader />
+  </>
+);
 
 // Static styles for Animated.Views — must NOT use Unistyles dynamic theme to
 // avoid the "Unable to find node on an unmounted component" crash when Unistyles

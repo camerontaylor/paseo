@@ -2025,6 +2025,32 @@ export const ar: TranslationResources = {
     },
     and: "و",
   },
+  views: {
+    sidebar: {
+      title: "العروض",
+      newView: "عرض جديد",
+    },
+    notFound: "لم يعد هذا العرض موجودًا.",
+    addSession: "إضافة جلسة",
+    emptyPane: {
+      title: "لوحة فارغة",
+    },
+    picker: {
+      addTitle: "إضافة جلسة",
+      splitTitle: "تقسيم مع جلسة",
+      searchPlaceholder: "ابحث عن الجلسات في جميع المشاريع",
+      empty: "لا توجد جلسات مطابقة",
+    },
+    actions: {
+      previousPane: "اللوحة السابقة",
+      nextPane: "اللوحة التالية",
+      rename: "إعادة تسمية العرض",
+      splitWithSession: "تقسيم مع جلسة",
+      delete: "حذف العرض",
+      openInView: "فتح في عرض",
+      openInNewView: "فتح في عرض جديد",
+    },
+  },
   renameModal: {
     rename: "إعادة تسمية",
     saving: "جارٍ الحفظ...",

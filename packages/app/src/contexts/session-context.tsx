@@ -2,6 +2,7 @@ import { useRef, ReactNode, useCallback, useEffect } from "react";
 import { Buffer } from "buffer";
 import { AppState } from "react-native";
 import { observeOpenWorkspaceAgentIds } from "@/stores/workspace-layout-store";
+import { observeViewAgentIds } from "@/stores/views-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useClientActivity } from "@/hooks/use-client-activity";
@@ -506,9 +507,23 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     viewedTimelineSyncRef.current = sync;
     setViewedTimelineSync(serverId, sync);
     sync.setActive(getIsAppVisible(appStateRef.current));
-    const stopObservingOpenChats = observeOpenWorkspaceAgentIds(serverId, (agentIds) =>
-      sync.replaceOpenTabAgentIds(agentIds),
-    );
+    // A chat stays live while any workspace tab or cross-workspace View shows it.
+    let workspaceAgentIds: string[] = [];
+    let viewAgentIds: string[] = [];
+    const publishOpenChats = () =>
+      sync.replaceOpenTabAgentIds([...new Set([...workspaceAgentIds, ...viewAgentIds])]);
+    const stopObservingWorkspaceChats = observeOpenWorkspaceAgentIds(serverId, (agentIds) => {
+      workspaceAgentIds = agentIds;
+      publishOpenChats();
+    });
+    const stopObservingViewChats = observeViewAgentIds(serverId, (agentIds) => {
+      viewAgentIds = agentIds;
+      publishOpenChats();
+    });
+    const stopObservingOpenChats = () => {
+      stopObservingWorkspaceChats();
+      stopObservingViewChats();
+    };
 
     return () => {
       stopObservingOpenChats();

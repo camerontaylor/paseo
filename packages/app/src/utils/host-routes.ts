@@ -428,6 +428,10 @@ export function buildSchedulesRoute() {
   return "/schedules" as const;
 }
 
+export function buildViewRoute(viewId: string) {
+  return `/views/${encodeURIComponent(viewId)}` as const;
+}
+
 export function buildOpenProjectRoute() {
   return "/open-project" as const;
 }

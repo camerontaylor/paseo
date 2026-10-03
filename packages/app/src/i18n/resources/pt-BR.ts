@@ -2062,6 +2062,32 @@ export const ptBR: TranslationResources = {
     },
     and: "e",
   },
+  views: {
+    sidebar: {
+      title: "Visões",
+      newView: "Nova visão",
+    },
+    notFound: "Esta visão não existe mais.",
+    addSession: "Adicionar sessão",
+    emptyPane: {
+      title: "Painel vazio",
+    },
+    picker: {
+      addTitle: "Adicionar uma sessão",
+      splitTitle: "Dividir com sessão",
+      searchPlaceholder: "Pesquisar sessões em todos os projetos",
+      empty: "Nenhuma sessão correspondente",
+    },
+    actions: {
+      previousPane: "Painel anterior",
+      nextPane: "Próximo painel",
+      rename: "Renomear visão",
+      splitWithSession: "Dividir com sessão",
+      delete: "Excluir visão",
+      openInView: "Abrir em visão",
+      openInNewView: "Abrir em nova visão",
+    },
+  },
   renameModal: {
     rename: "Renomear",
     saving: "Salvando...",

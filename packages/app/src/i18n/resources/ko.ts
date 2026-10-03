@@ -2038,6 +2038,32 @@ export const ko: TranslationResources = {
     },
     and: "그리고",
   },
+  views: {
+    sidebar: {
+      title: "보기",
+      newView: "새 보기",
+    },
+    notFound: "이 보기는 더 이상 존재하지 않습니다.",
+    addSession: "세션 추가",
+    emptyPane: {
+      title: "빈 창",
+    },
+    picker: {
+      addTitle: "세션 추가",
+      splitTitle: "세션으로 분할",
+      searchPlaceholder: "모든 프로젝트에서 세션 검색",
+      empty: "일치하는 세션이 없습니다",
+    },
+    actions: {
+      previousPane: "이전 창",
+      nextPane: "다음 창",
+      rename: "보기 이름 바꾸기",
+      splitWithSession: "세션으로 분할",
+      delete: "보기 삭제",
+      openInView: "보기에서 열기",
+      openInNewView: "새 보기에서 열기",
+    },
+  },
   renameModal: {
     rename: "이름 변경",
     saving: "저장하는 중...",
