@@ -5,6 +5,8 @@
 ### Added
 
 - Views: split layouts that show agents and terminals from different projects and hosts side by side, with a Views section in the sidebar, "Split with session", and "Open in View" on tab menus. Phones show one pane at a time with a pane pager.
+- Broadcast one prompt to every agent in a View: idle agents get it now, busy agents get it queued.
+- Pane shortcuts work inside Views (split opens a session picker), inactive panes are dimmed, and the header shows the focused pane's project.
 
 ### Fixed
 
