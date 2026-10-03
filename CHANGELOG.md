@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0-beta.7 - 2026-10-03
+
+### Fixed
+
+- Views on iPhone and iPad show one pane at a time with a tab strip and pane pager instead of the desktop split layout.
+
 ## 0.10.0-beta.6 - 2026-10-03
 
 ### Added
