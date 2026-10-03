@@ -261,7 +261,7 @@ Reading notes:
 
 ## Commits after `51fb7693d` up to the frozen source head `f0d5507d2`
 
-`git log --oneline 51fb7693d..f0d5507d2` — 29 commits. Proposed disposition for each. None of
+`git log --oneline 51fb7693d..f0d5507d2` — 31 commits. Proposed disposition for each. None of
 these are in the frozen source snapshot used for TM-01; they are **candidates for the update loop**,
 not part of the first port.
 
