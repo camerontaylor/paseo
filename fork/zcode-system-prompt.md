@@ -28,9 +28,11 @@ rejects a nonempty value with `INVALID_CONFIGURATION` and
 
 ## Native boundary
 
-`packages/shared/src/zcode-protocol/index.ts:zcodeSessionCreateParamsSchema`
-(line 1558) is strict and has no system prompt or additional instruction field.
-The resume schema follows it and likewise has no additive instruction field.
+The pinned plugin's `packages/shared/src/zcode-protocol/index.ts` —
+`zcodeSessionCreateParamsSchema` (line 1558 at plugin commit `fc66078`) — is
+strict and has no system prompt or additional instruction field. That path is
+in the plugin checkout, not this repo. The resume schema follows it and
+likewise has no additive instruction field.
 The plugin opens sessions through native `createSession` / `resumeSession` and then
 reapplies mode, planning, model, and reasoning settings; keep that cold-resume
 workaround intact.
