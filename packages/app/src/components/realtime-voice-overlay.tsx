@@ -1,28 +1,47 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { Pressable, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { Mic, MicOff, Square } from "lucide-react-native";
+import { Mic, MicOff, PhoneOff, Square } from "lucide-react-native";
 import { FOOTER_HEIGHT } from "@/constants/layout";
 import { useVoiceTelemetry } from "@/contexts/voice-context";
+import type { VoiceFailureKind } from "@/voice/voice-failure";
+import { isVoiceFailureBlocking } from "@/voice/voice-failure";
+import type { VoiceInputStatus } from "@/voice/voice-runtime";
 import { VolumeMeter } from "./volume-meter";
 
 interface RealtimeVoiceOverlayProps {
   isMuted: boolean;
   isSwitching: boolean;
+  failure: VoiceFailureKind | null;
+  lastInputStatus?: VoiceInputStatus | null;
+  isAgentRunning?: boolean;
+  isCancellingAgent?: boolean;
   onToggleMute: () => void;
   onStop: () => void;
+  onCancelAgent?: () => void;
 }
 
 const OVERLAY_BUTTON_SIZE = 44;
 const OVERLAY_VERTICAL_PADDING = (FOOTER_HEIGHT - OVERLAY_BUTTON_SIZE) / 2;
+const inputStatusLabels = {
+  queued: { key: "realtimeVoice.inputQueued", defaultValue: "Speech queued for agent" },
+  sent: { key: "realtimeVoice.inputSent", defaultValue: "Speech sent to agent" },
+  removed: { key: "realtimeVoice.inputRemoved", defaultValue: "Speech removed from queue" },
+  unknown: { key: "realtimeVoice.inputUnknown", defaultValue: "Speech delivery uncertain" },
+} as const;
 
 export function RealtimeVoiceOverlay({
   isMuted,
   isSwitching,
+  failure,
+  lastInputStatus,
+  isAgentRunning,
+  isCancellingAgent,
   onToggleMute,
   onStop,
+  onCancelAgent,
 }: RealtimeVoiceOverlayProps) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
@@ -40,8 +59,26 @@ export function RealtimeVoiceOverlay({
     () => [styles.actionButton, styles.stopButton, isSwitching ? styles.buttonDisabled : undefined],
     [isSwitching],
   );
+  const notListening = failure !== null && isVoiceFailureBlocking(failure);
   return (
     <View style={styles.container}>
+      <View accessibilityLiveRegion="polite" style={styles.status}>
+        <Text style={notListening ? styles.mutedLabel : styles.label}>
+          {notListening ? t("realtimeVoice.notListening") : t("realtimeVoice.listening")}
+        </Text>
+        {failure && (
+          <Text accessibilityRole="alert" style={styles.error}>
+            {t(`realtimeVoice.failure.${failure}`)}
+          </Text>
+        )}
+        {lastInputStatus && (
+          <Text accessibilityLiveRegion="polite" style={styles.hint}>
+            {t(inputStatusLabels[lastInputStatus].key, {
+              defaultValue: inputStatusLabels[lastInputStatus].defaultValue,
+            })}
+          </Text>
+        )}
+      </View>
       <View style={styles.meterContainer}>
         <VolumeMeter
           volume={volume}
@@ -52,6 +89,29 @@ export function RealtimeVoiceOverlay({
       </View>
 
       <View style={styles.actionsContainer}>
+        {isAgentRunning && onCancelAgent && (
+          <Pressable
+            onPress={onCancelAgent}
+            disabled={isCancellingAgent}
+            accessibilityRole="button"
+            accessibilityLabel={t("realtimeVoice.actions.interruptAgent", {
+              defaultValue: "Interrupt agent",
+            })}
+            style={stopButtonStyle}
+          >
+            {isCancellingAgent ? (
+              <LoadingSpinner size="small" color={theme.colors.palette.white} />
+            ) : (
+              <Square
+                size={theme.iconSize.lg}
+                color={theme.colors.palette.white}
+                fill={theme.colors.palette.white}
+                strokeWidth={2.5}
+              />
+            )}
+          </Pressable>
+        )}
+
         <Pressable
           onPress={onToggleMute}
           disabled={isSwitching}
@@ -78,10 +138,9 @@ export function RealtimeVoiceOverlay({
           {isSwitching ? (
             <LoadingSpinner size="small" color={theme.colors.palette.white} />
           ) : (
-            <Square
+            <PhoneOff
               size={theme.iconSize.lg}
               color={theme.colors.palette.white}
-              fill={theme.colors.palette.white}
               strokeWidth={2.5}
             />
           )}
@@ -105,8 +164,23 @@ const styles = StyleSheet.create((theme) => ({
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.border,
   },
-  meterContainer: {
+  status: {
     flex: 1,
+    gap: theme.spacing[1],
+  },
+  label: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+  },
+  mutedLabel: {
+    color: theme.colors.destructive,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+  },
+  hint: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
+  error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
+  meterContainer: {
     alignItems: "center",
     justifyContent: "center",
   },

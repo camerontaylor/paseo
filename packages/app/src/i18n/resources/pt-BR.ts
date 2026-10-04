@@ -179,7 +179,7 @@ export const ptBR: TranslationResources = {
       unmuteVoice: "Ativar som da voz",
       muteVoice: "Silenciar voz",
       dictation: "Ditado",
-      interruptBeforeVoice: "Interrompa o agente antes de iniciar o modo de voz",
+      interruptBeforeVoice: "Atualize o host para usar voz enquanto o agente trabalha",
     },
     attachments: {
       addImage: "Adicionar imagem",
@@ -1837,10 +1837,25 @@ export const ptBR: TranslationResources = {
     },
   },
   realtimeVoice: {
+    listening: "Microfone ligado",
+    notListening: "Não está ouvindo",
+    failure: {
+      "nothing-recognized": "Não entendi. Diga de novo.",
+      "recognition-stalled": "O reconhecimento de voz parou de responder. Pare e reinicie a voz.",
+      "recognition-failed": "O reconhecimento de voz falhou. Pare e reinicie a voz.",
+      "recognition-unavailable": "O reconhecimento de voz não está disponível no host.",
+      "host-disconnected": "Host desconectado. A entrada do microfone está pausada até reconectar.",
+      "microphone-lost": "Microfone perdido. A voz foi interrompida.",
+    },
+    inputQueued: "Fala na fila do agente",
+    inputSent: "Fala enviada ao agente",
+    inputRemoved: "Fala removida da fila",
+    inputUnknown: "Entrega da fala incerta",
     actions: {
+      interruptAgent: "Interromper agente",
       mute: "Silenciar voz em tempo real",
       unmute: "Ativar voz em tempo real",
-      stop: "Parar voz em tempo real e interromper a resposta",
+      stop: "Parar voz em tempo real",
     },
   },
   rewind: {

@@ -25,6 +25,10 @@ const StoredQueuedImageSchema = z.object({
 const StoredQueuedMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
+  /** Set when the item was admitted as spoken input; drives wrapping and receipt reads. */
+  origin: z.literal("voice").optional(),
+  /** The principal/client pair that spoke the item; only it may read the receipts. */
+  voiceOwner: z.string().optional(),
   // TM-02 adaptation: delivery bookkeeping is part of the durable record, so a
   // restart can tell a never-dispatched item from an ambiguous one. The source
   // store did not track it; every item this daemon writes carries all of these.
@@ -96,6 +100,7 @@ export function toAgentQueueSnapshot(queue: StoredAgentQueue): AgentQueueSnapsho
     items: queue.items.map((item) => ({
       id: item.id,
       text: item.text,
+      ...(item.origin ? { origin: item.origin } : {}),
       intent: item.intent,
       deliveryState: item.deliveryState,
       attempts: item.attempts,
@@ -129,7 +134,7 @@ function approximateBase64ByteSize(data: string): number {
   return Math.max(0, Math.floor((data.length * 3) / 4) - padding);
 }
 
-type QueueMutator = (current: StoredAgentQueue) => StoredAgentQueue;
+type QueueMutator = (current: StoredAgentQueue) => StoredAgentQueue | Promise<StoredAgentQueue>;
 
 export interface AgentQueueMutationResult {
   queue: StoredAgentQueue;
@@ -213,7 +218,9 @@ export class AgentQueueStore {
   async mutate(agentId: string, mutate: QueueMutator): Promise<AgentQueueMutationResult> {
     return this.serialize(agentId, async () => {
       const current = await this.get(agentId);
-      return this.apply(agentId, current, mutate(current));
+      // An async mutator (receipt reads during admission) still runs under the
+      // per-agent lock, so its decision cannot race a concurrent mutation.
+      return this.apply(agentId, current, await mutate(current));
     });
   }
 
@@ -232,7 +239,7 @@ export class AgentQueueStore {
       if (current.revision !== expectedRevision) {
         throw new QueueRevisionConflictError(expectedRevision, current.revision);
       }
-      return this.apply(agentId, current, mutate(current));
+      return this.apply(agentId, current, await mutate(current));
     });
   }
 
