@@ -33,6 +33,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 
 // Single source of truth for the publish scope (approval-gate confirmation):
 // resolved once at startup via resolveForkScope() and never hardcoded elsewhere.
@@ -215,6 +216,15 @@ function rewriteTextFileSpecifiers(filePath, { forkScope }) {
     throw new Error(`Non-text file contains a quoted "${UPSTREAM_SCOPE}" specifier: ${filePath}`);
   }
   writeFileSync(filePath, rewriteSpecifiersInText(text, { forkScope }));
+  // The daemon serves these variants before the plain asset. Keep them in sync
+  // with the rewritten bundle rather than serving pre-rewrite runtime names.
+  for (const [extension, compress] of [
+    [".br", brotliCompressSync],
+    [".gz", gzipSync],
+  ]) {
+    const compressedPath = `${filePath}${extension}`;
+    if (existsSync(compressedPath)) writeFileSync(compressedPath, compress(readFileSync(filePath)));
+  }
   return hits;
 }
 
@@ -236,6 +246,9 @@ export function rewriteDistSpecifiers(distDir, context) {
         continue;
       }
       filesScanned += 1;
+      const extension = path.extname(filePath);
+      const isCompressedVariant = extension === ".br" || extension === ".gz";
+      if (isCompressedVariant && existsSync(filePath.slice(0, -extension.length))) continue;
       const hits = rewriteTextFileSpecifiers(filePath, context);
       if (hits === 0) continue;
       filesRewritten += 1;

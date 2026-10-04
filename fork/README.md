@@ -12,6 +12,9 @@ _"restore X dropped during upstream merge"_, and `yooztech` invented a
 
 ## What's here
 
+Native ZCode: [SDK validation](zcode-sdk-validation.md) and
+[system instruction limitation](zcode-system-prompt.md).
+
 | File                                                                                           |                                                                                                                                                                                                                                                      |
 | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [upstream-research-2026-08-22.md](upstream-research-2026-08-22.md)                             | Research into upstream, its 1,546 forks, 490 open PRs and 467 open issues — features built, pain points, and the PR grab basket setup. Point-in-time; upstream merges ~30 community PRs a week.                                                      |

@@ -3,6 +3,7 @@ import { openExternalUrl } from "@/utils/open-external-url";
 import * as pluginUiRuntime from "./react-native/ui";
 import { useSettings } from "./settings/use-settings";
 import * as pluginSharedRuntime from "@getpaseo/plugin";
+import { pluginSdkEntry } from "@getpaseo/plugin";
 import * as pluginClientRuntime from "@getpaseo/plugin/client";
 import * as React from "react";
 import * as ReactJsxRuntime from "react/jsx-runtime";
@@ -435,26 +436,27 @@ export function runPluginClientBundle(
       return trackButton(runtime.addHeaderButton(contribution));
     },
   };
+  const clientRuntime = {
+    ...pluginClientRuntime,
+    useSettings,
+    openExternalUrl,
+    getPaseoClient: (serverId: string) => runtime.hosts.getPaseoClient(serverId),
+    useHosts: () =>
+      React.useSyncExternalStore(
+        runtime.hosts.subscribe,
+        runtime.hosts.getSnapshot,
+        runtime.hosts.getSnapshot,
+      ),
+  };
   const runtimeRequire = (name: string): unknown => {
-    if (name === "@getpaseo/plugin/client/ui") return pluginUiRuntime;
+    const sdkEntry = pluginSdkEntry(name);
+    if (sdkEntry === "/client/ui") return pluginUiRuntime;
     if (name === "react") return React;
     if (name === "react/jsx-runtime") return ReactJsxRuntime;
     if (name === "react-native") return ReactNative;
-    if (name === "@getpaseo/plugin") return pluginSharedRuntime;
-    if (name === "@getpaseo/plugin/client")
-      return {
-        ...pluginClientRuntime,
-        useSettings,
-        openExternalUrl,
-        getPaseoClient: (serverId: string) => runtime.hosts.getPaseoClient(serverId),
-        useHosts: () =>
-          React.useSyncExternalStore(
-            runtime.hosts.subscribe,
-            runtime.hosts.getSnapshot,
-            runtime.hosts.getSnapshot,
-          ),
-      };
-    if (name === "@getpaseo/plugin/client/react-native") {
+    if (sdkEntry === "") return pluginSharedRuntime;
+    if (sdkEntry === "/client") return clientRuntime;
+    if (sdkEntry === "/client/react-native") {
       return pluginReactNativeRuntime;
     }
     if (name === "@tanstack/react-query") return ReactQuery;
