@@ -309,7 +309,7 @@ interface SessionForTestOptions {
     getWorkspaceGitMetadata?: ReturnType<typeof vi.fn>;
     getProjectSlug?: ReturnType<typeof vi.fn>;
   };
-  workspaceRegistry?: { get: ReturnType<typeof vi.fn> };
+  workspaceRegistry?: { get: ReturnType<typeof vi.fn>; list?: ReturnType<typeof vi.fn> };
   projectRegistry?: Partial<SessionOptions["projectRegistry"]>;
   terminalManager?: SessionOptions["terminalManager"];
   serviceProxy?: SessionOptions["serviceProxy"];
@@ -333,6 +333,7 @@ interface SessionForTestOptions {
   orchestrationSkills?: SessionOptions["orchestrationSkills"];
   workspaceLabelService?: WorkspaceLabelService;
   metadataGeneration?: { providers: Array<{ provider: string; model?: string }> };
+  messageReceipts?: SessionOptions["messageReceipts"];
 }
 
 function createSessionForTest(options: SessionForTestOptions = {}): Session {
@@ -368,7 +369,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
   const messages = options.messages ?? [];
 
   const sessionOptions: SessionOptions = {
-    messageReceipts: createMessageReceiptsStub(),
+    messageReceipts: options.messageReceipts ?? createMessageReceiptsStub(),
     creationService: createTestCreationService(),
     clientId: options.clientId ?? "test-client",
     onMessage: (message) => messages.push(message),
@@ -5821,7 +5822,7 @@ test("session Find uses only Codex matching despite Claude metadata configuratio
     settingsReads++;
     throw new Error("GPT matching fixture unavailable");
   };
-  const project = createProjectRecord("/fixture/search");
+  const project = createPersistedProjectRecord(createProjectRecord("/fixture/search"));
   const workspace = {
     workspaceId: "search-workspace",
     projectId: project.projectId,
@@ -5835,10 +5836,12 @@ test("session Find uses only Codex matching despite Claude metadata configuratio
     messages,
     providerSnapshotManager: providers.manager,
     metadataGeneration: { providers: [{ provider: "claude", model: "haiku" }] },
+    messageReceipts: { ...createMessageReceiptsStub(), send },
     agentStorage: {
       list: async () => [
         createStoredAgentRecord({
           id: "search-agent",
+          cwd: workspace.cwd,
           title: "Existing search chat",
           workspaceId: workspace.workspaceId,
         }),
@@ -5847,7 +5850,6 @@ test("session Find uses only Codex matching despite Claude metadata configuratio
     agentManager: {
       readSessionSearchText: async () => ["Existing fixture context"],
       createAgent: send,
-      sendMessage: send,
     },
     workspaceRegistry: { get: vi.fn(), list: vi.fn(async () => [workspace]) },
     projectRegistry: { list: async () => [project] },

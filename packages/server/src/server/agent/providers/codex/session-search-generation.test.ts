@@ -163,12 +163,17 @@ describe("Codex tool-free session matching transport", () => {
     expect(await f.generation.generate(f.request)).toEqual(result);
     expect(f.logs()).toContain('"actualModel":"gpt-configured-default"');
   });
-  describe.each(["terminal body", "completed item"])("%s schema validation", (transport) => {
-    test.each([
-      ["unknown top-level key", { ...result, unexpected: true }],
-      ["unknown nested key", { matches: [{ ...result.matches[0], unexpected: true }] }],
-      ["missing nested key", { matches: [{ score: 0.96 }] }],
-    ])("rejects %s without retry, fallback or success receipt", async (_name, output) => {
+  test.each(
+    ["terminal body", "completed item"].flatMap((transport) =>
+      [
+        ["unknown top-level key", { ...result, unexpected: true }],
+        ["unknown nested key", { matches: [{ ...result.matches[0], unexpected: true }] }],
+        ["missing nested key", { matches: [{ score: 0.96 }] }],
+      ].map(([name, output]) => ({ transport, name, output })),
+    ),
+  )(
+    "$transport schema validation rejects $name without retry, fallback or success receipt",
+    async ({ transport, output }) => {
       const message = {
         type: "message",
         role: "assistant",
@@ -190,8 +195,8 @@ describe("Codex tool-free session matching transport", () => {
       expect(calls).toBe(1);
       expect(f.logs()).toBe("");
       expect(await readFile(path.join(f.dir, "auth.json"), "utf8")).toBe(f.auth);
-    });
-  });
+    },
+  );
   test.each([
     [
       "done item without terminal acknowledgement",
