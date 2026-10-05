@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { createCodexSessionSearchGeneration } from "./session-search-generation.
 
 const dirs: string[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 const schema = z.object({
@@ -96,6 +97,23 @@ async function setup(
 }
 
 describe("Codex tool-free session matching transport", () => {
+  test("uses the existing ChatGPT OAuth token even when an unrelated OpenAI key is inherited", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "ambient-unrelated-key");
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const f = await setup(async (url, init) => {
+      calls.push({ url: String(url), init });
+      return sse([completed()]);
+    });
+    expect(await f.generation.generate(f.request)).toEqual(result);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    const headers = new Headers(calls[0].init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer fixture-access-token");
+    expect(headers.get("ChatGPT-Account-ID")).toBe("fixture-account");
+    expect(process.env.OPENAI_API_KEY).toBe("ambient-unrelated-key");
+    expect(await readFile(path.join(f.dir, "auth.json"), "utf8")).toBe(f.auth);
+    expect(f.logs()).not.toContain("ambient-unrelated-key");
+  });
   test("emits a genuinely empty tool surface to the same Codex ChatGPT consumer, with saved model and no auth writes", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const f = await setup(async (url, init) => {

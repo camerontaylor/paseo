@@ -37,7 +37,10 @@ when available. It never substitutes a coding chat's model, shared Git metadata-
 configuration, Claude, or another provider. All providers remain valid destination sessions.
 Unsupported custom inference endpoints, keychain-only/API-key sign-in, unavailable defaults, expired
 sign-in, and account limits fail clearly; ordinary filtering and the manual recipient picker remain
-usable. Normal Codex owns authentication refresh; matching never rewrites authentication or config.
+usable. An unrelated `OPENAI_API_KEY` inherited from the login shell does not replace this explicit
+ChatGPT sign-in or prevent matching. An explicit Paseo provider-key override, Codex API-key override,
+or custom endpoint remains unsupported. Coding-session environments are unchanged.
+Normal Codex owns authentication refresh; matching never rewrites authentication or config.
 
 The routing-only matcher uses Codex's existing ChatGPT-authenticated
 [Responses transport](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core/src/client.rs)

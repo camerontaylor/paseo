@@ -7373,16 +7373,22 @@ export class CodexAppServerAgentClient implements AgentClient {
     }
   }
 
+  private hasSessionSearchProviderOverride(env: NodeJS.ProcessEnv): boolean {
+    return Boolean(
+      this.customProviderConfig() ||
+      env.OPENAI_BASE_URL ||
+      // A shell-inherited key is unrelated to routing's explicit ChatGPT OAuth
+      // transport. Preserve rejection of a deliberate Paseo provider override.
+      this.runtimeSettings?.env?.OPENAI_API_KEY ||
+      env.CODEX_API_KEY,
+    );
+  }
+
   /** Read the effective default without creating/resuming a native thread. */
   async getSessionSearchSettings(signal?: AbortSignal): Promise<CodexSessionSearchSettings> {
     signal?.throwIfAborted();
     const env = createProviderEnv({ runtimeSettings: this.runtimeSettings });
-    if (
-      this.customProviderConfig() ||
-      env.OPENAI_BASE_URL ||
-      env.OPENAI_API_KEY ||
-      env.CODEX_API_KEY
-    ) {
+    if (this.hasSessionSearchProviderOverride(env)) {
       throw new Error("GPT matching requires the existing Codex ChatGPT provider");
     }
     const child = await this.spawnAppServer();
