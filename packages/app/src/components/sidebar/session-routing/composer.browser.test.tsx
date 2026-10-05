@@ -32,6 +32,7 @@ vi.mock("react-native-unistyles", async () => {
   };
 });
 const fixture = vi.hoisted(() => ({
+  serverIds: ["host"],
   query: "Where were we working on offline?",
   search: vi.fn(),
   enqueue: vi.fn(),
@@ -47,6 +48,8 @@ const fixture = vi.hoisted(() => ({
 vi.mock("@/components/sidebar/sidebar-model", () => ({
   useSidebarModel: () => ({
     searchQuery: fixture.query,
+    serverIds: fixture.serverIds,
+    hostRegistryLoaded: true,
     allProjects: [{ viewKey: "view", projectName: "Paseo" }],
     workspacePlacements: [fixture.placement],
   }),
@@ -71,6 +74,7 @@ vi.mock("@/stores/session-store", async () => {
     useSessionStore: create(() => ({
       sessions: {
         host: {
+          hasHydratedWorkspaces: true,
           agents: new Map([
             [
               "chat",
@@ -138,6 +142,7 @@ beforeEach(async () => {
   fixture.search.mockReset();
   fixture.enqueue.mockReset();
   fixture.open.mockReset();
+  fixture.serverIds = ["host"];
   fixture.query = "Where were we working on offline?";
   fixture.search.mockResolvedValue({ results: [result], searchedCount: 1, totalCount: 1 });
   fixture.enqueue.mockResolvedValue({ agentId: "chat", revision: 1, items: [] });
@@ -316,4 +321,47 @@ test("an old failed Find cannot override a newer lookup", async () => {
   await act(async () => fail(new Error("stale failure")));
   expect(view.queryByText("stale failure")).toBeNull();
   expect(fixture.enqueue).not.toHaveBeenCalled();
+});
+
+
+test("complete Find displays searched and total chat counts", async () => {
+  fixture.search.mockResolvedValue({ results: [result], searchedCount: 12, totalCount: 12 });
+  const view = await mount();
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByText("Searched 12 of 12 chats.").textContent).toBe("Searched 12 of 12 chats."));
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+});
+
+test("a selected host without a directory prevents automatic delivery", async () => {
+  fixture.serverIds = ["host", "cold-host"];
+  const view = await mount();
+  act(() => view.getByTestId("routing-send-mode").click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getAllByRole("button", { name: "Send here" })).toHaveLength(1));
+  expect(view.getByText(/Host directories are still loading/).textContent).toContain("Choose a chat manually.");
+  expect(fixture.search).toHaveBeenCalledTimes(1);
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+});
+
+test("a pushed acknowledgement survives a lost enqueue response", async () => {
+  fixture.enqueue.mockImplementation(async (entry) => {
+    const outbox = useQueueOutboxStore.getState();
+    await outbox.acknowledge(entry.itemId, {
+      agentId: "chat", revision: 1,
+      items: [{ id: entry.itemId, text: entry.text, createdAt: "2026-01-01T00:00:00.000Z" }],
+    });
+    await outbox.removeDurably(entry.itemId, true);
+    throw new Error("response lost");
+  });
+  const view = await mount();
+  act(() => view.getByTestId("routing-send-mode").click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByText("Queued for Paseo · Offline indicator").textContent).toBe("Queued for Paseo · Offline indicator"));
+  expect(view.queryByText("response lost")).toBeNull();
+  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("");
+  act(() => view.getByTestId("routing-submit").click());
+  expect(fixture.enqueue).toHaveBeenCalledTimes(1);
 });

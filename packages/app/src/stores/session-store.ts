@@ -1824,7 +1824,10 @@ export const useSessionStore = create<SessionStore>()(
         if (acknowledged.length > 0) {
           try {
             await Promise.all(
-              acknowledged.map((entry) => outbox.removeDurably(entry.itemId, true)),
+              acknowledged.map(async (entry) => {
+                await outbox.acknowledge(entry.itemId, snapshot);
+                await outbox.removeDurably(entry.itemId, true);
+              }),
             );
           } catch {
             return;

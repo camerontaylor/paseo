@@ -101,6 +101,12 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
       acknowledgements: {},
       acknowledge: async (itemId, snapshot) => {
         const entry = get().entries[itemId];
+        set((state) => {
+          const kept = Object.entries(state.acknowledgements).slice(-255);
+          const acknowledgements = Object.fromEntries(kept);
+          acknowledgements[itemId] = { queued: snapshot.items.some((item) => item.id === itemId) };
+          return { acknowledgements };
+        });
         if (entry?.routingOrigin) {
           const { useDraftStore, flushDraftPersistStorage } = await import("@/stores/draft-store");
           const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
@@ -114,12 +120,7 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
             await flushDraftPersistStorage();
           }
         }
-        set((state) => {
-          const kept = Object.entries(state.acknowledgements).slice(-255);
-          const acknowledgements = Object.fromEntries(kept);
-          acknowledgements[itemId] = { queued: snapshot.items.some((item) => item.id === itemId) };
-          return { acknowledgements };
-        });
+
       },
 
       add: async (entry) =>

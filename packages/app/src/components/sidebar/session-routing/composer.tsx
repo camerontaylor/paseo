@@ -55,7 +55,8 @@ export function SessionRoutingComposer({
   children: (submit: () => void) => ReactNode;
 }) {
   const { t } = useTranslation();
-  const { searchQuery, allProjects, workspacePlacements } = useSidebarModel();
+  const { searchQuery, allProjects, workspacePlacements, serverIds, hostRegistryLoaded } =
+    useSidebarModel();
   const [state, dispatch] = useReducer(routingReducer, initialRoutingState);
   const pendingItemId = state.phase.status === "pending" ? state.phase.itemId : null;
   const rejection = useQueueOutboxStore((store) =>
@@ -78,10 +79,6 @@ export function SessionRoutingComposer({
   const request = useRef<string | null>(null);
   const submitting = useRef<string | null>(null);
   const sendInput = useRef<EditingTextInputHandle>(null);
-  const serverIds = useMemo(
-    () => [...new Set(workspacePlacements.map((placement) => placement.serverId))],
-    [workspacePlacements],
-  );
   const agentMaps = useSessionStore(
     useShallow((snapshot) => serverIds.map((serverId) => snapshot.sessions[serverId]?.agents)),
   );
@@ -130,10 +127,16 @@ export function SessionRoutingComposer({
       const scoped = workspacePlacements.filter(
         (placement) => scope === null || placement.projectViewKey === scope,
       );
-      const hostIds = [...new Set(scoped.map((placement) => placement.serverId))];
+      const hostIds = serverIds;
       const responses = await Promise.allSettled(
         hostIds.map(async (serverId) => {
           const session = useSessionStore.getState().sessions[serverId];
+          if (!session?.hasHydratedWorkspaces)
+            throw new Error(t("sidebar.routing.directoryUnavailable"));
+          const workspaceIds = scoped
+            .filter((placement) => placement.serverId === serverId)
+            .map((placement) => placement.workspaceId);
+          if (workspaceIds.length === 0) return { recipients: [], searched: 0, total: 0 };
           if (!session?.serverInfo?.features?.sessionSearch)
             throw new Error(t("sidebar.routing.updateHost"));
           const client = getHostRuntimeStore().getClient(serverId);
@@ -141,9 +144,7 @@ export function SessionRoutingComposer({
             throw new Error(t("sidebar.routing.offline"));
           const payload = await client.searchSessions({
             query,
-            workspaceIds: scoped
-              .filter((placement) => placement.serverId === serverId)
-              .map((placement) => placement.workspaceId),
+            workspaceIds,
           });
           const recipients: Recipient[] = [];
           for (const result of payload.results) {
@@ -162,7 +163,9 @@ export function SessionRoutingComposer({
         }),
       );
       const recipients: Recipient[] = [];
-      const failures: string[] = [];
+      const failures: string[] = hostRegistryLoaded
+        ? []
+        : [t("sidebar.routing.directoryUnavailable")];
       let searched = 0,
         total = 0;
       for (const response of responses) {
@@ -180,7 +183,9 @@ export function SessionRoutingComposer({
       }
       recipients.sort((a, b) => b.confidence - a.confidence);
       const notices = failures.map((message) => message.slice(0, 240));
-      if (searched < total) notices.push(t("sidebar.routing.searchLimit", { searched, total }));
+      notices.push(
+        t(searched < total ? "sidebar.routing.searchLimit" : "sidebar.routing.searchCoverage", { searched, total }),
+      );
       return {
         recipients,
         notice: notices.join(" "),
@@ -347,8 +352,11 @@ export function SessionRoutingComposer({
         dispatch({ type: "acknowledged", itemId, queued: result.queued });
       } catch (error) {
         const message = error instanceof Error ? error.message : t("sidebar.routing.sendFailed");
+        const acknowledgement = useQueueOutboxStore.getState().acknowledgements[itemId];
         const stored = useQueueOutboxStore.getState().entries[itemId];
-        if (!stored) dispatch({ type: "phase", phase: { status: "error", message } });
+        if (acknowledgement)
+          dispatch({ type: "acknowledged", itemId, queued: acknowledgement.queued });
+        else if (!stored) dispatch({ type: "phase", phase: { status: "error", message } });
         else
           dispatch({
             type: "phase",
