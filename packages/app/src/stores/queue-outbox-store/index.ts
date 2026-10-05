@@ -156,12 +156,11 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
               throw error;
             }
           }
+          const queued = snapshot.items.some((item) => item.id === itemId);
           set((state) => {
             const kept = Object.entries(state.acknowledgements).slice(-255);
             const acknowledgements = Object.fromEntries(kept);
-            acknowledgements[itemId] = {
-              queued: snapshot.items.some((item) => item.id === itemId),
-            };
+            acknowledgements[itemId] = { queued };
             return { acknowledgements };
           });
         }),

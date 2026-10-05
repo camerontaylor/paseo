@@ -41,6 +41,7 @@ import {
   routingReducer,
   type Recipient,
   type RoutingAction,
+  type RoutingState,
 } from "./model";
 
 interface MatchRequest {
@@ -243,8 +244,7 @@ export function SessionRoutingComposer({
     },
   });
 
-  const locked =
-    !state.draftReady || state.phase.status === "sending" || state.phase.status === "pending";
+  const locked = isRoutingLocked(state);
   useEffect(() => {
     if (request.current && submitting.current === request.current) submitting.current = null;
     request.current = null;
@@ -736,6 +736,10 @@ export function SessionRoutingComposer({
       ) : null}
     </View>
   );
+}
+
+function isRoutingLocked(state: RoutingState): boolean {
+  return !state.draftReady || state.phase.status === "sending" || state.phase.status === "pending";
 }
 
 function pendingRecovery(

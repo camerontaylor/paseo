@@ -75,6 +75,8 @@ Download it from [paseo.sh/download](https://paseo.sh/download) or the [GitHub r
 
 To connect from your phone, open **Settings → your host → Pair Device**.
 
+Use the sidebar's [Find and Send prompt controls](docs/session-routing.md) to work with existing chats.
+
 When an agent is running, the composer shows **Steer** as the default send action. It adds your message to the current turn. Open **Options** beside it to **Queue message** for the next turn or **Interrupt agent** to stop the current turn and send your message. The same controls are available on desktop and phone; you can change the default in Settings.
 
 **Settings → Chat → Tool call display** defaults to **Summary** on desktop and phone, including existing installs after the update. Summary groups routine calls. Failures (including nonzero shell exits), plans, questions, and approvals remain visible. Choose **Quiet** to hide routine calls from the chat view or **Full detail** to show each call. These choices do not delete timeline history, and a choice made after the update persists.
@@ -113,7 +115,7 @@ Open `http://localhost:6767` after it starts. Extend the base image with the age
 
 ## CLI
 
-Everything you can do in the app, you can do from the terminal.
+Use the CLI to create agents, inspect their output, and send follow-up tasks.
 
 ```bash
 paseo run --provider claude/opus-4.6 "implement user authentication"

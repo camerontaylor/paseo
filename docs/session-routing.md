@@ -3,7 +3,8 @@
 The project sidebar combines its immediate project/title filter with deliberate intelligent Find
 and Send prompt actions. Find and Open chat never deliver the query. Use this chat pins an exact
 host/session, switches to Send, and restores the independent, persisted send draft. The destination
-chat owns all replies; sending does not navigate away or create a session.
+chat owns all replies; sending does not navigate away or create a session. Press Enter/Search in the
+filter field or choose Find to submit intelligent matching; typing alone keeps the ordinary filter.
 
 Choose All projects, Current project, or a named project in the scope menu. A project scope is a
 sidebar project view identity, including its host/clone grouping. Search sends only that scope's
@@ -50,7 +51,10 @@ or definitive rejections to the composer. Queued for means the host acknowledged
 queue; Routed to means the acknowledgement no longer lists it. Neither confirms task completion.
 The composer waits for both persisted drafts and the outbox before enabling Send. Pending recovery
 does not require a loaded host/chat directory. Routing keeps durable outbox ownership until the draft
-checkpoint succeeds, including after a failed storage write. Draft clearing is guarded by the submitted
+checkpoint succeeds, including after a failed storage write. Acknowledgement waits for persisted draft
+hydration before comparing ownership. Checkpoint writes serialize with background draft writes;
+failure restores matching in-memory draft ownership and retains the same outbox item for retry.
+Draft clearing is guarded by the submitted
 draft revision and update timestamp, so a late
 acknowledgement cannot erase a newly edited identical prompt. See [queue mirroring](queue-mirroring.md)
 for the shared outbox and delivery-receipt contract.
