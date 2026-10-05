@@ -1138,3 +1138,107 @@ for (const change of ["mode", "query", "scope", "draft", "revision"] as const) {
     });
   }
 }
+
+test("ordinary queue cancellation resolves routing pending without a success receipt", async () => {
+  const view = await mount();
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Use this chat" })).toBeTruthy());
+  act(() => view.getByRole("button", { name: "Use this chat" }).click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+  fixture.enqueue.mockRejectedValueOnce(new Error("lost response"));
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
+  const itemId = fixture.enqueue.mock.calls[0]![0].itemId;
+  await act(async () => {
+    const store = useQueueOutboxStore.getState();
+    await store.requestRemoval(store.entries[itemId]!);
+    await flushQueueOutboxForServer({
+      serverId: "host",
+      client: {
+        enqueueAgentMessage: fixture.enqueue,
+        removeQueuedAgentMessage: async () => ({ agentId: "chat", revision: 2, items: [] }),
+      },
+      applySnapshot: () => {},
+    });
+  });
+  await waitFor(() => expect(view.queryByRole("button", { name: "Retry delivery" })).toBeNull());
+  expect(container.textContent).toContain("canceled");
+  expect(container.textContent).not.toContain("Routed to");
+  expect(container.textContent).not.toContain("Queued for");
+  expect(fixture.enqueue).toHaveBeenCalledTimes(1);
+  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+});
+
+test("cold cancellation ownership locks Send without a recipient directory until durable removal", async () => {
+  useDraftStore.getState().editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
+  const record = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY]!;
+  await useQueueOutboxStore.getState().add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "cold-cancel",
+    text: "continue",
+    expectedWorkspaceId: "workspace",
+    expectedProjectId: "project",
+    routingOrigin: true,
+    routingDispatchHeld: true,
+    routingDraftVersion: record.version,
+    routingDraftUpdatedAt: record.updatedAt,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  await useQueueOutboxStore
+    .getState()
+    .requestRemoval(useQueueOutboxStore.getState().entries["cold-cancel"]!);
+  await useQueueOutboxStore.persist.rehydrate();
+  fixture.directory = false;
+  fixture.routingSupported = false;
+  const view = await render();
+  await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
+  expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+  act(() => view.getByRole("button", { name: "Retry delivery" }).click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+  await act(async () => {
+    await flushQueueOutboxForServer({
+      serverId: "host",
+      client: {
+        enqueueAgentMessage: fixture.enqueue,
+        removeQueuedAgentMessage: async () => ({ agentId: "chat", revision: 2, items: [] }),
+      },
+      applySnapshot: () => {},
+    });
+  });
+  await waitFor(() => expect(view.queryByRole("button", { name: "Retry delivery" })).toBeNull());
+  expect(container.textContent).toContain("canceled");
+  expect(container.textContent).not.toContain("Routed to");
+  expect(container.textContent).not.toContain("Queued for");
+  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+});
+
+test("a durable cancellation intent supersedes an acknowledgement waiting for the composer", async () => {
+  const view = await mount();
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Use this chat" })).toBeTruthy());
+  act(() => view.getByRole("button", { name: "Use this chat" }).click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+  fixture.enqueue.mockRejectedValueOnce(new Error("lost response"));
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
+  const itemId = fixture.enqueue.mock.calls[0]![0].itemId;
+  fixture.pauseEffects = true;
+  await act(async () => {
+    const store = useQueueOutboxStore.getState();
+    await store.acknowledge(itemId, { agentId: "chat", revision: 2, items: [] });
+    await store.requestRemoval(store.entries[itemId]!);
+  });
+  fixture.pauseEffects = false;
+  await act(async () => {
+    for (const effect of fixture.effects.splice(0))
+      if (effect.active) effect.cleanup = effect.run() ?? undefined;
+  });
+  expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy();
+  expect(container.textContent).not.toContain("Routed to");
+  expect(container.textContent).not.toContain("Queued for");
+});

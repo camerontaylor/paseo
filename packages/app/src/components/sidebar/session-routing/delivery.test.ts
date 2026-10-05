@@ -9,6 +9,7 @@ const snapshot: AgentQueueSnapshot = {
 };
 function fixture() {
   const events: string[] = [];
+  let entry: import("@/stores/queue-outbox-store/model").PendingQueueEnqueue | undefined;
   const input: RouteDeliveryInput = {
     recipient: {
       serverId: "host",
@@ -33,15 +34,18 @@ function fixture() {
       }),
     },
     outbox: {
-      getEntry: vi.fn(async () => undefined),
+      getEntry: vi.fn(async () => entry),
       markRoutingDispatched: vi.fn(async () => {}),
-      add: vi.fn(async () => {
+      add: vi.fn(async (value) => {
+        entry = { ...value, createdAt: 1, attempts: 0 };
         events.push("persist");
       }),
       acknowledge: vi.fn(async () => {
         events.push("ack");
+        return true;
       }),
       removeDurably: vi.fn(async () => {
+        entry = undefined;
         events.push("remove");
       }),
     },
@@ -68,12 +72,13 @@ test("persists original prompt and destination before sending, then reports actu
 });
 test("storage failure never sends and uncertain delivery retains the durable item for same-ID retry", async () => {
   const { input } = fixture();
+  const originalAdd = input.outbox.add;
   input.outbox.add = vi.fn(async () => {
     throw new Error("disk full");
   });
   await expect(deliverRoutedPrompt(input)).rejects.toThrow("disk full");
   expect(input.client.enqueueAgentMessage).not.toHaveBeenCalled();
-  input.outbox.add = vi.fn(async () => {});
+  input.outbox.add = originalAdd;
   input.client.enqueueAgentMessage = vi.fn(async () => {
     throw new Error("ack lost");
   });

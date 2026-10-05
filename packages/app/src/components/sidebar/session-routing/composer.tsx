@@ -74,7 +74,10 @@ export function SessionRoutingComposer({
   const { searchQuery, allProjects, workspacePlacements, serverIds, hostRegistryLoaded } =
     useSidebarModel();
   const [state, reduce] = useReducer(routingReducer, initialRoutingState);
-  const pendingItemId = state.phase.status === "pending" ? state.phase.itemId : null;
+  const pendingItemId =
+    state.phase.status === "pending" || state.phase.status === "sending"
+      ? state.phase.itemId
+      : null;
   const rejection = useQueueOutboxStore((store) =>
     pendingItemId ? store.rejections[pendingItemId] : undefined,
   );
@@ -261,6 +264,7 @@ export function SessionRoutingComposer({
       itemId: string;
       draftVersion: number;
       draftUpdatedAt?: number;
+      requireExisting?: boolean;
     }) => {
       if (!latest.current.serverIds.includes(input.recipient.serverId))
         throw new Error(t("sidebar.routing.invalidDestination"));
@@ -315,7 +319,6 @@ export function SessionRoutingComposer({
         const entry = Object.values(useQueueOutboxStore.getState().entries).find(
           (pending) =>
             pending.routingOrigin &&
-            !pending.removalRequested &&
             pending.routingDraftVersion === (record?.version ?? 0) &&
             pending.routingDraftUpdatedAt === (record?.updatedAt ?? 0),
         );
@@ -350,7 +353,6 @@ export function SessionRoutingComposer({
       return;
     const entry = pendingOutbox.find(
       (pending) =>
-        !pending.removalRequested &&
         pending.routingDraftVersion === state.draftVersion &&
         pending.routingDraftUpdatedAt === state.draftUpdatedAt,
     );
@@ -368,11 +370,16 @@ export function SessionRoutingComposer({
     dispatch,
   ]);
   useEffect(() => {
-    if (state.phase.status === "pending" && rejection)
+    if ((state.phase.status === "pending" || state.phase.status === "sending") && rejection)
       dispatch({ type: "phase", phase: { status: "error", message: rejection } });
   }, [rejection, state.phase.status, dispatch]);
   useEffect(() => {
-    if (state.phase.status !== "pending" || !acknowledgement) return;
+    if (
+      state.phase.status !== "pending" ||
+      !acknowledgement ||
+      useQueueOutboxStore.getState().entries[state.phase.itemId]?.removalRequested
+    )
+      return;
     dispatch({ type: "acknowledged", itemId: state.phase.itemId, queued: acknowledgement.queued });
   }, [acknowledgement, state.phase, dispatch]);
   useEffect(() => {
@@ -445,13 +452,19 @@ export function SessionRoutingComposer({
           itemId,
           draftVersion,
           draftUpdatedAt,
+          requireExisting: retry,
         });
         dispatch({ type: "acknowledged", itemId, queued: result.queued });
       } catch (error) {
+        const phase = latest.current.state.phase;
+        if ((phase.status !== "sending" && phase.status !== "pending") || phase.itemId !== itemId)
+          return;
         const message = error instanceof Error ? error.message : t("sidebar.routing.sendFailed");
         const deliveryAcknowledgement = useQueueOutboxStore.getState().acknowledgements[itemId];
         const stored = useQueueOutboxStore.getState().entries[itemId];
-        if (deliveryAcknowledgement)
+        const rejection = useQueueOutboxStore.getState().rejections[itemId];
+        if (rejection) dispatch({ type: "phase", phase: { status: "error", message: rejection } });
+        else if (deliveryAcknowledgement && !stored?.removalRequested)
           dispatch({ type: "acknowledged", itemId, queued: deliveryAcknowledgement.queued });
         else if (!stored) dispatch({ type: "phase", phase: { status: "error", message } });
         else

@@ -114,7 +114,7 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
                 .list(input.serverId)
                 .find((pending) => pending.itemId === candidate.itemId);
           if (!entry) continue;
-          if (entry.routingDispatchHeld) break;
+          if (entry.routingDispatchHeld && !entry.removalRequested) break;
           if (!canRetryEnqueue(entry, input.client)) continue;
           try {
             const removeFromHost = async () => {

@@ -53,7 +53,10 @@ pending submission only after durable outbox removal succeeds and preserves its 
 item and shows an uncertain delivery state. A failed dispatch-marker write preserves a real host
 acknowledgement. Without one, explicit Retry recovers the same item; reloading alone never makes held
 items eligible for reconnect delivery. Background reconnect publishes actual acknowledgements
-or definitive rejections to the composer. Queued for means the host acknowledged an item still in its
+or definitive rejections to the composer. A cancellation stays pending until the host confirms
+removal and the device checkpoints it. Completion reports cancellation and preserves the editable
+draft; Retry requires the original uncanceled outbox item and cannot recreate a removed one.
+Held enqueue entries still allow durable cancellation on older hosts. Queued for means the host acknowledged an item still in its
 queue; Routed to means the acknowledgement no longer lists it. Neither confirms task completion.
 The composer waits for both persisted drafts and the outbox before enabling Send. Pending recovery
 does not require a loaded host/chat directory. Routing keeps durable outbox ownership until the draft

@@ -33,7 +33,7 @@ interface QueueOutboxActions {
   rejections: Record<string, string>;
   reject: (itemId: string, message: string) => void;
   acknowledgements: Record<string, { queued: boolean }>;
-  acknowledge: (itemId: string, snapshot: AgentQueueSnapshot) => Promise<void>;
+  acknowledge: (itemId: string, snapshot: AgentQueueSnapshot) => Promise<boolean>;
   add: (entry: Omit<PendingQueueEnqueue, "createdAt" | "attempts">) => Promise<void>;
   remove: (itemId: string) => void;
   removeDurably: (itemId: string, preserveRemovalIntent?: boolean) => Promise<void>;
@@ -114,7 +114,6 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
           const entry = get().entries[itemId];
           if (
             !entry?.routingOrigin ||
-            entry.removalRequested ||
             get().acknowledgements[itemId] ||
             entry.routingDraftVersion === undefined ||
             entry.routingDraftUpdatedAt === undefined
@@ -137,7 +136,7 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
       },
       getEntry: async (itemId) => {
         await awaitOutboxHydration();
-        return get().entries[itemId];
+        return serializeQueueOperation("queue-outbox-mutation", async () => get().entries[itemId]);
       },
       markRoutingDispatched: (itemId) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
@@ -170,6 +169,8 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
         serializeQueueOperation(JSON.stringify(["routing-ack", itemId]), async () => {
           await awaitOutboxHydration();
           const entry = get().entries[itemId];
+          if (!entry) return Boolean(get().acknowledgements[itemId]);
+          if (entry.removalRequested) return false;
           if (entry?.routingOrigin) {
             const { useDraftStore, awaitDraftHydration, flushDraftPersistStorageDurably } =
               await import("@/stores/draft-store");
@@ -214,6 +215,7 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
             acknowledgements[itemId] = { queued };
             return { acknowledgements };
           });
+          return true;
         }),
 
       add: async (entry) =>
@@ -264,31 +266,33 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
       },
 
       requestRemoval: (entry) =>
-        serializeQueueOperation("queue-outbox-mutation", async () => {
-          await awaitOutboxHydration();
-          const previous = get().entries[entry.itemId];
-          writesInFlight.add(entry.itemId);
-          set((state) => ({
-            entries: {
-              ...state.entries,
-              [entry.itemId]: { ...(previous ?? entry), removalRequested: true, attempts: 0 },
-            },
-          }));
-          try {
-            await pendingWrite;
-          } catch (error) {
-            set((state) => {
-              const entries = { ...state.entries };
-              if (previous) entries[entry.itemId] = previous;
-              else delete entries[entry.itemId];
-              return { entries };
-            });
-            await pendingWrite.catch(() => {});
-            throw error;
-          } finally {
-            writesInFlight.delete(entry.itemId);
-          }
-        }),
+        serializeQueueOperation(JSON.stringify(["routing-ack", entry.itemId]), () =>
+          serializeQueueOperation("queue-outbox-mutation", async () => {
+            await awaitOutboxHydration();
+            const previous = get().entries[entry.itemId];
+            writesInFlight.add(entry.itemId);
+            set((state) => ({
+              entries: {
+                ...state.entries,
+                [entry.itemId]: { ...(previous ?? entry), removalRequested: true, attempts: 0 },
+              },
+            }));
+            try {
+              await pendingWrite;
+            } catch (error) {
+              set((state) => {
+                const entries = { ...state.entries };
+                if (previous) entries[entry.itemId] = previous;
+                else delete entries[entry.itemId];
+                return { entries };
+              });
+              await pendingWrite.catch(() => {});
+              throw error;
+            } finally {
+              writesInFlight.delete(entry.itemId);
+            }
+          }),
+        ),
 
       removeDurably: (itemId, preserveRemovalIntent = false) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
@@ -301,6 +305,14 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
             set((state) => ({ entries: { ...state.entries, [itemId]: entry } }));
             await pendingWrite.catch(() => {});
             throw error;
+          }
+          if (entry.routingOrigin && entry.removalRequested) {
+            set((state) => {
+              const acknowledgements = { ...state.acknowledgements };
+              delete acknowledgements[itemId];
+              return { acknowledgements };
+            });
+            get().reject(itemId, "Delivery canceled.");
           }
         }),
 
@@ -330,7 +342,10 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
         return sortByCreation(
           Object.values(get().entries).filter((entry) => entry.serverId === serverId),
         ).filter((entry) => {
-          if (writesInFlight.has(entry.itemId) || entry.routingDispatchHeld)
+          if (
+            writesInFlight.has(entry.itemId) ||
+            (entry.routingDispatchHeld && !entry.removalRequested)
+          )
             blockedAgents.add(entry.agentId);
           return !blockedAgents.has(entry.agentId);
         });
@@ -363,7 +378,9 @@ export async function flushQueueOutboxForServer(input: {
   await flushQueueOutbox({
     ...input,
     onRejected: (entry, message) => store.reject(entry.itemId, message),
-    onAcknowledged: (entry, snapshot) => store.acknowledge(entry.itemId, snapshot),
+    onAcknowledged: async (entry, snapshot) => {
+      await store.acknowledge(entry.itemId, snapshot);
+    },
     outbox: {
       list: (serverId) => useQueueOutboxStore.getState().entriesForServer(serverId),
       get: (itemId) => useQueueOutboxStore.getState().entries[itemId],

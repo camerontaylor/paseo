@@ -547,3 +547,36 @@ test("background acknowledgement is published before removing a durable routing 
   expect(acknowledged).toBe(true);
   expect(harness.entries.size).toBe(0);
 });
+
+test("a held removal passes the model guard on a legacy host while held enqueue remains blocked", async () => {
+  const harness = createOutbox([
+    pendingEntry({
+      itemId: "cancel",
+      routingOrigin: true,
+      routingDispatchHeld: true,
+      removalRequested: true,
+    }),
+    pendingEntry({ itemId: "held", createdAt: 2, routingOrigin: true, routingDispatchHeld: true }),
+    pendingEntry({ itemId: "ordinary", agentId: "ordinary-agent", createdAt: 3 }),
+  ]);
+  const sent: string[] = [];
+  const removed: string[] = [];
+  await flushQueueOutbox({
+    serverId: "server-1",
+    outbox: harness.outbox,
+    client: {
+      enqueueAgentMessage: async (entry) => {
+        sent.push(entry.itemId);
+        return snapshotWith();
+      },
+      removeQueuedAgentMessage: async (_agentId, itemId) => {
+        removed.push(itemId);
+        return snapshotWith();
+      },
+    },
+    applySnapshot: () => {},
+  });
+  expect(removed).toEqual(["cancel"]);
+  expect(sent).toEqual(["ordinary"]);
+  expect([...harness.entries.keys()]).toEqual(["held"]);
+});
