@@ -835,7 +835,9 @@ describe("queue snapshot acknowledgement", () => {
     const { useDraftStore } = await import("@/stores/draft-store");
     const { SESSION_ROUTING_DRAFT_KEY } = await import("@/stores/draft-keys");
     await useDraftStore.persist.rehydrate();
-    useDraftStore.getState().editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
+    useDraftStore
+      .getState()
+      .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
     const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
     const outbox = useQueueOutboxStore.getState();
     await outbox.add({
@@ -856,12 +858,16 @@ describe("queue snapshot acknowledgement", () => {
       items: [{ id: "pushed-routing", text: "continue", createdAt: "2026-01-01T00:00:00.000Z" }],
     };
     const applying = useSessionStore.getState().applyAgentQueueSnapshot("test-server", snapshot);
-    expect(useQueueOutboxStore.getState().acknowledgements["pushed-routing"]).toEqual({ queued: true });
+    expect(useQueueOutboxStore.getState().acknowledgements["pushed-routing"]).toEqual({
+      queued: true,
+    });
     await applying;
     expect(useQueueOutboxStore.getState().entries["pushed-routing"]).toBeUndefined();
     expect(useDraftStore.getState().getDraftInput(SESSION_ROUTING_DRAFT_KEY)?.text ?? "").toBe("");
     await outbox.acknowledge("pushed-routing", snapshot);
-    expect(useQueueOutboxStore.getState().acknowledgements["pushed-routing"]).toEqual({ queued: true });
+    expect(useQueueOutboxStore.getState().acknowledgements["pushed-routing"]).toEqual({
+      queued: true,
+    });
   });
 
   it("clears accepted retry payloads before edits and retains local-only messages", async () => {

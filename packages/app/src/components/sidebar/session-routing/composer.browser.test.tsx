@@ -323,12 +323,13 @@ test("an old failed Find cannot override a newer lookup", async () => {
   expect(fixture.enqueue).not.toHaveBeenCalled();
 });
 
-
 test("complete Find displays searched and total chat counts", async () => {
   fixture.search.mockResolvedValue({ results: [result], searchedCount: 12, totalCount: 12 });
   const view = await mount();
   act(() => view.getByTestId("routing-submit").click());
-  await waitFor(() => expect(view.getByText("Searched 12 of 12 chats.").textContent).toBe("Searched 12 of 12 chats."));
+  await waitFor(() =>
+    expect(view.getByText("Searched 12 of 12 chats.").textContent).toBe("Searched 12 of 12 chats."),
+  );
   expect(fixture.enqueue).not.toHaveBeenCalled();
 });
 
@@ -339,7 +340,9 @@ test("a selected host without a directory prevents automatic delivery", async ()
   type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
   act(() => view.getByTestId("routing-submit").click());
   await waitFor(() => expect(view.getAllByRole("button", { name: "Send here" })).toHaveLength(1));
-  expect(view.getByText(/Host directories are still loading/).textContent).toContain("Choose a chat manually.");
+  expect(view.getByText(/Host directories are still loading/).textContent).toContain(
+    "Choose a chat manually.",
+  );
   expect(fixture.search).toHaveBeenCalledTimes(1);
   expect(fixture.enqueue).not.toHaveBeenCalled();
   expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
@@ -349,7 +352,8 @@ test("a pushed acknowledgement survives a lost enqueue response", async () => {
   fixture.enqueue.mockImplementation(async (entry) => {
     const outbox = useQueueOutboxStore.getState();
     await outbox.acknowledge(entry.itemId, {
-      agentId: "chat", revision: 1,
+      agentId: "chat",
+      revision: 1,
       items: [{ id: entry.itemId, text: entry.text, createdAt: "2026-01-01T00:00:00.000Z" }],
     });
     await outbox.removeDurably(entry.itemId, true);
@@ -359,9 +363,15 @@ test("a pushed acknowledgement survives a lost enqueue response", async () => {
   act(() => view.getByTestId("routing-send-mode").click());
   type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
   act(() => view.getByTestId("routing-submit").click());
-  await waitFor(() => expect(view.getByText("Queued for Paseo · Offline indicator").textContent).toBe("Queued for Paseo · Offline indicator"));
+  await waitFor(() =>
+    expect(view.getByText("Queued for Paseo · Offline indicator").textContent).toBe(
+      "Queued for Paseo · Offline indicator",
+    ),
+  );
   expect(view.queryByText("response lost")).toBeNull();
-  await waitFor(() => expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe(""));
+  await waitFor(() =>
+    expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe(""),
+  );
   act(() => view.getByTestId("routing-submit").click());
   expect(fixture.enqueue).toHaveBeenCalledTimes(1);
 });
