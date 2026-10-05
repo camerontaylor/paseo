@@ -1242,3 +1242,43 @@ test("a durable cancellation intent supersedes an acknowledgement waiting for th
   expect(container.textContent).not.toContain("Routed to");
   expect(container.textContent).not.toContain("Queued for");
 });
+
+test("cold suppressed acknowledgement ownership permits only the original delivery Retry", async () => {
+  useDraftStore.getState().editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
+  const record = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY]!;
+  const store = useQueueOutboxStore.getState();
+  await store.add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "suppressed-original",
+    text: "continue",
+    expectedWorkspaceId: "workspace",
+    expectedProjectId: "project",
+    routingOrigin: true,
+    routingDraftVersion: record.version,
+    routingDraftUpdatedAt: record.updatedAt,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  await store.removeDurably("suppressed-original", true);
+  await useQueueOutboxStore.persist.rehydrate();
+  await useDraftStore.persist.rehydrate();
+  fixture.directory = false;
+  const view = await render();
+  await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
+  expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+  expect(
+    view.getByTestId<HTMLTextAreaElement>("routing-send-draft").getAttribute("readonly"),
+  ).not.toBeNull();
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+  expect(container.textContent).not.toContain("Routed to");
+  expect(container.textContent).not.toContain("removed from the queue");
+  act(() => view.getByRole("button", { name: "Retry delivery" }).click());
+  await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+  expect(fixture.enqueue.mock.calls[0]![0]).toMatchObject({
+    itemId: "suppressed-original",
+    text: "continue",
+  });
+  await waitFor(() => expect(view.queryByRole("button", { name: "Retry delivery" })).toBeNull());
+});

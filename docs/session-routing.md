@@ -56,7 +56,9 @@ items eligible for reconnect delivery. Background reconnect publishes actual ack
 or definitive rejections to the composer. A cancellation stays pending until the host confirms
 removal and the device checkpoints it. Cancellation requested during a draft-clear checkpoint
 suppresses success and checkpoints restoration of that owned draft before releasing the outbox.
-A later draft stays intact. Completion reports queue removal and preserves the editable draft; Retry requires the original uncanceled outbox item and cannot recreate a removed one.
+A later draft stays intact. If the cancellation checkpoint fails after success was suppressed,
+acknowledgement cleanup retains the original outbox item for recovery with the same ID.
+Completion reports queue removal and preserves the editable draft; Retry requires the original uncanceled outbox item and cannot recreate a removed one.
 Held enqueue entries still allow durable cancellation on older hosts. Queued for means the host acknowledged an item still in its
 queue; Routed to means the acknowledgement no longer lists it. Neither confirms task completion.
 The composer waits for both persisted drafts and the outbox before enabling Send. Pending recovery

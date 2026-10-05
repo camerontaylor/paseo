@@ -340,7 +340,11 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
       removeDurably: (itemId, preserveRemovalIntent = false) => {
         const removeEntry = async () => {
           const entry = get().entries[itemId];
-          if (!entry || (preserveRemovalIntent && entry.removalRequested)) return;
+          if (!entry) return;
+          if (preserveRemovalIntent) {
+            if (entry.removalRequested) return;
+            if (entry.routingOrigin && !get().acknowledgements[itemId]) return;
+          }
           if (entry.removalRequested && !get().acknowledgements[itemId])
             await checkpointCanceledRoutingDraft(entry);
           get().remove(itemId);

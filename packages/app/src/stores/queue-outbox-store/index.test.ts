@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AgentQueueSnapshot } from "@getpaseo/protocol/messages";
 
 const storage = vi.hoisted(() => ({
   values: new Map<string, string>(),
@@ -676,11 +677,13 @@ async function routingDispatchFixture(itemId: string) {
   useDraftStore.getState().editDraftText({ draftKey: key, text: "continue" });
   await flushDraftPersistStorageDurably();
   const record = useDraftStore.getState().drafts[key]!;
-  const enqueueAgentMessage = vi.fn(async (_entry: { itemId: string; text: string }) => ({
-    agentId: "chat",
-    revision: 1,
-    items: [],
-  }));
+  const enqueueAgentMessage = vi.fn(
+    async (_entry: { itemId: string; text: string }): Promise<AgentQueueSnapshot> => ({
+      agentId: "chat",
+      revision: 1,
+      items: [],
+    }),
+  );
   const input = {
     recipient: {
       serverId: "host",
@@ -1404,4 +1407,129 @@ for (const newer of ["identical", "different"] as const) {
       storage.failRemovalItem = undefined;
     }
   });
+}
+
+for (const caller of ["pushed snapshot", "background flush"] as const) {
+  for (const draft of ["original", "newer identical", "newer different"] as const) {
+    it(`${caller} retains ${draft} ownership when suppressed acknowledgement is followed by cancellation-write failure`, async () => {
+      const fixture = await routingDispatchFixture(`suppressed-${caller}-${draft}`);
+      fixture.enqueueAgentMessage.mockRejectedValueOnce(new Error("response lost"));
+      await expect(fixture.deliverRoutedPrompt(fixture.input)).rejects.toThrow("response lost");
+      const store = fixture.useQueueOutboxStore.getState();
+      const entry = store.entries[fixture.input.itemId]!;
+      const snapshot = {
+        agentId: "chat",
+        revision: 2,
+        items: [{ id: entry.itemId, text: entry.text, createdAt: "2026-10-05T00:00:00.000Z" }],
+      };
+      let release!: () => void;
+      storage.draftHold = new Promise<void>((done) => {
+        release = done;
+      });
+      const removeQueuedAgentMessage = vi.fn(async () => ({
+        agentId: "chat",
+        revision: 3,
+        items: [],
+      }));
+      let applying: Promise<void> | void;
+      if (caller === "pushed snapshot") {
+        const sessions = (await import("../session-store")).useSessionStore;
+        sessions
+          .getState()
+          .initializeSession(
+            "host",
+            null as unknown as Parameters<
+              ReturnType<typeof sessions.getState>["initializeSession"]
+            >[1],
+          );
+        applying = sessions.getState().applyAgentQueueSnapshot("host", snapshot);
+      } else {
+        fixture.enqueueAgentMessage.mockResolvedValueOnce(snapshot);
+        applying = fixture.flushQueueOutboxForServer({
+          serverId: "host",
+          client: { ...fixture.input.client, removeQueuedAgentMessage },
+          applySnapshot: () => {},
+        });
+      }
+      await vi.waitFor(() =>
+        expect(fixture.useDraftStore.getState().drafts[fixture.key]?.routingClear?.itemId).toBe(
+          entry.itemId,
+        ),
+      );
+      if (draft !== "original")
+        fixture.useDraftStore
+          .getState()
+          .editDraftText({
+            draftKey: fixture.key,
+            text: draft === "newer identical" ? entry.text : "another prompt",
+          });
+      const expectedDraft =
+        draft === "original"
+          ? fixture.record
+          : fixture.useDraftStore.getState().drafts[fixture.key]!;
+      storage.failOnceKey = "paseo-queue-outbox";
+      const removing = store.requestRemoval(entry).catch((error: Error) => error.message);
+      release();
+      try {
+        expect(await removing).toBe("checkpoint failed");
+        await applying;
+        storage.draftHold = undefined;
+        expect(fixture.useQueueOutboxStore.getState().entries[entry.itemId]).toMatchObject({
+          itemId: entry.itemId,
+          routingDraftVersion: fixture.record.version,
+          routingDraftUpdatedAt: fixture.record.updatedAt,
+          text: entry.text,
+        });
+        expect(
+          fixture.useQueueOutboxStore.getState().entries[entry.itemId]?.removalRequested,
+        ).toBeUndefined();
+        expect(
+          fixture.useQueueOutboxStore.getState().acknowledgements[entry.itemId],
+        ).toBeUndefined();
+        expect(fixture.useQueueOutboxStore.getState().rejections[entry.itemId]).toBeUndefined();
+        expect(removeQueuedAgentMessage).not.toHaveBeenCalled();
+        await resetPersistedModules();
+        const restarted = await import("./index");
+        const drafts = (await import("@/stores/draft-store")).useDraftStore;
+        await restarted.useQueueOutboxStore.persist.rehydrate();
+        await drafts.persist.rehydrate();
+        expect(restarted.useQueueOutboxStore.getState().entries[entry.itemId]).toMatchObject(entry);
+        expect(drafts.getState().drafts[fixture.key]).toEqual(expectedDraft);
+        expect(
+          restarted.useQueueOutboxStore.getState().acknowledgements[entry.itemId],
+        ).toBeUndefined();
+        if (draft === "original") {
+          const pending = restarted.useQueueOutboxStore.getState().entries[entry.itemId]!;
+          const restoredDraft = drafts.getState().drafts[fixture.key]!;
+          expect([pending.routingDraftVersion, pending.routingDraftUpdatedAt]).toEqual([
+            restoredDraft.version,
+            restoredDraft.updatedAt,
+          ]);
+        }
+        const { deliverRoutedPrompt } =
+          await import("@/components/sidebar/session-routing/delivery");
+        fixture.enqueueAgentMessage.mockResolvedValueOnce(snapshot);
+        expect(
+          await deliverRoutedPrompt({
+            ...fixture.input,
+            requireExisting: true,
+            outbox: restarted.useQueueOutboxStore.getState(),
+          }),
+        ).toEqual({ queued: true });
+        expect(
+          fixture.enqueueAgentMessage.mock.calls.every(
+            ([input]) => input.itemId === entry.itemId && input.text === entry.text,
+          ),
+        ).toBe(true);
+        expect(restarted.useQueueOutboxStore.getState().entries[entry.itemId]).toBeUndefined();
+        expect(drafts.getState().getDraftInput(fixture.key)?.text).toBe(
+          draft === "original" ? "" : expectedDraft.input.text,
+        );
+      } finally {
+        release();
+        storage.draftHold = undefined;
+        storage.failOnceKey = undefined;
+      }
+    });
+  }
 }
