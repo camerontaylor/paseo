@@ -8,9 +8,9 @@ filter field or choose Find to submit intelligent matching; typing alone keeps t
 
 Choose All projects, Current project, or a named project in the scope menu. A project scope is a
 sidebar project view identity, including its host/clone grouping. Search sends only that scope's
-workspace IDs to each host. Changing scope clears a selected recipient outside it; changing the query,
-send draft, scope, or selected hosts ignores stale matching successes and failures. Find matching
-depends on its search query; Send matching depends on its draft and durable ownership revision.
+workspace IDs to each host. Changing scope clears a selected recipient outside it. Scope and selected
+host changes invalidate matching successes and failures in either mode. Find matching depends on its
+search query; Send matching depends on its draft and durable ownership revision and update timestamp.
 Changing the independent draft or query leaves the other mode's lookup intact. Cancellation
 releases only the canceled request's loading state, even if a newer lookup has started. Host changes
 also clear excluded results and editable recipients; a pending delivery keeps its original destination

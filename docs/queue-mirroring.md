@@ -213,7 +213,7 @@ failures the client shows one attention message and continues retrying.
 
 On every (re)connect that advertises `agentMessageQueue` (the `server_info`
 status message, which is exactly the re-established-transport signal), the
-session flushes the outbox oldest first within each agent. Enqueue entries use
+session flushes eligible outbox entries oldest first within each agent. Enqueue entries use
 the ordinary enqueue RPC; removal intents use the remove RPC and are never
 re-enqueued. A failed predecessor blocks later items for that agent while other
 agents proceed. Re-sending an enqueue is safe because the daemon treats a
@@ -232,9 +232,9 @@ also removes its local row. Equal-revision snapshots reconcile optimistic rows;
 older revisions remain ignored. An entry that keeps failing stays in the
 device's durable outbox and visible queue. At `QUEUE_OUTBOX_MAX_ATTEMPTS` failed
 reconnects, the client shows an attention message once; future reconnects keep
-retrying. A host acknowledgement removes an outbox entry. A definitive routing destination
-rejection also removes it and returns editable draft ownership; see [session routing](session-routing.md)
-for the destination guard and draft recovery contract. Rows absent from
+retrying. A host acknowledgement permits durable outbox removal. Routing adds dispatch holds and
+draft checkpoints before removal; [session routing](session-routing.md) owns those constraints and
+definitive destination rejection recovery. Rows absent from
 the latest authoritative snapshot are labeled "Waiting to sync with host" unless
 removal is pending, and cannot be edited or sent from the daemon queue. Inclusion in a snapshot
 acknowledges an enqueue only when no removal intent is pending. Persist removal intent
