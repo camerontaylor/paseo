@@ -78,6 +78,7 @@ export interface StructuredAgentGenerationOptions<T> {
   schema: z.ZodType<T> | JsonSchema;
   maxRetries?: number;
   schemaName?: string;
+  signal?: AbortSignal;
 }
 
 export interface StructuredAgentGenerationWithFallbackOptions<T> {
@@ -95,6 +96,7 @@ export interface StructuredAgentGenerationWithFallbackOptions<T> {
   schemaName?: string;
   logger?: StructuredGenerationLogger;
   runner?: <TResult>(options: StructuredAgentGenerationOptions<TResult>) => Promise<TResult>;
+  signal?: AbortSignal;
 }
 
 // Re-export from the legacy module path so existing server consumers keep working.
@@ -356,13 +358,21 @@ export async function generateStructuredAgentResponse<T>(
 ): Promise<T> {
   const { manager, agentConfig, agentId, persistSession, prompt, schema, maxRetries, schemaName } =
     options;
+  options.signal?.throwIfAborted();
   const agent = await manager.createAgent(agentConfig, agentId, {
     persistSession,
     workspaceId: undefined,
   });
+  const signal = options.signal;
+  const abort = () => {
+    void manager.closeAgent(agent.id).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", abort, { once: true });
   try {
+    signal?.throwIfAborted();
     const caller: AgentCaller = async (nextPrompt) => {
       const result = await manager.runAgent(agent.id, nextPrompt);
+      signal?.throwIfAborted();
       if (typeof result.finalText === "string" && result.finalText.length > 0) {
         return result.finalText;
       }
@@ -378,6 +388,7 @@ export async function generateStructuredAgentResponse<T>(
       schemaName,
     });
   } finally {
+    signal?.removeEventListener("abort", abort);
     try {
       await manager.closeAgent(agent.id);
     } catch {
@@ -422,6 +433,7 @@ export async function generateStructuredAgentResponseWithFallback<T>(
   const attempts: StructuredGenerationAttempt[] = [];
 
   for (const candidate of providers) {
+    options.signal?.throwIfAborted();
     const availabilityEntry = await manager.getProviderAvailability(candidate.provider);
     if (!availabilityEntry.available) {
       const reason = availabilityEntry.error ?? "unavailable";
@@ -446,6 +458,7 @@ export async function generateStructuredAgentResponseWithFallback<T>(
         maxRetries,
         schemaName,
         persistSession,
+        signal: options.signal,
         agentConfig: {
           ...agentConfigOverrides,
           provider: candidate.provider,
@@ -467,6 +480,7 @@ export async function generateStructuredAgentResponseWithFallback<T>(
       }
       return result;
     } catch (error) {
+      options.signal?.throwIfAborted();
       attempts.push({
         provider: candidate.provider,
         model: candidate.model ?? null,

@@ -1001,6 +1001,13 @@ export class DaemonConnectionError extends Error {
   }
 }
 
+export class AgentQueueDestinationChangedError extends Error {
+  constructor() {
+    super("The selected chat moved, was archived, or was deleted. Choose its destination again.");
+    this.name = "AgentQueueDestinationChangedError";
+  }
+}
+
 class DaemonRpcError extends Error {
   readonly requestId: string;
   readonly requestType?: string;
@@ -2977,6 +2984,8 @@ export class DaemonClient {
    */
   async enqueueAgentMessage(input: {
     agentId: string;
+    expectedWorkspaceId?: string;
+    expectedProjectId?: string;
     itemId: string;
     text: string;
     images?: Array<{ data: string; mimeType: string }>;
@@ -2988,6 +2997,8 @@ export class DaemonClient {
         message: {
           type: "agent.queue.enqueue.request",
           agentId: input.agentId,
+          expectedWorkspaceId: input.expectedWorkspaceId,
+          expectedProjectId: input.expectedProjectId,
           itemId: input.itemId,
           text: input.text,
           ...(input.images?.length ? { images: input.images } : {}),
@@ -3071,6 +3082,11 @@ export class DaemonClient {
     error: string | null;
   }): AgentQueueSnapshot {
     if (!payload.queue) {
+      if (
+        payload.error === "session_route_destination_changed" ||
+        payload.error === "session_route_destination_missing"
+      )
+        throw new AgentQueueDestinationChangedError();
       throw new Error(payload.error ?? "Agent queue request rejected");
     }
     return payload.queue;
@@ -3422,6 +3438,15 @@ export class DaemonClient {
       responseType: "agent.timeline.append.response",
     });
     return { seq: payload.seq, epoch: payload.epoch };
+  }
+
+  async searchSessions(input: { query: string; workspaceIds: string[] }) {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"session.search.response">({
+      message: { type: "session.search.request", ...input },
+      timeout: 50000,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
   }
 
   async searchAgentTimeline({

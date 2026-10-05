@@ -598,17 +598,10 @@ source code, prompts, and tool output; encrypted-at-rest storage is a separate s
 
 **AsyncStorage key:** `paseo-drafts` (version 2)
 
-```typescript
-{
-  drafts: Record<draftKey, {
-    input: { text: string, images: AttachmentMetadata[] },
-    lifecycle: "active" | "abandoned" | "sent",
-    updatedAt: number,     // epoch ms
-    version: number        // optimistic concurrency
-  }>,
-  createModalDraft: DraftRecord | null
-}
-```
+The persisted shape is owned by `DraftStoreStateSchema` in
+`packages/app/src/stores/draft-store/state.ts`; legacy input parsing is owned by
+`PersistedDraftStoreSchema` in `packages/app/src/stores/draft-store/migration.ts`.
+See [session routing](session-routing.md) for routing draft ownership and checkpoint recovery.
 
 ### Attachment Store (Web)
 

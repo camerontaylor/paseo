@@ -38,6 +38,7 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 | [docs/expo-router.md](docs/expo-router.md)                           | Expo Router route ownership, startup restore, and native blank-screen gotchas                                                  |
 | [docs/file-icons.md](docs/file-icons.md)                             | Material icon theme integration for the file explorer                                                                          |
 | [docs/queue-mirroring.md](docs/queue-mirroring.md)                   | Moving the composer message queue onto the daemon so it mirrors across devices and drains with no client attached              |
+| [docs/session-routing.md](docs/session-routing.md) | Existing-chat Find/Send, scope isolation, tool-free matching, and delivery recovery |
 | [docs/agent-tab-control.md](docs/agent-tab-control.md)               | MCP open_tab/close_tab over the ui.command push, and the queue-instead-of-interrupt busy-send policy                           |
 | [docs/companion-stream.md](docs/companion-stream.md)                 | Per-chat Stream (fork) — captured questions, decisions, outcomes and files beside the chat; capture limits and compat          |
 | [docs/providers.md](docs/providers.md)                               | Adding a new agent provider end-to-end                                                                                         |
@@ -102,7 +103,7 @@ npm run cli -- ls -a -g              # List all agents
 npm run cli -- daemon status         # Check daemon status
 npm run typecheck                    # Always run after changes
 npm run lint                         # Always run after changes
-npm run format                       # Auto-format with Biome
+npm run format                       # Auto-format with Oxfmt
 npm run format:check                 # Check formatting without writing
 ```
 
@@ -135,7 +136,7 @@ and updating `next`, integrating it after a release, and releasing a hotfix from
   - `npm run build:client` — rebuild protocol and client declarations.
   - `npm run build:server` — rebuild highlight, relay, protocol, client, server, and CLI when server/CLI types may be stale.
   - Do not patch inferred callback parameters or add local duplicate types just to silence stale declaration errors.
-- **Run `npm run format` before committing.** This repo uses Biome for formatting. Do not manually fix formatting — let the formatter handle it.
+- **Run `npm run format` before committing.** This repo uses Oxfmt for formatting. Do not manually fix formatting — let the formatter handle it.
 - **Always use npm scripts for linting and formatting.** Do not run tools directly with `npx eslint`, `npx oxfmt`, `npx oxlint`, or package-local binaries. For targeted checks, pass file paths through the npm script:
   - `npm run lint -- packages/app/src/components/message.tsx`
   - `npm run format:files -- CLAUDE.md packages/app/src/components/message.tsx`

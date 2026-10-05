@@ -1,8 +1,10 @@
+import { AgentQueueDestinationChangedError } from "@getpaseo/client/internal/daemon-client";
 import { z } from "zod";
 import {
   AgentAttachmentWireSchema,
   QueuedComposerAttachmentSchema,
   type AgentQueueSnapshot,
+  type ServerInfoStatusPayload,
 } from "@getpaseo/protocol/messages";
 
 /**
@@ -13,6 +15,12 @@ import {
 export const PendingQueueEnqueueSchema = z.object({
   serverId: z.string(),
   agentId: z.string(),
+  expectedWorkspaceId: z.string().optional(),
+  expectedProjectId: z.string().optional(),
+  routingOrigin: z.boolean().optional(),
+  routingDispatchHeld: z.boolean().optional(),
+  routingDraftUpdatedAt: z.number().nonnegative().optional(),
+  routingDraftVersion: z.number().int().nonnegative().optional(),
   itemId: z.string(),
   text: z.string(),
   images: z.array(z.object({ data: z.string(), mimeType: z.string() })),
@@ -39,9 +47,12 @@ export interface QueueOutboxAccess {
 }
 
 export interface QueueOutboxFlushClient {
+  getLastServerInfoMessage?: () => Pick<ServerInfoStatusPayload, "features"> | null;
   removeQueuedAgentMessage?: (agentId: string, itemId: string) => Promise<AgentQueueSnapshot>;
   enqueueAgentMessage: (input: {
     agentId: string;
+    expectedWorkspaceId?: string;
+    expectedProjectId?: string;
     itemId: string;
     text: string;
     images?: Array<{ data: string; mimeType: string }>;
@@ -57,6 +68,11 @@ export interface FlushQueueOutboxInput {
   applySnapshot: (snapshot: AgentQueueSnapshot) => void;
   /** Called once when an entry first reaches the retry alert threshold. */
   onRetryLimit?: (entry: PendingQueueEnqueue) => void;
+  onRejected?: (entry: PendingQueueEnqueue, message: string) => void;
+  onAcknowledged?: (
+    entry: PendingQueueEnqueue,
+    snapshot: AgentQueueSnapshot,
+  ) => boolean | void | Promise<boolean | void>;
 }
 
 const queueOperations = new Map<string, Promise<unknown>>();
@@ -75,6 +91,24 @@ export async function serializeQueueOperation<T>(
   }
 }
 
+function canRetryEnqueue(entry: PendingQueueEnqueue, client: QueueOutboxFlushClient): boolean {
+  if (!entry.routingOrigin || entry.removalRequested) return true;
+  // COMPAT(sessionSearch): added in v0.10.0, remove gate after 2027-04-04.
+  // Older queue handlers discard expected destination IDs. Retain ownership
+  // until this connection can validate them, including after a rollback.
+  const features = client.getLastServerInfoMessage?.()?.features;
+  return features?.sessionSearch === true && features.agentMessageQueue === true;
+}
+
+function getOutboxEntry(
+  input: FlushQueueOutboxInput,
+  itemId: string,
+): PendingQueueEnqueue | undefined {
+  return input.outbox.get
+    ? input.outbox.get(itemId)
+    : input.outbox.list(input.serverId).find((entry) => entry.itemId === itemId);
+}
+
 export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<void> {
   const agents = new Set(input.outbox.list(input.serverId).map((entry) => entry.agentId));
   await Promise.all(
@@ -83,12 +117,10 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
         for (const candidate of input.outbox
           .list(input.serverId)
           .filter((item) => item.agentId === agentId)) {
-          const entry = input.outbox.get
-            ? input.outbox.get(candidate.itemId)
-            : input.outbox
-                .list(input.serverId)
-                .find((pending) => pending.itemId === candidate.itemId);
+          const entry = getOutboxEntry(input, candidate.itemId);
           if (!entry) continue;
+          if (entry.routingDispatchHeld && !entry.removalRequested) break;
+          if (!canRetryEnqueue(entry, input.client)) continue;
           try {
             const removeFromHost = async () => {
               if (!input.client.removeQueuedAgentMessage)
@@ -99,6 +131,8 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
               ? await removeFromHost()
               : await input.client.enqueueAgentMessage({
                   agentId: entry.agentId,
+                  expectedWorkspaceId: entry.expectedWorkspaceId,
+                  expectedProjectId: entry.expectedProjectId,
                   itemId: entry.itemId,
                   text: entry.text,
                   images: entry.images,
@@ -106,13 +140,11 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
                   composerAttachments: entry.composerAttachments,
                 });
             if (!entry.removalRequested) {
+              const acknowledged = await input.onAcknowledged?.(entry, snapshot);
+              if (acknowledged === false) break;
               // A cancellation that raced acknowledgement must survive until the host confirms removal.
               await input.outbox.remove(entry.itemId, true);
-              const latest =
-                input.outbox.get?.(entry.itemId) ??
-                input.outbox
-                  .list(input.serverId)
-                  .find((pending) => pending.itemId === entry.itemId);
+              const latest = getOutboxEntry(input, entry.itemId);
               if (latest?.removalRequested) {
                 snapshot = await removeFromHost();
                 await input.outbox.remove(entry.itemId);
@@ -121,7 +153,12 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
               await input.outbox.remove(entry.itemId);
             }
             input.applySnapshot(snapshot);
-          } catch {
+          } catch (error) {
+            if (!entry.removalRequested && error instanceof AgentQueueDestinationChangedError) {
+              await input.outbox.remove(entry.itemId);
+              input.onRejected?.(entry, error.message);
+              continue;
+            }
             await input.outbox.bumpAttempts(entry.itemId);
             if (entry.attempts + 1 === QUEUE_OUTBOX_MAX_ATTEMPTS) input.onRetryLimit?.(entry);
             break;

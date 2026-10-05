@@ -1260,6 +1260,22 @@ export class AgentManager {
     return this.timelineStore.fetch(id, options);
   }
 
+  async readSessionSearchText(id: string): Promise<string[]> {
+    let rows: AgentTimelineFetchResult["rows"] = [];
+    if (this.timelineStore.has(id)) {
+      rows = this.timelineStore.fetch(id, { direction: "tail", limit: 40 }).rows;
+    } else if (this.durableTimelineStore) {
+      rows = (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 40 }))
+        .rows;
+    }
+    return rows
+      .flatMap(({ item }) => {
+        if (item.type !== "user_message" && item.type !== "assistant_message") return [];
+        return [item.text.slice(0, 800)];
+      })
+      .slice(-6);
+  }
+
   listProviderSubagents(parentAgentId: string): ProviderSubagentDescriptor[] {
     this.requirePublicAgent(parentAgentId);
     return this.providerSubagents.list(parentAgentId);
@@ -2372,7 +2388,7 @@ export class AgentManager {
     this.emitState(agent, { persist: false });
   }
 
-  private async runLifecycleMutation<T>(agentId: string, mutation: () => Promise<T>): Promise<T> {
+  async runLifecycleMutation<T>(agentId: string, mutation: () => Promise<T>): Promise<T> {
     // Parent cascade classifies a child inside the same lane used by open-tab
     // label writes, so a received ownership update cannot be overtaken.
     const previous = this.lifecycleMutationTails.get(agentId) ?? Promise.resolve();

@@ -228,7 +228,7 @@ test.describe("Schedules project target", () => {
     await expect(page.getByTestId("cadence-cron-expression")).toHaveValue("0 9 * * *");
 
     await page.getByLabel("Schedule name").fill(scheduleName);
-    await page.getByLabel("Prompt").fill("Summarize the project status.");
+    await page.getByLabel("Prompt", { exact: true }).fill("Summarize the project status.");
     await page.getByRole("button", { name: "Create schedule" }).click();
 
     await expect(page.getByTestId("schedule-form-sheet")).toHaveCount(0, { timeout: 30_000 });
@@ -336,7 +336,7 @@ test.describe("Schedules project target", () => {
     await expect(modeTrigger).toHaveCount(0);
 
     await page.getByLabel("Schedule name").fill(`Cross host model ${Date.now()}`);
-    await page.getByLabel("Prompt").fill("Run on the secondary host project.");
+    await page.getByLabel("Prompt", { exact: true }).fill("Run on the secondary host project.");
     await expect(page.getByRole("button", { name: "Create schedule" })).toBeDisabled();
   });
 
@@ -365,7 +365,7 @@ test.describe("Schedules project target", () => {
     await expect(page.getByTestId("schedule-isolation-trigger")).toContainText("Worktree");
     await page.getByTestId("schedule-archive-on-finish-switch").click();
     await page.getByLabel("Schedule name").fill(scheduleName);
-    await page.getByLabel("Prompt").fill("Run with custom workspace cleanup.");
+    await page.getByLabel("Prompt", { exact: true }).fill("Run with custom workspace cleanup.");
     await page.getByTestId("schedule-cadence-preset-trigger").click();
     await page.getByTestId("schedule-cadence-preset-every-hour").click();
     await page.getByRole("button", { name: "Create schedule" }).click();

@@ -9,6 +9,7 @@ export interface PersistenceScheduler {
 
 export interface DraftPersistStorage<T> extends PersistStorage<T> {
   flush: () => Promise<void>;
+  flushDurably: () => Promise<void>;
 }
 
 let nextSystemTimerId = 0;
@@ -51,8 +52,15 @@ export function createDraftPersistStorage<T>(
     return undefined;
   }
 
-  let pending: { name: string; value: Parameters<typeof storage.setItem>[1] } | null = null;
+  interface Checkpoint {
+    name: string;
+    value: Parameters<typeof storage.setItem>[1];
+  }
+  let pending: Checkpoint | null = null;
   let timer: unknown = null;
+  let latestWrite: Checkpoint | null = null;
+  const writesInFlight = new Set<Promise<void>>();
+  let lastWriteInFlight: Promise<void> | null = null;
   let lastWriteAt = -Infinity;
 
   const cancelTimer = () => {
@@ -61,25 +69,51 @@ export function createDraftPersistStorage<T>(
       timer = null;
     }
   };
+  const writeCheckpoint = async (write: Checkpoint): Promise<void> => {
+    lastWriteAt = scheduler.now();
+    const previous = lastWriteInFlight;
+    const result = previous
+      ? previous.catch(() => {}).then(() => storage.setItem(write.name, write.value))
+      : storage.setItem(write.name, write.value);
+    if (result === undefined) return;
+    const attempt = Promise.resolve(result).then(() => undefined);
+    lastWriteInFlight = attempt;
+    writesInFlight.add(attempt);
+    try {
+      await attempt;
+    } finally {
+      writesInFlight.delete(attempt);
+      if (lastWriteInFlight === attempt) lastWriteInFlight = null;
+    }
+  };
   const flush = async (): Promise<void> => {
     cancelTimer();
     const write = pending;
     pending = null;
-    if (!write) {
-      return;
-    }
-    lastWriteAt = scheduler.now();
+    if (!write) return;
     try {
-      await storage.setItem(write.name, write.value);
+      await writeCheckpoint(write);
     } catch (error) {
       console.warn("[DraftStore] Failed to persist draft checkpoint", error);
     }
+  };
+  const flushDurably = async (): Promise<void> => {
+    cancelTimer();
+    // Routing retains its outbox item until the current checkpoint is durable.
+    // Wait for background attempts, then rewrite the latest value even when a
+    // background attempt already consumed it or failed without a pending timer.
+    await Promise.allSettled(writesInFlight);
+    cancelTimer();
+    const write = pending ?? latestWrite;
+    pending = null;
+    if (write) await writeCheckpoint(write);
   };
 
   return {
     getItem: (name) => storage.getItem(name),
     setItem: (name, value) => {
       pending = { name, value };
+      latestWrite = pending;
       const delay = DRAFT_PERSIST_INTERVAL_MS - (scheduler.now() - lastWriteAt);
       if (delay <= 0) {
         return flush();
@@ -91,9 +125,11 @@ export function createDraftPersistStorage<T>(
     removeItem: (name) => {
       cancelTimer();
       pending = null;
+      latestWrite = null;
       lastWriteAt = scheduler.now();
       return storage.removeItem(name);
     },
     flush,
+    flushDurably,
   };
 }

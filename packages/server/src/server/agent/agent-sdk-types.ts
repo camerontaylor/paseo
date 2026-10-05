@@ -625,6 +625,8 @@ export interface AgentSessionConfig {
    * They are used for ephemeral system tasks like commit/PR generation.
    */
   internal?: boolean;
+  /** Runtime-only restriction for internal matching; supported by Claude only. */
+  textOnly?: boolean;
 }
 
 export interface AgentLaunchContext {

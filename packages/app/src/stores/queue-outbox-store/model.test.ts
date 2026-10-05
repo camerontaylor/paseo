@@ -1,3 +1,4 @@
+import { AgentQueueDestinationChangedError } from "@getpaseo/client/internal/daemon-client";
 import { describe, expect, test } from "vitest";
 
 import type { AgentQueueSnapshot } from "@getpaseo/protocol/messages";
@@ -6,6 +7,7 @@ import {
   flushQueueOutbox,
   PendingQueueEnqueueSchema,
   QUEUE_OUTBOX_MAX_ATTEMPTS,
+  serializeQueueOperation,
   type PendingQueueEnqueue,
   type QueueOutboxAccess,
 } from "./model";
@@ -172,6 +174,131 @@ describe("flushQueueOutbox", () => {
     });
     expect(harness.entries.size).toBe(0);
   });
+});
+
+for (const capability of ["absent", "unknown", "legacy", "missing-feature"] as const) {
+  test(`routing retry retains ownership on ${capability} hosts and resumes the original item after upgrade`, async () => {
+    const routed = pendingEntry({
+      routingOrigin: true,
+      expectedWorkspaceId: "original-workspace",
+      expectedProjectId: "original-project",
+      routingDraftVersion: 4,
+      routingDraftUpdatedAt: 123,
+      text: "  continue\nexactly  ",
+    });
+    const harness = createOutbox([
+      routed,
+      pendingEntry({ itemId: "ordinary", createdAt: 2 }),
+      pendingEntry({ itemId: "cancel", createdAt: 3, routingOrigin: true, removalRequested: true }),
+    ]);
+    let upgraded = false;
+    const sent: Array<{ itemId: string; text: string }> = [];
+    const removed: string[] = [];
+    const acknowledged: string[] = [];
+    const client = {
+      ...(capability === "absent"
+        ? {}
+        : {
+            getLastServerInfoMessage: () =>
+              capability === "unknown" && !upgraded
+                ? null
+                : {
+                    features: {
+                      agentMessageQueue: true,
+                      ...(capability === "missing-feature" && !upgraded
+                        ? {}
+                        : { sessionSearch: upgraded }),
+                    },
+                  },
+          }),
+      enqueueAgentMessage: async (input: { itemId: string; text: string }) => {
+        sent.push(input);
+        return snapshotWith(input.itemId);
+      },
+      removeQueuedAgentMessage: async (_agentId: string, itemId: string) => {
+        removed.push(itemId);
+        return snapshotWith();
+      },
+    };
+    const input = {
+      serverId: "server-1",
+      outbox: harness.outbox,
+      client,
+      applySnapshot: () => {},
+      onAcknowledged: (entry: PendingQueueEnqueue) => {
+        acknowledged.push(entry.itemId);
+      },
+    };
+    await flushQueueOutbox(input);
+    expect(sent.map((item) => item.itemId)).toEqual(["ordinary"]);
+    expect(removed).toEqual(["cancel"]);
+    expect(acknowledged).toEqual(["ordinary"]);
+    expect(harness.entries.get(routed.itemId)).toEqual(routed);
+    expect(harness.bumped).toEqual([]);
+    upgraded = true;
+    await flushQueueOutbox({
+      ...input,
+      client: {
+        ...client,
+        getLastServerInfoMessage: () => ({
+          features: { sessionSearch: true, agentMessageQueue: true },
+        }),
+      },
+    });
+    expect(sent).toEqual([
+      expect.objectContaining({ itemId: "ordinary" }),
+      expect.objectContaining({
+        itemId: routed.itemId,
+        text: routed.text,
+        expectedWorkspaceId: "original-workspace",
+        expectedProjectId: "original-project",
+      }),
+    ]);
+    expect(acknowledged).toEqual(["ordinary", routed.itemId]);
+    expect(harness.entries.size).toBe(0);
+  });
+}
+
+test("routing retry rechecks the current connection after waiting behind another dispatch", async () => {
+  const harness = createOutbox([pendingEntry({ routingOrigin: true })]);
+  let release!: () => void;
+  let started!: () => void;
+  const startedPromise = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const preceding = serializeQueueOperation(
+    JSON.stringify(["dispatch", "server-1", "agent-1"]),
+    async () => {
+      started();
+      await blocked;
+    },
+  );
+  await startedPromise;
+  let capable = true;
+  const sent: string[] = [];
+  const client = {
+    getLastServerInfoMessage: () => ({
+      features: { sessionSearch: capable, agentMessageQueue: true },
+    }),
+    enqueueAgentMessage: async ({ itemId }: { itemId: string }) => {
+      sent.push(itemId);
+      return snapshotWith(itemId);
+    },
+  };
+  const input = { serverId: "server-1", outbox: harness.outbox, client, applySnapshot: () => {} };
+  const flushing = flushQueueOutbox(input);
+  capable = false;
+  release();
+  await preceding;
+  await flushing;
+  expect(sent).toEqual([]);
+  expect(harness.entries.get("item-1")).toEqual(pendingEntry({ routingOrigin: true }));
+  capable = true;
+  await flushQueueOutbox(input);
+  expect(sent).toEqual(["item-1"]);
 });
 
 describe("ordered dispatch", () => {
@@ -355,4 +482,136 @@ test("cancelling B while A awaits acknowledgement dispatches only B removal", as
   expect(operations).toEqual(["enqueue:A", "remove:B"]);
   expect([...harness.entries]).toEqual([]);
   expect(applied.map((snapshot) => snapshot.items.map((item) => item.id))).toEqual([["A"], ["A"]]);
+});
+
+test("reconnect destination rejection returns editable ownership and never acknowledges", async () => {
+  const harness = createOutbox([
+    pendingEntry({
+      routingOrigin: true,
+      expectedWorkspaceId: "workspace",
+      expectedProjectId: "project",
+      routingDraftVersion: 4,
+    }),
+  ]);
+  const rejected: string[] = [];
+  const acknowledgements: string[] = [];
+  await flushQueueOutbox({
+    serverId: "server-1",
+    outbox: harness.outbox,
+    client: {
+      getLastServerInfoMessage: () => ({
+        features: { sessionSearch: true, agentMessageQueue: true },
+      }),
+      enqueueAgentMessage: async (input) => {
+        expect(input).toMatchObject({
+          expectedWorkspaceId: "workspace",
+          expectedProjectId: "project",
+        });
+        throw new AgentQueueDestinationChangedError();
+      },
+    },
+    applySnapshot: () => {
+      throw new Error("No acknowledgement expected");
+    },
+    onAcknowledged: (entry) => {
+      acknowledgements.push(entry.itemId);
+    },
+    onRejected: (entry) => {
+      rejected.push(entry.itemId);
+    },
+  });
+  expect(rejected).toEqual(["item-1"]);
+  expect(acknowledgements).toEqual([]);
+  expect(harness.entries.size).toBe(0);
+  expect(harness.bumped).toEqual([]);
+});
+test("background acknowledgement is published before removing a durable routing entry", async () => {
+  const harness = createOutbox([pendingEntry({ routingOrigin: true })]);
+  let acknowledged = false;
+  await flushQueueOutbox({
+    serverId: "server-1",
+    outbox: harness.outbox,
+    client: {
+      getLastServerInfoMessage: () => ({
+        features: { sessionSearch: true, agentMessageQueue: true },
+      }),
+      enqueueAgentMessage: async () => snapshotWith("item-1"),
+    },
+    applySnapshot: () => {},
+    onAcknowledged: (entry, snapshot) => {
+      expect(harness.entries.has(entry.itemId)).toBe(true);
+      expect(snapshot.items[0]?.id).toBe(entry.itemId);
+      acknowledged = true;
+    },
+  });
+  expect(acknowledged).toBe(true);
+  expect(harness.entries.size).toBe(0);
+});
+
+test("a held removal passes the model guard on a legacy host while held enqueue remains blocked", async () => {
+  const harness = createOutbox([
+    pendingEntry({
+      itemId: "cancel",
+      routingOrigin: true,
+      routingDispatchHeld: true,
+      removalRequested: true,
+    }),
+    pendingEntry({ itemId: "held", createdAt: 2, routingOrigin: true, routingDispatchHeld: true }),
+    pendingEntry({ itemId: "ordinary", agentId: "ordinary-agent", createdAt: 3 }),
+  ]);
+  const sent: string[] = [];
+  const removed: string[] = [];
+  await flushQueueOutbox({
+    serverId: "server-1",
+    outbox: harness.outbox,
+    client: {
+      enqueueAgentMessage: async (entry) => {
+        sent.push(entry.itemId);
+        return snapshotWith();
+      },
+      removeQueuedAgentMessage: async (_agentId, itemId) => {
+        removed.push(itemId);
+        return snapshotWith();
+      },
+    },
+    applySnapshot: () => {},
+  });
+  expect(removed).toEqual(["cancel"]);
+  expect(sent).toEqual(["ordinary"]);
+  expect([...harness.entries.keys()]).toEqual(["held"]);
+});
+
+test("suppressed acknowledgement stops snapshot replay and cleanup until the original item can retry", async () => {
+  const harness = createOutbox([
+    pendingEntry({ routingOrigin: true }),
+    pendingEntry({ itemId: "next-item", createdAt: 2 }),
+  ]);
+  const sent: string[] = [];
+  const snapshots: AgentQueueSnapshot[] = [];
+  const client = {
+    getLastServerInfoMessage: () => ({
+      features: { sessionSearch: true, agentMessageQueue: true },
+    }),
+    enqueueAgentMessage: async (entry: { itemId: string }) => {
+      sent.push(entry.itemId);
+      return snapshotWith(entry.itemId);
+    },
+  };
+  const input = {
+    serverId: "server-1",
+    outbox: harness.outbox,
+    client,
+    applySnapshot: (snapshot: AgentQueueSnapshot) => {
+      snapshots.push(snapshot);
+    },
+  };
+  await flushQueueOutbox({ ...input, onAcknowledged: () => false });
+  expect(sent).toEqual(["item-1"]);
+  expect(snapshots).toEqual([]);
+  expect(harness.bumped).toEqual([]);
+  expect([...harness.entries.keys()]).toEqual(["item-1", "next-item"]);
+  await flushQueueOutbox({ ...input, onAcknowledged: () => true });
+  expect(sent).toEqual(["item-1", "item-1", "next-item"]);
+  expect(snapshots.map((snapshot) => snapshot.items[0]!.id)).toEqual(["item-1", "next-item"]);
+  expect(harness.entries.size).toBe(0);
 });

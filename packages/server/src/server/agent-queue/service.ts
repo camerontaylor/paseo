@@ -30,6 +30,7 @@ export interface EnqueueAgentMessageInput {
   agentId: string;
   itemId: string;
   text: string;
+  validateDestination?: () => Promise<void>;
   origin?: "voice";
   voiceOwner?: string;
   images?: Array<{ data: string; mimeType: string }>;
@@ -213,9 +214,9 @@ export class AgentQueueService {
         if (receiptState === "pending") throw new Error("agent_request_outcome_unknown");
       }
       // A receipt remains durable after the bounded legacy drained-id window expires.
-      return current.drainedIds?.includes(item.id)
-        ? current
-        : { ...current, items: [...current.items, item] };
+      if (current.drainedIds?.includes(item.id)) return current;
+      await input.validateDestination?.();
+      return { ...current, items: [...current.items, item] };
     });
     this.publish(result);
     this.scheduleDrain(input.agentId);

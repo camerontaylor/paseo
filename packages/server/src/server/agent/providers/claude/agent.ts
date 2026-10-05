@@ -3328,7 +3328,20 @@ class ClaudeAgentSession implements AgentSession {
       env: sdkEnv,
     };
 
-    if (this.config.mcpServers) {
+    if (this.config.textOnly) {
+      base.tools = [];
+      base.allowedTools = [];
+      base.settings = {};
+      base.extraArgs = {};
+      base.additionalDirectories = [];
+      base.mcpServers = {};
+      base.settingSources = [];
+      base.systemPrompt = this.config.systemPrompt ?? "Return only the requested JSON.";
+      base.maxTurns = 1;
+      base.hooks = {};
+      base.agents = {};
+      base.canUseTool = async () => ({ behavior: "deny", message: "Tools are disabled." });
+    } else if (this.config.mcpServers) {
       base.mcpServers = this.normalizeMcpServers(this.config.mcpServers);
     }
 

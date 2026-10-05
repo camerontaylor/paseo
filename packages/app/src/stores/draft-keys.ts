@@ -34,3 +34,4 @@ export function buildDraftStoreKey(input: {
   }
   return `agent:${serverId}:${input.agentId.trim()}`;
 }
+export const SESSION_ROUTING_DRAFT_KEY = "session-routing:send";

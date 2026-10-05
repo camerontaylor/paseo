@@ -1,4 +1,6 @@
 import { searchTimeline } from "./agent/chat-search/index.js";
+import { searchExistingSessions, type SessionSearchCandidate } from "./session-search.js";
+import type { StructuredTextGeneration } from "./session/checkout/git-metadata-generator.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
@@ -819,6 +821,9 @@ export class Session {
   private readonly checkoutSession: CheckoutSession;
   private readonly scheduleSession: ScheduleSession;
   private readonly agentQueueService: AgentQueueService | null;
+  private readonly sessionSearchGeneration: StructuredTextGeneration;
+  private readonly sessionSearchAbort = new AbortController();
+  private sessionSearchActive: AbortController | null = null;
   private unsubscribeAgentQueue: (() => void) | null = null;
   private readonly providerCatalogSession: ProviderCatalogSession;
   private readonly workspaceFilesSession: WorkspaceFilesSession;
@@ -996,6 +1001,13 @@ export class Session {
       emitStatusUpdate: (cwd, snapshot) => this.checkoutSession.emitStatusUpdate(cwd, snapshot),
       onBranchChanged,
       logger: this.sessionLogger,
+    });
+    this.sessionSearchGeneration = createAgentStructuredTextGeneration({
+      agentManager: this.agentManager,
+      providerSnapshotManager,
+      readDaemonConfig: () => this.readStructuredGenerationDaemonConfig(),
+      getFocusedSelection: (cwd) => this.getFocusedAgentSelectionForCwd(cwd),
+      textOnly: true,
     });
     this.agentQueueService = resolveAgentQueueService(options);
     this.unsubscribeAgentQueue = this.subscribeToAgentQueueMutations();
@@ -2773,6 +2785,8 @@ export class Session {
         return this.handleFetchAgentTimelineRequest(msg, source);
       case "agent.timeline.append.request":
         return this.handleAgentTimelineAppendRequest(msg);
+      case "session.search.request":
+        return this.handleSessionSearchRequest(msg, source);
       case "agent.timeline.search.request":
         return this.handleAgentTimelineSearchRequest(msg, source);
       case "agent.timeline.list_prompts.request":
@@ -5046,15 +5060,23 @@ export class Session {
     msg: AgentQueueRequestMessage,
   ): Promise<AgentQueueSnapshot> {
     switch (msg.type) {
-      case "agent.queue.enqueue.request":
-        return service.enqueue({
-          agentId,
-          itemId: msg.itemId,
-          text: msg.text,
-          images: msg.images,
-          attachments: msg.attachments,
-          composerAttachments: msg.composerAttachments,
-        });
+      case "agent.queue.enqueue.request": {
+        const enqueue = () =>
+          service.enqueue({
+            agentId,
+            itemId: msg.itemId,
+            text: msg.text,
+            images: msg.images,
+            attachments: msg.attachments,
+            composerAttachments: msg.composerAttachments,
+            validateDestination: msg.expectedWorkspaceId
+              ? () => this.validateRoutingDestination(agentId, msg)
+              : undefined,
+          });
+        return msg.expectedWorkspaceId
+          ? this.agentManager.runLifecycleMutation(agentId, enqueue)
+          : enqueue();
+      }
       case "agent.queue.remove.request":
         return service.remove(agentId, msg.itemId);
       case "agent.queue.edit.request":
@@ -5066,6 +5088,28 @@ export class Session {
       case "agent.queue.list.request":
         return service.list(agentId);
     }
+  }
+
+  private async validateRoutingDestination(
+    agentId: string,
+    msg: Extract<AgentQueueRequestMessage, { type: "agent.queue.enqueue.request" }>,
+  ): Promise<void> {
+    const record = await this.agentStorage.get(agentId);
+    const live = this.agentManager.getAgent(agentId);
+    if (!record && !live) throw new Error("session_route_destination_missing");
+    const workspaceId = live?.workspaceId ?? record?.workspaceId;
+    const workspace = workspaceId ? await this.workspaceRegistry.get(workspaceId) : null;
+    const project = workspace ? await this.projectRegistry.get(workspace.projectId) : null;
+    if (
+      !workspace ||
+      workspace.archivedAt ||
+      !project ||
+      project.archivedAt ||
+      workspace.workspaceId !== msg.expectedWorkspaceId ||
+      (msg.expectedProjectId && workspace.projectId !== msg.expectedProjectId) ||
+      record?.archivedAt
+    )
+      throw new Error("session_route_destination_changed");
   }
 
   private async handleAgentQueueRequest(msg: AgentQueueRequestMessage): Promise<void> {
@@ -5084,7 +5128,10 @@ export class Session {
       return;
     }
 
-    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    const routing = msg.type === "agent.queue.enqueue.request" && !!msg.expectedWorkspaceId;
+    const resolved = routing
+      ? { ok: true as const, agentId: msg.agentId }
+      : await this.resolveAgentIdentifier(msg.agentId);
     if (!resolved.ok) {
       this.emit({
         type: responseType,
@@ -8103,6 +8150,101 @@ export class Session {
     });
   }
 
+  private async handleSessionSearchRequest(
+    msg: Extract<SessionInboundMessage, { type: "session.search.request" }>,
+    source?: object,
+  ): Promise<void> {
+    this.sessionSearchActive?.abort();
+    const active = new AbortController();
+    this.sessionSearchActive = active;
+    const signal = AbortSignal.any([
+      active.signal,
+      this.sessionSearchAbort.signal,
+      AbortSignal.timeout(45000),
+    ]);
+    try {
+      const [records, workspaces, projects] = await Promise.all([
+        this.agentStorage.list(),
+        this.workspaceRegistry.list(),
+        this.projectRegistry.list(),
+      ]);
+      const workspaceById = new Map(
+        workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+      );
+      const projectById = new Map(projects.map((project) => [project.projectId, project]));
+      const allowed = new Set(msg.workspaceIds);
+      const candidates: SessionSearchCandidate[] = [];
+      for (const record of records) {
+        const workspace = record.workspaceId ? workspaceById.get(record.workspaceId) : undefined;
+        const project = workspace ? projectById.get(workspace.projectId) : undefined;
+        if (
+          !workspace ||
+          !project ||
+          workspace.archivedAt ||
+          project.archivedAt ||
+          !allowed.has(workspace.workspaceId)
+        )
+          continue;
+        if (record.internal || record.archivedAt || record.labels["paseo.parent-agent-id"])
+          continue;
+        const title = record.title || resolveWorkspaceDisplayName(workspace);
+        candidates.push({
+          agentId: record.id,
+          workspaceId: workspace.workspaceId,
+          projectId: project.projectId,
+          projectName: resolveProjectDisplayName(project),
+          title,
+          cwd: workspace.cwd,
+          updatedAt: record.updatedAt,
+          excerpts: [title],
+        });
+        signal.throwIfAborted();
+      }
+      const result = await searchExistingSessions({
+        query: msg.query,
+        workspaceIds: msg.workspaceIds,
+        candidates,
+        readContext: async (agentId) => {
+          signal.throwIfAborted();
+          return this.agentManager.readSessionSearchText(agentId);
+        },
+        generate: ({ cwd, prompt, schema }) =>
+          this.sessionSearchGeneration.generate({
+            cwd,
+            prompt,
+            schema,
+            schemaName: "SessionSearchRanking",
+            agentTitle: "Conversation matcher",
+            signal,
+          }),
+      });
+      signal.throwIfAborted();
+      this.emitForSource(
+        {
+          type: "session.search.response",
+          payload: { requestId: msg.requestId, ...result, error: null },
+        },
+        source,
+      );
+    } catch (error) {
+      this.emitForSource(
+        {
+          type: "session.search.response",
+          payload: {
+            requestId: msg.requestId,
+            results: [],
+            searchedCount: 0,
+            totalCount: 0,
+            error: errorToFriendlyMessage(error),
+          },
+        },
+        source,
+      );
+    } finally {
+      if (this.sessionSearchActive === active) this.sessionSearchActive = null;
+    }
+  }
+
   private async handleAgentTimelineSearchRequest(
     msg: Extract<SessionInboundMessage, { type: "agent.timeline.search.request" }>,
     source?: object,
@@ -8835,6 +8977,7 @@ export class Session {
    * Clean up session resources
    */
   public async cleanup(): Promise<void> {
+    this.sessionSearchAbort.abort();
     this.sessionLogger.trace({}, "agent.session.lifecycle.cleanup");
     this.isCleanedUp = true;
     await this.delivery.close();

@@ -650,6 +650,49 @@ describe("ClaudeAgentSession features", () => {
     return { queryFactory, queryMock, launches };
   }
 
+  test("text-only matcher final SDK options override tool and settings grants", async () => {
+    const { queryFactory, launches } = createQueryMock();
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    }).createSession({
+      provider: "claude",
+      cwd: process.cwd(),
+      internal: true,
+      textOnly: true,
+      systemPrompt: "Only classify the supplied conversation data.",
+      providerOptions: {
+        allowedTools: ["Bash"],
+        settings: { permissions: { allow: ["Bash(*)"] } },
+        extraArgs: { tools: "Bash" },
+      },
+      mcpServers: { unsafe: { command: "dangerous" } },
+    });
+    try {
+      await session.startTurn("Find the CI conversation");
+      expect(launches[0]?.options).toMatchObject({
+        tools: [],
+        allowedTools: [],
+        settings: {},
+        extraArgs: {},
+        mcpServers: {},
+        settingSources: [],
+        hooks: {},
+        agents: {},
+        maxTurns: 1,
+        systemPrompt: "Only classify the supplied conversation data.",
+      });
+      const deny = queryFactory.mock.calls[0]?.[0].options.canUseTool;
+      if (!deny) throw new Error("Expected tool denial callback");
+      expect(
+        await deny("Bash", {}, { signal: new AbortController().signal, toolUseID: "tool" }),
+      ).toMatchObject({ behavior: "deny" });
+    } finally {
+      await session.close();
+    }
+  });
+
   test("publishes a resolution when the SDK aborts a permission callback", async () => {
     const { queryFactory } = createQueryMock();
     const session = await new ClaudeAgentClient({

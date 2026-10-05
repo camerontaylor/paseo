@@ -73,6 +73,21 @@ export function flushDraftPersistStorage(): Promise<void> {
   return draftPersistStorage?.flush() ?? Promise.resolve();
 }
 
+export function flushDraftPersistStorageDurably(): Promise<void> {
+  if (!draftPersistStorage) throw new Error("Draft storage unavailable");
+  return draftPersistStorage.flushDurably();
+}
+
+let hydrationInFlight: Promise<void> | undefined;
+export async function awaitDraftHydration(): Promise<void> {
+  if (useDraftStore.persist.hasHydrated()) return;
+  hydrationInFlight ??= Promise.resolve(useDraftStore.persist.rehydrate()).finally(() => {
+    hydrationInFlight = undefined;
+  });
+  await hydrationInFlight;
+  if (!useDraftStore.persist.hasHydrated()) throw new Error("Unable to load saved drafts");
+}
+
 function createDraftRecord(input: {
   draft: DraftInput;
   lifecycle: DraftLifecycleState;
