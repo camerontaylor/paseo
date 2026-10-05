@@ -9,7 +9,13 @@ export interface Recipient extends SessionSearchResult {
 export type RoutingPhase =
   | { status: "idle" }
   | { status: "matching"; requestId: string; mode: "find" | "send"; text: string }
-  | { status: "results"; mode: "find" | "send"; recipients: Recipient[]; notice: string }
+  | {
+      status: "results";
+      requestId: string;
+      mode: "find" | "send";
+      recipients: Recipient[];
+      notice: string;
+    }
   | {
       status: "sending";
       recipient: Recipient;
@@ -66,6 +72,7 @@ export type RoutingAction =
       pending?: Extract<RoutingAction, { type: "restorePending" }>;
     }
   | { type: "invalidateFind" }
+  | { type: "cancelMatch"; requestId: string }
   | { type: "hosts"; serverIds: readonly string[] }
   | {
       type: "restorePending";
@@ -110,6 +117,8 @@ export function routingReducer(state: RoutingState, action: RoutingAction): Rout
       return updateRoutingHosts(state, action.serverIds);
     case "invalidateFind":
       return invalidateFind(state);
+    case "cancelMatch":
+      return cancelRoutingMatch(state, action.requestId);
     case "restorePending":
       return {
         ...state,
@@ -160,12 +169,25 @@ export function routingReducer(state: RoutingState, action: RoutingAction): Rout
       );
       return {
         ...state,
-        phase: { status: "results", mode: state.phase.mode, recipients, notice: action.notice },
+        phase: {
+          status: "results",
+          requestId: action.requestId,
+          mode: state.phase.mode,
+          recipients,
+          notice: action.notice,
+        },
       };
     }
     case "acknowledged":
       return acknowledgeRoutingState(state, action);
   }
+}
+
+function cancelRoutingMatch(state: RoutingState, requestId: string): RoutingState {
+  return (state.phase.status === "matching" || state.phase.status === "results") &&
+    state.phase.requestId === requestId
+    ? { ...state, phase: { status: "idle" } }
+    : state;
 }
 
 function acknowledgeRoutingState(
@@ -216,9 +238,5 @@ function updateRoutingHosts(state: RoutingState, serverIds: readonly string[]): 
     ...state,
     recipient:
       state.recipient && serverIds.includes(state.recipient.serverId) ? state.recipient : null,
-    phase:
-      state.phase.status === "matching" || state.phase.status === "results"
-        ? { status: "idle" }
-        : state.phase,
   };
 }

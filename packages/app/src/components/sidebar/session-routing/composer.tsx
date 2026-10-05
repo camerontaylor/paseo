@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -53,6 +54,16 @@ interface MatchResponse {
   notice: string;
   complete: boolean;
 }
+interface ActiveMatch {
+  requestId: string;
+  mode: RoutingState["mode"];
+  scope: string | null;
+  hosts: string;
+  query: string;
+  draft: string;
+  draftVersion: number;
+  draftUpdatedAt: number;
+}
 
 export function SessionRoutingComposer({
   children,
@@ -82,6 +93,7 @@ export function SessionRoutingComposer({
   const hosts = useHosts();
   const selection = useActiveWorkspaceSelection();
   const request = useRef<string | null>(null);
+  const activeMatch = useRef<ActiveMatch | null>(null);
   const submitting = useRef<string | null>(null);
   const hostMembership = JSON.stringify([...serverIds].sort());
   const latest = useRef({ state, serverIds, hostMembership, searchQuery });
@@ -92,6 +104,33 @@ export function SessionRoutingComposer({
       reduce(action);
     },
     [reduce],
+  );
+  const matchesContext = useCallback((context: ActiveMatch) => {
+    const current = latest.current;
+    if (
+      current.state.mode !== context.mode ||
+      current.state.scope !== context.scope ||
+      current.hostMembership !== context.hosts
+    )
+      return false;
+    if (context.mode === "find") return current.searchQuery === context.query;
+    const draft = useDraftStore.getState().drafts[ROUTING_DRAFT_KEY];
+    return (
+      current.state.sendDraft === context.draft &&
+      current.state.draftVersion === context.draftVersion &&
+      current.state.draftUpdatedAt === context.draftUpdatedAt &&
+      (draft?.version ?? 0) === context.draftVersion &&
+      (draft?.updatedAt ?? 0) === context.draftUpdatedAt
+    );
+  }, []);
+  const cancelMatch = useCallback(
+    (requestId: string) => {
+      if (request.current === requestId) request.current = null;
+      if (activeMatch.current?.requestId === requestId) activeMatch.current = null;
+      if (submitting.current === requestId) submitting.current = null;
+      dispatch({ type: "cancelMatch", requestId });
+    },
+    [dispatch],
   );
   const sendInput = useRef<EditingTextInputHandle>(null);
   const agentMaps = useSessionStore(
@@ -245,17 +284,15 @@ export function SessionRoutingComposer({
   });
 
   const locked = isRoutingLocked(state);
-  useEffect(() => {
-    if (request.current && submitting.current === request.current) submitting.current = null;
-    request.current = null;
-  }, [searchQuery, state.mode, state.scope, state.sendDraft, state.draftVersion, hostMembership]);
+  // Validate the currently owned lookup before input becomes interactive. A
+  // delayed passive effect from an older render must never cancel a newer one.
+  useLayoutEffect(() => {
+    const context = activeMatch.current;
+    if (context && !matchesContext(context)) cancelMatch(context.requestId);
+  });
   useEffect(() => {
     dispatch({ type: "hosts", serverIds: latest.current.serverIds });
   }, [hostMembership, state.recipient?.serverId, dispatch]);
-  useEffect(() => {
-    request.current = null;
-    dispatch({ type: "invalidateFind" });
-  }, [searchQuery, dispatch]);
   useEffect(() => {
     let active = true;
     void Promise.all([awaitDraftHydration(), awaitOutboxHydration()])
@@ -359,6 +396,7 @@ export function SessionRoutingComposer({
   useEffect(
     () => () => {
       request.current = null;
+      activeMatch.current = null;
     },
     [],
   );
@@ -431,25 +469,24 @@ export function SessionRoutingComposer({
     if (!text.trim()) return;
     const mode = state.mode;
     const submitted = latest.current.state;
-    const submittedQuery = latest.current.searchQuery;
-    const submittedHosts = latest.current.hostMembership;
     const requestId = uuid();
+    const context: ActiveMatch = {
+      requestId,
+      mode,
+      scope: submitted.scope,
+      hosts: latest.current.hostMembership,
+      query: latest.current.searchQuery,
+      draft: submitted.sendDraft,
+      draftVersion: submitted.draftVersion,
+      draftUpdatedAt: submitted.draftUpdatedAt,
+    };
     const isCurrentMatch = () => {
       const current = latest.current;
-      const draft = useDraftStore.getState().drafts[ROUTING_DRAFT_KEY];
       return (
         request.current === requestId &&
         current.state.phase.status === "matching" &&
         current.state.phase.requestId === requestId &&
-        current.state.mode === mode &&
-        current.state.scope === submitted.scope &&
-        current.searchQuery === submittedQuery &&
-        current.state.sendDraft === submitted.sendDraft &&
-        current.state.draftVersion === submitted.draftVersion &&
-        current.state.draftUpdatedAt === submitted.draftUpdatedAt &&
-        (draft?.version ?? 0) === submitted.draftVersion &&
-        (draft?.updatedAt ?? 0) === submitted.draftUpdatedAt &&
-        current.hostMembership === submittedHosts
+        matchesContext(context)
       );
     };
     submitting.current = requestId;
@@ -459,9 +496,13 @@ export function SessionRoutingComposer({
         return;
       }
       request.current = requestId;
+      activeMatch.current = context;
       dispatch({ type: "phase", phase: { status: "matching", requestId, mode, text } });
       const result = await match.mutateAsync({ query: text, scope: state.scope });
-      if (!isCurrentMatch()) return;
+      if (!isCurrentMatch()) {
+        cancelMatch(requestId);
+        return;
+      }
       const recipient = result.complete ? automaticRecipient(result.recipients) : null;
       if (mode === "send" && recipient) {
         request.current = null;
@@ -475,7 +516,10 @@ export function SessionRoutingComposer({
         notice: result.notice,
       });
     } catch (error) {
-      if (!isCurrentMatch()) return;
+      if (!isCurrentMatch()) {
+        cancelMatch(requestId);
+        return;
+      }
       dispatch({
         type: "phase",
         phase: {
@@ -486,7 +530,7 @@ export function SessionRoutingComposer({
     } finally {
       if (submitting.current === requestId) submitting.current = null;
     }
-  }, [locked, state, searchQuery, match, send, t, dispatch]);
+  }, [locked, state, searchQuery, match, send, t, dispatch, matchesContext, cancelMatch]);
 
   const select = useCallback(
     (recipient: Recipient | null) => {

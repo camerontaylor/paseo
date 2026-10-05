@@ -15,6 +15,26 @@ const recipient: Recipient = {
 };
 
 describe("session routing decisions", () => {
+  test("cancellation clears only its owned lookup and cannot clear a newer lookup", () => {
+    const matching = routingReducer(initialRoutingState, {
+      type: "phase",
+      phase: { status: "matching", mode: "find", requestId: "new", text: "offline" },
+    });
+    expect(routingReducer(matching, { type: "cancelMatch", requestId: "old" })).toBe(matching);
+    const results = routingReducer(matching, {
+      type: "matched",
+      requestId: "new",
+      recipients: [recipient],
+      notice: "",
+    });
+    expect(routingReducer(results, { type: "cancelMatch", requestId: "old" })).toBe(results);
+    expect(routingReducer(results, { type: "cancelMatch", requestId: "new" }).phase.status).toBe(
+      "idle",
+    );
+    expect(routingReducer(matching, { type: "cancelMatch", requestId: "new" }).phase.status).toBe(
+      "idle",
+    );
+  });
   test("finding and using a chat preserve the independent send draft without submitting", () => {
     let state = routingReducer(initialRoutingState, {
       type: "restoreDraft",

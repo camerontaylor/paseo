@@ -38,6 +38,7 @@ const fixture = vi.hoisted(() => ({
   serverIds: ["host"],
   directory: true,
   query: "Where were we working on offline?",
+  changeQuery: (_query: string) => {},
   search: vi.fn(),
   enqueue: vi.fn(),
   open: vi.fn(),
@@ -207,6 +208,7 @@ afterEach(() => {
 const fixtureFindStyle = { color: "#f2f3f2", fontSize: 14 };
 function Fixture() {
   const [query, setQuery] = useState(fixture.query);
+  fixture.changeQuery = setQuery;
   fixture.query = query;
   const renderInput = useCallback(
     (submit: () => void) => (
@@ -820,6 +822,119 @@ for (const rejection of ["direct", "reconnect"] as const) {
   });
 }
 
+test("Find remains independent of an externally revised Send draft", async () => {
+  let resolve!: (value: {
+    results: (typeof result)[];
+    searchedCount: number;
+    totalCount: number;
+  }) => void;
+  fixture.search.mockImplementation(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const view = await mount();
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(fixture.search).toHaveBeenCalledTimes(1));
+  act(() => {
+    useDraftStore
+      .getState()
+      .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "separate send draft" });
+  });
+  await act(async () =>
+    resolve({
+      results: [{ ...result, excerpt: "current Find evidence" }],
+      searchedCount: 1,
+      totalCount: 1,
+    }),
+  );
+  await waitFor(() => expect(view.getByText("current Find evidence")).toBeTruthy());
+  expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).not.toBe("true");
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+});
+
+test("automatic Send remains independent of the Find query", async () => {
+  let resolve!: (value: {
+    results: (typeof result)[];
+    searchedCount: number;
+    totalCount: number;
+  }) => void;
+  fixture.search.mockImplementation(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const view = await mount();
+  act(() => view.getByTestId("routing-send-mode").click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "  continue\n");
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(fixture.search).toHaveBeenCalledTimes(1));
+  act(() => {
+    fixture.changeQuery("unrelated Find query");
+  });
+  await act(async () => resolve({ results: [result], searchedCount: 1, totalCount: 1 }));
+  await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+  expect(fixture.enqueue.mock.calls[0][0].text).toBe("  continue\n");
+});
+
+for (const outcome of ["success", "failure"] as const) {
+  test(`canceling an old lookup releases loading and preserves the newer lookup after ${outcome}`, async () => {
+    const lookups: {
+      resolve: (value: {
+        results: (typeof result)[];
+        searchedCount: number;
+        totalCount: number;
+      }) => void;
+      reject: (error: Error) => void;
+    }[] = [];
+    fixture.search.mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          lookups.push({ resolve, reject });
+        }),
+    );
+    const view = await mount();
+    act(() => view.getByTestId("routing-submit").click());
+    await waitFor(() => expect(lookups).toHaveLength(1));
+    fixture.pauseEffects = true;
+    type(view.getByRole<HTMLTextAreaElement>("textbox", { name: "Find query" }), "new Find query");
+    await waitFor(() =>
+      expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).not.toBe("true"),
+    );
+    act(() => view.getByTestId("routing-submit").click());
+    await waitFor(() => expect(lookups).toHaveLength(2));
+    fixture.pauseEffects = false;
+    act(() => {
+      for (const effect of fixture.effects.splice(0))
+        if (effect.active) effect.cleanup = effect.run() ?? undefined;
+    });
+    await act(async () => {
+      if (outcome === "success")
+        lookups[0].resolve({
+          results: [{ ...result, excerpt: "old evidence" }],
+          searchedCount: 1,
+          totalCount: 1,
+        });
+      else lookups[0].reject(new Error("old error"));
+    });
+    expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+    expect(view.queryByText("old evidence")).toBeNull();
+    expect(view.queryByText(/old error/)).toBeNull();
+    await act(async () =>
+      lookups[1].resolve({
+        results: [{ ...result, excerpt: "new evidence" }],
+        searchedCount: 1,
+        totalCount: 1,
+      }),
+    );
+    await waitFor(() => expect(view.getByText("new evidence")).toBeTruthy());
+    expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).not.toBe("true");
+    expect(fixture.enqueue).not.toHaveBeenCalled();
+  });
+}
+
 for (const change of ["mode", "query", "scope", "draft", "revision"] as const) {
   for (const outcome of ["success", "failure"] as const) {
     test(`${change} changes invalidate matching ${outcome} before passive cancellation runs`, async () => {
@@ -870,7 +985,6 @@ for (const change of ["mode", "query", "scope", "draft", "revision"] as const) {
             .getState()
             .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
         });
-      expect(fixture.effects.length).toBeGreaterThan(0);
       await act(async () => {
         if (outcome === "success")
           resolve({
@@ -884,6 +998,7 @@ for (const change of ["mode", "query", "scope", "draft", "revision"] as const) {
       expect(view.queryByText("stale match evidence")).toBeNull();
       expect(view.queryByText(/stale matching failure/)).toBeNull();
       expect(view.queryByText(/The submitted draft changed/)).toBeNull();
+      expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).not.toBe("true");
       if (sending)
         expect(useDraftStore.getState().getDraftInput(SESSION_ROUTING_DRAFT_KEY)?.text).toBe(
           change === "draft" ? "new draft" : "continue",
