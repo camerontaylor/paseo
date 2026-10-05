@@ -10,7 +10,11 @@ import type { ToastApi } from "@/components/toast-host";
 import type { AgentScreenAgent } from "@/hooks/use-agent-screen-state-machine";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { useHostFeature } from "@/runtime/host-features";
-import { generateDraftId } from "@/stores/draft-keys";
+// FORK(selection-toolbar): side-chat drafts reuse the existing transcript snapshot flow.
+import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
+import { useDraftStore } from "@/stores/draft-store";
+import { openWorkspaceTargetBeside } from "@/workspace-tabs/open-beside";
+import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import { useSessionStore } from "@/stores/session-store";
 import {
@@ -55,7 +59,8 @@ export interface ForkAgentRequest {
   agentId: string;
   agent: ForkAgentSource;
   workspaceId?: string;
-  target: AssistantForkTarget;
+  target: AssistantForkTarget | "side";
+  initialPrompt?: string;
   boundary?: ForkAgentBoundary;
 }
 
@@ -132,67 +137,82 @@ export function useForkAgent(
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const supportsAgentForkContext = useHostFeature(serverId, "agentForkContext") && !readOnly;
 
-  return useStableEvent(async ({ agentId, agent, workspaceId, target, boundary }) => {
-    try {
-      if (!supportsAgentForkContext) {
-        toast?.error(t("message.actions.forkUnavailable"));
-        return;
-      }
-      if (!client) {
-        throw new Error(t("workspace.terminal.hostDisconnected"));
-      }
-      const draftSetup = buildForkDraftSetup(agent);
-      const prepareForkDraft = async () => {
-        const draftId = generateDraftId();
-        const payload = await client.buildAgentForkContext(agentId, boundary);
-        const attachment = buildChatHistoryAttachment({
-          draftId,
-          serverId,
-          agentId,
-          payload,
-          missingAttachmentMessage: t("message.actions.forkFailed"),
-        });
-        useWorkspaceAttachmentsStore.getState().setWorkspaceAttachments({
-          scopeKey: buildDraftWorkspaceAttachmentScopeKey(draftId),
-          attachments: [attachment],
-        });
-        return draftId;
-      };
-
-      if (target === "tab") {
-        if (!workspaceId) {
-          throw new Error(t("message.actions.forkMissingWorkspace"));
+  return useStableEvent(
+    async ({ agentId, agent, workspaceId, target, boundary, initialPrompt }) => {
+      try {
+        if (!supportsAgentForkContext) {
+          toast?.error(t("message.actions.forkUnavailable"));
+          return;
         }
-        const draftId = await prepareForkDraft();
-        navigateToWorkspace({
-          serverId,
-          workspaceId,
-          target: buildForkDraftTabTarget(draftSetup, draftId),
-        });
-        return;
-      }
+        if (!client) {
+          throw new Error(t("workspace.terminal.hostDisconnected"));
+        }
+        const draftSetup = buildForkDraftSetup(agent);
+        const prepareForkDraft = async () => {
+          const draftId = generateDraftId();
+          const payload = await client.buildAgentForkContext(agentId, boundary);
+          const attachment = buildChatHistoryAttachment({
+            draftId,
+            serverId,
+            agentId,
+            payload,
+            missingAttachmentMessage: t("message.actions.forkFailed"),
+          });
+          useWorkspaceAttachmentsStore.getState().setWorkspaceAttachments({
+            scopeKey: buildDraftWorkspaceAttachmentScopeKey(draftId),
+            attachments: [attachment],
+          });
+          if (initialPrompt) {
+            useDraftStore.getState().editDraftText({
+              draftKey: buildDraftStoreKey({ serverId, agentId: "", draftId }),
+              text: initialPrompt,
+            });
+          }
+          return draftId;
+        };
 
-      const draftId = await prepareForkDraft();
-      const sourceDirectory =
-        agent.projectPlacement?.checkout?.cwd?.trim() || agent.cwd.trim() || undefined;
-      if (draftSetup) {
-        useWorkspaceDraftSubmissionStore.getState().setDraftSetup({
-          draftId,
-          setup: draftSetup,
-          sourceDirectory,
-        });
+        if (target === "tab" || target === "side") {
+          if (!workspaceId) {
+            throw new Error(t("message.actions.forkMissingWorkspace"));
+          }
+          const draftId = await prepareForkDraft();
+          if (target === "side") {
+            openWorkspaceTargetBeside({
+              workspaceKey: buildWorkspaceTabPersistenceKey({ serverId, workspaceId }),
+              target: buildForkDraftTabTarget(draftSetup, draftId),
+            });
+            return;
+          }
+          navigateToWorkspace({
+            serverId,
+            workspaceId,
+            target: buildForkDraftTabTarget(draftSetup, draftId),
+          });
+          return;
+        }
+
+        const draftId = await prepareForkDraft();
+        const sourceDirectory =
+          agent.projectPlacement?.checkout?.cwd?.trim() || agent.cwd.trim() || undefined;
+        if (draftSetup) {
+          useWorkspaceDraftSubmissionStore.getState().setDraftSetup({
+            draftId,
+            setup: draftSetup,
+            sourceDirectory,
+          });
+        }
+        router.push(
+          buildNewWorkspaceRoute({
+            serverId,
+            sourceDirectory,
+            displayName: agent.projectPlacement?.projectName,
+            projectId: agent.projectPlacement?.projectKey,
+            draftId,
+          }),
+        );
+      } catch (error) {
+        toast?.error(toErrorMessage(error) || t("message.actions.forkFailed"));
       }
-      router.push(
-        buildNewWorkspaceRoute({
-          serverId,
-          sourceDirectory,
-          displayName: agent.projectPlacement?.projectName,
-          projectId: agent.projectPlacement?.projectKey,
-          draftId,
-        }),
-      );
-    } catch (error) {
-      toast?.error(toErrorMessage(error) || t("message.actions.forkFailed"));
-    }
-  });
+    },
+  );
 }

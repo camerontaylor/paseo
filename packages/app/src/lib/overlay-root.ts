@@ -88,6 +88,8 @@ interface WebOverlayEntry {
   getScope: () => HTMLElement | null;
   getKeyHandler: () => WebOverlayKeyHandler;
   restoreFocus: HTMLElement | null;
+  // FORK(selection-toolbar): selection actions receive keys without owning input focus.
+  managesFocus: () => boolean;
 }
 
 const webOverlayEntries: WebOverlayEntry[] = [];
@@ -140,7 +142,7 @@ function focusFirstElement(scope: HTMLElement): void {
 function handleWebOverlayFocus(event: FocusEvent): void {
   const top = getTopWebOverlay();
   const scope = top?.getScope();
-  if (!scope || scope.contains(event.target as Node)) return;
+  if (!top?.managesFocus() || !scope || scope.contains(event.target as Node)) return;
   if (webOverlayFocusCheckQueued) return;
 
   // React can autofocus a child before its parent scope ref attaches. Defer
@@ -149,7 +151,9 @@ function handleWebOverlayFocus(event: FocusEvent): void {
   webOverlayFocusCheckQueued = true;
   queueMicrotask(() => {
     webOverlayFocusCheckQueued = false;
-    const currentScope = getTopWebOverlay()?.getScope();
+    const currentTop = getTopWebOverlay();
+    if (!currentTop?.managesFocus()) return;
+    const currentScope = currentTop.getScope();
     if (!currentScope || currentScope.contains(document.activeElement)) return;
     focusFirstElement(currentScope);
   });
@@ -169,7 +173,7 @@ export function dispatchTopWebOverlayKeyDown(event: KeyboardEvent): boolean {
   const scope = top?.getScope();
   if (!top || !scope) return false;
 
-  if (event.key === "Tab") {
+  if (event.key === "Tab" && top.managesFocus()) {
     const focusable = getFocusableElements(scope);
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -214,7 +218,12 @@ function addWebOverlay(entry: WebOverlayEntry): (options?: RemoveWebOverlayOptio
 
   const focusFrame = window.requestAnimationFrame(() => {
     const scope = entry.getScope();
-    if (getTopWebOverlay() === entry && scope && !scope.contains(document.activeElement)) {
+    if (
+      entry.managesFocus() &&
+      getTopWebOverlay() === entry &&
+      scope &&
+      !scope.contains(document.activeElement)
+    ) {
       focusFirstElement(scope);
     }
   });
@@ -225,6 +234,7 @@ function addWebOverlay(entry: WebOverlayEntry): (options?: RemoveWebOverlayOptio
     if (index !== -1) webOverlayEntries.splice(index, 1);
     detachWebOverlayListeners();
     if (
+      entry.managesFocus() &&
       options?.restoreFocus !== false &&
       entry.restoreFocus &&
       document.contains(entry.restoreFocus)
@@ -239,6 +249,8 @@ interface WebOverlayRegistration {
   layer: number;
   onKeyDown: WebOverlayKeyHandler;
   restoreFocusRef?: React.RefObject<unknown>;
+  /** Selection toolbars keep browser selection and composer focus intact. */
+  manageFocus?: boolean;
 }
 
 /**
@@ -251,10 +263,13 @@ export function useWebOverlayRegistration({
   layer,
   onKeyDown,
   restoreFocusRef: preferredRestoreFocusRef,
+  manageFocus = true,
 }: WebOverlayRegistration) {
   const idRef = useRef(Symbol("web-overlay"));
   const scopeRef = useRef<HTMLElement | null>(null);
   const layerRef = useRef(layer);
+  const manageFocusRef = useRef(manageFocus);
+  manageFocusRef.current = manageFocus;
   const keyHandlerRef = useRef(onKeyDown);
   const capturedRestoreFocusRef = useRef<HTMLElement | null>(null);
   const removeEntryRef = useRef<((options?: RemoveWebOverlayOptions) => void) | null>(null);
@@ -305,6 +320,7 @@ export function useWebOverlayRegistration({
       getScope: () => scopeRef.current,
       getKeyHandler: () => keyHandlerRef.current,
       restoreFocus: capturedRestoreFocusRef.current,
+      managesFocus: () => manageFocusRef.current,
     };
     removeEntryRef.current = addWebOverlay(entry);
     registeredRef.current = true;

@@ -1,5 +1,10 @@
 import type { BrowserContext, Locator } from "@playwright/test";
 import { expect, test, type Page } from "../support/fixtures";
+import {
+  expectChatHistoryAttachment,
+  observeForkAttachment,
+} from "../support/helpers/assistant-fork";
+import { expectComposerVisible, submitMessage } from "../support/helpers/composer";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 
 const CROSS_STRUCTURE_MARKDOWN = [
@@ -597,6 +602,103 @@ test("copying an assistant selection preserves Markdown structure and links", as
     await bashFence.locator("[data-paseo-markdown-ignore]").click();
 
     expect(await readPlainClipboard(page)).toBe("echo trailing");
+  } finally {
+    await agent.cleanup();
+  }
+});
+
+test("selection toolbar adds a formatted quote to the source draft without sending", async ({
+  page,
+}) => {
+  const agent = await seedMockAgentWorkspace({
+    repoPrefix: "assistant-selection-quote-",
+    title: "Selection quote source",
+    initialPrompt: "Explain the selected phrase.",
+    featureValues: { mockAssistantResponse: "A **selected phrase** in context." },
+  });
+  try {
+    await agent.client.waitForFinish(agent.agentId, 30_000);
+    await openAgentRoute(page, agent);
+    await expectComposerVisible(page);
+    const input = page.getByRole("textbox", { name: "Message agent..." });
+    await input.fill("Existing question");
+    await selectAssistantText(page, "selected phrase");
+    const toolbar = page.getByTestId("assistant-selection-toolbar");
+    await expect(toolbar).toBeVisible();
+    await expect(toolbar).toContainText("Reply in side chat");
+    // The toolbar must not capture input focus merely because a selection exists.
+    await expect(page.getByTestId("selection-add-to-chat")).not.toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(toolbar).toHaveCount(0);
+    await page.keyboard.press("Shift");
+    await expect(toolbar).toHaveCount(0);
+    await selectAssistantText(page, "selected phrase");
+    await page.getByTestId("selection-add-to-chat").click();
+    await expect(input).toHaveValue("Existing question\n\n> selected phrase\n\n");
+    await expect(input).toBeFocused();
+    await expect(toolbar).toHaveCount(0);
+    await expect(page.getByTestId("user-message")).toHaveCount(1);
+    await expect(input).toHaveCount(1);
+  } finally {
+    await agent.cleanup();
+  }
+});
+
+test("selection toolbar opens a side draft with history through the selected response", async ({
+  page,
+}) => {
+  const attachment = observeForkAttachment(page);
+  const agent = await seedMockAgentWorkspace({
+    repoPrefix: "assistant-selection-side-",
+    title: "Selection side source",
+    initialPrompt: "Original question included in snapshot.",
+    featureValues: { mockAssistantResponse: "A selected phrase in context." },
+    model: "e2e-fast-stream",
+  });
+  try {
+    await agent.client.waitForFinish(agent.agentId, 30_000);
+    await openAgentRoute(page, agent);
+    await expectComposerVisible(page);
+    await submitMessage(page, "Later question excluded from snapshot.");
+    await agent.client.waitForFinish(agent.agentId, 30_000);
+    await expect(page.getByTestId("user-message")).toHaveCount(2);
+    const sourceInput = page.getByRole("textbox", { name: "Message agent..." });
+    await sourceInput.fill("Keep this source draft");
+    await selectAssistantText(page, "selected phrase");
+    await expect(page.getByTestId("selection-reply-in-side-chat")).toBeEnabled();
+    const toolbarBounds = await page.getByTestId("assistant-selection-toolbar").boundingBox();
+    expect(toolbarBounds).not.toBeNull();
+    expect(toolbarBounds!.x).toBeGreaterThanOrEqual(8);
+    expect(toolbarBounds!.x + toolbarBounds!.width).toBeLessThanOrEqual(
+      page.viewportSize()!.width - 8,
+    );
+    await page.screenshot({ path: "/tmp/paseo-selection-toolbar.png" });
+    await page.getByTestId("selection-reply-in-side-chat").click();
+    await expectChatHistoryAttachment(page);
+    const transcript = await attachment.waitForText();
+    expect(transcript).toContain("Original question included in snapshot.");
+    expect(transcript).toContain("A selected phrase in context.");
+    expect(transcript).not.toContain("Later question excluded from snapshot.");
+    const inputs = page.getByRole("textbox", { name: "Message agent..." });
+    await expect(inputs).toHaveCount(2);
+    await expect(inputs.nth(0)).toHaveValue("Keep this source draft");
+    await expect(inputs.nth(1)).toHaveValue("> selected phrase\n\n");
+    await expect(inputs.nth(1)).toBeFocused();
+    const sourceBounds = await inputs.nth(0).boundingBox();
+    const sideBounds = await inputs.nth(1).boundingBox();
+    expect(sourceBounds).not.toBeNull();
+    expect(sideBounds).not.toBeNull();
+    expect(sideBounds!.x).toBeGreaterThan(sourceBounds!.x + sourceBounds!.width);
+    await expect(page.getByTestId("user-message")).toHaveCount(2);
+    await expect(page.getByTestId("assistant-selection-toolbar")).toHaveCount(0);
+    await page.screenshot({ path: "/tmp/paseo-selection-side-chat.png" });
+    // A subsequent side reply adds another draft tab to the same pane.
+    await selectAssistantText(page, "selected phrase");
+    await page.getByTestId("selection-reply-in-side-chat").click();
+    await expect(page.getByRole("button", { name: "New Agent", exact: true })).toHaveCount(2);
+    await expect(inputs).toHaveCount(2);
+    await expect(inputs.nth(0)).toHaveValue("Keep this source draft");
+    await expect(inputs.nth(1)).toHaveValue("> selected phrase\n\n");
   } finally {
     await agent.cleanup();
   }

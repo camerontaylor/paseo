@@ -92,7 +92,10 @@ import {
   type BottomAnchorRouteRequest,
 } from "./bottom-anchor-controller";
 import { createAssistantImageOccurrenceKey } from "@/assistant-image/acquisition-cache";
-import { AssistantSelectionCopySurface } from "@/assistant-selection-copy/surface";
+// FORK(selection-toolbar): quote selections or fork them into the ordinary side pane.
+import { AssistantSelectionToolbarSurface } from "@/assistant-selection-toolbar/surface";
+import { resolveAssistantTurnForkBoundary } from "./turn-boundary";
+import { useSelectionToolbarActions } from "@/assistant-selection-toolbar/actions";
 import {
   AssistantFileLinkResolverProvider,
   normalizeInlinePathTarget,
@@ -300,6 +303,7 @@ export interface AgentStreamViewProps {
   bottomOverlayControlClearance?: number;
   toast?: ToastApi | null;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
+  onQuoteSelection?: (quote: string) => void;
   readOnly?: boolean;
   historyPagination?: {
     hasOlder: boolean;
@@ -355,6 +359,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       readOnly = false,
+      onQuoteSelection,
       renderUserMessageHeader,
       historyPagination,
     },
@@ -1148,6 +1153,20 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => [...effectiveStreamItems, ...(effectiveStreamHead ?? [])],
       [effectiveStreamItems, effectiveStreamHead],
     );
+    const resolveSelectionBoundary = useStableEvent((messageId: string) =>
+      resolveAssistantTurnForkBoundary({
+        items: findItems,
+        startIndex: findItems.findIndex((item) => getStreamItemMessageId(item) === messageId),
+        supportsTimelineCursor: supportsAgentForkContextCursor,
+      }),
+    );
+    const selectionToolbarActions = useSelectionToolbarActions({
+      active: isActive,
+      readOnly,
+      context,
+      agentId,
+      forkAgent,
+    });
     return (
       <ChatFind
         agentId={agentId}
@@ -1159,7 +1178,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         visibleMessageIds={visibleMessageIds}
       >
         <ToolCallSheetProvider>
-          <AssistantSelectionCopySurface style={stylesheet.container}>
+          <AssistantSelectionToolbarSurface
+            style={stylesheet.container}
+            active={selectionToolbarActions.active}
+            onQuote={onQuoteSelection}
+            onReply={selectionToolbarActions.onReply}
+            resolveBoundary={resolveSelectionBoundary}
+          >
             {inlinePathError ? (
               <Alert
                 variant="info"
@@ -1221,7 +1246,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                 </Animated.View>
               </View>
             )}
-          </AssistantSelectionCopySurface>
+          </AssistantSelectionToolbarSurface>
         </ToolCallSheetProvider>
       </ChatFind>
     );

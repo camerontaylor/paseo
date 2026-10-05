@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createAssistantSelectionClipboardContent } from "./content.web";
+import { readAssistantSelection } from "@/assistant-selection-toolbar/selection.web";
 
 const fixture = `
   <div data-testid="assistant-message">
@@ -606,5 +607,31 @@ describe("assistant selection copy inside highlighted code", () => {
     expect(content?.plainText).toBe(
       "```typescript\nconst answer = 1;\n  if (answer) {\n    doThing();\n```\n\nAfter the block.",
     );
+  });
+});
+
+describe("selection toolbar quote extraction", () => {
+  it("quotes a selection across Markdown blocks and keeps its source identity", () => {
+    const transcript = mountTranscript([
+      { messageId: "source-message", blocks: ["First paragraph.", "Second paragraph."] },
+    ]);
+    const blocks = transcript.querySelectorAll('[data-paseo-markdown-tag="p"]');
+    const selected = readAssistantSelection(transcript, selectRange(blocks[0]!, 6, blocks[1]!, 6));
+    expect(selected?.messageId).toBe("source-message");
+    expect(selected?.quote).toBe("> paragraph.\n> \n> Second\n\n");
+  });
+
+  it("does not act on another transcript or a range crossing responses", () => {
+    const transcript = mountTranscript([
+      { messageId: "source-message", blocks: ["First paragraph."] },
+      { messageId: "later-message", blocks: ["Second paragraph."] },
+    ]);
+    const other = mountTranscript([{ messageId: "other-message", blocks: ["Elsewhere."] }]);
+    const blocks = transcript.querySelectorAll('[data-paseo-markdown-tag="p"]');
+    expect(readAssistantSelection(other, selectText(blocks[0]!, 0, 5))).toBeNull();
+    expect(
+      readAssistantSelection(transcript, selectRange(blocks[0]!, 0, blocks[1]!, 6)),
+    ).toBeNull();
+    expect(readAssistantSelection(transcript, selectText(blocks[0]!, 0, 0))).toBeNull();
   });
 });

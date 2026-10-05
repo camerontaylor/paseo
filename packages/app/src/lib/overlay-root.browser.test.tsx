@@ -8,8 +8,25 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-function OverlayHarness({ active, showScope }: { active: boolean; showScope: boolean }) {
-  const setScope = useWebOverlayRegistration({ active, layer: 20, onKeyDown: () => false });
+function OverlayHarness({
+  active,
+  showScope,
+  manageFocus = true,
+}: {
+  active: boolean;
+  showScope: boolean;
+  manageFocus?: boolean;
+}) {
+  const setScope = useWebOverlayRegistration({
+    active,
+    layer: 20,
+    manageFocus,
+    onKeyDown: (event) => {
+      if (event.key !== "Escape") return false;
+      event.preventDefault();
+      return true;
+    },
+  });
   return showScope ? (
     <div data-testid="scope" ref={setScope as RefCallback<HTMLDivElement>} tabIndex={-1}>
       <input data-testid="overlay-input" />
@@ -66,5 +83,22 @@ describe("useWebOverlayRegistration in the browser", () => {
     await renderHarness(false, false);
 
     expect(openerFocusCalls).toBe(1);
+  });
+  it("lets selection actions receive Escape without stealing or restoring focus", async () => {
+    flushSync(() => root.render(<OverlayHarness active showScope manageFocus={false} />));
+    await nextFrame();
+    expect(document.activeElement).toBe(opener);
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    window.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(true);
+    const destination = document.createElement("textarea");
+    document.body.append(destination);
+    destination.focus();
+    await nextFrame();
+    expect(document.activeElement).toBe(destination);
+    flushSync(() =>
+      root.render(<OverlayHarness active={false} showScope={false} manageFocus={false} />),
+    );
+    expect(document.activeElement).toBe(destination);
   });
 });
