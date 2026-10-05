@@ -1217,8 +1217,8 @@ export const es: TranslationResources = {
     routing: {
       findMode: "Find chats mode",
       findAction: "Find existing chats",
-      sendMode: "Message routing mode",
-      sendAction: "Route message",
+      sendMode: "Send prompt mode",
+      sendAction: "Send message to an existing chat",
       draftLoadFailed: "Unable to restore your saved message. Reload to retry.",
       find: "Find",
       sendPrompt: "Send prompt",

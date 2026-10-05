@@ -33,6 +33,7 @@ vi.mock("react-native-unistyles", async () => {
 });
 const fixture = vi.hoisted(() => ({
   serverIds: ["host"],
+  directory: true,
   query: "Where were we working on offline?",
   search: vi.fn(),
   enqueue: vi.fn(),
@@ -51,7 +52,7 @@ vi.mock("@/components/sidebar/sidebar-model", () => ({
     serverIds: fixture.serverIds,
     hostRegistryLoaded: true,
     allProjects: [{ viewKey: "view", projectName: "Paseo" }],
-    workspacePlacements: [fixture.placement],
+    workspacePlacements: fixture.directory ? [fixture.placement] : [],
   }),
 }));
 vi.mock("@/runtime/host-runtime", () => ({
@@ -124,10 +125,19 @@ vi.mock("@/stores/draft-store", async () => {
       { name: "routing-fixture-drafts", storage: createJSONStorage(() => storage) },
     ),
   );
-  return { useDraftStore: fixtureDraftStore, flushDraftPersistStorage: async () => {} };
+  return {
+    useDraftStore: fixtureDraftStore,
+    flushDraftPersistStorage: async () => {},
+    flushDraftPersistStorageDurably: async () => {},
+    awaitDraftHydration: async () => {
+      if (!fixtureDraftStore.persist.hasHydrated()) await fixtureDraftStore.persist.rehydrate();
+      if (!fixtureDraftStore.persist.hasHydrated()) throw new Error("Draft hydration failed");
+    },
+  };
 });
 let root: Root | undefined;
 let container: HTMLDivElement;
+let queryClient: QueryClient;
 const result = {
   agentId: "chat",
   workspaceId: "workspace",
@@ -139,16 +149,22 @@ const result = {
 };
 beforeEach(async () => {
   vi.stubGlobal("React", React);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fixture.search.mockReset();
   fixture.enqueue.mockReset();
   fixture.open.mockReset();
   fixture.serverIds = ["host"];
+  fixture.directory = true;
+  queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
   fixture.query = "Where were we working on offline?";
   fixture.search.mockResolvedValue({ results: [result], searchedCount: 1, totalCount: 1 });
   fixture.enqueue.mockResolvedValue({ agentId: "chat", revision: 1, items: [] });
   await useDraftStore.persist.rehydrate();
   await useQueueOutboxStore.persist.rehydrate();
-  useDraftStore.setState({ drafts: {} });
+  useDraftStore.setState({
+    drafts: {},
+    hydrateDraftInput: async ({ draftKey }) => useDraftStore.getState().getDraftInput(draftKey),
+  });
   useQueueOutboxStore.setState({ entries: {}, acknowledgements: {}, rejections: {} });
   document.body.style.background = "#141716";
   container = document.createElement("div");
@@ -179,16 +195,18 @@ function Fixture() {
   );
   return <SessionRoutingComposer>{renderInput}</SessionRoutingComposer>;
 }
-async function mount() {
+async function render() {
   await act(async () =>
     root?.render(
-      <QueryClientProvider
-        client={new QueryClient({ defaultOptions: { mutations: { retry: false } } })}
-      >
+      <QueryClientProvider client={queryClient}>
         <Fixture />
       </QueryClientProvider>,
     ),
   );
+  return within(container);
+}
+async function mount() {
+  await render();
   await waitFor(() =>
     expect(within(container).getByTestId("routing-submit").getAttribute("aria-disabled")).not.toBe(
       "true",
@@ -374,4 +392,201 @@ test("a pushed acknowledgement survives a lost enqueue response", async () => {
   );
   act(() => view.getByTestId("routing-submit").click());
   expect(fixture.enqueue).toHaveBeenCalledTimes(1);
+});
+
+test("changing selected hosts ignores an in-flight automatic send and clears editable recipients", async () => {
+  let resolve!: (value: {
+    results: (typeof result)[];
+    searchedCount: number;
+    totalCount: number;
+  }) => void;
+  fixture.search.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const view = await mount();
+  act(() => view.getByTestId("routing-send-mode").click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(fixture.search).toHaveBeenCalledTimes(1));
+  fixture.serverIds = ["cold-host"];
+  await render();
+  await act(async () => resolve({ results: [result], searchedCount: 1, totalCount: 1 }));
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+  expect(view.queryByText("Relay reconnect investigation")).toBeNull();
+  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+  fixture.serverIds = ["host"];
+  await render();
+  act(() => view.getByTestId("routing-find-mode").click());
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Use this chat" })).toBeTruthy());
+  act(() => view.getByRole("button", { name: "Use this chat" }).click());
+  fixture.serverIds = ["cold-host"];
+  await render();
+  expect(view.getByTestId("routing-recipient").textContent).toContain("Automatic");
+});
+
+test("host changes ignore stale Find failure and success", async () => {
+  let reject!: (error: Error) => void;
+  fixture.search.mockImplementationOnce(
+    () =>
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+  );
+  const view = await mount();
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(fixture.search).toHaveBeenCalledTimes(1));
+  fixture.serverIds = ["cold-host"];
+  await render();
+  await act(async () => reject(new Error("old host failure")));
+  expect(view.queryByText(/old host failure/)).toBeNull();
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+});
+
+test("filtering out an uncertain destination preserves its lock and original retry ID", async () => {
+  fixture.enqueue.mockRejectedValueOnce(new Error("response lost"));
+  const view = await mount();
+  act(() => view.getByTestId("routing-send-mode").click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
+  const itemId = fixture.enqueue.mock.calls[0]?.[0].itemId;
+  fixture.serverIds = ["cold-host"];
+  await render();
+  expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+  act(() => view.getByRole("button", { name: "Retry delivery" }).click());
+  expect(fixture.enqueue).toHaveBeenCalledTimes(1);
+  fixture.serverIds = ["host"];
+  await render();
+  act(() => view.getByRole("button", { name: "Retry delivery" }).click());
+  await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(2));
+  expect(fixture.enqueue.mock.calls[1]?.[0].itemId).toBe(itemId);
+});
+
+test("both persisted reads gate sending and restore an owned pending item with no loaded directory", async () => {
+  useDraftStore.getState().editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
+  const record = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+  await useQueueOutboxStore.getState().add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "recovered-original",
+    text: "continue",
+    expectedWorkspaceId: "workspace",
+    expectedProjectId: "project",
+    routingOrigin: true,
+    routingDraftVersion: record?.version,
+    routingDraftUpdatedAt: record?.updatedAt,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  const draftStorage = useDraftStore.persist.getOptions().storage!;
+  const outboxStorage = useQueueOutboxStore.persist.getOptions().storage!;
+  let releaseDraft!: () => void;
+  let releaseOutbox!: () => void;
+  const draftRead = new Promise<void>((done) => {
+    releaseDraft = done;
+  });
+  const outboxRead = new Promise<void>((done) => {
+    releaseOutbox = done;
+  });
+  useDraftStore.persist.setOptions({
+    storage: {
+      ...draftStorage,
+      getItem: async (key) => {
+        await draftRead;
+        return draftStorage.getItem(key);
+      },
+    },
+  });
+  useQueueOutboxStore.persist.setOptions({
+    storage: {
+      ...outboxStorage,
+      getItem: async (key) => {
+        await outboxRead;
+        return outboxStorage.getItem(key);
+      },
+    },
+  });
+  const loadingDraft = useDraftStore.persist.rehydrate();
+  const loadingOutbox = useQueueOutboxStore.persist.rehydrate();
+  fixture.directory = false;
+  try {
+    const view = await render();
+    expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+    await act(async () => releaseDraft());
+    await loadingDraft;
+    expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+    await act(async () => releaseOutbox());
+    await loadingOutbox;
+    await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
+    expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+    expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+    expect(fixture.search).not.toHaveBeenCalled();
+    act(() => view.getByRole("button", { name: "Retry delivery" }).click());
+    await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+    expect(fixture.enqueue.mock.calls[0]?.[0].itemId).toBe("recovered-original");
+  } finally {
+    releaseDraft();
+    releaseOutbox();
+    useDraftStore.persist.setOptions({ storage: draftStorage });
+    useQueueOutboxStore.persist.setOptions({ storage: outboxStorage });
+  }
+});
+
+test("an acknowledgement during draft loading cannot pair stale text with new ownership", async () => {
+  useDraftStore.getState().editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
+  const record = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+  await useQueueOutboxStore.getState().add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "accepted-on-load",
+    text: "continue",
+    routingOrigin: true,
+    routingDraftVersion: record?.version,
+    routingDraftUpdatedAt: record?.updatedAt,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  let finishMigration!: () => void;
+  const migration = new Promise<void>((done) => {
+    finishMigration = done;
+  });
+  const staleInput = useDraftStore.getState().getDraftInput(SESSION_ROUTING_DRAFT_KEY);
+  useDraftStore.setState({
+    hydrateDraftInput: async () => {
+      await migration;
+      return staleInput;
+    },
+  });
+  const view = await render();
+  await act(async () => {
+    await useQueueOutboxStore
+      .getState()
+      .acknowledge("accepted-on-load", { agentId: "chat", revision: 1, items: [] });
+    await useQueueOutboxStore.getState().removeDurably("accepted-on-load");
+    finishMigration();
+  });
+  await waitFor(() =>
+    expect(view.getByTestId("routing-send-mode").getAttribute("aria-disabled")).not.toBe("true"),
+  );
+  act(() => view.getByTestId("routing-send-mode").click());
+  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("");
+  act(() => view.getByTestId("routing-submit").click());
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+});
+
+test("visible Find and Send actions have matching voice-accessible names", async () => {
+  const view = await mount();
+  expect(
+    view.getByRole("button", { name: "Find existing chats", exact: true }).textContent,
+  ).toContain("Find");
+  act(() => view.getByRole("button", { name: "Send prompt mode", exact: true }).click());
+  expect(
+    view.getByRole("button", { name: "Send message to an existing chat", exact: true }).textContent,
+  ).toContain("Send");
 });

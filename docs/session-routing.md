@@ -8,7 +8,9 @@ chat owns all replies; sending does not navigate away or create a session.
 Choose All projects, Current project, or a named project in the scope menu. A project scope is a
 sidebar project view identity, including its host/clone grouping. Search sends only that scope's
 workspace IDs to each host. Changing scope clears a selected recipient outside it; changing the query,
-send draft, or scope ignores stale matching successes and failures. Explicit recipient selection
+send draft, scope, or selected hosts ignores stale matching successes and failures. Host changes
+also clear excluded results and editable recipients; a pending delivery keeps its original destination
+and item ID until acknowledgement or rejection. Explicit recipient selection
 bypasses matching. Automatic Send requires one clear high-confidence result and complete coverage
 of all scoped hosts; ambiguity,
 no matches, unavailable hosts, or incomplete shortlist coverage require manual selection first.
@@ -41,6 +43,9 @@ pending submission and preserves its editable draft; a missing acknowledgement r
 item and shows an uncertain delivery state. Background reconnect publishes actual acknowledgements
 or definitive rejections to the composer. Queued for means the host acknowledged an item still in its
 queue; Routed to means the acknowledgement no longer lists it. Neither confirms task completion.
-Draft clearing is guarded by the submitted draft revision and update timestamp, so a late
+The composer waits for both persisted drafts and the outbox before enabling Send. Pending recovery
+does not require a loaded host/chat directory. Routing keeps durable outbox ownership until the draft
+checkpoint succeeds, including after a failed storage write. Draft clearing is guarded by the submitted
+draft revision and update timestamp, so a late
 acknowledgement cannot erase a newly edited identical prompt. See [queue mirroring](queue-mirroring.md)
 for the shared outbox and delivery-receipt contract.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PersistStorage, StorageValue } from "zustand/middleware";
 import {
   createDraftPersistStorage,
@@ -106,4 +106,76 @@ describe("draft persistence", () => {
 
     expect(drafts.text()).toBe("pending checkpoint");
   });
+});
+
+it("strict routing flush reports a failed background checkpoint and retries the latest value", async () => {
+  let saved: StorageValue<DraftState> | null = null;
+  let fail = false;
+  const storage: PersistStorage<DraftState> = {
+    getItem: () => saved,
+    setItem: async (_name, value) => {
+      if (fail) throw new Error("disk full");
+      saved = value;
+    },
+    removeItem: () => {
+      saved = null;
+    },
+  };
+  const drafts = createDraftPersistStorage(storage);
+  await drafts.setItem("drafts", { state: { text: "continue" } });
+  fail = true;
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    drafts.setItem("drafts", { state: { text: "" } });
+    await expect(drafts.flushDurably()).rejects.toThrow("disk full");
+    expect((await drafts.getItem("drafts"))?.state.text).toBe("continue");
+    fail = false;
+    await drafts.flushDurably();
+    expect((await drafts.getItem("drafts"))?.state.text).toBe("");
+  } finally {
+    warning.mockRestore();
+  }
+});
+
+it("strict checkpoints stay ordered behind a background write added while waiting", async () => {
+  const writes: Array<{ text: string; release: () => void }> = [];
+  let saved = "initial";
+  const storage: PersistStorage<DraftState> = {
+    getItem: () => ({ state: { text: saved } }),
+    setItem: (_name, value) =>
+      new Promise<void>((done) => {
+        writes.push({
+          text: value.state.text,
+          release: () => {
+            saved = value.state.text;
+            done();
+          },
+        });
+      }),
+    removeItem: () => {},
+  };
+  const drafts = createDraftPersistStorage(storage);
+  const first = drafts.setItem("drafts", { state: { text: "old" } });
+  const durable = drafts.flushDurably();
+  drafts.setItem("drafts", { state: { text: "" } });
+  const laterBackground = drafts.flush();
+  expect(writes.map((write) => write.text)).toEqual(["old"]);
+  writes[0]?.release();
+  await first;
+  await vi.waitFor(() => expect(writes).toHaveLength(2));
+  expect(writes[1]?.text).toBe("");
+  let confirmed = false;
+  const confirming = durable.then(() => {
+    confirmed = true;
+    return undefined;
+  });
+  expect(confirmed).toBe(false);
+  writes[1]?.release();
+  await laterBackground;
+  await vi.waitFor(() => expect(writes).toHaveLength(3));
+  expect(writes[2]?.text).toBe("");
+  writes[2]?.release();
+  await confirming;
+  expect(saved).toBe("");
+  expect(confirmed).toBe(true);
 });

@@ -65,7 +65,7 @@ const durableStorage: typeof persistedStorage = {
 };
 
 let hydrationInFlight: Promise<void> | undefined;
-async function awaitOutboxHydration(): Promise<void> {
+export async function awaitOutboxHydration(): Promise<void> {
   if (useQueueOutboxStore.persist.hasHydrated()) return;
   hydrationInFlight ??= Promise.resolve(useQueueOutboxStore.persist.rehydrate())
     .then(() => {
@@ -100,16 +100,14 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
         })),
       acknowledgements: {},
       acknowledge: async (itemId, snapshot) => {
+        await awaitOutboxHydration();
         const entry = get().entries[itemId];
-        set((state) => {
-          const kept = Object.entries(state.acknowledgements).slice(-255);
-          const acknowledgements = Object.fromEntries(kept);
-          acknowledgements[itemId] = { queued: snapshot.items.some((item) => item.id === itemId) };
-          return { acknowledgements };
-        });
         if (entry?.routingOrigin) {
-          const { useDraftStore, flushDraftPersistStorage } = await import("@/stores/draft-store");
+          const { useDraftStore, awaitDraftHydration, flushDraftPersistStorageDurably } =
+            await import("@/stores/draft-store");
+          await awaitDraftHydration();
           const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+          let clearedDraft: typeof draft | undefined;
           if (
             draft?.version === entry.routingDraftVersion &&
             draft?.updatedAt === entry.routingDraftUpdatedAt
@@ -117,9 +115,28 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
             useDraftStore
               .getState()
               .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "" });
-            await flushDraftPersistStorage();
+            clearedDraft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+          }
+          try {
+            await flushDraftPersistStorageDurably();
+          } catch (error) {
+            if (
+              draft &&
+              clearedDraft &&
+              useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY] === clearedDraft
+            )
+              useDraftStore.setState((state) => ({
+                drafts: { ...state.drafts, [SESSION_ROUTING_DRAFT_KEY]: draft },
+              }));
+            throw error;
           }
         }
+        set((state) => {
+          const kept = Object.entries(state.acknowledgements).slice(-255);
+          const acknowledgements = Object.fromEntries(kept);
+          acknowledgements[itemId] = { queued: snapshot.items.some((item) => item.id === itemId) };
+          return { acknowledgements };
+        });
       },
 
       add: async (entry) =>

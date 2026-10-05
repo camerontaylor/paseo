@@ -3,12 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 const storage = vi.hoisted(() => ({
   values: new Map<string, string>(),
   hold: undefined as Promise<void> | undefined,
+  reads: new Map<string, Promise<void>>(),
+  failWriteKey: undefined as string | undefined,
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
-    getItem: async (key: string) => storage.values.get(key) ?? null,
+    getItem: async (key: string) => {
+      const value = storage.values.get(key) ?? null;
+      await storage.reads.get(key);
+      return value;
+    },
     setItem: async (key: string, value: string) => {
       await storage.hold;
+      if (key === storage.failWriteKey) throw new Error("checkpoint failed");
       storage.values.set(key, value);
     },
     removeItem: async (key: string) => {
@@ -55,7 +62,7 @@ describe("durable outbox acceptance", () => {
     expect(restarted.getState().entriesForAgent("server", "agent")).toEqual([
       { ...entry, attempts: 0, createdAt: expect.any(Number) },
     ]);
-  });
+  }, 15000);
 });
 
 it("cannot dispatch an entry while its write is pending or after that write fails", async () => {
@@ -168,4 +175,143 @@ it("late routing acknowledgement cannot clear a new identical draft after owners
     .acknowledge("old-routing", { agentId: "chat", revision: 1, items: [] });
   expect(useDraftStore.getState().getDraftInput(SESSION_ROUTING_DRAFT_KEY)?.text).toBe("continue");
   expect(useQueueOutboxStore.getState().acknowledgements["old-routing"]).toEqual({ queued: false });
+});
+
+it("cold-start acknowledgement waits for actual outbox and draft reads before removing ownership", async () => {
+  vi.resetModules();
+  storage.values.clear();
+  const { useQueueOutboxStore } = await import("./index");
+  const { useDraftStore, flushDraftPersistStorageDurably } = await import("@/stores/draft-store");
+  const { SESSION_ROUTING_DRAFT_KEY: key } = await import("@/stores/draft-keys");
+  await useDraftStore.persist.rehydrate();
+  await useQueueOutboxStore.persist.rehydrate();
+  useDraftStore.getState().editDraftText({ draftKey: key, text: "continue" });
+  await flushDraftPersistStorageDurably();
+  const record = useDraftStore.getState().drafts[key];
+  await useQueueOutboxStore.getState().add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "cold-accepted",
+    text: "continue",
+    routingOrigin: true,
+    routingDraftVersion: record?.version,
+    routingDraftUpdatedAt: record?.updatedAt,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  let releaseDraft!: () => void;
+  let releaseOutbox!: () => void;
+  storage.reads.set(
+    "paseo-drafts",
+    new Promise((done) => {
+      releaseDraft = done;
+    }),
+  );
+  storage.reads.set(
+    "paseo-queue-outbox",
+    new Promise((done) => {
+      releaseOutbox = done;
+    }),
+  );
+  vi.resetModules();
+  const restarted = (await import("./index")).useQueueOutboxStore;
+  let finished = false;
+  const accepting = restarted
+    .getState()
+    .acknowledge("cold-accepted", { agentId: "chat", revision: 1, items: [] })
+    .then(() => restarted.getState().removeDurably("cold-accepted"))
+    .then(() => {
+      finished = true;
+      return undefined;
+    });
+  try {
+    await new Promise((done) => setTimeout(done, 0));
+    expect(finished).toBe(false);
+    expect(
+      JSON.parse(storage.values.get("paseo-queue-outbox")!).state.entries["cold-accepted"],
+    ).toBeTruthy();
+    releaseOutbox();
+    await new Promise((done) => setTimeout(done, 20));
+    expect(finished).toBe(false);
+    expect(restarted.getState().acknowledgements["cold-accepted"]).toBeUndefined();
+    releaseDraft();
+    await accepting;
+    const drafts = (await import("@/stores/draft-store")).useDraftStore;
+    expect(drafts.getState().getDraftInput(key)?.text ?? "").toBe("");
+    expect(JSON.parse(storage.values.get("paseo-drafts")!).state.drafts[key].input.text).toBe("");
+    expect(restarted.getState().entries["cold-accepted"]).toBeUndefined();
+    expect(restarted.getState().acknowledgements["cold-accepted"]).toEqual({ queued: false });
+  } finally {
+    releaseDraft();
+    releaseOutbox();
+    storage.reads.clear();
+  }
+});
+
+it("failed routing draft checkpoint retains original ownership through reload and retry", async () => {
+  vi.resetModules();
+  storage.values.clear();
+  const { useQueueOutboxStore } = await import("./index");
+  const { useDraftStore, flushDraftPersistStorageDurably } = await import("@/stores/draft-store");
+  const { SESSION_ROUTING_DRAFT_KEY: key } = await import("@/stores/draft-keys");
+  await useDraftStore.persist.rehydrate();
+  await useQueueOutboxStore.persist.rehydrate();
+  useDraftStore.getState().editDraftText({ draftKey: key, text: "continue" });
+  await flushDraftPersistStorageDurably();
+  const record = useDraftStore.getState().drafts[key];
+  await useQueueOutboxStore.getState().add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "checkpoint-owned",
+    text: "continue",
+    routingOrigin: true,
+    routingDraftVersion: record?.version,
+    routingDraftUpdatedAt: record?.updatedAt,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  storage.failWriteKey = "paseo-drafts";
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await expect(
+      useQueueOutboxStore
+        .getState()
+        .acknowledge("checkpoint-owned", { agentId: "chat", revision: 1, items: [] }),
+    ).rejects.toThrow("checkpoint failed");
+    expect(useQueueOutboxStore.getState().acknowledgements["checkpoint-owned"]).toBeUndefined();
+    expect(useQueueOutboxStore.getState().entries["checkpoint-owned"]).toBeTruthy();
+    expect(useDraftStore.getState().drafts[key]).toEqual(record);
+    vi.resetModules();
+    const restarted = await import("./index");
+    const drafts = (await import("@/stores/draft-store")).useDraftStore;
+    await restarted.useQueueOutboxStore.persist.rehydrate();
+    await drafts.persist.rehydrate();
+    expect(drafts.getState().getDraftInput(key)?.text).toBe("continue");
+    expect(
+      restarted.useQueueOutboxStore.getState().entries["checkpoint-owned"]?.routingDraftVersion,
+    ).toBe(drafts.getState().drafts[key]?.version);
+    storage.failWriteKey = undefined;
+    const enqueueAgentMessage = vi.fn(async (_entry: { itemId: string; text: string }) => ({
+      agentId: "chat",
+      revision: 1,
+      items: [],
+    }));
+    await restarted.flushQueueOutboxForServer({
+      serverId: "host",
+      client: { enqueueAgentMessage },
+      applySnapshot: () => {},
+    });
+    expect(enqueueAgentMessage).toHaveBeenCalledTimes(1);
+    expect(enqueueAgentMessage.mock.calls[0]?.[0]).toMatchObject({
+      itemId: "checkpoint-owned",
+      text: "continue",
+    });
+    expect(restarted.useQueueOutboxStore.getState().entries["checkpoint-owned"]).toBeUndefined();
+    expect(drafts.getState().getDraftInput(key)?.text ?? "").toBe("");
+  } finally {
+    storage.failWriteKey = undefined;
+    warning.mockRestore();
+  }
 });

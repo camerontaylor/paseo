@@ -58,8 +58,15 @@ export const initialRoutingState: RoutingState = {
 
 export type RoutingAction =
   | { type: "syncDraft"; text: string; version: number; updatedAt?: number }
-  | { type: "restoreDraft"; text: string; version: number; updatedAt?: number }
+  | {
+      type: "restoreDraft";
+      text: string;
+      version: number;
+      updatedAt?: number;
+      pending?: Extract<RoutingAction, { type: "restorePending" }>;
+    }
   | { type: "invalidateFind" }
+  | { type: "hosts"; serverIds: readonly string[] }
   | {
       type: "restorePending";
       recipient: Recipient;
@@ -98,11 +105,9 @@ export function routingReducer(state: RoutingState, action: RoutingAction): Rout
         ...routingDraftFields(action),
       };
     case "restoreDraft":
-      return {
-        ...state,
-        ...routingDraftFields(action),
-        draftReady: true,
-      };
+      return restoreRoutingDraft(state, action);
+    case "hosts":
+      return updateRoutingHosts(state, action.serverIds);
     case "invalidateFind":
       return invalidateFind(state);
     case "restorePending":
@@ -196,5 +201,25 @@ function routingDraftFields(
     sendDraft: action.text,
     draftVersion: action.version,
     draftUpdatedAt: action.updatedAt ?? 0,
+  };
+}
+
+function restoreRoutingDraft(
+  state: RoutingState,
+  action: Extract<RoutingAction, { type: "restoreDraft" }>,
+): RoutingState {
+  const restored = { ...state, ...routingDraftFields(action), draftReady: true };
+  return action.pending ? routingReducer(restored, action.pending) : restored;
+}
+function updateRoutingHosts(state: RoutingState, serverIds: readonly string[]): RoutingState {
+  if (state.phase.status === "sending" || state.phase.status === "pending") return state;
+  return {
+    ...state,
+    recipient:
+      state.recipient && serverIds.includes(state.recipient.serverId) ? state.recipient : null,
+    phase:
+      state.phase.status === "matching" || state.phase.status === "results"
+        ? { status: "idle" }
+        : state.phase,
   };
 }

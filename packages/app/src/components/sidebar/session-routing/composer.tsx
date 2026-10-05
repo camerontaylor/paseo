@@ -25,8 +25,12 @@ import { useSidebarModel } from "@/components/sidebar/sidebar-model";
 import { getHostRuntimeStore, useHosts } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
 import { SESSION_ROUTING_DRAFT_KEY as ROUTING_DRAFT_KEY } from "@/stores/draft-keys";
-import { useDraftStore } from "@/stores/draft-store";
-import { useQueueOutboxStore } from "@/stores/queue-outbox-store";
+import { useDraftStore, awaitDraftHydration } from "@/stores/draft-store";
+import {
+  useQueueOutboxStore,
+  awaitOutboxHydration,
+  type PendingQueueEnqueue,
+} from "@/stores/queue-outbox-store";
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { deliverRoutedPrompt } from "./delivery";
@@ -78,6 +82,9 @@ export function SessionRoutingComposer({
   const selection = useActiveWorkspaceSelection();
   const request = useRef<string | null>(null);
   const submitting = useRef<string | null>(null);
+  const hostMembership = JSON.stringify([...serverIds].sort());
+  const latest = useRef({ state, serverIds, hostMembership });
+  latest.current = { state, serverIds, hostMembership };
   const sendInput = useRef<EditingTextInputHandle>(null);
   const agentMaps = useSessionStore(
     useShallow((snapshot) => serverIds.map((serverId) => snapshot.sessions[serverId]?.agents)),
@@ -121,6 +128,9 @@ export function SessionRoutingComposer({
     }
     return recipients;
   }, [agentMaps, hosts, workspacePlacements]);
+
+  const recipientDirectory = useRef({ manualRecipients, hosts });
+  recipientDirectory.current = { manualRecipients, hosts };
 
   const match = useMutation({
     mutationFn: async ({ query, scope }: MatchRequest): Promise<MatchResponse> => {
@@ -205,6 +215,8 @@ export function SessionRoutingComposer({
       draftVersion: number;
       draftUpdatedAt?: number;
     }) => {
+      if (!latest.current.serverIds.includes(input.recipient.serverId))
+        throw new Error(t("sidebar.routing.invalidDestination"));
       const client = getHostRuntimeStore().getClient(input.recipient.serverId);
       if (!client) throw new Error(t("sidebar.routing.offline"));
       const session = useSessionStore.getState().sessions[input.recipient.serverId];
@@ -228,24 +240,44 @@ export function SessionRoutingComposer({
   useEffect(() => {
     if (request.current && submitting.current === request.current) submitting.current = null;
     request.current = null;
-  }, [searchQuery, state.mode, state.scope, state.sendDraft, state.draftVersion]);
+  }, [searchQuery, state.mode, state.scope, state.sendDraft, state.draftVersion, hostMembership]);
+  useEffect(() => {
+    dispatch({ type: "hosts", serverIds: latest.current.serverIds });
+  }, [hostMembership]);
   useEffect(() => {
     request.current = null;
     dispatch({ type: "invalidateFind" });
   }, [searchQuery]);
   useEffect(() => {
     let active = true;
-    void useDraftStore
-      .getState()
-      .hydrateDraftInput({ draftKey: ROUTING_DRAFT_KEY })
-      .then((draft) => {
-        if (active)
-          dispatch({
-            type: "restoreDraft",
-            text: draft?.text ?? "",
-            version: useDraftStore.getState().drafts[ROUTING_DRAFT_KEY]?.version ?? 0,
-            updatedAt: useDraftStore.getState().drafts[ROUTING_DRAFT_KEY]?.updatedAt ?? 0,
-          });
+    void Promise.all([awaitDraftHydration(), awaitOutboxHydration()])
+      .then(async () => {
+        await useDraftStore.getState().hydrateDraftInput({ draftKey: ROUTING_DRAFT_KEY });
+        if (!active) return undefined;
+        // Migration/acknowledgement may change the record during an await. Read
+        // the text and ownership together only after both persisted stores load.
+        const draftStore = useDraftStore.getState();
+        const record = draftStore.drafts[ROUTING_DRAFT_KEY];
+        const entry = Object.values(useQueueOutboxStore.getState().entries).find(
+          (pending) =>
+            pending.routingOrigin &&
+            !pending.removalRequested &&
+            pending.routingDraftVersion === (record?.version ?? 0) &&
+            pending.routingDraftUpdatedAt === (record?.updatedAt ?? 0),
+        );
+        dispatch({
+          type: "restoreDraft",
+          text: draftStore.getDraftInput(ROUTING_DRAFT_KEY)?.text ?? "",
+          version: record?.version ?? 0,
+          updatedAt: record?.updatedAt ?? 0,
+          pending: entry
+            ? pendingRecovery(
+                entry,
+                recipientDirectory.current.manualRecipients,
+                recipientDirectory.current.hosts,
+              )
+            : undefined,
+        });
         return undefined;
       })
       .catch(() => {
@@ -264,24 +296,15 @@ export function SessionRoutingComposer({
       return;
     const entry = pendingOutbox.find(
       (pending) =>
+        !pending.removalRequested &&
         pending.routingDraftVersion === state.draftVersion &&
         pending.routingDraftUpdatedAt === state.draftUpdatedAt,
     );
     if (!entry) return;
-    const recipient = manualRecipients.find(
-      (candidate) => candidate.serverId === entry.serverId && candidate.agentId === entry.agentId,
-    );
-    if (recipient)
-      dispatch({
-        type: "restorePending",
-        recipient,
-        text: entry.text,
-        itemId: entry.itemId,
-        draftVersion: entry.routingDraftVersion ?? 0,
-        draftUpdatedAt: entry.routingDraftUpdatedAt,
-      });
+    dispatch(pendingRecovery(entry, manualRecipients, hosts));
   }, [
     manualRecipients,
+    hosts,
     pendingOutbox,
     state.draftReady,
     state.phase.status,
@@ -338,7 +361,21 @@ export function SessionRoutingComposer({
       draftVersion = state.draftVersion,
       draftUpdatedAt = state.draftUpdatedAt,
     ) => {
-      if (!recipientInScope(recipient, state.scope)) return;
+      const current = latest.current;
+      const retry =
+        current.state.phase.status === "pending" && current.state.phase.itemId === itemId;
+      if (
+        !current.serverIds.includes(recipient.serverId) ||
+        (!retry && !recipientInScope(recipient, current.state.scope))
+      )
+        return;
+      if (
+        !retry &&
+        (!current.state.draftReady ||
+          current.state.phase.status === "pending" ||
+          current.state.phase.status === "sending")
+      )
+        return;
       request.current = null;
       dispatch({
         type: "phase",
@@ -375,7 +412,7 @@ export function SessionRoutingComposer({
           });
       }
     },
-    [delivery, state.scope, state.draftVersion, state.draftUpdatedAt, t],
+    [delivery, state.draftVersion, state.draftUpdatedAt, t],
   );
 
   const submit = useCallback(async () => {
@@ -383,6 +420,7 @@ export function SessionRoutingComposer({
     const text = state.mode === "find" ? searchQuery : state.sendDraft;
     if (!text.trim()) return;
     const mode = state.mode;
+    const submittedHosts = latest.current.hostMembership;
     const requestId = uuid();
     submitting.current = requestId;
     try {
@@ -393,7 +431,7 @@ export function SessionRoutingComposer({
       request.current = requestId;
       dispatch({ type: "phase", phase: { status: "matching", requestId, mode, text } });
       const result = await match.mutateAsync({ query: text, scope: state.scope });
-      if (request.current !== requestId) return;
+      if (request.current !== requestId || latest.current.hostMembership !== submittedHosts) return;
       const recipient = result.complete ? automaticRecipient(result.recipients) : null;
       if (mode === "send" && recipient) {
         request.current = null;
@@ -407,7 +445,7 @@ export function SessionRoutingComposer({
         notice: result.notice,
       });
     } catch (error) {
-      if (request.current !== requestId) return;
+      if (request.current !== requestId || latest.current.hostMembership !== submittedHosts) return;
       dispatch({
         type: "phase",
         phase: {
@@ -421,6 +459,15 @@ export function SessionRoutingComposer({
   }, [locked, state, searchQuery, match, send, t]);
 
   const select = useCallback((recipient: Recipient | null) => {
+    const current = latest.current;
+    if (current.state.phase.status === "sending" || current.state.phase.status === "pending")
+      return;
+    if (
+      recipient &&
+      (!current.serverIds.includes(recipient.serverId) ||
+        !recipientInScope(recipient, current.state.scope))
+    )
+      return;
     if (request.current && submitting.current === request.current) submitting.current = null;
     request.current = null;
     dispatch({ type: "recipient", recipient });
@@ -650,6 +697,35 @@ export function SessionRoutingComposer({
       ) : null}
     </View>
   );
+}
+
+function pendingRecovery(
+  entry: PendingQueueEnqueue,
+  recipients: readonly Recipient[],
+  hosts: readonly { serverId: string; label?: string }[],
+): Extract<RoutingAction, { type: "restorePending" }> {
+  const recipient = recipients.find(
+    (candidate) => candidate.serverId === entry.serverId && candidate.agentId === entry.agentId,
+  ) ?? {
+    serverId: entry.serverId,
+    agentId: entry.agentId,
+    workspaceId: entry.expectedWorkspaceId ?? "",
+    projectId: entry.expectedProjectId ?? "",
+    projectName: entry.expectedProjectId ?? entry.serverId,
+    projectViewKey: "",
+    hostLabel: hosts.find((host) => host.serverId === entry.serverId)?.label ?? entry.serverId,
+    title: entry.agentId,
+    excerpt: "",
+    confidence: 0,
+  };
+  return {
+    type: "restorePending",
+    recipient,
+    text: entry.text,
+    itemId: entry.itemId,
+    draftVersion: entry.routingDraftVersion ?? 0,
+    draftUpdatedAt: entry.routingDraftUpdatedAt,
+  };
 }
 
 function RoutingOutcome({
