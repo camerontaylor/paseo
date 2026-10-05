@@ -309,7 +309,7 @@ interface SessionForTestOptions {
     getWorkspaceGitMetadata?: ReturnType<typeof vi.fn>;
     getProjectSlug?: ReturnType<typeof vi.fn>;
   };
-  workspaceRegistry?: { get: ReturnType<typeof vi.fn> };
+  workspaceRegistry?: { get: ReturnType<typeof vi.fn>; list?: ReturnType<typeof vi.fn> };
   projectRegistry?: Partial<SessionOptions["projectRegistry"]>;
   terminalManager?: SessionOptions["terminalManager"];
   serviceProxy?: SessionOptions["serviceProxy"];
@@ -332,6 +332,8 @@ interface SessionForTestOptions {
   pluginRuntime?: SessionOptions["pluginRuntime"];
   orchestrationSkills?: SessionOptions["orchestrationSkills"];
   workspaceLabelService?: WorkspaceLabelService;
+  metadataGeneration?: { providers: Array<{ provider: string; model?: string }> };
+  messageReceipts?: SessionOptions["messageReceipts"];
 }
 
 function createSessionForTest(options: SessionForTestOptions = {}): Session {
@@ -367,7 +369,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
   const messages = options.messages ?? [];
 
   const sessionOptions: SessionOptions = {
-    messageReceipts: createMessageReceiptsStub(),
+    messageReceipts: options.messageReceipts ?? createMessageReceiptsStub(),
     creationService: createTestCreationService(),
     clientId: options.clientId ?? "test-client",
     onMessage: (message) => messages.push(message),
@@ -420,6 +422,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
       get: vi.fn(() => ({
         mcp: { injectIntoAgents: false },
         providers: {},
+        metadataGeneration: options.metadataGeneration,
       })),
       onChange: vi.fn(() => () => {}),
     }),
@@ -5809,4 +5812,66 @@ test("provider snapshots preserve versionless visibility while capabilities upda
     "plugin-provider",
   ]);
   expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
+});
+
+test("session Find uses only Codex matching despite Claude metadata configuration and never sends", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const providers = createProviderSnapshotManagerStub();
+  let settingsReads = 0;
+  providers.manager.getCodexSessionSearchSettings = async () => {
+    settingsReads++;
+    throw new Error("GPT matching fixture unavailable");
+  };
+  const project = createPersistedProjectRecord(createProjectRecord("/fixture/search"));
+  const workspace = {
+    workspaceId: "search-workspace",
+    projectId: project.projectId,
+    cwd: project.rootPath,
+    kind: "local_checkout" as const,
+    displayName: "Search fixture",
+    archivedAt: null,
+  };
+  const send = vi.fn();
+  const session = createSessionForTest({
+    messages,
+    providerSnapshotManager: providers.manager,
+    metadataGeneration: { providers: [{ provider: "claude", model: "haiku" }] },
+    messageReceipts: { ...createMessageReceiptsStub(), send },
+    agentStorage: {
+      list: async () => [
+        createStoredAgentRecord({
+          id: "search-agent",
+          cwd: workspace.cwd,
+          title: "Existing search chat",
+          workspaceId: workspace.workspaceId,
+        }),
+      ],
+    },
+    agentManager: {
+      readSessionSearchText: async () => ["Existing fixture context"],
+      createAgent: send,
+    },
+    workspaceRegistry: { get: vi.fn(), list: vi.fn(async () => [workspace]) },
+    projectRegistry: { list: async () => [project] },
+  });
+  await session.handleMessage({
+    type: "session.search.request",
+    requestId: "gpt-only-search",
+    query: "send this to the existing search chat",
+    workspaceIds: [workspace.workspaceId],
+  });
+  expect(settingsReads).toBe(1);
+  expect(send).not.toHaveBeenCalled();
+  expect(messages).toEqual([
+    {
+      type: "session.search.response",
+      payload: {
+        requestId: "gpt-only-search",
+        results: [],
+        searchedCount: 0,
+        totalCount: 0,
+        error: "GPT matching fixture unavailable",
+      },
+    },
+  ]);
 });

@@ -29,13 +29,35 @@ searched/total counts. Evidence snippets come verbatim from supplied context, an
 evidence indexes are validated. Archived and child/internal agents are excluded. No maintained index
 is required.
 
-Semantic matching currently requires an already configured Claude provider. Other providers remain
-valid destination sessions. If matching is unavailable, the sidebar shows the reason and preserves
-ordinary filtering and the manual recipient picker. The internal matcher session is nonpersisted,
-uses a plain classification system prompt, and disables tools, MCP, setting sources, hooks, subagents,
-and provider tool grants at the final Claude SDK options boundary. A connection supersedes its prior
-matcher and aborts inference after 45 seconds. Live provider inference and native-device interaction
-need separate validation; fixture tests never send tasks to real agents.
+Semantic matching uses the enabled built-in Codex provider and the existing ChatGPT file sign-in in
+its exact `CODEX_HOME` (or the provider environment's `HOME/.codex`). It reads the effective saved
+GPT model/reasoning default through `config/read`. When no model is saved, it uses only Codex's
+declared account default; missing reasoning effort comes from the selected model's declared default
+when available. It never substitutes a coding chat's model, shared Git metadata-generation
+configuration, Claude, or another provider. All providers remain valid destination sessions.
+Unsupported custom inference endpoints, keychain-only/API-key sign-in, unavailable defaults, expired
+sign-in, and account limits fail clearly; ordinary filtering and the manual recipient picker remain
+usable. Normal Codex owns authentication refresh; matching never rewrites authentication or config.
+
+The routing-only matcher uses Codex's existing ChatGPT-authenticated
+[Responses transport](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core/src/client.rs)
+and [backend endpoint](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/model-provider-info/src/lib.rs).
+This is Codex's backend protocol, not public API-key support for ChatGPT tokens. Every request sends
+`tools: []`, `tool_choice: "none"`, and `store: false`, with only classification instructions and the
+supplied query/candidate context. No native thread or agent runtime is created, so MCP, instructions
+files, hooks, skills, subagents, and coding-session grants cannot enter the matcher. The fixed endpoint
+rejects redirects. Streaming and output sizes are bounded; partial, tool, refusal, malformed, and
+model-mismatched responses fail closed. Codex can deliver completed messages in `output_item.done`
+while leaving terminal `response.output` empty. Those messages are accepted only after a completed
+terminal acknowledgement confirms the configured model; text deltas alone are insufficient.
+Successful generation logs the requested and actual response
+model without query, context, or credentials. Schema validation and scoped candidate/evidence
+validation still apply after generation.
+
+A connection supersedes its prior matcher and aborts after 45 seconds, including configuration
+resolution and streaming. Fixture tests exercise the real SDK request consumer and a local Codex
+JSON-RPC subprocess; they never send tasks to real agents. Live inference and installed runtime
+acceptance are recorded separately.
 Routing copy remains English across locales in v1.
 
 Delivery uses the daemon queue and the existing durable device outbox, preserving the original text

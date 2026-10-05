@@ -3,6 +3,7 @@ import { execFileSync } from "child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { createServer } from "node:net";
 
 import type { AgentTimelineItem } from "./agent/agent-sdk-types.js";
 import { runAsyncWorktreeBootstrap, spawnWorkspaceScript } from "./worktree-bootstrap.js";
@@ -969,33 +970,57 @@ describe("runAsyncWorktreeBootstrap", () => {
     });
     expect(routeStore.getRouteEntry("api--feature-respawn-service--repo.localhost")).toBeNull();
 
-    const secondResult = await spawnWorkspaceScript({
-      repoRoot: repoDir,
-      workspaceId: repoDir,
-      projectSlug: "repo",
-      branchName: "feature-respawn-service",
-      scriptName: "api",
-      daemonPort: 6767,
-      serviceProxy: routeStore,
-      runtimeStore,
-      terminalManager,
-    });
+    // A fresh OS allocation can reuse a free port. Occupy the old port so this
+    // verifies reallocation and route replacement without relying on randomness.
+    const portBlocker = createServer();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        portBlocker.once("error", reject);
+        portBlocker.listen(firstPort, "127.0.0.1", resolve);
+      });
 
-    expect(secondResult.port).toEqual(expect.any(Number));
-    const secondPort = secondResult.port;
-    if (secondPort === null) {
-      throw new Error("Expected second service spawn to return a port");
+      const secondResult = await spawnWorkspaceScript({
+        repoRoot: repoDir,
+        workspaceId: repoDir,
+        projectSlug: "repo",
+        branchName: "feature-respawn-service",
+        scriptName: "api",
+        daemonPort: 6767,
+        serviceProxy: routeStore,
+        runtimeStore,
+        terminalManager,
+      });
+
+      expect(secondResult.port).toEqual(expect.any(Number));
+      const secondPort = secondResult.port;
+      if (secondPort === null) {
+        throw new Error("Expected second service spawn to return a port");
+      }
+      expect(secondPort).not.toBe(firstPort);
+      expect(secondPort).toEqual(expect.any(Number));
+      expect(createTerminalCalls[2]?.env?.PASEO_SERVICE_WORKER_PORT).toBe(String(workerPort));
+      expect(
+        routeStore.getRouteEntry("api--feature-respawn-service--repo.localhost"),
+      ).toMatchObject({
+        hostname: "api--feature-respawn-service--repo.localhost",
+        port: secondPort,
+        workspaceId: repoDir,
+        projectSlug: "repo",
+        scriptName: "api",
+      });
+    } finally {
+      if (portBlocker.listening) {
+        await new Promise<void>((resolve, reject) => {
+          portBlocker.close((error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve();
+          });
+        });
+      }
     }
-    expect(secondPort).not.toBe(firstPort);
-    expect(secondPort).toEqual(expect.any(Number));
-    expect(createTerminalCalls[2]?.env?.PASEO_SERVICE_WORKER_PORT).toBe(String(workerPort));
-    expect(routeStore.getRouteEntry("api--feature-respawn-service--repo.localhost")).toMatchObject({
-      hostname: "api--feature-respawn-service--repo.localhost",
-      port: secondPort,
-      workspaceId: repoDir,
-      projectSlug: "repo",
-      scriptName: "api",
-    });
   });
 
   it("removes the current service route on exit after a branch rename", async () => {

@@ -1,3 +1,4 @@
+import { createCodexSessionSearchGeneration } from "./agent/providers/codex/session-search-generation.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
 import { searchExistingSessions, type SessionSearchCandidate } from "./session-search.js";
 import type { StructuredTextGeneration } from "./session/checkout/git-metadata-generator.js";
@@ -1002,12 +1003,9 @@ export class Session {
       onBranchChanged,
       logger: this.sessionLogger,
     });
-    this.sessionSearchGeneration = createAgentStructuredTextGeneration({
-      agentManager: this.agentManager,
-      providerSnapshotManager,
-      readDaemonConfig: () => this.readStructuredGenerationDaemonConfig(),
-      getFocusedSelection: (cwd) => this.getFocusedAgentSelectionForCwd(cwd),
-      textOnly: true,
+    this.sessionSearchGeneration = createCodexSessionSearchGeneration({
+      readSettings: (signal) => providerSnapshotManager.getCodexSessionSearchSettings(signal),
+      logger: this.sessionLogger,
     });
     this.agentQueueService = resolveAgentQueueService(options);
     this.unsubscribeAgentQueue = this.subscribeToAgentQueueMutations();
