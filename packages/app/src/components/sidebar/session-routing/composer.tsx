@@ -503,7 +503,7 @@ export function SessionRoutingComposer({
           size="xs"
           variant={state.mode === "find" ? "secondary" : "ghost"}
           disabled={locked}
-          accessibilityLabel={t("sidebar.routing.find")}
+          accessibilityLabel={t("sidebar.routing.findMode")}
           testID="routing-find-mode"
           onPress={setFindMode}
         >
@@ -513,7 +513,7 @@ export function SessionRoutingComposer({
           size="xs"
           variant={state.mode === "send" ? "secondary" : "ghost"}
           disabled={locked}
-          accessibilityLabel={t("sidebar.routing.sendPrompt")}
+          accessibilityLabel={t("sidebar.routing.sendMode")}
           testID="routing-send-mode"
           onPress={setSendMode}
         >
@@ -619,6 +619,7 @@ export function SessionRoutingComposer({
           disabled={locked || !(state.mode === "find" ? searchQuery : state.sendDraft).trim()}
           loading={state.phase.status === "matching" || state.phase.status === "sending"}
           onPress={submitFromButton}
+          accessibilityLabel={t(routingSubmitLabel(state.mode))}
           testID="routing-submit"
         >
           {state.mode === "find" ? t("sidebar.routing.find") : t("sidebar.routing.send")}
@@ -824,3 +825,7 @@ const styles = StyleSheet.create((theme) => ({
     borderTopColor: theme.colors.border,
   },
 }));
+
+function routingSubmitLabel(mode: "find" | "send") {
+  return mode === "find" ? "sidebar.routing.findAction" : "sidebar.routing.sendAction";
+}

@@ -1189,6 +1189,10 @@ export const ja: TranslationResources = {
   },
   sidebar: {
     routing: {
+      findMode: "Find chats mode",
+      findAction: "Find existing chats",
+      sendMode: "Message routing mode",
+      sendAction: "Route message",
       draftLoadFailed: "Unable to restore your saved message. Reload to retry.",
       find: "Find",
       sendPrompt: "Send prompt",

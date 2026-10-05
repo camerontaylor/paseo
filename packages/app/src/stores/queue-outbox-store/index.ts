@@ -5,7 +5,6 @@ import { z } from "zod";
 import type { AgentQueueSnapshot } from "@getpaseo/protocol/messages";
 
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
-import { useDraftStore, flushDraftPersistStorage } from "@/stores/draft-store";
 import { SESSION_ROUTING_DRAFT_KEY } from "@/stores/draft-keys";
 import {
   flushQueueOutbox,
@@ -102,14 +101,18 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
       acknowledgements: {},
       acknowledge: async (itemId, snapshot) => {
         const entry = get().entries[itemId];
-        const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
-        if (
-          entry?.routingOrigin &&
-          draft?.version === entry.routingDraftVersion &&
-          draft?.updatedAt === entry.routingDraftUpdatedAt
-        ) {
-          useDraftStore.getState().editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "" });
-          await flushDraftPersistStorage();
+        if (entry?.routingOrigin) {
+          const { useDraftStore, flushDraftPersistStorage } = await import("@/stores/draft-store");
+          const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+          if (
+            draft?.version === entry.routingDraftVersion &&
+            draft?.updatedAt === entry.routingDraftUpdatedAt
+          ) {
+            useDraftStore
+              .getState()
+              .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "" });
+            await flushDraftPersistStorage();
+          }
         }
         set((state) => {
           const kept = Object.entries(state.acknowledgements).slice(-255);
