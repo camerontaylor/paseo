@@ -212,7 +212,6 @@ function restoreRoutingDraft(
   return action.pending ? routingReducer(restored, action.pending) : restored;
 }
 function updateRoutingHosts(state: RoutingState, serverIds: readonly string[]): RoutingState {
-  if (state.phase.status === "sending" || state.phase.status === "pending") return state;
   return {
     ...state,
     recipient:

@@ -5122,7 +5122,12 @@ export class Session {
       return;
     }
 
-    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    const routing = msg.type === "agent.queue.enqueue.request" && !!msg.expectedWorkspaceId;
+    const resolved = routing
+      ? this.agentManager.getAgent(msg.agentId) || (await this.agentStorage.get(msg.agentId))
+        ? { ok: true as const, agentId: msg.agentId }
+        : { ok: false as const, error: "session_route_destination_missing" }
+      : await this.resolveAgentIdentifier(msg.agentId);
     if (!resolved.ok) {
       this.emit({
         type: responseType,

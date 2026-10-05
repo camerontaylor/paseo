@@ -9,7 +9,8 @@ import { beforeEach, afterEach, expect, test, vi } from "vitest";
 import { EditingTextInput } from "@/components/ui/text-input";
 import { i18n } from "@/i18n/i18next";
 import { useDraftStore } from "@/stores/draft-store";
-import { useQueueOutboxStore } from "@/stores/queue-outbox-store";
+import { AgentQueueDestinationChangedError } from "@getpaseo/client/internal/daemon-client";
+import { flushQueueOutboxForServer, useQueueOutboxStore } from "@/stores/queue-outbox-store";
 import { SESSION_ROUTING_DRAFT_KEY } from "@/stores/draft-keys";
 import { SessionRoutingComposer } from "./composer";
 void i18n;
@@ -589,4 +590,91 @@ test("visible Find and Send actions have matching voice-accessible names", async
   expect(
     view.getByRole("button", { name: "Send message to an existing chat", exact: true }).textContent,
   ).toContain("Send");
+});
+
+for (const outcome of ["acknowledged", "rejected"] as const) {
+  test(`host exclusion clears the editable pin after pending delivery is ${outcome}`, async () => {
+    const view = await mount();
+    act(() => view.getByTestId("routing-submit").click());
+    await waitFor(() => expect(view.getByRole("button", { name: "Use this chat" })).toBeTruthy());
+    act(() => view.getByRole("button", { name: "Use this chat" }).click());
+    type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+    fixture.enqueue.mockRejectedValueOnce(new Error("lost response"));
+    act(() => view.getByTestId("routing-submit").click());
+    await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
+    const itemId = fixture.enqueue.mock.calls[0]?.[0].itemId;
+    fixture.serverIds = ["cold-host"];
+    await render();
+    expect(view.getByTestId("routing-recipient").textContent).toContain("Automatic");
+    expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy();
+    await act(async () => {
+      if (outcome === "acknowledged") {
+        await useQueueOutboxStore
+          .getState()
+          .acknowledge(itemId, { agentId: "chat", revision: 2, items: [] });
+        await useQueueOutboxStore.getState().removeDurably(itemId);
+      } else {
+        await flushQueueOutboxForServer({
+          serverId: "host",
+          client: {
+            enqueueAgentMessage: async () => {
+              throw new AgentQueueDestinationChangedError();
+            },
+          },
+          applySnapshot: () => {},
+        });
+      }
+    });
+    await waitFor(() => expect(view.queryByRole("button", { name: "Retry delivery" })).toBeNull());
+    expect(view.getByTestId("routing-recipient").textContent).toContain("Automatic");
+    fixture.serverIds = ["host"];
+    await render();
+    act(() => view.getByTestId("routing-recipient").click());
+    act(() => view.getByRole("button", { name: /Paseo.*Offline indicator/ }).click());
+    type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "next prompt");
+    act(() => view.getByTestId("routing-submit").click());
+    await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(2));
+    expect(fixture.enqueue.mock.calls[1]?.[0].text).toBe("next prompt");
+  });
+}
+
+test("cold recovery never adopts a moved chat's new project for retry", async () => {
+  useDraftStore.getState().editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
+  const record = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+  await useQueueOutboxStore.getState().add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "moved-original",
+    text: "continue",
+    expectedWorkspaceId: "original-workspace",
+    expectedProjectId: "original-project",
+    routingOrigin: true,
+    routingDraftVersion: record?.version,
+    routingDraftUpdatedAt: record?.updatedAt,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  await useDraftStore.persist.rehydrate();
+  await useQueueOutboxStore.persist.rehydrate();
+  fixture.enqueue.mockImplementation(async (entry) => {
+    if (entry.expectedWorkspaceId !== "workspace" || entry.expectedProjectId !== "project")
+      throw new AgentQueueDestinationChangedError();
+    return { agentId: "chat", revision: 1, items: [] };
+  });
+  const view = await render();
+  await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
+  expect(view.getByTestId("routing-recipient").textContent).toContain("original-project");
+  act(() => view.getByRole("button", { name: "Retry delivery" }).click());
+  await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(useQueueOutboxStore.getState().entries["moved-original"]).toBeUndefined(),
+  );
+  expect(fixture.enqueue.mock.calls[0]?.[0]).toMatchObject({
+    itemId: "moved-original",
+    expectedWorkspaceId: "original-workspace",
+    expectedProjectId: "original-project",
+  });
+  expect(useQueueOutboxStore.getState().entries["moved-original"]).toBeUndefined();
+  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
 });

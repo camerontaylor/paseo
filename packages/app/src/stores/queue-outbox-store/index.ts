@@ -99,49 +99,68 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
           },
         })),
       acknowledgements: {},
-      acknowledge: async (itemId, snapshot) => {
-        await awaitOutboxHydration();
-        const entry = get().entries[itemId];
-        if (entry?.routingOrigin) {
-          const { useDraftStore, awaitDraftHydration, flushDraftPersistStorageDurably } =
-            await import("@/stores/draft-store");
-          await awaitDraftHydration();
-          const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
-          let clearedDraft: typeof draft | undefined;
-          if (
-            draft?.version === entry.routingDraftVersion &&
-            draft?.updatedAt === entry.routingDraftUpdatedAt
-          ) {
-            useDraftStore
-              .getState()
-              .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "" });
-            clearedDraft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
-          }
-          try {
-            await flushDraftPersistStorageDurably();
-          } catch (error) {
+      acknowledge: (itemId, snapshot) =>
+        serializeQueueOperation(JSON.stringify(["routing-ack", itemId]), async () => {
+          await awaitOutboxHydration();
+          const entry = get().entries[itemId];
+          if (entry?.routingOrigin) {
+            const { useDraftStore, awaitDraftHydration, flushDraftPersistStorageDurably } =
+              await import("@/stores/draft-store");
+            await awaitDraftHydration();
+            const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+            let clearedDraft: typeof draft | undefined;
             if (
-              draft &&
-              clearedDraft &&
-              useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY] === clearedDraft
-            )
-              useDraftStore.setState((state) => ({
-                drafts: { ...state.drafts, [SESSION_ROUTING_DRAFT_KEY]: draft },
-              }));
-            throw error;
+              draft?.version === entry.routingDraftVersion &&
+              draft?.updatedAt === entry.routingDraftUpdatedAt
+            ) {
+              useDraftStore
+                .getState()
+                .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "" });
+              clearedDraft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+            }
+            try {
+              await flushDraftPersistStorageDurably();
+            } catch (error) {
+              if (
+                draft &&
+                clearedDraft &&
+                useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY] === clearedDraft
+              )
+                useDraftStore.setState((state) => ({
+                  drafts: { ...state.drafts, [SESSION_ROUTING_DRAFT_KEY]: draft },
+                }));
+              throw error;
+            }
           }
-        }
-        set((state) => {
-          const kept = Object.entries(state.acknowledgements).slice(-255);
-          const acknowledgements = Object.fromEntries(kept);
-          acknowledgements[itemId] = { queued: snapshot.items.some((item) => item.id === itemId) };
-          return { acknowledgements };
-        });
-      },
+          set((state) => {
+            const kept = Object.entries(state.acknowledgements).slice(-255);
+            const acknowledgements = Object.fromEntries(kept);
+            acknowledgements[itemId] = {
+              queued: snapshot.items.some((item) => item.id === itemId),
+            };
+            return { acknowledgements };
+          });
+        }),
 
       add: async (entry) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
           await awaitOutboxHydration();
+          if (entry.routingOrigin && !get().entries[entry.itemId]) {
+            const { useDraftStore, awaitDraftHydration, flushDraftPersistStorageDurably } =
+              await import("@/stores/draft-store");
+            await awaitDraftHydration();
+            const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+            if (
+              !draft ||
+              draft.version !== entry.routingDraftVersion ||
+              draft.updatedAt !== entry.routingDraftUpdatedAt ||
+              draft.input.text !== entry.text
+            )
+              throw new Error("The submitted draft changed. Send it again.");
+            await flushDraftPersistStorageDurably();
+            if (useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY] !== draft)
+              throw new Error("The submitted draft changed. Send it again.");
+          }
           writesInFlight.add(entry.itemId);
           set((state) => ({
             entries: {

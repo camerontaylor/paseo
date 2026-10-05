@@ -21,6 +21,7 @@ import { z } from "zod";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import { Session } from "./session.js";
+import type { AgentQueueService } from "./agent-queue/service.js";
 import type { SessionOptions } from "./session.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import type { AgentUpdatesService } from "./session/agent-updates/agent-updates-service.js";
@@ -9557,4 +9558,40 @@ test("workspace.create.request reports an archived explicit project", async () =
     workspace: null,
     errorCode: "archived_project",
   });
+});
+
+test("missing routing destination is rejected before queue acceptance", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const session = createSessionForWorkspaceTests({
+    onMessage: (message) => emitted.push(message),
+    agentStorage: { list: async () => [], get: async () => null },
+  });
+  const enqueue = vi.fn();
+  asSessionInternals<{ agentQueueService: Pick<AgentQueueService, "enqueue"> }>(
+    session,
+  ).agentQueueService = { enqueue };
+  for (const routing of [true, false]) {
+    await session.handleMessage({
+      type: "agent.queue.enqueue.request",
+      requestId: routing ? "route" : "ordinary",
+      agentId: "deleted-chat",
+      itemId: "original-item",
+      text: "continue",
+      ...(routing
+        ? { expectedWorkspaceId: "original-workspace", expectedProjectId: "original-project" }
+        : {}),
+    });
+    const response = emitted
+      .filter((message) => message.type === "agent.queue.enqueue.response")
+      .at(-1);
+    expect(response).toMatchObject({
+      type: "agent.queue.enqueue.response",
+      payload: {
+        queue: null,
+        error: routing ? "session_route_destination_missing" : "Agent not found: deleted-chat",
+      },
+    });
+  }
+  expect(enqueue).not.toHaveBeenCalled();
+  await session.cleanup();
 });

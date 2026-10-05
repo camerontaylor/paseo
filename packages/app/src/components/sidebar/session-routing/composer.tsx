@@ -243,7 +243,7 @@ export function SessionRoutingComposer({
   }, [searchQuery, state.mode, state.scope, state.sendDraft, state.draftVersion, hostMembership]);
   useEffect(() => {
     dispatch({ type: "hosts", serverIds: latest.current.serverIds });
-  }, [hostMembership]);
+  }, [hostMembership, state.recipient?.serverId]);
   useEffect(() => {
     request.current = null;
     dispatch({ type: "invalidateFind" });
@@ -704,17 +704,24 @@ function pendingRecovery(
   recipients: readonly Recipient[],
   hosts: readonly { serverId: string; label?: string }[],
 ): Extract<RoutingAction, { type: "restorePending" }> {
-  const recipient = recipients.find(
+  const display = recipients.find(
     (candidate) => candidate.serverId === entry.serverId && candidate.agentId === entry.agentId,
-  ) ?? {
+  );
+  const sameDestination =
+    display &&
+    display.workspaceId === entry.expectedWorkspaceId &&
+    display.projectId === entry.expectedProjectId;
+  const recipient: Recipient = {
     serverId: entry.serverId,
     agentId: entry.agentId,
     workspaceId: entry.expectedWorkspaceId ?? "",
     projectId: entry.expectedProjectId ?? "",
-    projectName: entry.expectedProjectId ?? entry.serverId,
-    projectViewKey: "",
+    projectName: sameDestination
+      ? display.projectName
+      : (entry.expectedProjectId ?? entry.serverId),
+    projectViewKey: sameDestination ? display.projectViewKey : "",
     hostLabel: hosts.find((host) => host.serverId === entry.serverId)?.label ?? entry.serverId,
-    title: entry.agentId,
+    title: display?.title ?? entry.agentId,
     excerpt: "",
     confidence: 0,
   };

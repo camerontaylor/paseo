@@ -1,6 +1,7 @@
 import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import {
+  AgentQueueDestinationChangedError,
   DaemonClient,
   type DaemonClientTrace,
   type CreateAgentRequestOptions,
@@ -7034,5 +7035,45 @@ test("reviewed plugin updates gate before requests and preserve exact proposal d
     await expect(applying).resolves.toEqual([
       { id: "review", outcome: "error", error: "changed since review" },
     ]);
+  }
+});
+
+test("queue responses classify missing routing destinations without interpreting generic errors", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "routing-rejection",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen();
+  await connecting;
+  for (const error of ["session_route_destination_missing", "Agent not found: chat"]) {
+    const response = client.enqueueAgentMessage({
+      agentId: "chat",
+      itemId: "item",
+      text: "continue",
+      expectedWorkspaceId: "original",
+      expectedProjectId: "project",
+    });
+    const rejected = expect(response).rejects;
+    await Promise.resolve();
+    const request = parseSentFrame(mock.sent.at(-1));
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "agent.queue.enqueue.response",
+        payload: {
+          requestId: request.requestId,
+          agentId: "chat",
+          queue: null,
+          error,
+        },
+      }),
+    );
+    if (error === "session_route_destination_missing")
+      await rejected.toBeInstanceOf(AgentQueueDestinationChangedError);
+    else await rejected.not.toBeInstanceOf(AgentQueueDestinationChangedError);
   }
 });

@@ -1003,7 +1003,7 @@ export class DaemonConnectionError extends Error {
 
 export class AgentQueueDestinationChangedError extends Error {
   constructor() {
-    super("The selected chat moved or was archived. Choose its destination again.");
+    super("The selected chat moved, was archived, or was deleted. Choose its destination again.");
     this.name = "AgentQueueDestinationChangedError";
   }
 }
@@ -3082,7 +3082,10 @@ export class DaemonClient {
     error: string | null;
   }): AgentQueueSnapshot {
     if (!payload.queue) {
-      if (payload.error === "session_route_destination_changed")
+      if (
+        payload.error === "session_route_destination_changed" ||
+        payload.error === "session_route_destination_missing"
+      )
         throw new AgentQueueDestinationChangedError();
       throw new Error(payload.error ?? "Agent queue request rejected");
     }

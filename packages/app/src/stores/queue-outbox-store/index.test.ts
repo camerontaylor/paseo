@@ -5,6 +5,8 @@ const storage = vi.hoisted(() => ({
   hold: undefined as Promise<void> | undefined,
   reads: new Map<string, Promise<void>>(),
   failWriteKey: undefined as string | undefined,
+  failOnceKey: undefined as string | undefined,
+  draftHold: undefined as Promise<void> | undefined,
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
@@ -14,8 +16,11 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
       return value;
     },
     setItem: async (key: string, value: string) => {
+      const failOnce = key === storage.failOnceKey;
+      if (failOnce) storage.failOnceKey = undefined;
+      if (key === "paseo-drafts") await storage.draftHold;
       await storage.hold;
-      if (key === storage.failWriteKey) throw new Error("checkpoint failed");
+      if (failOnce || key === storage.failWriteKey) throw new Error("checkpoint failed");
       storage.values.set(key, value);
     },
     removeItem: async (key: string) => {
@@ -314,4 +319,126 @@ it("failed routing draft checkpoint retains original ownership through reload an
     storage.failWriteKey = undefined;
     warning.mockRestore();
   }
+});
+
+it("overlapping acknowledgements checkpoint restored ownership before publishing a receipt", async () => {
+  vi.resetModules();
+  storage.values.clear();
+  const { useQueueOutboxStore } = await import("./index");
+  const { useDraftStore, flushDraftPersistStorageDurably } = await import("@/stores/draft-store");
+  const { SESSION_ROUTING_DRAFT_KEY: key } = await import("@/stores/draft-keys");
+  await useDraftStore.persist.rehydrate();
+  await useQueueOutboxStore.persist.rehydrate();
+  useDraftStore.getState().editDraftText({ draftKey: key, text: "continue" });
+  const record = useDraftStore.getState().drafts[key];
+  await useQueueOutboxStore.getState().add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "overlap",
+    text: "continue",
+    routingOrigin: true,
+    routingDraftVersion: record?.version,
+    routingDraftUpdatedAt: record?.updatedAt,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  let release!: () => void;
+  storage.draftHold = new Promise<void>((done) => {
+    release = done;
+  });
+  storage.failOnceKey = "paseo-drafts";
+  const snapshot = { agentId: "chat", revision: 1, items: [] };
+  const first = useQueueOutboxStore
+    .getState()
+    .acknowledge("overlap", snapshot)
+    .catch(() => "failed");
+  await new Promise((done) => setTimeout(done, 20));
+  const second = useQueueOutboxStore
+    .getState()
+    .acknowledge("overlap", snapshot)
+    .then(() => useQueueOutboxStore.getState().removeDurably("overlap"));
+  expect(useQueueOutboxStore.getState().acknowledgements.overlap).toBeUndefined();
+  release();
+  expect(await first).toBe("failed");
+  await second;
+  storage.draftHold = undefined;
+  await flushDraftPersistStorageDurably();
+  vi.resetModules();
+  const restarted = (await import("./index")).useQueueOutboxStore;
+  const drafts = (await import("@/stores/draft-store")).useDraftStore;
+  await restarted.persist.rehydrate();
+  await drafts.persist.rehydrate();
+  expect(restarted.getState().entries.overlap).toBeUndefined();
+  expect(drafts.getState().getDraftInput(key)?.text ?? "").toBe("");
+});
+
+it("sending within the draft throttle checkpoints ownership before dispatch and cold recovery", async () => {
+  vi.resetModules();
+  storage.values.clear();
+  const { useQueueOutboxStore } = await import("./index");
+  const { useDraftStore, flushDraftPersistStorageDurably } = await import("@/stores/draft-store");
+  const { SESSION_ROUTING_DRAFT_KEY: key } = await import("@/stores/draft-keys");
+  const { deliverRoutedPrompt } = await import("@/components/sidebar/session-routing/delivery");
+  await useDraftStore.persist.rehydrate();
+  await useQueueOutboxStore.persist.rehydrate();
+  useDraftStore.getState().editDraftText({ draftKey: key, text: "old" });
+  await flushDraftPersistStorageDurably();
+  useDraftStore.getState().editDraftText({ draftKey: key, text: "new" });
+  const record = useDraftStore.getState().drafts[key];
+  let release!: () => void;
+  storage.draftHold = new Promise<void>((done) => {
+    release = done;
+  });
+  const enqueueAgentMessage = vi.fn(async () => {
+    throw new Error("lost response");
+  });
+  const input = {
+    recipient: {
+      serverId: "host",
+      agentId: "chat",
+      workspaceId: "workspace",
+      projectId: "project",
+      projectViewKey: "view",
+      hostLabel: "M5",
+      projectName: "Paseo",
+      title: "Chat",
+      excerpt: "",
+      confidence: 1,
+    },
+    text: "new",
+    itemId: "fast-send",
+    draftVersion: record!.version,
+    draftUpdatedAt: record!.updatedAt,
+    client: { enqueueAgentMessage },
+    outbox: useQueueOutboxStore.getState(),
+    applySnapshot: () => {},
+  };
+  const sending = deliverRoutedPrompt(input).catch((error: Error) => error.message);
+  await new Promise((done) => setTimeout(done, 20));
+  expect(enqueueAgentMessage).not.toHaveBeenCalled();
+  expect(useQueueOutboxStore.getState().entries["fast-send"]).toBeUndefined();
+  release();
+  expect(await sending).toBe("lost response");
+  storage.draftHold = undefined;
+  vi.resetModules();
+  const restarted = (await import("./index")).useQueueOutboxStore;
+  const drafts = (await import("@/stores/draft-store")).useDraftStore;
+  await restarted.persist.rehydrate();
+  await drafts.persist.rehydrate();
+  expect(restarted.getState().entries["fast-send"]).toMatchObject({
+    routingDraftVersion: drafts.getState().drafts[key]?.version,
+    routingDraftUpdatedAt: drafts.getState().drafts[key]?.updatedAt,
+    text: "new",
+  });
+  expect(drafts.getState().getDraftInput(key)?.text).toBe("new");
+  await restarted.getState().removeDurably("fast-send");
+  storage.failWriteKey = "paseo-drafts";
+  await expect(
+    deliverRoutedPrompt({ ...input, itemId: "unsaved-send", outbox: restarted.getState() }),
+  ).rejects.toThrow("checkpoint failed");
+  storage.failWriteKey = undefined;
+  expect(enqueueAgentMessage).toHaveBeenCalledTimes(1);
+  expect(restarted.getState().entries["unsaved-send"]).toBeUndefined();
+  expect(drafts.getState().getDraftInput(key)?.text).toBe("new");
 });
