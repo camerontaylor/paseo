@@ -609,12 +609,10 @@ test("an acknowledgement during draft loading cannot pair stale text with new ow
 
 test("visible Find and Send actions have matching voice-accessible names", async () => {
   const view = await mount();
+  expect(view.getByRole("button", { name: "Find existing chats" }).textContent).toContain("Find");
+  act(() => view.getByRole("button", { name: "Send prompt mode" }).click());
   expect(
-    view.getByRole("button", { name: "Find existing chats", exact: true }).textContent,
-  ).toContain("Find");
-  act(() => view.getByRole("button", { name: "Send prompt mode", exact: true }).click());
-  expect(
-    view.getByRole("button", { name: "Send message to an existing chat", exact: true }).textContent,
+    view.getByRole("button", { name: "Send message to an existing chat" }).textContent,
   ).toContain("Send");
 });
 

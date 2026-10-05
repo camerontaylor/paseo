@@ -858,10 +858,11 @@ describe("queue snapshot acknowledgement", () => {
       items: [{ id: "pushed-routing", text: "continue", createdAt: "2026-01-01T00:00:00.000Z" }],
     };
     const applying = useSessionStore.getState().applyAgentQueueSnapshot("test-server", snapshot);
+    expect(useQueueOutboxStore.getState().entries["pushed-routing"]?.itemId).toBe("pushed-routing");
+    await applying;
     expect(useQueueOutboxStore.getState().acknowledgements["pushed-routing"]).toEqual({
       queued: true,
     });
-    await applying;
     expect(useQueueOutboxStore.getState().entries["pushed-routing"]).toBeUndefined();
     expect(useDraftStore.getState().getDraftInput(SESSION_ROUTING_DRAFT_KEY)?.text ?? "").toBe("");
     await outbox.acknowledge("pushed-routing", snapshot);
