@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,11 +7,17 @@ import { createTestLogger } from "../../../../test-utils/test-logger.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 async function fixture(
   config: Record<string, unknown>,
-  options: { models?: unknown[]; holdConfig?: boolean } = {},
+  options: {
+    models?: unknown[];
+    holdConfig?: boolean;
+    inheritOpenAiApiKey?: boolean;
+    env?: Record<string, string>;
+  } = {},
 ) {
   const dir = await mkdtemp(path.join(tmpdir(), "paseo-search-settings-"));
   dirs.push(dir);
@@ -24,7 +30,14 @@ async function fixture(
     `
     const fs = require('node:fs');
     const readline = require('node:readline');
+    if (process.argv.includes('--version')) {
+      process.stdout.write('codex 0.144.4\\n');
+      process.exit(0);
+    }
     fs.writeFileSync(process.env.PASEO_FIXTURE_REQUESTS+'.pid', String(process.pid));
+    fs.writeFileSync(process.env.PASEO_FIXTURE_REQUESTS+'.env', JSON.stringify({
+      inheritedKeyUnchanged: process.env.OPENAI_API_KEY === 'ambient-unrelated-key'
+    }));
     const config = JSON.parse(process.env.PASEO_FIXTURE_CONFIG);
     const models = JSON.parse(process.env.PASEO_FIXTURE_MODELS);
     readline.createInterface({input:process.stdin}).on('line', line => {
@@ -46,18 +59,23 @@ async function fixture(
     env: {
       CODEX_HOME: dir,
       OPENAI_BASE_URL: "",
-      OPENAI_API_KEY: "",
+      ...(options.inheritOpenAiApiKey ? {} : { OPENAI_API_KEY: "" }),
       CODEX_API_KEY: "",
       PASEO_FIXTURE_CONFIG: JSON.stringify(config),
       PASEO_FIXTURE_MODELS: JSON.stringify(options.models ?? []),
       PASEO_FIXTURE_REQUESTS: requestsFile,
       PASEO_FIXTURE_HOLD: options.holdConfig ? "yes" : "no",
+      ...options.env,
     },
   });
   return {
     client,
     dir,
     pid: async () => Number(await readFile(requestsFile + ".pid", "utf8")),
+    environment: async () =>
+      JSON.parse(await readFile(requestsFile + ".env", "utf8")) as {
+        inheritedKeyUnchanged: boolean;
+      },
     requests: async () =>
       (await readFile(requestsFile, "utf8"))
         .trim()
@@ -67,6 +85,43 @@ async function fixture(
 }
 
 describe("routing-only effective Codex settings", () => {
+  test("an unrelated inherited OpenAI key does not block ChatGPT matching or alter normal provider environment", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "ambient-unrelated-key");
+    const f = await fixture(
+      { model: "gpt-host-default", model_reasoning_effort: "high", model_provider: "openai" },
+      { inheritOpenAiApiKey: true },
+    );
+    expect(await f.client.getSessionSearchSettings()).toEqual({
+      model: "gpt-host-default",
+      effort: "high",
+      codexHome: f.dir,
+    });
+    expect((await f.requests()).map((request) => request.method)).toEqual([
+      "initialize",
+      "initialized",
+      "config/read",
+    ]);
+    expect(await f.environment()).toEqual({ inheritedKeyUnchanged: true });
+    expect(
+      (await f.client.fetchCatalog({ scope: "workspace", cwd: f.dir, force: false })).models,
+    ).toEqual([]);
+    expect(await f.environment()).toEqual({ inheritedKeyUnchanged: true });
+    expect(process.env.OPENAI_API_KEY).toBe("ambient-unrelated-key");
+  });
+  test.each<{ env: Record<string, string> }>([
+    { env: { OPENAI_API_KEY: "explicit-provider-key" } },
+    { env: { CODEX_API_KEY: "explicit-codex-key" } },
+    { env: { OPENAI_BASE_URL: "https://custom.invalid/v1" } },
+  ])(
+    "explicit provider/authentication/endpoint overrides remain unsupported: $env",
+    async ({ env }) => {
+      const f = await fixture({ model: "gpt-host-default" }, { env });
+      await expect(f.client.getSessionSearchSettings()).rejects.toThrow(
+        "GPT matching requires the existing Codex ChatGPT provider",
+      );
+      await expect(f.pid()).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
   test("reads the configured GPT default without discovering instructions, changing config, or creating a thread", async () => {
     const f = await fixture({
       model: "gpt-host-default",
