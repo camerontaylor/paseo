@@ -31,8 +31,9 @@ is required.
 
 Semantic matching uses the enabled built-in Codex provider and the existing ChatGPT file sign-in in
 its exact `CODEX_HOME` (or the provider environment's `HOME/.codex`). It reads the effective saved
-GPT model/reasoning default through `config/read`, using Codex's declared account default only when
-no model is saved. It never substitutes a coding chat's model, shared Git metadata-generation
+GPT model/reasoning default through `config/read`. When no model is saved, it uses only Codex's
+declared account default; missing reasoning effort comes from the selected model's declared default
+when available. It never substitutes a coding chat's model, shared Git metadata-generation
 configuration, Claude, or another provider. All providers remain valid destination sessions.
 Unsupported custom inference endpoints, keychain-only/API-key sign-in, unavailable defaults, expired
 sign-in, and account limits fail clearly; ordinary filtering and the manual recipient picker remain
@@ -46,7 +47,10 @@ This is Codex's backend protocol, not public API-key support for ChatGPT tokens.
 supplied query/candidate context. No native thread or agent runtime is created, so MCP, instructions
 files, hooks, skills, subagents, and coding-session grants cannot enter the matcher. The fixed endpoint
 rejects redirects. Streaming and output sizes are bounded; partial, tool, refusal, malformed, and
-model-mismatched responses fail closed. Successful generation logs the requested and actual response
+model-mismatched responses fail closed. Codex can deliver completed messages in `output_item.done`
+while leaving terminal `response.output` empty. Those messages are accepted only after a completed
+terminal acknowledgement confirms the configured model; text deltas alone are insufficient.
+Successful generation logs the requested and actual response
 model without query, context, or credentials. Schema validation and scoped candidate/evidence
 validation still apply after generation.
 
