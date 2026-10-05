@@ -100,6 +100,15 @@ function canRetryEnqueue(entry: PendingQueueEnqueue, client: QueueOutboxFlushCli
   return features?.sessionSearch === true && features.agentMessageQueue === true;
 }
 
+function getOutboxEntry(
+  input: FlushQueueOutboxInput,
+  itemId: string,
+): PendingQueueEnqueue | undefined {
+  return input.outbox.get
+    ? input.outbox.get(itemId)
+    : input.outbox.list(input.serverId).find((entry) => entry.itemId === itemId);
+}
+
 export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<void> {
   const agents = new Set(input.outbox.list(input.serverId).map((entry) => entry.agentId));
   await Promise.all(
@@ -108,11 +117,7 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
         for (const candidate of input.outbox
           .list(input.serverId)
           .filter((item) => item.agentId === agentId)) {
-          const entry = input.outbox.get
-            ? input.outbox.get(candidate.itemId)
-            : input.outbox
-                .list(input.serverId)
-                .find((pending) => pending.itemId === candidate.itemId);
+          const entry = getOutboxEntry(input, candidate.itemId);
           if (!entry) continue;
           if (entry.routingDispatchHeld && !entry.removalRequested) break;
           if (!canRetryEnqueue(entry, input.client)) continue;
@@ -138,11 +143,7 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
             if (!entry.removalRequested) {
               // A cancellation that raced acknowledgement must survive until the host confirms removal.
               await input.outbox.remove(entry.itemId, true);
-              const latest =
-                input.outbox.get?.(entry.itemId) ??
-                input.outbox
-                  .list(input.serverId)
-                  .find((pending) => pending.itemId === entry.itemId);
+              const latest = getOutboxEntry(input, entry.itemId);
               if (latest?.removalRequested) {
                 snapshot = await removeFromHost();
                 await input.outbox.remove(entry.itemId);

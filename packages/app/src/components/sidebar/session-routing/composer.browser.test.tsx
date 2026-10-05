@@ -1162,7 +1162,7 @@ test("ordinary queue cancellation resolves routing pending without a success rec
     });
   });
   await waitFor(() => expect(view.queryByRole("button", { name: "Retry delivery" })).toBeNull());
-  expect(container.textContent).toContain("canceled");
+  expect(container.textContent).toContain("removed from the queue");
   expect(container.textContent).not.toContain("Routed to");
   expect(container.textContent).not.toContain("Queued for");
   expect(fixture.enqueue).toHaveBeenCalledTimes(1);
@@ -1210,7 +1210,7 @@ test("cold cancellation ownership locks Send without a recipient directory until
     });
   });
   await waitFor(() => expect(view.queryByRole("button", { name: "Retry delivery" })).toBeNull());
-  expect(container.textContent).toContain("canceled");
+  expect(container.textContent).toContain("removed from the queue");
   expect(container.textContent).not.toContain("Routed to");
   expect(container.textContent).not.toContain("Queued for");
   expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");

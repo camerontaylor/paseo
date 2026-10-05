@@ -65,6 +65,10 @@ interface ActiveMatch {
   draftUpdatedAt: number;
 }
 
+function ownsRoutingDelivery(phase: RoutingState["phase"], itemId: string): boolean {
+  return (phase.status === "sending" || phase.status === "pending") && phase.itemId === itemId;
+}
+
 export function SessionRoutingComposer({
   children,
 }: {
@@ -457,13 +461,13 @@ export function SessionRoutingComposer({
         dispatch({ type: "acknowledged", itemId, queued: result.queued });
       } catch (error) {
         const phase = latest.current.state.phase;
-        if ((phase.status !== "sending" && phase.status !== "pending") || phase.itemId !== itemId)
-          return;
+        if (!ownsRoutingDelivery(phase, itemId)) return;
         const message = error instanceof Error ? error.message : t("sidebar.routing.sendFailed");
         const deliveryAcknowledgement = useQueueOutboxStore.getState().acknowledgements[itemId];
         const stored = useQueueOutboxStore.getState().entries[itemId];
-        const rejection = useQueueOutboxStore.getState().rejections[itemId];
-        if (rejection) dispatch({ type: "phase", phase: { status: "error", message: rejection } });
+        const deliveryRejection = useQueueOutboxStore.getState().rejections[itemId];
+        if (deliveryRejection)
+          dispatch({ type: "phase", phase: { status: "error", message: deliveryRejection } });
         else if (deliveryAcknowledgement && !stored?.removalRequested)
           dispatch({ type: "acknowledged", itemId, queued: deliveryAcknowledgement.queued });
         else if (!stored) dispatch({ type: "phase", phase: { status: "error", message } });

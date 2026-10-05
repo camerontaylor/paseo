@@ -11,6 +11,7 @@ const storage = vi.hoisted(() => ({
   outboxHold: undefined as Promise<void> | undefined,
   failRemovalItem: undefined as string | undefined,
   failDispatchMarkerItem: undefined as string | undefined,
+  failRestoredDraftKey: undefined as string | undefined,
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
@@ -22,7 +23,14 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
     setItem: async (key: string, value: string) => {
       const failOnce = key === storage.failOnceKey;
       if (failOnce) storage.failOnceKey = undefined;
-      if (key === "paseo-drafts") await storage.draftHold;
+      if (key === "paseo-drafts") {
+        await storage.draftHold;
+        if (storage.failRestoredDraftKey) {
+          const record = JSON.parse(value).state.drafts[storage.failRestoredDraftKey];
+          if (record?.input.text === "continue" && !record.routingClear)
+            throw new Error("restoration checkpoint failed");
+        }
+      }
       if (key === "paseo-queue-outbox") {
         await storage.outboxHold;
         if (
@@ -1021,7 +1029,7 @@ it("held routing cancellation survives cold reload and completes on a legacy hos
   expect(fixture.enqueueAgentMessage).toHaveBeenCalledTimes(1);
   expect(restarted.useQueueOutboxStore.getState().entries[fixture.input.itemId]).toBeUndefined();
   expect(restarted.useQueueOutboxStore.getState().rejections[fixture.input.itemId]).toContain(
-    "cancel",
+    "removed from the queue",
   );
 });
 
@@ -1106,7 +1114,7 @@ for (const newer of ["original", "identical", "different"] as const) {
       applySnapshot: () => {},
     });
     expect(fixture.useQueueOutboxStore.getState().rejections[fixture.input.itemId]).toContain(
-      "cancel",
+      "removed from the queue",
     );
     await store.acknowledge(fixture.input.itemId, { agentId: "chat", revision: 3, items: [] });
     expect(
@@ -1182,3 +1190,218 @@ it("cold cancellation recovers tentative draft ownership until removal is durabl
     restarted.useQueueOutboxStore.getState().entries[fixture.input.itemId]?.removalRequested,
   ).toBe(true);
 });
+
+it("cancellation during an acknowledgement checkpoint suppresses success and restores the durable original before removal", async () => {
+  const fixture = await routingDispatchFixture("cancel-during-ack");
+  fixture.enqueueAgentMessage.mockRejectedValueOnce(new Error("response lost"));
+  await expect(fixture.deliverRoutedPrompt(fixture.input)).rejects.toThrow("response lost");
+  const store = fixture.useQueueOutboxStore.getState();
+  const entry = store.entries[fixture.input.itemId]!;
+  let release!: () => void;
+  storage.draftHold = new Promise<void>((done) => {
+    release = done;
+  });
+  const acknowledging = store.acknowledge(entry.itemId, {
+    agentId: "chat",
+    revision: 2,
+    items: [],
+  });
+  await vi.waitFor(() =>
+    expect(fixture.useDraftStore.getState().drafts[fixture.key]?.routingClear?.itemId).toBe(
+      entry.itemId,
+    ),
+  );
+  const successes: unknown[] = [];
+  const unsubscribe = fixture.useQueueOutboxStore.subscribe((state) => {
+    if (state.acknowledgements[entry.itemId]) successes.push(state.acknowledgements[entry.itemId]);
+  });
+  const removing = store.requestRemoval(entry);
+  release();
+  try {
+    await acknowledging;
+    await removing;
+    storage.draftHold = undefined;
+    const removeQueuedAgentMessage = vi.fn(async (_agentId: string, itemId: string) => {
+      expect(itemId).toBe(entry.itemId);
+      const persisted = JSON.parse(storage.values.get("paseo-drafts")!).state.drafts[fixture.key];
+      expect(persisted).toMatchObject({
+        input: { text: entry.text },
+        version: fixture.record.version,
+        updatedAt: fixture.record.updatedAt,
+      });
+      return { agentId: "chat", revision: 3, items: [] };
+    });
+    await fixture.flushQueueOutboxForServer({
+      serverId: "host",
+      client: { enqueueAgentMessage: fixture.enqueueAgentMessage, removeQueuedAgentMessage },
+      applySnapshot: () => {},
+    });
+    expect(successes).toEqual([]);
+    expect(removeQueuedAgentMessage).toHaveBeenCalledTimes(1);
+    expect(fixture.useQueueOutboxStore.getState().entries[entry.itemId]).toBeUndefined();
+    expect(fixture.useDraftStore.getState().drafts[fixture.key]).toMatchObject({
+      input: { text: entry.text },
+      version: fixture.record.version,
+      updatedAt: fixture.record.updatedAt,
+    });
+    await expect(
+      fixture.deliverRoutedPrompt({ ...fixture.input, requireExisting: true }),
+    ).rejects.toThrow();
+    expect(fixture.enqueueAgentMessage).toHaveBeenCalledTimes(1);
+  } finally {
+    release();
+    storage.draftHold = undefined;
+    unsubscribe();
+  }
+});
+
+it("failed cancellation restoration retains cold ownership until a strict restoration checkpoint succeeds", async () => {
+  const fixture = await routingDispatchFixture("cancel-restore-failure");
+  fixture.enqueueAgentMessage.mockRejectedValueOnce(new Error("response lost"));
+  await expect(fixture.deliverRoutedPrompt(fixture.input)).rejects.toThrow("response lost");
+  const store = fixture.useQueueOutboxStore.getState();
+  const entry = store.entries[fixture.input.itemId]!;
+  let release!: () => void;
+  storage.draftHold = new Promise<void>((done) => {
+    release = done;
+  });
+  const acknowledging = store
+    .acknowledge(entry.itemId, { agentId: "chat", revision: 2, items: [] })
+    .catch((error: Error) => error.message);
+  await vi.waitFor(() =>
+    expect(fixture.useDraftStore.getState().drafts[fixture.key]?.routingClear?.itemId).toBe(
+      entry.itemId,
+    ),
+  );
+  storage.failRestoredDraftKey = fixture.key;
+  const removing = store.requestRemoval(entry);
+  release();
+  try {
+    expect(await acknowledging).toBe("restoration checkpoint failed");
+    await removing;
+    storage.draftHold = undefined;
+    const client = {
+      enqueueAgentMessage: fixture.enqueueAgentMessage,
+      removeQueuedAgentMessage: vi.fn(async () => ({ agentId: "chat", revision: 3, items: [] })),
+    };
+    await fixture.flushQueueOutboxForServer({ serverId: "host", client, applySnapshot: () => {} });
+    expect(fixture.useQueueOutboxStore.getState().entries[entry.itemId]?.removalRequested).toBe(
+      true,
+    );
+    expect(fixture.useQueueOutboxStore.getState().acknowledgements[entry.itemId]).toBeUndefined();
+    expect(fixture.useQueueOutboxStore.getState().rejections[entry.itemId]).toBeUndefined();
+    await resetPersistedModules();
+    const restarted = await import("./index");
+    const drafts = (await import("@/stores/draft-store")).useDraftStore;
+    await restarted.useQueueOutboxStore.persist.rehydrate();
+    await drafts.persist.rehydrate();
+    expect(drafts.getState().drafts[fixture.key]?.routingClear?.itemId).toBe(entry.itemId);
+    expect(restarted.useQueueOutboxStore.getState().entries[entry.itemId]).toMatchObject({
+      removalRequested: true,
+      routingDraftVersion: fixture.record.version,
+      routingDraftUpdatedAt: fixture.record.updatedAt,
+    });
+    await restarted.flushQueueOutboxForServer({
+      serverId: "host",
+      client,
+      applySnapshot: () => {},
+    });
+    expect(restarted.useQueueOutboxStore.getState().entries[entry.itemId]?.removalRequested).toBe(
+      true,
+    );
+    expect(restarted.useQueueOutboxStore.getState().rejections[entry.itemId]).toBeUndefined();
+    storage.failRestoredDraftKey = undefined;
+    await restarted.flushQueueOutboxForServer({
+      serverId: "host",
+      client,
+      applySnapshot: () => {},
+    });
+    expect(restarted.useQueueOutboxStore.getState().entries[entry.itemId]).toBeUndefined();
+    expect(JSON.parse(storage.values.get("paseo-drafts")!).state.drafts[fixture.key]).toMatchObject(
+      {
+        input: { text: entry.text },
+        version: fixture.record.version,
+        updatedAt: fixture.record.updatedAt,
+      },
+    );
+    expect(fixture.enqueueAgentMessage).toHaveBeenCalledTimes(1);
+  } finally {
+    release();
+    storage.draftHold = undefined;
+    storage.failRestoredDraftKey = undefined;
+  }
+});
+
+for (const newer of ["identical", "different"] as const) {
+  it(`cancellation during acknowledgement preserves a newer ${newer} draft through removal failure and cold reload`, async () => {
+    const fixture = await routingDispatchFixture(`cancel-checkpoint-${newer}`);
+    fixture.enqueueAgentMessage.mockRejectedValueOnce(new Error("response lost"));
+    await expect(fixture.deliverRoutedPrompt(fixture.input)).rejects.toThrow("response lost");
+    const store = fixture.useQueueOutboxStore.getState();
+    const entry = store.entries[fixture.input.itemId]!;
+    let release!: () => void;
+    storage.draftHold = new Promise<void>((done) => {
+      release = done;
+    });
+    const acknowledging = store.acknowledge(entry.itemId, {
+      agentId: "chat",
+      revision: 2,
+      items: [],
+    });
+    await vi.waitFor(() =>
+      expect(fixture.useDraftStore.getState().drafts[fixture.key]?.routingClear?.itemId).toBe(
+        entry.itemId,
+      ),
+    );
+    fixture.useDraftStore.getState().editDraftText({
+      draftKey: fixture.key,
+      text: newer === "identical" ? entry.text : "another prompt",
+    });
+    const newerRecord = fixture.useDraftStore.getState().drafts[fixture.key]!;
+    expect(newerRecord.version).not.toBe(fixture.record.version);
+    const removing = store.requestRemoval(entry);
+    release();
+    try {
+      expect(await acknowledging).toBe(false);
+      await removing;
+      storage.draftHold = undefined;
+      storage.failRemovalItem = entry.itemId;
+      const client = {
+        enqueueAgentMessage: fixture.enqueueAgentMessage,
+        removeQueuedAgentMessage: async () => ({ agentId: "chat", revision: 3, items: [] }),
+      };
+      await fixture.flushQueueOutboxForServer({
+        serverId: "host",
+        client,
+        applySnapshot: () => {},
+      });
+      expect(fixture.useQueueOutboxStore.getState().entries[entry.itemId]?.removalRequested).toBe(
+        true,
+      );
+      expect(fixture.useQueueOutboxStore.getState().acknowledgements[entry.itemId]).toBeUndefined();
+      await resetPersistedModules();
+      const restarted = await import("./index");
+      const drafts = (await import("@/stores/draft-store")).useDraftStore;
+      await restarted.useQueueOutboxStore.persist.rehydrate();
+      await drafts.persist.rehydrate();
+      await restarted.useQueueOutboxStore.getState().recoverRoutingDraft();
+      expect(drafts.getState().drafts[fixture.key]).toEqual(newerRecord);
+      storage.failRemovalItem = undefined;
+      await restarted.flushQueueOutboxForServer({
+        serverId: "host",
+        client,
+        applySnapshot: () => {},
+      });
+      expect(restarted.useQueueOutboxStore.getState().entries[entry.itemId]).toBeUndefined();
+      expect(drafts.getState().drafts[fixture.key]).toEqual(newerRecord);
+      expect(JSON.parse(storage.values.get("paseo-drafts")!).state.drafts[fixture.key]).toEqual(
+        newerRecord,
+      );
+      expect(fixture.enqueueAgentMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      storage.draftHold = undefined;
+      storage.failRemovalItem = undefined;
+    }
+  });
+}

@@ -51,6 +51,7 @@ function sortByCreation(entries: PendingQueueEnqueue[]): PendingQueueEnqueue[] {
 }
 
 const writesInFlight = new Set<string>();
+const cancellationRequested = new Map<string, number>();
 let pendingWrite: Promise<void> = Promise.resolve();
 const persistedStorage = createValidatedPersistStorage(AsyncStorage, PersistedQueueOutboxSchema);
 const durableStorage: typeof persistedStorage = {
@@ -82,6 +83,37 @@ export async function awaitOutboxHydration(): Promise<void> {
   await hydrationInFlight;
   if (!useQueueOutboxStore.persist.hasHydrated())
     throw new Error("Unable to load saved queued messages");
+}
+
+async function checkpointCanceledRoutingDraft(entry: PendingQueueEnqueue): Promise<void> {
+  if (!entry.routingOrigin) return;
+  const { useDraftStore, awaitDraftHydration, flushDraftPersistStorageDurably } =
+    await import("@/stores/draft-store");
+  await awaitDraftHydration();
+  const state = useDraftStore.getState();
+  const draft = state.drafts[SESSION_ROUTING_DRAFT_KEY];
+  const clear = draft?.routingClear;
+  if (
+    draft &&
+    clear?.itemId === entry.itemId &&
+    draft.version === clear.version &&
+    draft.updatedAt === clear.updatedAt &&
+    entry.routingDraftVersion !== undefined &&
+    entry.routingDraftUpdatedAt !== undefined
+  ) {
+    useDraftStore.setState({
+      drafts: {
+        ...state.drafts,
+        [SESSION_ROUTING_DRAFT_KEY]: {
+          input: { ...draft.input, text: entry.text },
+          lifecycle: "active",
+          version: entry.routingDraftVersion,
+          updatedAt: entry.routingDraftUpdatedAt,
+        },
+      },
+    });
+  }
+  await flushDraftPersistStorageDurably();
 }
 
 /**
@@ -136,6 +168,8 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
       },
       getEntry: async (itemId) => {
         await awaitOutboxHydration();
+        if (cancellationRequested.has(itemId))
+          await serializeQueueOperation(JSON.stringify(["routing-ack", itemId]), async () => {});
         return serializeQueueOperation("queue-outbox-mutation", async () => get().entries[itemId]);
       },
       markRoutingDispatched: (itemId) =>
@@ -170,7 +204,7 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
           await awaitOutboxHydration();
           const entry = get().entries[itemId];
           if (!entry) return Boolean(get().acknowledgements[itemId]);
-          if (entry.removalRequested) return false;
+          if (entry.removalRequested || cancellationRequested.has(itemId)) return false;
           if (entry?.routingOrigin) {
             const { useDraftStore, awaitDraftHydration, flushDraftPersistStorageDurably } =
               await import("@/stores/draft-store");
@@ -207,6 +241,10 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
                 }));
               throw error;
             }
+          }
+          if (cancellationRequested.has(itemId)) {
+            await checkpointCanceledRoutingDraft(entry);
+            return false;
           }
           const queued = snapshot.items.some((item) => item.id === itemId);
           set((state) => {
@@ -265,56 +303,65 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
         });
       },
 
-      requestRemoval: (entry) =>
-        serializeQueueOperation(JSON.stringify(["routing-ack", entry.itemId]), () =>
-          serializeQueueOperation("queue-outbox-mutation", async () => {
-            await awaitOutboxHydration();
-            const previous = get().entries[entry.itemId];
-            writesInFlight.add(entry.itemId);
-            set((state) => ({
-              entries: {
-                ...state.entries,
-                [entry.itemId]: { ...(previous ?? entry), removalRequested: true, attempts: 0 },
-              },
-            }));
-            try {
-              await pendingWrite;
-            } catch (error) {
-              set((state) => {
-                const entries = { ...state.entries };
-                if (previous) entries[entry.itemId] = previous;
-                else delete entries[entry.itemId];
-                return { entries };
-              });
-              await pendingWrite.catch(() => {});
-              throw error;
-            } finally {
-              writesInFlight.delete(entry.itemId);
-            }
-          }),
-        ),
+      requestRemoval: (entry) => {
+        cancellationRequested.set(entry.itemId, (cancellationRequested.get(entry.itemId) ?? 0) + 1);
+        const persistRemovalIntent = async () => {
+          await awaitOutboxHydration();
+          const previous = get().entries[entry.itemId];
+          writesInFlight.add(entry.itemId);
+          set({
+            entries: {
+              ...get().entries,
+              [entry.itemId]: { ...(previous ?? entry), removalRequested: true, attempts: 0 },
+            },
+          });
+          try {
+            await pendingWrite;
+          } catch (error) {
+            const entries = { ...get().entries };
+            if (previous) entries[entry.itemId] = previous;
+            else delete entries[entry.itemId];
+            set({ entries });
+            await pendingWrite.catch(() => {});
+            throw error;
+          } finally {
+            writesInFlight.delete(entry.itemId);
+          }
+        };
+        return serializeQueueOperation(JSON.stringify(["routing-ack", entry.itemId]), () =>
+          serializeQueueOperation("queue-outbox-mutation", persistRemovalIntent),
+        ).finally(() => {
+          const remaining = (cancellationRequested.get(entry.itemId) ?? 1) - 1;
+          if (remaining) cancellationRequested.set(entry.itemId, remaining);
+          else cancellationRequested.delete(entry.itemId);
+        });
+      },
 
-      removeDurably: (itemId, preserveRemovalIntent = false) =>
-        serializeQueueOperation("queue-outbox-mutation", async () => {
+      removeDurably: (itemId, preserveRemovalIntent = false) => {
+        const removeEntry = async () => {
           const entry = get().entries[itemId];
           if (!entry || (preserveRemovalIntent && entry.removalRequested)) return;
+          if (entry.removalRequested && !get().acknowledgements[itemId])
+            await checkpointCanceledRoutingDraft(entry);
           get().remove(itemId);
           try {
             await pendingWrite;
           } catch (error) {
-            set((state) => ({ entries: { ...state.entries, [itemId]: entry } }));
+            set({ entries: { ...get().entries, [itemId]: entry } });
             await pendingWrite.catch(() => {});
             throw error;
           }
           if (entry.routingOrigin && entry.removalRequested) {
-            set((state) => {
-              const acknowledgements = { ...state.acknowledgements };
-              delete acknowledgements[itemId];
-              return { acknowledgements };
-            });
-            get().reject(itemId, "Delivery canceled.");
+            const acknowledgements = { ...get().acknowledgements };
+            delete acknowledgements[itemId];
+            set({ acknowledgements });
+            get().reject(itemId, "Prompt removed from the queue.");
           }
-        }),
+        };
+        return serializeQueueOperation(JSON.stringify(["routing-ack", itemId]), () =>
+          serializeQueueOperation("queue-outbox-mutation", removeEntry),
+        );
+      },
 
       bumpAttempts: (itemId) => {
         set((state) => {
@@ -344,6 +391,7 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
         ).filter((entry) => {
           if (
             writesInFlight.has(entry.itemId) ||
+            cancellationRequested.has(entry.itemId) ||
             (entry.routingDispatchHeld && !entry.removalRequested)
           )
             blockedAgents.add(entry.agentId);

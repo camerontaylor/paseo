@@ -54,8 +54,9 @@ item and shows an uncertain delivery state. A failed dispatch-marker write prese
 acknowledgement. Without one, explicit Retry recovers the same item; reloading alone never makes held
 items eligible for reconnect delivery. Background reconnect publishes actual acknowledgements
 or definitive rejections to the composer. A cancellation stays pending until the host confirms
-removal and the device checkpoints it. Completion reports cancellation and preserves the editable
-draft; Retry requires the original uncanceled outbox item and cannot recreate a removed one.
+removal and the device checkpoints it. Cancellation requested during a draft-clear checkpoint
+suppresses success and checkpoints restoration of that owned draft before releasing the outbox.
+A later draft stays intact. Completion reports queue removal and preserves the editable draft; Retry requires the original uncanceled outbox item and cannot recreate a removed one.
 Held enqueue entries still allow durable cancellation on older hosts. Queued for means the host acknowledged an item still in its
 queue; Routed to means the acknowledgement no longer lists it. Neither confirms task completion.
 The composer waits for both persisted drafts and the outbox before enabling Send. Pending recovery
