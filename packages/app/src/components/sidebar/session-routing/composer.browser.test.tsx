@@ -37,6 +37,7 @@ const fixture = vi.hoisted(() => ({
   effects: [] as Array<{ run: () => void | (() => void); cleanup?: () => void; active: boolean }>,
   serverIds: ["host"],
   directory: true,
+  routingSupported: true as boolean | null,
   query: "Where were we working on offline?",
   changeQuery: (_query: string) => {},
   search: vi.fn(),
@@ -86,6 +87,12 @@ vi.mock("@/runtime/host-runtime", () => ({
   getHostRuntimeStore: () => ({
     getClient: () => ({
       getConnectionState: () => ({ status: "connected" }),
+      getLastServerInfoMessage: () =>
+        fixture.routingSupported === null
+          ? null
+          : {
+              features: { sessionSearch: fixture.routingSupported, agentMessageQueue: true },
+            },
       searchSessions: fixture.search,
       enqueueAgentMessage: fixture.enqueue,
     }),
@@ -183,6 +190,7 @@ beforeEach(async () => {
   fixture.open.mockReset();
   fixture.serverIds = ["host"];
   fixture.directory = true;
+  fixture.routingSupported = true;
   queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
   fixture.query = "Where were we working on offline?";
   fixture.search.mockResolvedValue({ results: [result], searchedCount: 1, totalCount: 1 });
@@ -712,6 +720,9 @@ for (const outcome of ["acknowledged", "rejected"] as const) {
         await flushQueueOutboxForServer({
           serverId: "host",
           client: {
+            getLastServerInfoMessage: () => ({
+              features: { sessionSearch: true, agentMessageQueue: true },
+            }),
             enqueueAgentMessage: async () => {
               throw new AgentQueueDestinationChangedError();
             },
@@ -774,6 +785,43 @@ test("cold recovery never adopts a moved chat's new project for retry", async ()
   expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
 });
 
+for (const capability of [false, null] as const) {
+  test(`host capability ${capability} during durable acceptance cannot submit to a downgraded connection`, async () => {
+    const view = await mount();
+    act(() => view.getByTestId("routing-send-mode").click());
+    type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+    const storage = (await import("@react-native-async-storage/async-storage")).default;
+    const setItem = storage.setItem.bind(storage);
+    let release!: () => void;
+    const hold = new Promise<void>((done) => {
+      release = done;
+    });
+    let saving = false;
+    const spy = vi.spyOn(storage, "setItem").mockImplementation(async (key, value) => {
+      if (key === "paseo-queue-outbox") {
+        saving = true;
+        await hold;
+      }
+      return setItem(key, value);
+    });
+    try {
+      act(() => view.getByTestId("routing-submit").click());
+      await waitFor(() => expect(saving).toBe(true));
+      fixture.routingSupported = capability;
+      await act(async () => release());
+      await waitFor(() =>
+        expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).not.toBe("true"),
+      );
+      expect(fixture.enqueue).not.toHaveBeenCalled();
+      expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+      expect(Object.values(useQueueOutboxStore.getState().entries)).toEqual([]);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+}
+
 test("host exclusion during durable outbox acceptance releases an unsent draft safely", async () => {
   const view = await mount();
   act(() => view.getByTestId("routing-send-mode").click());
@@ -800,7 +848,12 @@ test("host exclusion during durable outbox acceptance releases an unsent draft s
     expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
     await flushQueueOutboxForServer({
       serverId: "host",
-      client: { enqueueAgentMessage: fixture.enqueue },
+      client: {
+        getLastServerInfoMessage: () => ({
+          features: { sessionSearch: true, agentMessageQueue: true },
+        }),
+        enqueueAgentMessage: fixture.enqueue,
+      },
       applySnapshot: () => {},
     });
     expect(fixture.enqueue).not.toHaveBeenCalled();
@@ -812,7 +865,12 @@ test("host exclusion during durable outbox acceptance releases an unsent draft s
     expect(Object.values(useQueueOutboxStore.getState().entries)).toEqual([]);
     await flushQueueOutboxForServer({
       serverId: "host",
-      client: { enqueueAgentMessage: fixture.enqueue },
+      client: {
+        getLastServerInfoMessage: () => ({
+          features: { sessionSearch: true, agentMessageQueue: true },
+        }),
+        enqueueAgentMessage: fixture.enqueue,
+      },
       applySnapshot: () => {},
     });
     expect(fixture.enqueue).not.toHaveBeenCalled();
@@ -851,7 +909,12 @@ for (const rejection of ["direct", "reconnect"] as const) {
           await expect(
             flushQueueOutboxForServer({
               serverId: "host",
-              client: { enqueueAgentMessage: fixture.enqueue },
+              client: {
+                getLastServerInfoMessage: () => ({
+                  features: { sessionSearch: true, agentMessageQueue: true },
+                }),
+                enqueueAgentMessage: fixture.enqueue,
+              },
               applySnapshot: () => {},
             }),
           ).rejects.toThrow("durable removal failed");

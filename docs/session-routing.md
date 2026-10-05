@@ -45,7 +45,10 @@ Workspace moves cannot interleave with destination validation and durable new-it
 checks accepted item IDs and durable receipts before that guard, so retries after an accepted send
 remain idempotent even if the destination subsequently moves or is deleted. Pending receipts retain
 uncertain ownership. Fresh device items stay held out of reconnect delivery through draft/outbox
-checkpoints; the current host selection is checked again before the first enqueue attempt. A definitive rejection releases the
+checkpoints; the current host selection and live connection capabilities are checked again before
+the first enqueue attempt. A saved routed item stays pending after a host rollback until that host
+can validate its expected destination again. Ordinary queue items and cancellation remain usable.
+A definitive rejection releases the
 pending submission only after durable outbox removal succeeds and preserves its editable draft; a missing acknowledgement retains the durable
 item and shows an uncertain delivery state. A failed dispatch-marker write preserves a real host
 acknowledgement. Without one, explicit Retry recovers the same item; reloading alone never makes held

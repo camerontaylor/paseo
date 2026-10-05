@@ -123,7 +123,12 @@ it("cannot dispatch an entry while its write is pending or after that write fail
   const enqueueAgentMessage = vi.fn(async () => ({ agentId: "agent", revision: 1, items: [] }));
   await flushQueueOutboxForServer({
     serverId: "server",
-    client: { enqueueAgentMessage },
+    client: {
+      getLastServerInfoMessage: () => ({
+        features: { sessionSearch: true, agentMessageQueue: true },
+      }),
+      enqueueAgentMessage,
+    },
     applySnapshot: () => {},
   });
   expect(enqueueAgentMessage).not.toHaveBeenCalled();
@@ -132,7 +137,12 @@ it("cannot dispatch an entry while its write is pending or after that write fail
   expect(await failed).toBe("storage full");
   await flushQueueOutboxForServer({
     serverId: "server",
-    client: { enqueueAgentMessage },
+    client: {
+      getLastServerInfoMessage: () => ({
+        features: { sessionSearch: true, agentMessageQueue: true },
+      }),
+      enqueueAgentMessage,
+    },
     applySnapshot: () => {},
   });
   expect(enqueueAgentMessage).not.toHaveBeenCalled();
@@ -334,7 +344,12 @@ it("failed routing draft checkpoint retains original ownership through reload an
     }));
     await restarted.flushQueueOutboxForServer({
       serverId: "host",
-      client: { enqueueAgentMessage },
+      client: {
+        getLastServerInfoMessage: () => ({
+          features: { sessionSearch: true, agentMessageQueue: true },
+        }),
+        enqueueAgentMessage,
+      },
       applySnapshot: () => {},
     });
     expect(enqueueAgentMessage).toHaveBeenCalledTimes(1);
@@ -422,7 +437,12 @@ for (const newer of [undefined, "continue", "a different prompt"] as const) {
       }));
       await restarted.flushQueueOutboxForServer({
         serverId: "offline-host",
-        client: { enqueueAgentMessage },
+        client: {
+          getLastServerInfoMessage: () => ({
+            features: { sessionSearch: true, agentMessageQueue: true },
+          }),
+          enqueueAgentMessage,
+        },
         applySnapshot: () => {},
       });
       expect(enqueueAgentMessage).toHaveBeenCalledExactlyOnceWith(
@@ -598,7 +618,12 @@ it("sending within the draft throttle checkpoints ownership before dispatch and 
     itemId: "fast-send",
     draftVersion: record!.version,
     draftUpdatedAt: record!.updatedAt,
-    client: { enqueueAgentMessage },
+    client: {
+      getLastServerInfoMessage: () => ({
+        features: { sessionSearch: true, agentMessageQueue: true },
+      }),
+      enqueueAgentMessage,
+    },
     outbox: useQueueOutboxStore.getState(),
     applySnapshot: () => {},
   };
@@ -665,13 +690,89 @@ async function routingDispatchFixture(itemId: string) {
     itemId,
     draftVersion: record.version,
     draftUpdatedAt: record.updatedAt,
-    client: { enqueueAgentMessage },
+    client: {
+      getLastServerInfoMessage: () => ({
+        features: { sessionSearch: true, agentMessageQueue: true },
+      }),
+      enqueueAgentMessage,
+    },
     outbox: outbox.useQueueOutboxStore.getState(),
     isHostEligible: () => true,
     applySnapshot: () => {},
   };
   return { ...outbox, useDraftStore, key, record, input, enqueueAgentMessage, deliverRoutedPrompt };
 }
+
+it("reconnect capability is checked after cold outbox hydration and preserves the original routing draft", async () => {
+  const fixture = await routingDispatchFixture("rollback-original");
+  await fixture.input.outbox.add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: fixture.input.itemId,
+    text: fixture.input.text,
+    expectedWorkspaceId: "workspace",
+    expectedProjectId: "project",
+    routingOrigin: true,
+    routingDraftVersion: fixture.record.version,
+    routingDraftUpdatedAt: fixture.record.updatedAt,
+    routingDispatchHeld: false,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  await resetPersistedModules();
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  storage.reads.set("paseo-queue-outbox", hold);
+  const restarted = await import("./index");
+  let capable = true;
+  const client = {
+    ...fixture.input.client,
+    getLastServerInfoMessage: () => ({
+      features: { agentMessageQueue: true, sessionSearch: capable },
+    }),
+  };
+  const flushing = restarted.flushQueueOutboxForServer({
+    serverId: "host",
+    client,
+    applySnapshot: () => {},
+  });
+  capable = false;
+  release();
+  storage.reads.delete("paseo-queue-outbox");
+  await flushing;
+  expect(fixture.enqueueAgentMessage).not.toHaveBeenCalled();
+  expect(restarted.useQueueOutboxStore.getState().entries[fixture.input.itemId]).toMatchObject({
+    routingDraftVersion: fixture.record.version,
+    routingDraftUpdatedAt: fixture.record.updatedAt,
+    text: fixture.input.text,
+    expectedWorkspaceId: "workspace",
+    expectedProjectId: "project",
+    attempts: 0,
+  });
+  const { useDraftStore } = await import("@/stores/draft-store");
+  await useDraftStore.persist.rehydrate();
+  expect(useDraftStore.getState().drafts[fixture.key]).toMatchObject({
+    version: fixture.record.version,
+    updatedAt: fixture.record.updatedAt,
+    input: { text: fixture.input.text },
+  });
+  capable = true;
+  await restarted.flushQueueOutboxForServer({ serverId: "host", client, applySnapshot: () => {} });
+  expect(fixture.enqueueAgentMessage).toHaveBeenCalledTimes(1);
+  expect(fixture.enqueueAgentMessage).toHaveBeenCalledWith(
+    expect.objectContaining({
+      itemId: fixture.input.itemId,
+      expectedWorkspaceId: "workspace",
+      expectedProjectId: "project",
+      text: fixture.input.text,
+    }),
+  );
+  expect(restarted.useQueueOutboxStore.getState().entries[fixture.input.itemId]).toBeUndefined();
+  expect(useDraftStore.getState().getDraftInput(fixture.key)?.text ?? "").toBe("");
+});
 
 for (const checkpoint of ["draft", "outbox"] as const) {
   it(`host exclusion while ${checkpoint} storage waits cannot dispatch now or on reconnect`, async () => {

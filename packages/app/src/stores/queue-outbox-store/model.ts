@@ -4,6 +4,7 @@ import {
   AgentAttachmentWireSchema,
   QueuedComposerAttachmentSchema,
   type AgentQueueSnapshot,
+  type ServerInfoStatusPayload,
 } from "@getpaseo/protocol/messages";
 
 /**
@@ -46,6 +47,7 @@ export interface QueueOutboxAccess {
 }
 
 export interface QueueOutboxFlushClient {
+  getLastServerInfoMessage?: () => Pick<ServerInfoStatusPayload, "features"> | null;
   removeQueuedAgentMessage?: (agentId: string, itemId: string) => Promise<AgentQueueSnapshot>;
   enqueueAgentMessage: (input: {
     agentId: string;
@@ -89,6 +91,15 @@ export async function serializeQueueOperation<T>(
   }
 }
 
+function canRetryEnqueue(entry: PendingQueueEnqueue, client: QueueOutboxFlushClient): boolean {
+  if (!entry.routingOrigin || entry.removalRequested) return true;
+  // COMPAT(sessionSearch): added in v0.10.0, remove gate after 2027-04-04.
+  // Older queue handlers discard expected destination IDs. Retain ownership
+  // until this connection can validate them, including after a rollback.
+  const features = client.getLastServerInfoMessage?.()?.features;
+  return features?.sessionSearch === true && features.agentMessageQueue === true;
+}
+
 export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<void> {
   const agents = new Set(input.outbox.list(input.serverId).map((entry) => entry.agentId));
   await Promise.all(
@@ -104,6 +115,7 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
                 .find((pending) => pending.itemId === candidate.itemId);
           if (!entry) continue;
           if (entry.routingDispatchHeld) break;
+          if (!canRetryEnqueue(entry, input.client)) continue;
           try {
             const removeFromHost = async () => {
               if (!input.client.removeQueuedAgentMessage)

@@ -275,7 +275,14 @@ export function SessionRoutingComposer({
       return deliverRoutedPrompt({
         ...input,
         client,
-        isHostEligible: () => latest.current.serverIds.includes(input.recipient.serverId),
+        isHostEligible: () => {
+          const features = client.getLastServerInfoMessage()?.features;
+          return (
+            latest.current.serverIds.includes(input.recipient.serverId) &&
+            features?.sessionSearch === true &&
+            features.agentMessageQueue === true
+          );
+        },
         outbox: useQueueOutboxStore.getState(),
         applySnapshot: (snapshot) =>
           useSessionStore.getState().applyAgentQueueSnapshot(input.recipient.serverId, snapshot),
