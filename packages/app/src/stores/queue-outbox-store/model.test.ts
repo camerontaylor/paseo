@@ -580,3 +580,38 @@ test("a held removal passes the model guard on a legacy host while held enqueue 
   expect(sent).toEqual(["ordinary"]);
   expect([...harness.entries.keys()]).toEqual(["held"]);
 });
+
+test("suppressed acknowledgement stops snapshot replay and cleanup until the original item can retry", async () => {
+  const harness = createOutbox([
+    pendingEntry({ routingOrigin: true }),
+    pendingEntry({ itemId: "next-item", createdAt: 2 }),
+  ]);
+  const sent: string[] = [];
+  const snapshots: AgentQueueSnapshot[] = [];
+  const client = {
+    getLastServerInfoMessage: () => ({
+      features: { sessionSearch: true, agentMessageQueue: true },
+    }),
+    enqueueAgentMessage: async (entry: { itemId: string }) => {
+      sent.push(entry.itemId);
+      return snapshotWith(entry.itemId);
+    },
+  };
+  const input = {
+    serverId: "server-1",
+    outbox: harness.outbox,
+    client,
+    applySnapshot: (snapshot: AgentQueueSnapshot) => {
+      snapshots.push(snapshot);
+    },
+  };
+  await flushQueueOutbox({ ...input, onAcknowledged: () => false });
+  expect(sent).toEqual(["item-1"]);
+  expect(snapshots).toEqual([]);
+  expect(harness.bumped).toEqual([]);
+  expect([...harness.entries.keys()]).toEqual(["item-1", "next-item"]);
+  await flushQueueOutbox({ ...input, onAcknowledged: () => true });
+  expect(sent).toEqual(["item-1", "item-1", "next-item"]);
+  expect(snapshots.map((snapshot) => snapshot.items[0]!.id)).toEqual(["item-1", "next-item"]);
+  expect(harness.entries.size).toBe(0);
+});

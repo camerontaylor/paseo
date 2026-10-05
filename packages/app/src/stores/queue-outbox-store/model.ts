@@ -72,7 +72,7 @@ export interface FlushQueueOutboxInput {
   onAcknowledged?: (
     entry: PendingQueueEnqueue,
     snapshot: AgentQueueSnapshot,
-  ) => void | Promise<void>;
+  ) => boolean | void | Promise<boolean | void>;
 }
 
 const queueOperations = new Map<string, Promise<unknown>>();
@@ -139,8 +139,9 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
                   attachments: entry.attachments,
                   composerAttachments: entry.composerAttachments,
                 });
-            if (!entry.removalRequested) await input.onAcknowledged?.(entry, snapshot);
             if (!entry.removalRequested) {
+              const acknowledged = await input.onAcknowledged?.(entry, snapshot);
+              if (acknowledged === false) break;
               // A cancellation that raced acknowledgement must survive until the host confirms removal.
               await input.outbox.remove(entry.itemId, true);
               const latest = getOutboxEntry(input, entry.itemId);

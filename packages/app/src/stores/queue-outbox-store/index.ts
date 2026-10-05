@@ -430,9 +430,7 @@ export async function flushQueueOutboxForServer(input: {
   await flushQueueOutbox({
     ...input,
     onRejected: (entry, message) => store.reject(entry.itemId, message),
-    onAcknowledged: async (entry, snapshot) => {
-      await store.acknowledge(entry.itemId, snapshot);
-    },
+    onAcknowledged: (entry, snapshot) => store.acknowledge(entry.itemId, snapshot),
     outbox: {
       list: (serverId) => useQueueOutboxStore.getState().entriesForServer(serverId),
       get: (itemId) => useQueueOutboxStore.getState().entries[itemId],

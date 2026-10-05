@@ -1823,12 +1823,15 @@ export const useSessionStore = create<SessionStore>()(
           .filter((entry) => acceptedIds.has(entry.itemId) && !entry.removalRequested);
         if (acknowledged.length > 0) {
           try {
-            await Promise.all(
+            const results = await Promise.all(
               acknowledged.map(async (entry) => {
-                await outbox.acknowledge(entry.itemId, snapshot);
+                const accepted = await outbox.acknowledge(entry.itemId, snapshot);
+                if (!accepted) return false;
                 await outbox.removeDurably(entry.itemId, true);
+                return true;
               }),
             );
+            if (results.includes(false)) return;
           } catch {
             return;
           }

@@ -1431,24 +1431,30 @@ for (const caller of ["pushed snapshot", "background flush"] as const) {
         revision: 3,
         items: [],
       }));
+      const sessions = (await import("../session-store")).useSessionStore;
+      sessions
+        .getState()
+        .initializeSession(
+          "host",
+          null as unknown as Parameters<
+            ReturnType<typeof sessions.getState>["initializeSession"]
+          >[1],
+        );
+      const snapshotApplications: Array<void | Promise<void>> = [];
+      const applySnapshot = vi.fn((incoming: AgentQueueSnapshot) => {
+        const application = sessions.getState().applyAgentQueueSnapshot("host", incoming);
+        snapshotApplications.push(application);
+        return application;
+      });
       let applying: Promise<void> | void;
       if (caller === "pushed snapshot") {
-        const sessions = (await import("../session-store")).useSessionStore;
-        sessions
-          .getState()
-          .initializeSession(
-            "host",
-            null as unknown as Parameters<
-              ReturnType<typeof sessions.getState>["initializeSession"]
-            >[1],
-          );
         applying = sessions.getState().applyAgentQueueSnapshot("host", snapshot);
       } else {
         fixture.enqueueAgentMessage.mockResolvedValueOnce(snapshot);
         applying = fixture.flushQueueOutboxForServer({
           serverId: "host",
           client: { ...fixture.input.client, removeQueuedAgentMessage },
-          applySnapshot: () => {},
+          applySnapshot,
         });
       }
       await vi.waitFor(() =>
@@ -1457,12 +1463,10 @@ for (const caller of ["pushed snapshot", "background flush"] as const) {
         ),
       );
       if (draft !== "original")
-        fixture.useDraftStore
-          .getState()
-          .editDraftText({
-            draftKey: fixture.key,
-            text: draft === "newer identical" ? entry.text : "another prompt",
-          });
+        fixture.useDraftStore.getState().editDraftText({
+          draftKey: fixture.key,
+          text: draft === "newer identical" ? entry.text : "another prompt",
+        });
       const expectedDraft =
         draft === "original"
           ? fixture.record
@@ -1473,6 +1477,11 @@ for (const caller of ["pushed snapshot", "background flush"] as const) {
       try {
         expect(await removing).toBe("checkpoint failed");
         await applying;
+        await Promise.all(snapshotApplications);
+        if (caller === "background flush") expect(applySnapshot).not.toHaveBeenCalled();
+        expect(
+          sessions.getState().sessions.host.queuedMessageRevisions.get("chat"),
+        ).toBeUndefined();
         storage.draftHold = undefined;
         expect(fixture.useQueueOutboxStore.getState().entries[entry.itemId]).toMatchObject({
           itemId: entry.itemId,
