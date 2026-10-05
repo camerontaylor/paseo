@@ -1,3 +1,4 @@
+import { AgentQueueDestinationChangedError } from "@getpaseo/client/internal/daemon-client";
 import { z } from "zod";
 import {
   AgentAttachmentWireSchema,
@@ -13,6 +14,11 @@ import {
 export const PendingQueueEnqueueSchema = z.object({
   serverId: z.string(),
   agentId: z.string(),
+  expectedWorkspaceId: z.string().optional(),
+  expectedProjectId: z.string().optional(),
+  routingOrigin: z.boolean().optional(),
+  routingDraftUpdatedAt: z.number().nonnegative().optional(),
+  routingDraftVersion: z.number().int().nonnegative().optional(),
   itemId: z.string(),
   text: z.string(),
   images: z.array(z.object({ data: z.string(), mimeType: z.string() })),
@@ -42,6 +48,8 @@ export interface QueueOutboxFlushClient {
   removeQueuedAgentMessage?: (agentId: string, itemId: string) => Promise<AgentQueueSnapshot>;
   enqueueAgentMessage: (input: {
     agentId: string;
+    expectedWorkspaceId?: string;
+    expectedProjectId?: string;
     itemId: string;
     text: string;
     images?: Array<{ data: string; mimeType: string }>;
@@ -57,6 +65,11 @@ export interface FlushQueueOutboxInput {
   applySnapshot: (snapshot: AgentQueueSnapshot) => void;
   /** Called once when an entry first reaches the retry alert threshold. */
   onRetryLimit?: (entry: PendingQueueEnqueue) => void;
+  onRejected?: (entry: PendingQueueEnqueue, message: string) => void;
+  onAcknowledged?: (
+    entry: PendingQueueEnqueue,
+    snapshot: AgentQueueSnapshot,
+  ) => void | Promise<void>;
 }
 
 const queueOperations = new Map<string, Promise<unknown>>();
@@ -99,12 +112,15 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
               ? await removeFromHost()
               : await input.client.enqueueAgentMessage({
                   agentId: entry.agentId,
+                  expectedWorkspaceId: entry.expectedWorkspaceId,
+                  expectedProjectId: entry.expectedProjectId,
                   itemId: entry.itemId,
                   text: entry.text,
                   images: entry.images,
                   attachments: entry.attachments,
                   composerAttachments: entry.composerAttachments,
                 });
+            if (!entry.removalRequested) await input.onAcknowledged?.(entry, snapshot);
             if (!entry.removalRequested) {
               // A cancellation that raced acknowledgement must survive until the host confirms removal.
               await input.outbox.remove(entry.itemId, true);
@@ -121,7 +137,12 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
               await input.outbox.remove(entry.itemId);
             }
             input.applySnapshot(snapshot);
-          } catch {
+          } catch (error) {
+            if (!entry.removalRequested && error instanceof AgentQueueDestinationChangedError) {
+              await input.outbox.remove(entry.itemId);
+              input.onRejected?.(entry, error.message);
+              continue;
+            }
             await input.outbox.bumpAttempts(entry.itemId);
             if (entry.attempts + 1 === QUEUE_OUTBOX_MAX_ATTEMPTS) input.onRetryLimit?.(entry);
             break;

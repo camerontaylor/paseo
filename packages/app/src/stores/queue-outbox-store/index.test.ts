@@ -138,3 +138,34 @@ it("keeps durable entries for other agents eligible during a pending write", asy
   await pending;
   storage.hold = undefined;
 });
+
+it("late routing acknowledgement cannot clear a new identical draft after ownership changes", async () => {
+  storage.hold = undefined;
+  const { useQueueOutboxStore } = await import("./index");
+  const { useDraftStore } = await import("@/stores/draft-store");
+  const { SESSION_ROUTING_DRAFT_KEY } = await import("@/stores/draft-keys");
+  await useQueueOutboxStore.persist.rehydrate();
+  await useDraftStore.persist.rehydrate();
+  const drafts = useDraftStore.getState();
+  drafts.editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
+  const version = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY]?.version;
+  await useQueueOutboxStore.getState().add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "old-routing",
+    text: "continue",
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+    routingOrigin: true,
+    routingDraftVersion: version,
+    routingDraftUpdatedAt: useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY]?.updatedAt,
+  });
+  drafts.editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "" });
+  drafts.editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
+  await useQueueOutboxStore
+    .getState()
+    .acknowledge("old-routing", { agentId: "chat", revision: 1, items: [] });
+  expect(useDraftStore.getState().getDraftInput(SESSION_ROUTING_DRAFT_KEY)?.text).toBe("continue");
+  expect(useQueueOutboxStore.getState().acknowledgements["old-routing"]).toEqual({ queued: false });
+});

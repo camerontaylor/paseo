@@ -31,6 +31,7 @@ import {
   SIDEBAR_RESIZE_FAIL_OFFSET,
 } from "@/components/sidebar-resize-handle-layout";
 import { HostPicker } from "@/components/hosts/host-picker";
+import { SessionRoutingComposer } from "@/components/sidebar/session-routing/composer";
 import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/display-preferences/menu";
 import {
   EditingTextInput as TextInput,
@@ -864,62 +865,67 @@ function SidebarSearchControls() {
   useEffect(() => {
     if (!searchQuery && searchInputRef.current?.getText()) searchInputRef.current.reset();
   }, [searchQuery]);
-  return (
-    <View style={styles.sidebarSearchControls}>
-      <View style={styles.sidebarSearchField}>
-        <Search size={15} color={theme.colors.foregroundMuted} />
-        <TextInput
-          ref={searchInputRef}
-          initialValue={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder={t("sidebar.filterSidebar.placeholder")}
-          placeholderTextColor={theme.colors.foregroundMuted}
-          accessibilityLabel={t("sidebar.filterSidebar.placeholder")}
-          autoCorrect={false}
-          autoCapitalize="none"
-          returnKeyType="search"
-          testID="sidebar-title-project-filter"
-          style={styles.sidebarSearchInput}
-        />
-        {searchQuery ? (
-          <Pressable
-            onPress={clearSearch}
+  const renderFindField = useCallback(
+    (submit: () => void) => (
+      <View style={styles.sidebarSearchControls}>
+        <View style={styles.sidebarSearchField}>
+          <Search size={15} color={theme.colors.foregroundMuted} />
+          <TextInput
+            ref={searchInputRef}
+            initialValue={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder={t("sidebar.filterSidebar.placeholder")}
+            placeholderTextColor={theme.colors.foregroundMuted}
+            accessibilityLabel={t("sidebar.filterSidebar.placeholder")}
+            autoCorrect={false}
+            autoCapitalize="none"
+            returnKeyType="search"
+            onSubmitEditing={submit}
+            testID="sidebar-title-project-filter"
+            style={styles.sidebarSearchInput}
+          />
+          {searchQuery ? (
+            <Pressable
+              onPress={clearSearch}
+              accessibilityRole="button"
+              accessibilityLabel={t("sidebar.filterSidebar.clear")}
+              testID="sidebar-title-project-filter-clear"
+            >
+              <X size={14} color={theme.colors.foregroundMuted} />
+            </Pressable>
+          ) : null}
+        </View>
+        <DropdownMenu compactMode="sheet">
+          <DropdownMenuTrigger
+            style={styles.sidebarSortTrigger}
             accessibilityRole="button"
-            accessibilityLabel={t("sidebar.filterSidebar.clear")}
-            testID="sidebar-title-project-filter-clear"
+            accessibilityLabel={t("sidebar.filterSidebar.sortBy", {
+              value: t(`sidebar.filterSidebar.sort.${sortMode}`),
+            })}
+            testID="sidebar-sort-trigger"
           >
-            <X size={14} color={theme.colors.foregroundMuted} />
-          </Pressable>
-        ) : null}
+            <ArrowDownUp size={14} color={theme.colors.foregroundMuted} />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            width={210}
+            sheetTitle={t("sidebar.filterSidebar.sortHeading")}
+          >
+            {SIDEBAR_SORT_MODES.map((mode) => (
+              <SidebarSortItem
+                key={mode}
+                mode={mode}
+                selected={sortMode === mode}
+                onSelectMode={setSortMode}
+              />
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </View>
-      <DropdownMenu compactMode="sheet">
-        <DropdownMenuTrigger
-          style={styles.sidebarSortTrigger}
-          accessibilityRole="button"
-          accessibilityLabel={t("sidebar.filterSidebar.sortBy", {
-            value: t(`sidebar.filterSidebar.sort.${sortMode}`),
-          })}
-          testID="sidebar-sort-trigger"
-        >
-          <ArrowDownUp size={14} color={theme.colors.foregroundMuted} />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          width={210}
-          sheetTitle={t("sidebar.filterSidebar.sortHeading")}
-        >
-          {SIDEBAR_SORT_MODES.map((mode) => (
-            <SidebarSortItem
-              key={mode}
-              mode={mode}
-              selected={sortMode === mode}
-              onSelectMode={setSortMode}
-            />
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </View>
+    ),
+    [theme, searchQuery, setSearchQuery, clearSearch, sortMode, setSortMode, t],
   );
+  return <SessionRoutingComposer>{renderFindField}</SessionRoutingComposer>;
 }
 
 function SidebarSortItem({

@@ -136,6 +136,45 @@ describe("AgentQueueService", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  test("destination archival after a completed send preserves its durable retry receipt", async () => {
+    const receipts = new MessageReceipts(join(dir, "route-receipts"));
+    harness.service.setMessageReceipts(receipts);
+    const input = { agentId: AGENT_ID, itemId: "accepted-routing", text: "continue" };
+    await harness.service.enqueue(input);
+    await harness.service.flushDrains();
+    expect(await receipts.get(AGENT_ID, input.itemId)).toBe("completed");
+    const retry = await harness.service.enqueue({
+      ...input,
+      validateDestination: async () => {
+        throw new Error("session_route_destination_changed");
+      },
+    });
+    expect(retry.items).toEqual([]);
+    expect(harness.sent).toHaveLength(1);
+  });
+
+  test("destination guards reject new enqueues but cannot reject an already accepted retry", async () => {
+    harness.agents.lifecycle = "running";
+    const input = { agentId: AGENT_ID, itemId: "routed", text: "continue" };
+    await expect(
+      harness.service.enqueue({
+        ...input,
+        validateDestination: async () => {
+          throw new Error("session_route_destination_changed");
+        },
+      }),
+    ).rejects.toThrow("session_route_destination_changed");
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+    await harness.service.enqueue(input);
+    const retry = await harness.service.enqueue({
+      ...input,
+      validateDestination: async () => {
+        throw new Error("session_route_destination_changed");
+      },
+    });
+    expect(retry.items.map((item) => item.id)).toEqual(["routed"]);
+  });
+
   test("broadcasts the queue to subscribers when an item is enqueued while the agent is busy", async () => {
     harness.agents.lifecycle = "running";
 

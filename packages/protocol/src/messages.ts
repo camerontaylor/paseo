@@ -2606,6 +2606,36 @@ export const QueuedAgentMessageSchema = z.object({
   createdAt: z.string(),
 });
 
+export const SessionSearchResultSchema = z.object({
+  agentId: z.string(),
+  workspaceId: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  title: z.string(),
+  excerpt: z.string(),
+  confidence: z.number().min(0).max(1),
+});
+
+export const SessionSearchRequestSchema = z.object({
+  type: z.literal("session.search.request"),
+  requestId: z.string(),
+  query: z.string().min(1).max(16000),
+  workspaceIds: z.array(z.string()).max(1000),
+});
+
+export const SessionSearchResponseSchema = z.object({
+  type: z.literal("session.search.response"),
+  payload: z.object({
+    requestId: z.string(),
+    results: z.array(SessionSearchResultSchema),
+    searchedCount: z.number().int().nonnegative(),
+    totalCount: z.number().int().nonnegative(),
+    error: z.string().nullable(),
+  }),
+});
+
+export type SessionSearchResult = z.infer<typeof SessionSearchResultSchema>;
+
 export const AgentQueueSnapshotSchema = z.object({
   agentId: z.string(),
   /** Increments on every mutation so clients can drop a stale broadcast. */
@@ -2617,6 +2647,8 @@ export const AgentQueueEnqueueRequestSchema = z.object({
   type: z.literal("agent.queue.enqueue.request"),
   requestId: z.string(),
   agentId: z.string(),
+  expectedWorkspaceId: z.string().optional(),
+  expectedProjectId: z.string().optional(),
   /** Client-generated so the optimistic local item and the stored item share an id. */
   itemId: z.string(),
   text: z.string(),
@@ -3627,6 +3659,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentDetachRequestMessageSchema,
   AgentArtifactsScanRequestMessageSchema,
   AgentRewindRequestMessageSchema,
+  SessionSearchRequestSchema,
   AgentQueueEnqueueRequestSchema,
   AgentQueueRemoveRequestSchema,
   AgentQueueEditRequestSchema,
@@ -4002,6 +4035,8 @@ export const ServerInfoStatusPayloadSchema = z
         agentTimelinePromptIndex: z.boolean().optional(),
         // COMPAT(agentHistorySearch): added in v0.3.0, remove gate after 2027-02-07.
         agentHistorySearch: z.boolean().optional(),
+        // COMPAT(sessionSearch): added in v0.10.0, remove gate after 2027-04-04.
+        sessionSearch: z.boolean().optional(),
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: z.boolean().optional(),
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
@@ -7297,6 +7332,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentDetachResponseMessageSchema,
   AgentArtifactsScanResponseMessageSchema,
   AgentRewindResponseMessageSchema,
+  SessionSearchResponseSchema,
   AgentQueueEnqueueResponseSchema,
   AgentQueueRemoveResponseSchema,
   AgentQueueEditResponseSchema,

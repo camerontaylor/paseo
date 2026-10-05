@@ -5,6 +5,8 @@ import { z } from "zod";
 import type { AgentQueueSnapshot } from "@getpaseo/protocol/messages";
 
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
+import { useDraftStore, flushDraftPersistStorage } from "@/stores/draft-store";
+import { SESSION_ROUTING_DRAFT_KEY } from "@/stores/draft-keys";
 import {
   flushQueueOutbox,
   PendingQueueEnqueueSchema,
@@ -26,6 +28,10 @@ const PersistedQueueOutboxSchema = z.object({
 type PersistedQueueOutbox = z.infer<typeof PersistedQueueOutboxSchema>;
 
 interface QueueOutboxActions {
+  rejections: Record<string, string>;
+  reject: (itemId: string, message: string) => void;
+  acknowledgements: Record<string, { queued: boolean }>;
+  acknowledge: (itemId: string, snapshot: AgentQueueSnapshot) => Promise<void>;
   add: (entry: Omit<PendingQueueEnqueue, "createdAt" | "attempts">) => Promise<void>;
   remove: (itemId: string) => void;
   removeDurably: (itemId: string, preserveRemovalIntent?: boolean) => Promise<void>;
@@ -85,6 +91,33 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
   persist(
     (set, get) => ({
       entries: {},
+      rejections: {},
+      reject: (itemId, message) =>
+        set((state) => ({
+          rejections: {
+            ...Object.fromEntries(Object.entries(state.rejections).slice(-255)),
+            [itemId]: message,
+          },
+        })),
+      acknowledgements: {},
+      acknowledge: async (itemId, snapshot) => {
+        const entry = get().entries[itemId];
+        const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+        if (
+          entry?.routingOrigin &&
+          draft?.version === entry.routingDraftVersion &&
+          draft?.updatedAt === entry.routingDraftUpdatedAt
+        ) {
+          useDraftStore.getState().editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "" });
+          await flushDraftPersistStorage();
+        }
+        set((state) => {
+          const kept = Object.entries(state.acknowledgements).slice(-255);
+          const acknowledgements = Object.fromEntries(kept);
+          acknowledgements[itemId] = { queued: snapshot.items.some((item) => item.id === itemId) };
+          return { acknowledgements };
+        });
+      },
 
       add: async (entry) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
@@ -215,6 +248,8 @@ export async function flushQueueOutboxForServer(input: {
   const store = useQueueOutboxStore.getState();
   await flushQueueOutbox({
     ...input,
+    onRejected: (entry, message) => store.reject(entry.itemId, message),
+    onAcknowledged: (entry, snapshot) => store.acknowledge(entry.itemId, snapshot),
     outbox: {
       list: (serverId) => useQueueOutboxStore.getState().entriesForServer(serverId),
       get: (itemId) => useQueueOutboxStore.getState().entries[itemId],

@@ -1,3 +1,4 @@
+import { AgentQueueDestinationChangedError } from "@getpaseo/client/internal/daemon-client";
 import { describe, expect, test } from "vitest";
 
 import type { AgentQueueSnapshot } from "@getpaseo/protocol/messages";
@@ -355,4 +356,60 @@ test("cancelling B while A awaits acknowledgement dispatches only B removal", as
   expect(operations).toEqual(["enqueue:A", "remove:B"]);
   expect([...harness.entries]).toEqual([]);
   expect(applied.map((snapshot) => snapshot.items.map((item) => item.id))).toEqual([["A"], ["A"]]);
+});
+
+test("reconnect destination rejection returns editable ownership and never acknowledges", async () => {
+  const harness = createOutbox([
+    pendingEntry({
+      routingOrigin: true,
+      expectedWorkspaceId: "workspace",
+      expectedProjectId: "project",
+      routingDraftVersion: 4,
+    }),
+  ]);
+  const rejected: string[] = [];
+  const acknowledgements: string[] = [];
+  await flushQueueOutbox({
+    serverId: "server-1",
+    outbox: harness.outbox,
+    client: {
+      enqueueAgentMessage: async (input) => {
+        expect(input).toMatchObject({
+          expectedWorkspaceId: "workspace",
+          expectedProjectId: "project",
+        });
+        throw new AgentQueueDestinationChangedError();
+      },
+    },
+    applySnapshot: () => {
+      throw new Error("No acknowledgement expected");
+    },
+    onAcknowledged: (entry) => {
+      acknowledgements.push(entry.itemId);
+    },
+    onRejected: (entry) => {
+      rejected.push(entry.itemId);
+    },
+  });
+  expect(rejected).toEqual(["item-1"]);
+  expect(acknowledgements).toEqual([]);
+  expect(harness.entries.size).toBe(0);
+  expect(harness.bumped).toEqual([]);
+});
+test("background acknowledgement is published before removing a durable routing entry", async () => {
+  const harness = createOutbox([pendingEntry({ routingOrigin: true })]);
+  let acknowledged = false;
+  await flushQueueOutbox({
+    serverId: "server-1",
+    outbox: harness.outbox,
+    client: { enqueueAgentMessage: async () => snapshotWith("item-1") },
+    applySnapshot: () => {},
+    onAcknowledged: (entry, snapshot) => {
+      expect(harness.entries.has(entry.itemId)).toBe(true);
+      expect(snapshot.items[0]?.id).toBe(entry.itemId);
+      acknowledged = true;
+    },
+  });
+  expect(acknowledged).toBe(true);
+  expect(harness.entries.size).toBe(0);
 });

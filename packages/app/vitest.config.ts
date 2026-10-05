@@ -78,6 +78,8 @@ export default defineConfig({
       "react-native-gesture-handler > invariant",
     ],
     exclude: [
+      "expo-router",
+      "expo-modules-core",
       "react-native-reanimated",
       "react-native-gesture-handler",
       "react-native-keyboard-controller",
