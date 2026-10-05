@@ -483,6 +483,7 @@ it("recovery waits for an active acknowledgement and cannot restore its cleared 
       .recoverRoutingDraft()
       .then(() => {
         recovered = true;
+        return undefined;
       });
     await new Promise((done) => setTimeout(done, 10));
     expect(recovered).toBe(false);
