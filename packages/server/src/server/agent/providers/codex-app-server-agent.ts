@@ -52,6 +52,7 @@ import { z } from "zod";
 import { renderPromptAttachmentAsText } from "../prompt-attachments.js";
 import { composeSystemPromptParts } from "../system-prompt.js";
 import { curateAgentActivity } from "../activity-curator.js";
+import type { CodexSessionSearchSettings } from "./codex/session-search-generation.js";
 import { CodexAsyncQuestions, codexAsyncQuestionToTimeline } from "./codex/async-questions.js";
 import {
   mapCodexToolCallEnvelope,
@@ -7012,6 +7013,54 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 }
 
+const CodexSessionSearchConfigSchema = z.object({
+  config: z.object({
+    model: z.string().nullish(),
+    model_reasoning_effort: z.string().nullish(),
+    model_provider: z.literal("openai").nullish(),
+    cli_auth_credentials_store: z.enum(["file", "auto"]).nullish(),
+    model_providers: z
+      .object({
+        openai: z
+          .object({
+            base_url: z.null().optional(),
+            auth: z.null().optional(),
+            env_key: z.null().optional(),
+            http_headers: z.null().optional(),
+          })
+          .nullish(),
+      })
+      .nullish(),
+  }),
+});
+
+async function readCodexSessionSearchDefaults(
+  client: CodexAppServerClient,
+): Promise<Pick<CodexSessionSearchSettings, "model" | "effort">> {
+  const parsed = CodexSessionSearchConfigSchema.safeParse(
+    await client.request("config/read", { includeLayers: false }),
+  );
+  if (!parsed.success)
+    throw new Error(
+      "GPT matching requires default Codex ChatGPT settings and file sign-in; custom providers/keychain are unsupported",
+    );
+  const config = parsed.data.config;
+  let model = normalizeCodexModelId(config.model ?? undefined);
+  let thinkingOptionId = normalizeCodexThinkingOptionId(config.model_reasoning_effort);
+  if (!model || !thinkingOptionId) {
+    const models =
+      CodexModelListResponseSchema.parse(await client.request("model/list", {})).data ?? [];
+    const selected = model
+      ? models.find((entry) => entry.id === model || entry.model === model)
+      : models.find((entry) => entry.isDefault);
+    model ??= selected?.model ?? selected?.id;
+    thinkingOptionId ??= normalizeCodexThinkingOptionId(selected?.defaultReasoningEffort);
+  }
+  if (!model?.startsWith("gpt-"))
+    throw new Error("GPT matching has no configured default GPT model");
+  return { model, effort: thinkingOptionId };
+}
+
 export class CodexAppServerAgentClient implements AgentClient {
   readonly provider = CODEX_PROVIDER;
   readonly capabilities = CODEX_APP_SERVER_CAPABILITIES;
@@ -7321,6 +7370,51 @@ export class CodexAppServerAgentClient implements AgentClient {
     } finally {
       context?.signal.removeEventListener("abort", handleAbort);
       await dispose();
+    }
+  }
+
+  /** Read the effective default without creating/resuming a native thread. */
+  async getSessionSearchSettings(signal?: AbortSignal): Promise<CodexSessionSearchSettings> {
+    signal?.throwIfAborted();
+    const env = createProviderEnv({ runtimeSettings: this.runtimeSettings });
+    if (
+      this.customProviderConfig() ||
+      env.OPENAI_BASE_URL ||
+      env.OPENAI_API_KEY ||
+      env.CODEX_API_KEY
+    ) {
+      throw new Error("GPT matching requires the existing Codex ChatGPT provider");
+    }
+    const child = await this.spawnAppServer();
+    const client = new CodexAppServerClient(child, this.logger);
+    const abort = () => void client.dispose().catch(() => undefined);
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      signal?.throwIfAborted();
+      await client.request("initialize", buildCodexAppServerInitializeParams());
+      client.notify("initialized", {});
+      const defaults = await readCodexSessionSearchDefaults(client);
+      signal?.throwIfAborted();
+      return {
+        model: defaults.model,
+        effort: defaults.effort,
+        codexHome: env.CODEX_HOME || path.join(env.HOME || os.homedir(), ".codex"),
+      };
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      if (
+        error instanceof Error &&
+        (error.message.startsWith("GPT matching") ||
+          error.message.startsWith("Codex has no") ||
+          error.message === "Codex matching config is unavailable")
+      )
+        throw error;
+      // RPC errors may embed private config; omit the raw cause at this boundary.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error("GPT matching could not read existing Codex settings");
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      await client.dispose();
     }
   }
 

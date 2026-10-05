@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Logger } from "pino";
 import pLimit, { type LimitFunction } from "p-limit";
 
+import { CodexAppServerAgentClient } from "./providers/codex-app-server-agent.js";
 import { expandTilde } from "../../utils/path.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
 import {
@@ -459,6 +460,18 @@ export class ProviderSnapshotManager {
       throw new Error(`Provider ${input.provider} is not configured`);
     }
     return entry;
+  }
+
+  async getCodexSessionSearchSettings(signal?: AbortSignal) {
+    const definition = this.requireProvider("codex");
+    if (!this.generation.providerStates.get("codex")?.initial.entry.enabled) {
+      throw new Error("GPT matching requires an enabled Codex provider");
+    }
+    const client = this.ensureClient("codex", definition);
+    if (!(client instanceof CodexAppServerAgentClient)) {
+      throw new Error("GPT matching requires the built-in Codex ChatGPT provider");
+    }
+    return client.getSessionSearchSettings(signal);
   }
 
   async validateAgentConfiguration(

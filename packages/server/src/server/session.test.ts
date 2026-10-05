@@ -332,6 +332,7 @@ interface SessionForTestOptions {
   pluginRuntime?: SessionOptions["pluginRuntime"];
   orchestrationSkills?: SessionOptions["orchestrationSkills"];
   workspaceLabelService?: WorkspaceLabelService;
+  metadataGeneration?: { providers: Array<{ provider: string; model?: string }> };
 }
 
 function createSessionForTest(options: SessionForTestOptions = {}): Session {
@@ -420,6 +421,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
       get: vi.fn(() => ({
         mcp: { injectIntoAgents: false },
         providers: {},
+        metadataGeneration: options.metadataGeneration,
       })),
       onChange: vi.fn(() => () => {}),
     }),
@@ -5809,4 +5811,65 @@ test("provider snapshots preserve versionless visibility while capabilities upda
     "plugin-provider",
   ]);
   expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
+});
+
+test("session Find uses only Codex matching despite Claude metadata configuration and never sends", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const providers = createProviderSnapshotManagerStub();
+  let settingsReads = 0;
+  providers.manager.getCodexSessionSearchSettings = async () => {
+    settingsReads++;
+    throw new Error("GPT matching fixture unavailable");
+  };
+  const project = createProjectRecord("/fixture/search");
+  const workspace = {
+    workspaceId: "search-workspace",
+    projectId: project.projectId,
+    cwd: project.rootPath,
+    kind: "local_checkout" as const,
+    displayName: "Search fixture",
+    archivedAt: null,
+  };
+  const send = vi.fn();
+  const session = createSessionForTest({
+    messages,
+    providerSnapshotManager: providers.manager,
+    metadataGeneration: { providers: [{ provider: "claude", model: "haiku" }] },
+    agentStorage: {
+      list: async () => [
+        createStoredAgentRecord({
+          id: "search-agent",
+          title: "Existing search chat",
+          workspaceId: workspace.workspaceId,
+        }),
+      ],
+    },
+    agentManager: {
+      readSessionSearchText: async () => ["Existing fixture context"],
+      createAgent: send,
+      sendMessage: send,
+    },
+    workspaceRegistry: { get: vi.fn(), list: vi.fn(async () => [workspace]) },
+    projectRegistry: { list: async () => [project] },
+  });
+  await session.handleMessage({
+    type: "session.search.request",
+    requestId: "gpt-only-search",
+    query: "send this to the existing search chat",
+    workspaceIds: [workspace.workspaceId],
+  });
+  expect(settingsReads).toBe(1);
+  expect(send).not.toHaveBeenCalled();
+  expect(messages).toEqual([
+    {
+      type: "session.search.response",
+      payload: {
+        requestId: "gpt-only-search",
+        results: [],
+        searchedCount: 0,
+        totalCount: 0,
+        error: "GPT matching fixture unavailable",
+      },
+    },
+  ]);
 });
