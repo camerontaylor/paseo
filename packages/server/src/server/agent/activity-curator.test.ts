@@ -354,6 +354,38 @@ second line'`,
     expect(result.attachment.text).toContain("[Assistant] Done.");
   });
 
+  it.each(["messageId", "cursor"] as const)(
+    "includes current context when forking the latest response by %s",
+    (boundaryKind) => {
+      const result = buildAgentForkContextAttachment({
+        boundaryMessageId: boundaryKind === "messageId" ? "assistant-1" : null,
+        cursorBoundary:
+          boundaryKind === "cursor"
+            ? { timelineEpoch: "timeline-1", cursor: { epoch: "timeline-1", seq: 3 } }
+            : null,
+        rows: [
+          row(1, { type: "user_message", text: "Run it", messageId: "user-1" }),
+          row(2, toolCallItem({ callId: "terminal-1", name: "terminal", status: "running" })),
+          row(3, { type: "assistant_message", text: "Latest response.", messageId: "assistant-1" }),
+          row(
+            4,
+            toolCallItem({
+              callId: "terminal-1",
+              name: "terminal",
+              status: "completed",
+              detail: { type: "plain_text", label: "Updated tool result" },
+            }),
+          ),
+          row(5, { type: "user_message", text: "Follow-up prompt", messageId: "user-2" }),
+        ],
+      });
+      expect(result.itemCount).toBe(4);
+      expect(result.attachment.text).toContain("[Assistant] Latest response.");
+      expect(result.attachment.text).toContain("Updated tool result");
+      expect(result.attachment.text).toContain("[User] Follow-up prompt");
+    },
+  );
+
   it("rejects a checkpoint whose projected tool state changed later", () => {
     expect(() =>
       buildAgentForkContextAttachment({
@@ -389,6 +421,7 @@ second line'`,
               },
             }),
           ),
+          row(5, { type: "assistant_message", text: "Later response.", messageId: "assistant-2" }),
         ],
       }),
     ).toThrow("Fork from a later completed response");

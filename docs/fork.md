@@ -75,6 +75,11 @@ Commits are the fork commits that built the feature (`git show --stat <sha>` for
 - Wires into: `agent-stream/view.tsx`, `panels/agent-panel.tsx`, `hooks/use-fork-agent.ts`, `lib/overlay-root.ts`, and English action labels.
 - Desktop selections can quote into the source draft or open a transcript-backed draft in the ordinary side pane. The toolbar receives overlay keys without taking focus from the browser selection or composer.
 
+### Fork from the latest response
+
+- Wires into: `packages/server/src/server/agent/activity-curator.ts` and its existing test suite.
+- Latest-response forks include current context; see [durable item anchors](timeline-sync.md#durable-item-anchors).
+
 ### Responsive browser preview scale
 
 - Wires into: `packages/app/src/desktop/browser/pane/index.electron.tsx`, `desktop/browser/store/state.ts`, `desktop/browser/resident-webviews.ts`, and English browser labels.

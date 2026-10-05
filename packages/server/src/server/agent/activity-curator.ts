@@ -259,6 +259,18 @@ function selectForkContextRows(input: {
         : "Selected assistant message is no longer available.",
     );
   }
+  // FORK(latest-response-context): late tool updates belong to a fork of the latest response.
+  const latestResponseIndex = projectedRows.findLastIndex(
+    (row) => row.item.type === "assistant_message",
+  );
+  if (boundaryIndex === latestResponseIndex) {
+    return {
+      items: projectedRows.map((entry) => entry.item),
+      boundaryCursor,
+      boundaryMessageId,
+    };
+  }
+
   const boundarySeq = projectedRows[boundaryIndex].seqEnd;
   if (projectedRows.some((row) => row.seqStart <= boundarySeq && row.seqEnd > boundarySeq)) {
     throw new Error(
