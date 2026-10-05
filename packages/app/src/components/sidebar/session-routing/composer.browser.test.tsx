@@ -66,6 +66,8 @@ vi.mock("react", async () => {
           deferred.active = false;
           deferred.cleanup?.();
         };
+        // This interceptor forwards the caller's dependencies to preserve effect scheduling.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
       }, dependencies),
   };
 });

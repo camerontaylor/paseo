@@ -9601,9 +9601,9 @@ test("missing routing destination is rejected before queue acceptance", async ()
           ? { expectedWorkspaceId: "original-workspace", expectedProjectId: "original-project" }
           : {}),
       });
-      const response = harness.emitted
-        .filter((message) => message.type === "agent.queue.enqueue.response")
-        .at(-1);
+      const response = harness.emitted.findLast(
+        (message) => message.type === "agent.queue.enqueue.response",
+      );
       expect(response).toMatchObject({
         type: "agent.queue.enqueue.response",
         payload: {
@@ -9652,9 +9652,9 @@ for (const state of ["completed", "removed", "pending", "conflict"] as const) {
           expectedWorkspaceId: "original-workspace",
           expectedProjectId: "original-project",
         });
-        const response = harness.emitted
-          .filter((message) => message.type === "agent.queue.enqueue.response")
-          .at(-1);
+        const response = harness.emitted.findLast(
+          (message) => message.type === "agent.queue.enqueue.response",
+        );
         if (state === "completed" || state === "removed")
           expect(response).toMatchObject({
             payload: {
@@ -9780,6 +9780,7 @@ for (const checkpoint of ["workspace", "project"] as const) {
       let moved = false;
       const move = manager.updateAgentMetadata(agentId, { workspaceId: "workspace-b" }).then(() => {
         moved = true;
+        return undefined;
       });
       await waitForImmediate();
       expect(moved).toBe(false);
