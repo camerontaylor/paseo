@@ -1238,7 +1238,8 @@ export const fr: TranslationResources = {
       offline: "The host is offline. Your message is preserved.",
       invalidDestination: "The chat is outside the selected scope.",
       matchFailed: "Unable to match conversations. Choose a chat manually.",
-      directoryUnavailable: "Host directories are still loading or unavailable. Choose a chat manually.",
+      directoryUnavailable:
+        "Host directories are still loading or unavailable. Choose a chat manually.",
       searchCoverage: "Searched {{searched}} of {{total}} chats.",
       searchLimit:
         "Searched {{searched}} of {{total}} chats. Narrow the project scope to search more.",

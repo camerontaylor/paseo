@@ -120,7 +120,6 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
             await flushDraftPersistStorage();
           }
         }
-
       },
 
       add: async (entry) =>

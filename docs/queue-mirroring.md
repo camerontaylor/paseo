@@ -201,11 +201,9 @@ its local row.
 
 ## The un-acked window
 
-Daemon ownership leaves one gap: the moment between tapping queue and the daemon
-acknowledging the enqueue. If the relay is stalled or iOS suspends the app
-mid-request, the item exists only in app memory — kill the app and it is gone,
-and the daemon never knew. This is the client-side mirror of upstream #3464 /
-#4477: the write itself has to be durable, not just the queue.
+Between tapping queue and the daemon acknowledging enqueue, the device owns delivery.
+The local write must be durable before attempting the request, so a stalled relay,
+iOS suspension, or app restart cannot lose the item before the daemon knows about it.
 
 The outbox (`packages/app/src/stores/queue-outbox-store/`) persists the full wire
 payload — image bytes included — before clearing the draft or attempting delivery.
@@ -234,7 +232,9 @@ also removes its local row. Equal-revision snapshots reconcile optimistic rows;
 older revisions remain ignored. An entry that keeps failing stays in the
 device's durable outbox and visible queue. At `QUEUE_OUTBOX_MAX_ATTEMPTS` failed
 reconnects, the client shows an attention message once; future reconnects keep
-retrying. Only a host acknowledgement removes an outbox entry. Rows absent from
+retrying. A host acknowledgement removes an outbox entry. A definitive routing destination
+rejection also removes it and returns editable draft ownership; see [session routing](session-routing.md)
+for the destination guard and draft recovery contract. Rows absent from
 the latest authoritative snapshot are labeled "Waiting to sync with host" unless
 removal is pending, and cannot be edited or sent from the daemon queue. Inclusion in a snapshot
 acknowledges an enqueue only when no removal intent is pending. Persist removal intent

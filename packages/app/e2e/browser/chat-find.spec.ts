@@ -428,8 +428,20 @@ async function findFromComposer(page: Page, shortcut: string, testInfo: TestInfo
   }
 }
 
-test("opens and refocuses Find with Control+f from the composer", async ({ page }, testInfo) => {
-  await findFromComposer(page, "Control+f", testInfo);
+test.describe("Linux", () => {
+  test.use({
+    userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  });
+
+  test("opens and refocuses Find with Control+f from the composer", async ({ page }, testInfo) => {
+    // Chromium retains the host's navigator.platform when only the UA changes.
+    const browser = await page.context().newCDPSession(page);
+    await browser.send("Emulation.setUserAgentOverride", {
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+      platform: "Linux x86_64",
+    });
+    await findFromComposer(page, "Control+f", testInfo);
+  });
 });
 
 test.describe("macOS", () => {

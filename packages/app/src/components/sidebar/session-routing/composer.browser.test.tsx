@@ -361,7 +361,7 @@ test("a pushed acknowledgement survives a lost enqueue response", async () => {
   act(() => view.getByTestId("routing-submit").click());
   await waitFor(() => expect(view.getByText("Queued for Paseo · Offline indicator").textContent).toBe("Queued for Paseo · Offline indicator"));
   expect(view.queryByText("response lost")).toBeNull();
-  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("");
+  await waitFor(() => expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe(""));
   act(() => view.getByTestId("routing-submit").click());
   expect(fixture.enqueue).toHaveBeenCalledTimes(1);
 });

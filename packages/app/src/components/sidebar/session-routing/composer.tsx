@@ -184,7 +184,10 @@ export function SessionRoutingComposer({
       recipients.sort((a, b) => b.confidence - a.confidence);
       const notices = failures.map((message) => message.slice(0, 240));
       notices.push(
-        t(searched < total ? "sidebar.routing.searchLimit" : "sidebar.routing.searchCoverage", { searched, total }),
+        t(searched < total ? "sidebar.routing.searchLimit" : "sidebar.routing.searchCoverage", {
+          searched,
+          total,
+        }),
       );
       return {
         recipients,
@@ -352,10 +355,10 @@ export function SessionRoutingComposer({
         dispatch({ type: "acknowledged", itemId, queued: result.queued });
       } catch (error) {
         const message = error instanceof Error ? error.message : t("sidebar.routing.sendFailed");
-        const acknowledgement = useQueueOutboxStore.getState().acknowledgements[itemId];
+        const deliveryAcknowledgement = useQueueOutboxStore.getState().acknowledgements[itemId];
         const stored = useQueueOutboxStore.getState().entries[itemId];
-        if (acknowledgement)
-          dispatch({ type: "acknowledged", itemId, queued: acknowledgement.queued });
+        if (deliveryAcknowledgement)
+          dispatch({ type: "acknowledged", itemId, queued: deliveryAcknowledgement.queued });
         else if (!stored) dispatch({ type: "phase", phase: { status: "error", message } });
         else
           dispatch({
