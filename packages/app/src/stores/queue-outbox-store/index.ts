@@ -27,6 +27,8 @@ const PersistedQueueOutboxSchema = z.object({
 type PersistedQueueOutbox = z.infer<typeof PersistedQueueOutboxSchema>;
 
 interface QueueOutboxActions {
+  getEntry: (itemId: string) => Promise<PendingQueueEnqueue | undefined>;
+  markRoutingDispatched: (itemId: string) => Promise<void>;
   rejections: Record<string, string>;
   reject: (itemId: string, message: string) => void;
   acknowledgements: Record<string, { queued: boolean }>;
@@ -90,6 +92,28 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
   persist(
     (set, get) => ({
       entries: {},
+      getEntry: async (itemId) => {
+        await awaitOutboxHydration();
+        return get().entries[itemId];
+      },
+      markRoutingDispatched: (itemId) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          const entry = get().entries[itemId];
+          if (!entry?.routingDispatchHeld) return;
+          const dispatched = { ...entry, routingDispatchHeld: false };
+          writesInFlight.add(itemId);
+          set((state) => ({ entries: { ...state.entries, [itemId]: dispatched } }));
+          try {
+            await pendingWrite;
+          } catch (error) {
+            if (get().entries[itemId] === dispatched)
+              set((state) => ({ entries: { ...state.entries, [itemId]: entry } }));
+            await pendingWrite.catch(() => {});
+            throw error;
+          } finally {
+            writesInFlight.delete(itemId);
+          }
+        }),
       rejections: {},
       reject: (itemId, message) =>
         set((state) => ({
@@ -256,7 +280,8 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
         return sortByCreation(
           Object.values(get().entries).filter((entry) => entry.serverId === serverId),
         ).filter((entry) => {
-          if (writesInFlight.has(entry.itemId)) blockedAgents.add(entry.agentId);
+          if (writesInFlight.has(entry.itemId) || entry.routingDispatchHeld)
+            blockedAgents.add(entry.agentId);
           return !blockedAgents.has(entry.agentId);
         });
       },

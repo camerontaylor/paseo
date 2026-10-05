@@ -17,6 +17,7 @@ export const PendingQueueEnqueueSchema = z.object({
   expectedWorkspaceId: z.string().optional(),
   expectedProjectId: z.string().optional(),
   routingOrigin: z.boolean().optional(),
+  routingDispatchHeld: z.boolean().optional(),
   routingDraftUpdatedAt: z.number().nonnegative().optional(),
   routingDraftVersion: z.number().int().nonnegative().optional(),
   itemId: z.string(),
@@ -102,6 +103,7 @@ export async function flushQueueOutbox(input: FlushQueueOutboxInput): Promise<vo
                 .list(input.serverId)
                 .find((pending) => pending.itemId === candidate.itemId);
           if (!entry) continue;
+          if (entry.routingDispatchHeld) break;
           try {
             const removeFromHost = async () => {
               if (!input.client.removeQueuedAgentMessage)

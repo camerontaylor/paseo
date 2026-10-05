@@ -25,6 +25,7 @@ function fixture() {
     itemId: "item",
     text: "  original\nverbatim  ",
     draftVersion: 7,
+    isHostEligible: () => true,
     client: {
       enqueueAgentMessage: vi.fn(async () => {
         events.push("wire");
@@ -32,6 +33,8 @@ function fixture() {
       }),
     },
     outbox: {
+      getEntry: vi.fn(async () => undefined),
+      markRoutingDispatched: vi.fn(async () => {}),
       add: vi.fn(async () => {
         events.push("persist");
       }),

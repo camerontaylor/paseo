@@ -678,3 +678,120 @@ test("cold recovery never adopts a moved chat's new project for retry", async ()
   expect(useQueueOutboxStore.getState().entries["moved-original"]).toBeUndefined();
   expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
 });
+
+test("host exclusion during durable outbox acceptance releases an unsent draft safely", async () => {
+  const view = await mount();
+  act(() => view.getByTestId("routing-send-mode").click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+  const storage = (await import("@react-native-async-storage/async-storage")).default;
+  const setItem = storage.setItem.bind(storage);
+  let release!: () => void;
+  const hold = new Promise<void>((done) => {
+    release = done;
+  });
+  let saving = false;
+  const spy = vi.spyOn(storage, "setItem").mockImplementation(async (key, value) => {
+    if (key === "paseo-queue-outbox") {
+      saving = true;
+      await hold;
+    }
+    return setItem(key, value);
+  });
+  try {
+    act(() => view.getByTestId("routing-submit").click());
+    await waitFor(() => expect(saving).toBe(true));
+    fixture.serverIds = ["cold-host"];
+    await render();
+    expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+    await flushQueueOutboxForServer({
+      serverId: "host",
+      client: { enqueueAgentMessage: fixture.enqueue },
+      applySnapshot: () => {},
+    });
+    expect(fixture.enqueue).not.toHaveBeenCalled();
+    await act(async () => release());
+    await waitFor(() =>
+      expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).not.toBe("true"),
+    );
+    expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+    expect(Object.values(useQueueOutboxStore.getState().entries)).toEqual([]);
+    await flushQueueOutboxForServer({
+      serverId: "host",
+      client: { enqueueAgentMessage: fixture.enqueue },
+      applySnapshot: () => {},
+    });
+    expect(fixture.enqueue).not.toHaveBeenCalled();
+  } finally {
+    release();
+    spy.mockRestore();
+  }
+});
+
+for (const rejection of ["direct", "reconnect"] as const) {
+  test(`${rejection} definitive rejection keeps the draft locked when durable removal fails`, async () => {
+    const view = await mount();
+    act(() => view.getByTestId("routing-send-mode").click());
+    type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+    let ownedId = "";
+    fixture.enqueue.mockImplementation(async (entry) => {
+      ownedId = entry.itemId;
+      if (rejection === "reconnect") throw new Error("response lost");
+      throw new AgentQueueDestinationChangedError();
+    });
+    const storage = (await import("@react-native-async-storage/async-storage")).default;
+    const setItem = storage.setItem.bind(storage);
+    const spy = vi.spyOn(storage, "setItem").mockImplementation(async (key, value) => {
+      if (key === "paseo-queue-outbox" && ownedId && !JSON.parse(value).state.entries[ownedId])
+        throw new Error("durable removal failed");
+      return setItem(key, value);
+    });
+    try {
+      act(() => view.getByTestId("routing-submit").click());
+      await waitFor(() =>
+        expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy(),
+      );
+      if (rejection === "reconnect") {
+        fixture.enqueue.mockRejectedValue(new AgentQueueDestinationChangedError());
+        await act(async () => {
+          await expect(
+            flushQueueOutboxForServer({
+              serverId: "host",
+              client: { enqueueAgentMessage: fixture.enqueue },
+              applySnapshot: () => {},
+            }),
+          ).rejects.toThrow("durable removal failed");
+        });
+      }
+      expect(useQueueOutboxStore.getState().entries[ownedId]).toBeTruthy();
+      expect(useQueueOutboxStore.getState().rejections[ownedId]).toBeUndefined();
+      expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+      expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+      await act(async () => {
+        await useQueueOutboxStore.persist.rehydrate();
+        await useDraftStore.persist.rehydrate();
+        root?.unmount();
+        root = createRoot(container);
+      });
+      await render();
+      await waitFor(() =>
+        expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy(),
+      );
+      expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+      expect(useQueueOutboxStore.getState().entries[ownedId]).toMatchObject({
+        itemId: ownedId,
+        text: "continue",
+      });
+      spy.mockRestore();
+      fixture.enqueue.mockRejectedValue(new AgentQueueDestinationChangedError());
+      act(() => view.getByRole("button", { name: "Retry delivery" }).click());
+      await waitFor(() => expect(useQueueOutboxStore.getState().entries[ownedId]).toBeUndefined());
+      await waitFor(() =>
+        expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).not.toBe("true"),
+      );
+      expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+      expect(fixture.enqueue.mock.calls.every(([entry]) => entry.itemId === ownedId)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+}

@@ -21,7 +21,9 @@ import { z } from "zod";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import { Session } from "./session.js";
-import type { AgentQueueService } from "./agent-queue/service.js";
+import { AgentQueueService } from "./agent-queue/service.js";
+import { AgentQueueStore } from "./agent-queue/store.js";
+import { MessageReceipts } from "./message-receipts/index.js";
 import type { SessionOptions } from "./session.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import type { AgentUpdatesService } from "./session/agent-updates/agent-updates-service.js";
@@ -9560,38 +9562,126 @@ test("workspace.create.request reports an archived explicit project", async () =
   });
 });
 
-test("missing routing destination is rejected before queue acceptance", async () => {
+function missingRoutingHarness() {
+  const root = path.resolve(".dev");
+  mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(path.join(root, "review-routing-receipts-"));
   const emitted: SessionOutboundMessage[] = [];
+  const agentStorage = { list: async () => [], get: async () => null };
   const session = createSessionForWorkspaceTests({
     onMessage: (message) => emitted.push(message),
-    agentStorage: { list: async () => [], get: async () => null },
+    agentStorage,
   });
-  const enqueue = vi.fn();
-  asSessionInternals<{ agentQueueService: Pick<AgentQueueService, "enqueue"> }>(
-    session,
-  ).agentQueueService = { enqueue };
-  for (const routing of [true, false]) {
-    await session.handleMessage({
-      type: "agent.queue.enqueue.request",
-      requestId: routing ? "route" : "ordinary",
-      agentId: "deleted-chat",
-      itemId: "original-item",
-      text: "continue",
-      ...(routing
-        ? { expectedWorkspaceId: "original-workspace", expectedProjectId: "original-project" }
-        : {}),
-    });
-    const response = emitted
-      .filter((message) => message.type === "agent.queue.enqueue.response")
-      .at(-1);
-    expect(response).toMatchObject({
-      type: "agent.queue.enqueue.response",
-      payload: {
-        queue: null,
-        error: routing ? "session_route_destination_missing" : "Agent not found: deleted-chat",
-      },
-    });
+  const receipts = new MessageReceipts(path.join(directory, "receipts"));
+  const sendPrompt = vi.fn(async () => {});
+  const service = new AgentQueueService({
+    store: new AgentQueueStore(path.join(directory, "queues")),
+    agentManager: { getAgent: () => null, subscribe: () => () => {} },
+    agentStorage: asAgentStorage(agentStorage),
+    logger: createTestLogger(),
+    sendPrompt,
+  });
+  service.setMessageReceipts(receipts);
+  asSessionInternals<{ agentQueueService: AgentQueueService }>(session).agentQueueService = service;
+  return { directory, emitted, session, receipts, service, sendPrompt };
+}
+
+test("missing routing destination is rejected before queue acceptance", async () => {
+  const harness = missingRoutingHarness();
+  try {
+    for (const routing of [true, false]) {
+      await harness.session.handleMessage({
+        type: "agent.queue.enqueue.request",
+        requestId: routing ? "route" : "ordinary",
+        agentId: "deleted-chat",
+        itemId: "original-item",
+        text: "continue",
+        ...(routing
+          ? { expectedWorkspaceId: "original-workspace", expectedProjectId: "original-project" }
+          : {}),
+      });
+      const response = harness.emitted
+        .filter((message) => message.type === "agent.queue.enqueue.response")
+        .at(-1);
+      expect(response).toMatchObject({
+        type: "agent.queue.enqueue.response",
+        payload: {
+          queue: null,
+          error: routing ? "session_route_destination_missing" : "Agent not found: deleted-chat",
+        },
+      });
+    }
+    expect(harness.sendPrompt).not.toHaveBeenCalled();
+    expect((await harness.service.list("deleted-chat")).items).toEqual([]);
+  } finally {
+    await harness.service.flushDrains();
+    await harness.session.cleanup();
+    rmSync(harness.directory, { recursive: true, force: true });
   }
-  expect(enqueue).not.toHaveBeenCalled();
-  await session.cleanup();
 });
+
+for (const state of ["completed", "removed", "pending", "conflict"] as const) {
+  test(`deleted routing destination preserves ${state} durable receipt semantics`, async () => {
+    const harness = missingRoutingHarness();
+    const request = { prompt: "continue", activeTurnBehavior: "interrupt" };
+    const receipt = { agentId: "deleted-chat", messageId: "original-item", request };
+    try {
+      if (state === "removed") await harness.receipts.recordRemoved(receipt);
+      else if (state === "pending") {
+        await expect(
+          harness.receipts.send({
+            ...receipt,
+            send: async () => {
+              throw new Error("provider response lost");
+            },
+          }),
+        ).rejects.toThrow("provider response lost");
+      } else await harness.receipts.send({ ...receipt, send: async () => {} });
+      await harness.service.deleteForAgent("deleted-chat");
+      harness.service.setMessageReceipts(
+        new MessageReceipts(path.join(harness.directory, "receipts")),
+      );
+      for (const attempt of [1, 2]) {
+        await harness.session.handleMessage({
+          type: "agent.queue.enqueue.request",
+          requestId: `retry-${attempt}`,
+          agentId: "deleted-chat",
+          itemId: "original-item",
+          text: state === "conflict" ? "different" : "continue",
+          expectedWorkspaceId: "original-workspace",
+          expectedProjectId: "original-project",
+        });
+        const response = harness.emitted
+          .filter((message) => message.type === "agent.queue.enqueue.response")
+          .at(-1);
+        if (state === "completed" || state === "removed")
+          expect(response).toMatchObject({
+            payload: {
+              requestId: `retry-${attempt}`,
+              error: null,
+              queue: { agentId: "deleted-chat", items: [] },
+            },
+          });
+        else
+          expect(response).toMatchObject({
+            payload: {
+              requestId: `retry-${attempt}`,
+              queue: null,
+              error:
+                state === "pending"
+                  ? "agent_request_outcome_unknown"
+                  : "agent_request_key_conflict",
+            },
+          });
+      }
+      expect(harness.sendPrompt).not.toHaveBeenCalled();
+      expect(await harness.receipts.get("deleted-chat", "original-item", request)).toBe(
+        state === "conflict" ? "completed" : state,
+      );
+    } finally {
+      await harness.service.flushDrains();
+      await harness.session.cleanup();
+      rmSync(harness.directory, { recursive: true, force: true });
+    }
+  });
+}

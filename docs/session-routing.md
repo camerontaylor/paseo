@@ -36,10 +36,12 @@ Routing copy remains English across locales in v1.
 
 Delivery uses the daemon queue and the existing durable device outbox, preserving the original text
 and a stable item ID for retries. Active tasks are queued without interruption. Routing supplies
-expected workspace/project IDs; a new enqueue rejects a moved or archived destination. The queue
+expected workspace/project IDs; a new enqueue rejects a moved, archived, or deleted destination. The queue
 checks accepted item IDs and durable receipts before that guard, so retries after an accepted send
-remain idempotent even if the destination subsequently moves. A definitive rejection releases the
-pending submission and preserves its editable draft; a missing acknowledgement retains the durable
+remain idempotent even if the destination subsequently moves or is deleted. Pending receipts retain
+uncertain ownership. Fresh device items stay held out of reconnect delivery through draft/outbox
+checkpoints; the current host selection is checked again before the first enqueue attempt. A definitive rejection releases the
+pending submission only after durable outbox removal succeeds and preserves its editable draft; a missing acknowledgement retains the durable
 item and shows an uncertain delivery state. Background reconnect publishes actual acknowledgements
 or definitive rejections to the composer. Queued for means the host acknowledged an item still in its
 queue; Routed to means the acknowledgement no longer lists it. Neither confirms task completion.

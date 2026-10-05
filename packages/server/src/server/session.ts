@@ -5091,6 +5091,7 @@ export class Session {
   ): Promise<void> {
     const record = await this.agentStorage.get(agentId);
     const live = this.agentManager.getAgent(agentId);
+    if (!record && !live) throw new Error("session_route_destination_missing");
     const workspaceId = live?.workspaceId ?? record?.workspaceId;
     const workspace = workspaceId ? await this.workspaceRegistry.get(workspaceId) : null;
     const project = workspace ? await this.projectRegistry.get(workspace.projectId) : null;
@@ -5124,9 +5125,7 @@ export class Session {
 
     const routing = msg.type === "agent.queue.enqueue.request" && !!msg.expectedWorkspaceId;
     const resolved = routing
-      ? this.agentManager.getAgent(msg.agentId) || (await this.agentStorage.get(msg.agentId))
-        ? { ok: true as const, agentId: msg.agentId }
-        : { ok: false as const, error: "session_route_destination_missing" }
+      ? { ok: true as const, agentId: msg.agentId }
       : await this.resolveAgentIdentifier(msg.agentId);
     if (!resolved.ok) {
       this.emit({
