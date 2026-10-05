@@ -163,6 +163,35 @@ describe("Codex tool-free session matching transport", () => {
     expect(await f.generation.generate(f.request)).toEqual(result);
     expect(f.logs()).toContain('"actualModel":"gpt-configured-default"');
   });
+  describe.each(["terminal body", "completed item"])("%s schema validation", (transport) => {
+    test.each([
+      ["unknown top-level key", { ...result, unexpected: true }],
+      ["unknown nested key", { matches: [{ ...result.matches[0], unexpected: true }] }],
+      ["missing nested key", { matches: [{ score: 0.96 }] }],
+    ])("rejects %s without retry, fallback or success receipt", async (_name, output) => {
+      const message = {
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: JSON.stringify(output) }],
+      };
+      let calls = 0;
+      const f = await setup(async () => {
+        calls++;
+        return sse(
+          transport === "terminal body"
+            ? [completed({ output: [message] })]
+            : [{ type: "response.output_item.done", item: message }, completed({ output: [] })],
+        );
+      });
+      await expect(f.generation.generate(f.request)).rejects.toThrow(
+        "GPT matching returned invalid structured output",
+      );
+      expect(calls).toBe(1);
+      expect(f.logs()).toBe("");
+      expect(await readFile(path.join(f.dir, "auth.json"), "utf8")).toBe(f.auth);
+    });
+  });
   test.each([
     [
       "done item without terminal acknowledgement",

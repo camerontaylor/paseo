@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import OpenAI, { APIError } from "openai";
+import { Ajv } from "ajv";
 import type { Logger } from "pino";
 import { z } from "zod";
 import type { StructuredTextGeneration } from "../../../session/checkout/git-metadata-generator.js";
@@ -149,6 +150,7 @@ export function createCodexSessionSearchGeneration(deps: {
       });
       let stream;
       try {
+        const validate = new Ajv({ strict: false }).compile(schema);
         stream = await client.responses.create(
           {
             model: settings.model,
@@ -209,7 +211,9 @@ export function createCodexSessionSearchGeneration(deps: {
           if (response.model !== settings.model)
             throw new Error("GPT matching returned a different model than the configured default");
           const text = completedResponseText({ response, completedItems });
-          const result = request.schema.parse(JSON.parse(text));
+          const parsed: unknown = JSON.parse(text);
+          if (!validate(parsed)) throw new Error("GPT matching returned invalid structured output");
+          const result = request.schema.parse(parsed);
           deps.logger.info(
             {
               provider: "codex",
