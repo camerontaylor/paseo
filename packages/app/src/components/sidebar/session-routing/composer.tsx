@@ -61,7 +61,7 @@ export function SessionRoutingComposer({
   const { t } = useTranslation();
   const { searchQuery, allProjects, workspacePlacements, serverIds, hostRegistryLoaded } =
     useSidebarModel();
-  const [state, dispatch] = useReducer(routingReducer, initialRoutingState);
+  const [state, reduce] = useReducer(routingReducer, initialRoutingState);
   const pendingItemId = state.phase.status === "pending" ? state.phase.itemId : null;
   const rejection = useQueueOutboxStore((store) =>
     pendingItemId ? store.rejections[pendingItemId] : undefined,
@@ -83,8 +83,15 @@ export function SessionRoutingComposer({
   const request = useRef<string | null>(null);
   const submitting = useRef<string | null>(null);
   const hostMembership = JSON.stringify([...serverIds].sort());
-  const latest = useRef({ state, serverIds, hostMembership });
-  latest.current = { state, serverIds, hostMembership };
+  const latest = useRef({ state, serverIds, hostMembership, searchQuery });
+  latest.current = { state, serverIds, hostMembership, searchQuery };
+  const dispatch = useCallback(
+    (action: RoutingAction) => {
+      latest.current.state = routingReducer(latest.current.state, action);
+      reduce(action);
+    },
+    [reduce],
+  );
   const sendInput = useRef<EditingTextInputHandle>(null);
   const agentMaps = useSessionStore(
     useShallow((snapshot) => serverIds.map((serverId) => snapshot.sessions[serverId]?.agents)),
@@ -244,11 +251,11 @@ export function SessionRoutingComposer({
   }, [searchQuery, state.mode, state.scope, state.sendDraft, state.draftVersion, hostMembership]);
   useEffect(() => {
     dispatch({ type: "hosts", serverIds: latest.current.serverIds });
-  }, [hostMembership, state.recipient?.serverId]);
+  }, [hostMembership, state.recipient?.serverId, dispatch]);
   useEffect(() => {
     request.current = null;
     dispatch({ type: "invalidateFind" });
-  }, [searchQuery]);
+  }, [searchQuery, dispatch]);
   useEffect(() => {
     let active = true;
     void Promise.all([awaitDraftHydration(), awaitOutboxHydration()])
@@ -291,7 +298,7 @@ export function SessionRoutingComposer({
     return () => {
       active = false;
     };
-  }, [t]);
+  }, [t, dispatch]);
   useEffect(() => {
     if (!state.draftReady || state.phase.status === "sending" || state.phase.status === "pending")
       return;
@@ -312,15 +319,16 @@ export function SessionRoutingComposer({
     state.sendDraft,
     state.draftVersion,
     state.draftUpdatedAt,
+    dispatch,
   ]);
   useEffect(() => {
     if (state.phase.status === "pending" && rejection)
       dispatch({ type: "phase", phase: { status: "error", message: rejection } });
-  }, [rejection, state.phase.status]);
+  }, [rejection, state.phase.status, dispatch]);
   useEffect(() => {
     if (state.phase.status !== "pending" || !acknowledgement) return;
     dispatch({ type: "acknowledged", itemId: state.phase.itemId, queued: acknowledgement.queued });
-  }, [acknowledgement, state.phase]);
+  }, [acknowledgement, state.phase, dispatch]);
   useEffect(() => {
     if (
       !state.draftReady ||
@@ -342,6 +350,7 @@ export function SessionRoutingComposer({
     state.draftReady,
     state.draftVersion,
     state.draftUpdatedAt,
+    dispatch,
   ]);
   useEffect(() => {
     if (sendInput.current && sendInput.current.getText() !== state.sendDraft)
@@ -413,7 +422,7 @@ export function SessionRoutingComposer({
           });
       }
     },
-    [delivery, state.draftVersion, state.draftUpdatedAt, t],
+    [delivery, state.draftVersion, state.draftUpdatedAt, t, dispatch],
   );
 
   const submit = useCallback(async () => {
@@ -421,8 +430,28 @@ export function SessionRoutingComposer({
     const text = state.mode === "find" ? searchQuery : state.sendDraft;
     if (!text.trim()) return;
     const mode = state.mode;
+    const submitted = latest.current.state;
+    const submittedQuery = latest.current.searchQuery;
     const submittedHosts = latest.current.hostMembership;
     const requestId = uuid();
+    const isCurrentMatch = () => {
+      const current = latest.current;
+      const draft = useDraftStore.getState().drafts[ROUTING_DRAFT_KEY];
+      return (
+        request.current === requestId &&
+        current.state.phase.status === "matching" &&
+        current.state.phase.requestId === requestId &&
+        current.state.mode === mode &&
+        current.state.scope === submitted.scope &&
+        current.searchQuery === submittedQuery &&
+        current.state.sendDraft === submitted.sendDraft &&
+        current.state.draftVersion === submitted.draftVersion &&
+        current.state.draftUpdatedAt === submitted.draftUpdatedAt &&
+        (draft?.version ?? 0) === submitted.draftVersion &&
+        (draft?.updatedAt ?? 0) === submitted.draftUpdatedAt &&
+        current.hostMembership === submittedHosts
+      );
+    };
     submitting.current = requestId;
     try {
       if (mode === "send" && state.recipient) {
@@ -432,11 +461,11 @@ export function SessionRoutingComposer({
       request.current = requestId;
       dispatch({ type: "phase", phase: { status: "matching", requestId, mode, text } });
       const result = await match.mutateAsync({ query: text, scope: state.scope });
-      if (request.current !== requestId || latest.current.hostMembership !== submittedHosts) return;
+      if (!isCurrentMatch()) return;
       const recipient = result.complete ? automaticRecipient(result.recipients) : null;
       if (mode === "send" && recipient) {
         request.current = null;
-        await send(recipient, text);
+        await send(recipient, text, undefined, submitted.draftVersion, submitted.draftUpdatedAt);
         return;
       }
       dispatch({
@@ -446,7 +475,7 @@ export function SessionRoutingComposer({
         notice: result.notice,
       });
     } catch (error) {
-      if (request.current !== requestId || latest.current.hostMembership !== submittedHosts) return;
+      if (!isCurrentMatch()) return;
       dispatch({
         type: "phase",
         phase: {
@@ -457,22 +486,25 @@ export function SessionRoutingComposer({
     } finally {
       if (submitting.current === requestId) submitting.current = null;
     }
-  }, [locked, state, searchQuery, match, send, t]);
+  }, [locked, state, searchQuery, match, send, t, dispatch]);
 
-  const select = useCallback((recipient: Recipient | null) => {
-    const current = latest.current;
-    if (current.state.phase.status === "sending" || current.state.phase.status === "pending")
-      return;
-    if (
-      recipient &&
-      (!current.serverIds.includes(recipient.serverId) ||
-        !recipientInScope(recipient, current.state.scope))
-    )
-      return;
-    if (request.current && submitting.current === request.current) submitting.current = null;
-    request.current = null;
-    dispatch({ type: "recipient", recipient });
-  }, []);
+  const select = useCallback(
+    (recipient: Recipient | null) => {
+      const current = latest.current;
+      if (current.state.phase.status === "sending" || current.state.phase.status === "pending")
+        return;
+      if (
+        recipient &&
+        (!current.serverIds.includes(recipient.serverId) ||
+          !recipientInScope(recipient, current.state.scope))
+      )
+        return;
+      if (request.current && submitting.current === request.current) submitting.current = null;
+      request.current = null;
+      dispatch({ type: "recipient", recipient });
+    },
+    [dispatch],
+  );
   const open = useCallback((recipient: Recipient) => {
     navigateToAgent({
       serverId: recipient.serverId,
@@ -482,34 +514,40 @@ export function SessionRoutingComposer({
   }, []);
   const setFindMode = useCallback(() => {
     dispatch({ type: "mode", mode: "find" });
-  }, []);
+  }, [dispatch]);
   const setSendMode = useCallback(() => {
     dispatch({ type: "mode", mode: "send" });
-  }, []);
+  }, [dispatch]);
   const setAllProjects = useCallback(() => {
     dispatch({ type: "scope", scope: null });
-  }, []);
+  }, [dispatch]);
   const setCurrentProject = useCallback(() => {
     if (currentProject) dispatch({ type: "scope", scope: currentProject.projectViewKey });
-  }, [currentProject]);
+  }, [currentProject, dispatch]);
   const togglePicker = useCallback(() => {
     dispatch({ type: "picker", open: !state.picker });
-  }, [state.picker]);
+  }, [state.picker, dispatch]);
   const openPicker = useCallback(() => {
     dispatch({ type: "picker", open: true });
-  }, []);
-  const setDraft = useCallback((text: string) => {
-    useDraftStore.getState().editDraftText({ draftKey: ROUTING_DRAFT_KEY, text });
-    dispatch({
-      type: "draft",
-      text,
-      version: useDraftStore.getState().drafts[ROUTING_DRAFT_KEY]?.version ?? 0,
-      updatedAt: useDraftStore.getState().drafts[ROUTING_DRAFT_KEY]?.updatedAt ?? 0,
-    });
-  }, []);
-  const setPickerQuery = useCallback((text: string) => {
-    dispatch({ type: "pickerQuery", text });
-  }, []);
+  }, [dispatch]);
+  const setDraft = useCallback(
+    (text: string) => {
+      useDraftStore.getState().editDraftText({ draftKey: ROUTING_DRAFT_KEY, text });
+      dispatch({
+        type: "draft",
+        text,
+        version: useDraftStore.getState().drafts[ROUTING_DRAFT_KEY]?.version ?? 0,
+        updatedAt: useDraftStore.getState().drafts[ROUTING_DRAFT_KEY]?.updatedAt ?? 0,
+      });
+    },
+    [dispatch],
+  );
+  const setPickerQuery = useCallback(
+    (text: string) => {
+      dispatch({ type: "pickerQuery", text });
+    },
+    [dispatch],
+  );
   const selectAutomatic = useCallback(() => {
     select(null);
   }, [select]);

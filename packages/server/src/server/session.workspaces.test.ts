@@ -589,6 +589,7 @@ function createSessionForWorkspaceTests(
     listAgents: () => [],
     listProviderSubagentActivity: () => [],
     getAgent: () => null,
+    runLifecycleMutation: <T>(_: string, operation: () => Promise<T>) => operation(),
     archiveAgent: async () => ({ archivedAt: new Date().toISOString() }),
     archiveSnapshot: async () => ({}),
     unarchiveSnapshot: async () => true,
@@ -9682,6 +9683,140 @@ for (const state of ["completed", "removed", "pending", "conflict"] as const) {
       await harness.service.flushDrains();
       await harness.session.cleanup();
       rmSync(harness.directory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const checkpoint of ["workspace", "project"] as const) {
+  test(`routed admission holds the lifecycle boundary across delayed ${checkpoint} reads and metadata moves`, async () => {
+    const root = path.resolve(".dev");
+    mkdirSync(root, { recursive: true });
+    const directory = mkdtempSync(path.join(root, "review-routing-move-"));
+    const logger = createTestLogger();
+    const storage = new AgentStorage(path.join(directory, "agents"), logger);
+    const manager = new AgentManager({ clients: {}, registry: storage, logger });
+    const agentId = "original-chat";
+    await storage.upsert({
+      ...makeStoredAgent({ id: agentId, cwd: directory, updatedAt: "2026-10-01T00:00:00.000Z" }),
+      workspaceId: "workspace-a",
+    });
+    const projects = new FileBackedProjectRegistry(path.join(directory, "projects.json"), logger);
+    const workspaces = new FileBackedWorkspaceRegistry(
+      path.join(directory, "workspaces.json"),
+      logger,
+    );
+    for (const suffix of ["a", "b"]) {
+      await projects.upsert(
+        createPersistedProjectRecord({
+          projectId: `project-${suffix}`,
+          rootPath: directory,
+          kind: "non_git",
+          displayName: suffix,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          updatedAt: "2026-10-01T00:00:00.000Z",
+        }),
+      );
+      await workspaces.upsert(
+        createPersistedWorkspaceRecord({
+          workspaceId: `workspace-${suffix}`,
+          projectId: `project-${suffix}`,
+          cwd: directory,
+          kind: "directory",
+          displayName: suffix,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          updatedAt: "2026-10-01T00:00:00.000Z",
+        }),
+      );
+    }
+    const emitted: SessionOutboundMessage[] = [];
+    const session = createSessionForWorkspaceTests({
+      onMessage: (message) => emitted.push(message),
+      agentStorage: { get: storage.get.bind(storage), list: storage.list.bind(storage) },
+      agentManager: {
+        getAgent: manager.getAgent.bind(manager),
+        runLifecycleMutation: manager.runLifecycleMutation.bind(manager),
+      },
+      projectRegistry: projects,
+      workspaceRegistry: workspaces,
+    });
+    const service = new AgentQueueService({
+      store: new AgentQueueStore(path.join(directory, "queues")),
+      agentManager: manager,
+      agentStorage: storage,
+      logger,
+      sendPrompt: async () => {},
+    });
+    service.setMessageReceipts(new MessageReceipts(path.join(directory, "receipts")));
+    asSessionInternals<{ agentQueueService: AgentQueueService }>(session).agentQueueService =
+      service;
+    const readStarted = deferred<void>();
+    const releaseRead = deferred<void>();
+    const workspaceGet = workspaces.get.bind(workspaces);
+    const projectGet = projects.get.bind(projects);
+    const read =
+      checkpoint === "workspace"
+        ? vi.spyOn(workspaces, "get").mockImplementation(async (id) => {
+            readStarted.resolve();
+            await releaseRead.promise;
+            return workspaceGet(id);
+          })
+        : vi.spyOn(projects, "get").mockImplementation(async (id) => {
+            readStarted.resolve();
+            await releaseRead.promise;
+            return projectGet(id);
+          });
+    const request = {
+      type: "agent.queue.enqueue.request",
+      requestId: "before-move",
+      agentId,
+      itemId: "original-item",
+      text: "continue",
+      expectedWorkspaceId: "workspace-a",
+      expectedProjectId: "project-a",
+    };
+    try {
+      const admission = session.handleMessage(request);
+      await readStarted.promise;
+      let moved = false;
+      const move = manager.updateAgentMetadata(agentId, { workspaceId: "workspace-b" }).then(() => {
+        moved = true;
+      });
+      await waitForImmediate();
+      expect(moved).toBe(false);
+      expect((await storage.get(agentId))?.workspaceId).toBe("workspace-a");
+      releaseRead.resolve();
+      await admission;
+      await move;
+      expect((await storage.get(agentId))?.workspaceId).toBe("workspace-b");
+      expect(
+        emitted.find(
+          (message) =>
+            message.type === "agent.queue.enqueue.response" &&
+            message.payload.requestId === "before-move",
+        ),
+      ).toMatchObject({
+        payload: {
+          error: null,
+          queue: { items: [expect.objectContaining({ id: "original-item" })] },
+        },
+      });
+      await session.handleMessage({ ...request, requestId: "after-move", itemId: "new-item" });
+      expect(
+        emitted.find(
+          (message) =>
+            message.type === "agent.queue.enqueue.response" &&
+            message.payload.requestId === "after-move",
+        ),
+      ).toMatchObject({ payload: { queue: null, error: "session_route_destination_changed" } });
+      expect((await service.list(agentId)).items.some((item) => item.id === "new-item")).toBe(
+        false,
+      );
+    } finally {
+      releaseRead.resolve();
+      read.mockRestore();
+      await service.flushDrains();
+      await session.cleanup();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 }

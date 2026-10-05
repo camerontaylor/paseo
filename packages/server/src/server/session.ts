@@ -5060,18 +5060,23 @@ export class Session {
     msg: AgentQueueRequestMessage,
   ): Promise<AgentQueueSnapshot> {
     switch (msg.type) {
-      case "agent.queue.enqueue.request":
-        return service.enqueue({
-          agentId,
-          itemId: msg.itemId,
-          text: msg.text,
-          images: msg.images,
-          attachments: msg.attachments,
-          composerAttachments: msg.composerAttachments,
-          validateDestination: msg.expectedWorkspaceId
-            ? () => this.validateRoutingDestination(agentId, msg)
-            : undefined,
-        });
+      case "agent.queue.enqueue.request": {
+        const enqueue = () =>
+          service.enqueue({
+            agentId,
+            itemId: msg.itemId,
+            text: msg.text,
+            images: msg.images,
+            attachments: msg.attachments,
+            composerAttachments: msg.composerAttachments,
+            validateDestination: msg.expectedWorkspaceId
+              ? () => this.validateRoutingDestination(agentId, msg)
+              : undefined,
+          });
+        return msg.expectedWorkspaceId
+          ? this.agentManager.runLifecycleMutation(agentId, enqueue)
+          : enqueue();
+      }
       case "agent.queue.remove.request":
         return service.remove(agentId, msg.itemId);
       case "agent.queue.edit.request":

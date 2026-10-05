@@ -33,6 +33,8 @@ vi.mock("react-native-unistyles", async () => {
   };
 });
 const fixture = vi.hoisted(() => ({
+  pauseEffects: false,
+  effects: [] as Array<{ run: () => void | (() => void); cleanup?: () => void; active: boolean }>,
   serverIds: ["host"],
   directory: true,
   query: "Where were we working on offline?",
@@ -47,6 +49,26 @@ const fixture = vi.hoisted(() => ({
     name: "paseo",
   },
 }));
+vi.mock("react", async () => {
+  const actual = await vi.importActual<typeof import("react")>("react");
+  return {
+    ...actual,
+    useEffect: (effect: () => void | (() => void), dependencies?: readonly unknown[]) =>
+      actual.useEffect(() => {
+        if (!fixture.pauseEffects) return effect();
+        const deferred = {
+          run: effect,
+          active: true,
+          cleanup: undefined as (() => void) | undefined,
+        };
+        fixture.effects.push(deferred);
+        return () => {
+          deferred.active = false;
+          deferred.cleanup?.();
+        };
+      }, dependencies),
+  };
+});
 vi.mock("@/components/sidebar/sidebar-model", () => ({
   useSidebarModel: () => ({
     searchQuery: fixture.query,
@@ -151,6 +173,8 @@ const result = {
 beforeEach(async () => {
   vi.stubGlobal("React", React);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  fixture.pauseEffects = false;
+  fixture.effects.length = 0;
   fixture.search.mockReset();
   fixture.enqueue.mockReset();
   fixture.open.mockReset();
@@ -794,4 +818,76 @@ for (const rejection of ["direct", "reconnect"] as const) {
       spy.mockRestore();
     }
   });
+}
+
+for (const change of ["mode", "query", "scope", "draft", "revision"] as const) {
+  for (const outcome of ["success", "failure"] as const) {
+    test(`${change} changes invalidate matching ${outcome} before passive cancellation runs`, async () => {
+      let resolve!: (value: {
+        results: (typeof result)[];
+        searchedCount: number;
+        totalCount: number;
+      }) => void;
+      let reject!: (error: Error) => void;
+      fixture.search.mockImplementation(
+        () =>
+          new Promise((done, fail) => {
+            resolve = done;
+            reject = fail;
+          }),
+      );
+      const view = await mount();
+      const sending = change === "mode" || change === "draft" || change === "revision";
+      if (sending) {
+        act(() => view.getByTestId("routing-send-mode").click());
+        type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
+      }
+      act(() => view.getByTestId("routing-submit").click());
+      await waitFor(() => expect(fixture.search).toHaveBeenCalledTimes(1));
+      if (change === "scope") {
+        act(() => view.getByTestId("routing-scope").click());
+        await waitFor(() =>
+          expect(within(document.body).getByText("Current project · Paseo")).toBeTruthy(),
+        );
+      }
+      fixture.pauseEffects = true;
+      if (change === "mode") act(() => view.getByTestId("routing-find-mode").click());
+      else if (change === "query")
+        type(
+          view.getByRole<HTMLTextAreaElement>("textbox", { name: "Find query" }),
+          "different query",
+        );
+      else if (change === "scope")
+        act(() => within(document.body).getByText("Current project · Paseo").click());
+      else if (change === "draft")
+        type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "new draft");
+      else
+        act(() => {
+          useDraftStore
+            .getState()
+            .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "temporary" });
+          useDraftStore
+            .getState()
+            .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
+        });
+      expect(fixture.effects.length).toBeGreaterThan(0);
+      await act(async () => {
+        if (outcome === "success")
+          resolve({
+            results: [{ ...result, excerpt: "stale match evidence" }],
+            searchedCount: 1,
+            totalCount: 1,
+          });
+        else reject(new Error("stale matching failure"));
+      });
+      expect(fixture.enqueue).not.toHaveBeenCalled();
+      expect(view.queryByText("stale match evidence")).toBeNull();
+      expect(view.queryByText(/stale matching failure/)).toBeNull();
+      expect(view.queryByText(/The submitted draft changed/)).toBeNull();
+      if (sending)
+        expect(useDraftStore.getState().getDraftInput(SESSION_ROUTING_DRAFT_KEY)?.text).toBe(
+          change === "draft" ? "new draft" : "continue",
+        );
+    });
+  }
 }

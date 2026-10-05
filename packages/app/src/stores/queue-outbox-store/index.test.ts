@@ -9,6 +9,7 @@ const storage = vi.hoisted(() => ({
   draftHold: undefined as Promise<void> | undefined,
   outboxHold: undefined as Promise<void> | undefined,
   failRemovalItem: undefined as string | undefined,
+  failDispatchMarkerItem: undefined as string | undefined,
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
@@ -23,6 +24,14 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
       if (key === "paseo-drafts") await storage.draftHold;
       if (key === "paseo-queue-outbox") {
         await storage.outboxHold;
+        if (
+          storage.failDispatchMarkerItem &&
+          JSON.parse(value).state.entries[storage.failDispatchMarkerItem]?.routingDispatchHeld ===
+            false
+        ) {
+          storage.failDispatchMarkerItem = undefined;
+          throw new Error("dispatch marker failed");
+        }
         if (storage.failRemovalItem && !JSON.parse(value).state.entries[storage.failRemovalItem])
           throw new Error("removal failed");
       }
@@ -469,7 +478,11 @@ async function routingDispatchFixture(itemId: string) {
   useDraftStore.getState().editDraftText({ draftKey: key, text: "continue" });
   await flushDraftPersistStorageDurably();
   const record = useDraftStore.getState().drafts[key]!;
-  const enqueueAgentMessage = vi.fn(async () => ({ agentId: "chat", revision: 1, items: [] }));
+  const enqueueAgentMessage = vi.fn(async (_entry: { itemId: string; text: string }) => ({
+    agentId: "chat",
+    revision: 1,
+    items: [],
+  }));
   const input = {
     recipient: {
       serverId: "host",
@@ -633,3 +646,71 @@ for (const rejection of ["direct", "reconnect"] as const) {
     }
   });
 }
+
+it("a successful RPC acknowledgement survives failed dispatch-marker persistence without a pushed snapshot", async () => {
+  const fixture = await routingDispatchFixture("ack-with-failed-marker");
+  storage.failDispatchMarkerItem = fixture.input.itemId;
+  expect(await fixture.deliverRoutedPrompt(fixture.input)).toEqual({ queued: false });
+  expect(fixture.enqueueAgentMessage).toHaveBeenCalledTimes(1);
+  expect(fixture.useQueueOutboxStore.getState().acknowledgements[fixture.input.itemId]).toEqual({
+    queued: false,
+  });
+  expect(fixture.useQueueOutboxStore.getState().entries[fixture.input.itemId]).toBeUndefined();
+  await resetPersistedModules();
+  const restarted = await import("./index");
+  const drafts = (await import("@/stores/draft-store")).useDraftStore;
+  await restarted.useQueueOutboxStore.persist.rehydrate();
+  await drafts.persist.rehydrate();
+  expect(drafts.getState().getDraftInput(fixture.key)?.text ?? "").toBe("");
+  await restarted.flushQueueOutboxForServer({
+    serverId: "host",
+    client: fixture.input.client,
+    applySnapshot: () => {},
+  });
+  expect(fixture.enqueueAgentMessage).toHaveBeenCalledTimes(1);
+});
+
+it("an uncertain RPC with failed marker recovers through explicit same-ID retry without unholding unsent items", async () => {
+  const fixture = await routingDispatchFixture("unknown-with-failed-marker");
+  storage.failDispatchMarkerItem = fixture.input.itemId;
+  fixture.enqueueAgentMessage.mockRejectedValueOnce(new Error("response lost"));
+  await expect(fixture.deliverRoutedPrompt(fixture.input)).rejects.toThrow("response lost");
+  expect(
+    fixture.useQueueOutboxStore.getState().entries[fixture.input.itemId]?.routingDispatchHeld,
+  ).toBe(true);
+  await resetPersistedModules();
+  const restarted = await import("./index");
+  const drafts = (await import("@/stores/draft-store")).useDraftStore;
+  await restarted.useQueueOutboxStore.persist.rehydrate();
+  await drafts.persist.rehydrate();
+  expect(drafts.getState().drafts[fixture.key]).toEqual(fixture.record);
+  await restarted.flushQueueOutboxForServer({
+    serverId: "host",
+    client: fixture.input.client,
+    applySnapshot: () => {},
+  });
+  expect(fixture.enqueueAgentMessage).toHaveBeenCalledTimes(1);
+  const { deliverRoutedPrompt } = await import("@/components/sidebar/session-routing/delivery");
+  expect(
+    await deliverRoutedPrompt({
+      ...fixture.input,
+      outbox: restarted.useQueueOutboxStore.getState(),
+    }),
+  ).toEqual({ queued: false });
+  expect(fixture.enqueueAgentMessage).toHaveBeenCalledTimes(2);
+  expect(fixture.enqueueAgentMessage.mock.calls.map(([entry]) => entry)).toEqual([
+    expect.objectContaining({
+      itemId: fixture.input.itemId,
+      text: "continue",
+      expectedWorkspaceId: "workspace",
+      expectedProjectId: "project",
+    }),
+    expect.objectContaining({
+      itemId: fixture.input.itemId,
+      text: "continue",
+      expectedWorkspaceId: "workspace",
+      expectedProjectId: "project",
+    }),
+  ]);
+  expect(restarted.useQueueOutboxStore.getState().entries[fixture.input.itemId]).toBeUndefined();
+});

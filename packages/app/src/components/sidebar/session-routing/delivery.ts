@@ -54,7 +54,10 @@ export async function deliverRoutedPrompt(input: RouteDeliveryInput): Promise<{ 
       let snapshot: AgentQueueSnapshot;
       try {
         const request = input.client.enqueueAgentMessage(enqueue);
-        [snapshot] = await Promise.all([request, input.outbox.markRoutingDispatched(itemId)]);
+        const marker = input.outbox.markRoutingDispatched(itemId).catch(() => {});
+        const outcome = await Promise.allSettled([request, marker]);
+        if (outcome[0].status === "rejected") throw outcome[0].reason;
+        snapshot = outcome[0].value;
       } catch (error) {
         if (error instanceof AgentQueueDestinationChangedError)
           await input.outbox.removeDurably(itemId);
