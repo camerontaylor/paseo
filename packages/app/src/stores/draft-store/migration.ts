@@ -10,6 +10,7 @@ import {
   type CanonicalDraftInput,
   type DraftLifecycleState,
   type DraftRecord,
+  RoutingDraftClearSchema,
   type DraftStoreState,
   type PersistedDraftImage,
 } from "./state";
@@ -91,11 +92,13 @@ const NestedDraftRecordSchema = z.strictObject({
   lifecycle: DraftLifecycleSchema.optional(),
   updatedAt: z.number().optional(),
   version: z.number().int().positive().optional(),
+  routingClear: RoutingDraftClearSchema.optional(),
 });
 const FlatDraftRecordSchema = RawDraftInputSchema.extend({
   lifecycle: DraftLifecycleSchema.optional(),
   updatedAt: z.number().optional(),
   version: z.number().int().positive().optional(),
+  routingClear: RoutingDraftClearSchema.optional(),
 });
 const PersistedDraftRecordSchema = z.union([NestedDraftRecordSchema, FlatDraftRecordSchema]);
 export const PersistedDraftStoreSchema = z.strictObject({
@@ -188,6 +191,7 @@ async function buildMigratedDraftRecord(
     lifecycle: resolvePersistedLifecycle(parsed.lifecycle),
     updatedAt: parsed.updatedAt ?? nowMs,
     version: parsed.version ?? 1,
+    ...(parsed.routingClear ? { routingClear: parsed.routingClear } : {}),
   };
 }
 

@@ -4,6 +4,7 @@ const storage = vi.hoisted(() => ({
   values: new Map<string, string>(),
   hold: undefined as Promise<void> | undefined,
   reads: new Map<string, Promise<void>>(),
+  failDraftWriteAfter: undefined as number | undefined,
   failWriteKey: undefined as string | undefined,
   failOnceKey: undefined as string | undefined,
   draftHold: undefined as Promise<void> | undefined,
@@ -37,6 +38,12 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
       }
       await storage.hold;
       if (failOnce || key === storage.failWriteKey) throw new Error("checkpoint failed");
+      if (key === "paseo-drafts" && storage.failDraftWriteAfter !== undefined) {
+        if (storage.failDraftWriteAfter-- === 0) {
+          storage.failDraftWriteAfter = undefined;
+          throw new Error("strict checkpoint failed");
+        }
+      }
       storage.values.set(key, value);
     },
     removeItem: async (key: string) => {
@@ -340,6 +347,163 @@ it("failed routing draft checkpoint retains original ownership through reload an
   } finally {
     storage.failWriteKey = undefined;
     warning.mockRestore();
+  }
+});
+
+for (const newer of [undefined, "continue", "a different prompt"] as const) {
+  it(`recovers an immediately persisted tentative clear without overwriting ${newer ?? "owned retry"}`, async () => {
+    await resetPersistedModules();
+    storage.values.clear();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { useQueueOutboxStore } = await import("./index");
+    const { useDraftStore, flushDraftPersistStorageDurably } = await import("@/stores/draft-store");
+    const { SESSION_ROUTING_DRAFT_KEY: key } = await import("@/stores/draft-keys");
+    await useDraftStore.persist.rehydrate();
+    await useQueueOutboxStore.persist.rehydrate();
+    try {
+      useDraftStore.getState().editDraftText({ draftKey: key, text: "continue" });
+      await flushDraftPersistStorageDurably();
+      const record = useDraftStore.getState().drafts[key]!;
+      await useQueueOutboxStore.getState().add({
+        serverId: "offline-host",
+        agentId: "original-chat",
+        expectedWorkspaceId: "original-workspace",
+        expectedProjectId: "original-project",
+        itemId: "temporal-owned",
+        text: "continue",
+        routingOrigin: true,
+        routingDraftVersion: record.version,
+        routingDraftUpdatedAt: record.updatedAt,
+        images: [],
+        attachments: [],
+        composerAttachments: [],
+      });
+      await vi.advanceTimersByTimeAsync(201);
+      storage.failDraftWriteAfter = 1;
+      await expect(
+        useQueueOutboxStore.getState().acknowledge("temporal-owned", {
+          agentId: "original-chat",
+          revision: 1,
+          items: [],
+        }),
+      ).rejects.toThrow("strict checkpoint failed");
+      const persistedClear = JSON.parse(storage.values.get("paseo-drafts")!).state.drafts[key];
+      expect(persistedClear.input.text).toBe("");
+      expect(persistedClear.version).toBe(record.version + 1);
+      expect(useDraftStore.getState().drafts[key]).toEqual(record);
+      expect(useQueueOutboxStore.getState().acknowledgements["temporal-owned"]).toBeUndefined();
+      let expected = record;
+      if (newer !== undefined) {
+        useDraftStore
+          .getState()
+          .saveDraftInput({ draftKey: key, draft: { text: newer, attachments: [] } });
+        expected = useDraftStore.getState().drafts[key]!;
+        expect(expected.version).toBe(persistedClear.version);
+        expect(expected.updatedAt).toBe(persistedClear.updatedAt);
+        await flushDraftPersistStorageDurably();
+      }
+      vi.clearAllTimers();
+      vi.resetModules();
+      const restarted = await import("./index");
+      const drafts = (await import("@/stores/draft-store")).useDraftStore;
+      await restarted.useQueueOutboxStore.persist.rehydrate();
+      await drafts.persist.rehydrate();
+      await restarted.useQueueOutboxStore.getState().recoverRoutingDraft();
+      expect(drafts.getState().drafts[key]).toEqual(expected);
+      expect(restarted.useQueueOutboxStore.getState().entries["temporal-owned"]).toMatchObject({
+        itemId: "temporal-owned",
+        routingDraftVersion: record.version,
+        routingDraftUpdatedAt: record.updatedAt,
+      });
+      const enqueueAgentMessage = vi.fn(async () => ({
+        agentId: "original-chat",
+        revision: 2,
+        items: [],
+      }));
+      await restarted.flushQueueOutboxForServer({
+        serverId: "offline-host",
+        client: { enqueueAgentMessage },
+        applySnapshot: () => {},
+      });
+      expect(enqueueAgentMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          itemId: "temporal-owned",
+          text: "continue",
+          agentId: "original-chat",
+          expectedWorkspaceId: "original-workspace",
+          expectedProjectId: "original-project",
+        }),
+      );
+      expect(restarted.useQueueOutboxStore.getState().entries["temporal-owned"]).toBeUndefined();
+      expect(drafts.getState().getDraftInput(key)?.text ?? "").toBe(newer ?? "");
+    } finally {
+      storage.failDraftWriteAfter = undefined;
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+}
+
+it("recovery waits for an active acknowledgement and cannot restore its cleared draft", async () => {
+  await resetPersistedModules();
+  storage.values.clear();
+  const { useQueueOutboxStore } = await import("./index");
+  const { useDraftStore, flushDraftPersistStorageDurably } = await import("@/stores/draft-store");
+  const { SESSION_ROUTING_DRAFT_KEY: key } = await import("@/stores/draft-keys");
+  await useDraftStore.persist.rehydrate();
+  await useQueueOutboxStore.persist.rehydrate();
+  useDraftStore.getState().editDraftText({ draftKey: key, text: "continue" });
+  const record = useDraftStore.getState().drafts[key]!;
+  await useQueueOutboxStore.getState().add({
+    serverId: "host",
+    agentId: "chat",
+    itemId: "active-ack",
+    text: "continue",
+    routingOrigin: true,
+    routingDraftVersion: record.version,
+    routingDraftUpdatedAt: record.updatedAt,
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+  });
+  let release!: () => void;
+  storage.draftHold = new Promise<void>((done) => {
+    release = done;
+  });
+  try {
+    const ack = useQueueOutboxStore
+      .getState()
+      .acknowledge("active-ack", { agentId: "chat", revision: 1, items: [] });
+    await vi.waitFor(() =>
+      expect(useDraftStore.getState().drafts[key]?.routingClear?.itemId).toBe("active-ack"),
+    );
+    let recovered = false;
+    const recovery = useQueueOutboxStore
+      .getState()
+      .recoverRoutingDraft()
+      .then(() => {
+        recovered = true;
+      });
+    await new Promise((done) => setTimeout(done, 10));
+    expect(recovered).toBe(false);
+    release();
+    await ack;
+    await recovery;
+    expect(useDraftStore.getState().getDraftInput(key)?.text).toBe("");
+    await useQueueOutboxStore.getState().removeDurably("active-ack");
+    storage.draftHold = undefined;
+    await flushDraftPersistStorageDurably();
+    await resetPersistedModules();
+    const restarted = await import("./index");
+    const drafts = (await import("@/stores/draft-store")).useDraftStore;
+    await drafts.persist.rehydrate();
+    await restarted.useQueueOutboxStore.persist.rehydrate();
+    await restarted.useQueueOutboxStore.getState().recoverRoutingDraft();
+    expect(drafts.getState().getDraftInput(key)?.text).toBe("");
+    expect(restarted.useQueueOutboxStore.getState().entries["active-ack"]).toBeUndefined();
+  } finally {
+    release();
+    storage.draftHold = undefined;
   }
 });
 

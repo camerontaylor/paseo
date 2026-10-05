@@ -27,6 +27,7 @@ const PersistedQueueOutboxSchema = z.object({
 type PersistedQueueOutbox = z.infer<typeof PersistedQueueOutboxSchema>;
 
 interface QueueOutboxActions {
+  recoverRoutingDraft: () => Promise<void>;
   getEntry: (itemId: string) => Promise<PendingQueueEnqueue | undefined>;
   markRoutingDispatched: (itemId: string) => Promise<void>;
   rejections: Record<string, string>;
@@ -92,6 +93,48 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
   persist(
     (set, get) => ({
       entries: {},
+      recoverRoutingDraft: async () => {
+        await awaitOutboxHydration();
+        const { useDraftStore, awaitDraftHydration } = await import("@/stores/draft-store");
+        await awaitDraftHydration();
+        const itemId =
+          useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY]?.routingClear?.itemId;
+        if (!itemId) return;
+        await serializeQueueOperation(JSON.stringify(["routing-ack", itemId]), async () => {
+          const draft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+          const clear = draft?.routingClear;
+          if (
+            !draft ||
+            !clear ||
+            clear.itemId !== itemId ||
+            draft.version !== clear.version ||
+            draft.updatedAt !== clear.updatedAt
+          )
+            return;
+          const entry = get().entries[itemId];
+          if (
+            !entry?.routingOrigin ||
+            entry.removalRequested ||
+            get().acknowledgements[itemId] ||
+            entry.routingDraftVersion === undefined ||
+            entry.routingDraftUpdatedAt === undefined
+          )
+            return;
+          const version = entry.routingDraftVersion;
+          const updatedAt = entry.routingDraftUpdatedAt;
+          useDraftStore.setState((state) => ({
+            drafts: {
+              ...state.drafts,
+              [SESSION_ROUTING_DRAFT_KEY]: {
+                input: { ...draft.input, text: entry.text },
+                lifecycle: "active",
+                version,
+                updatedAt,
+              },
+            },
+          }));
+        });
+      },
       getEntry: async (itemId) => {
         await awaitOutboxHydration();
         return get().entries[itemId];
@@ -137,10 +180,18 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
               draft?.version === entry.routingDraftVersion &&
               draft?.updatedAt === entry.routingDraftUpdatedAt
             ) {
-              useDraftStore
-                .getState()
-                .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "" });
-              clearedDraft = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];
+              const { editDraftRecordText } = await import("@/stores/draft-store/state");
+              if (useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY] === draft) {
+                const next = editDraftRecordText(draft, "", Date.now(), true);
+                const cleared = {
+                  ...next,
+                  routingClear: { itemId, version: next.version, updatedAt: next.updatedAt },
+                };
+                clearedDraft = cleared;
+                useDraftStore.setState((state) => ({
+                  drafts: { ...state.drafts, [SESSION_ROUTING_DRAFT_KEY]: cleared },
+                }));
+              }
             }
             try {
               await flushDraftPersistStorageDurably();

@@ -30,6 +30,7 @@ export interface DraftRecord {
   lifecycle: DraftLifecycleState;
   updatedAt: number;
   version: number;
+  routingClear?: { itemId: string; version: number; updatedAt: number };
 }
 
 export function editDraftRecordText(
@@ -126,11 +127,17 @@ export const CanonicalDraftInputSchema = z.strictObject({
   // COMPAT(draft-cwd): accept legacy persisted drafts that include cwd. Stop accepting after 2026-11-09.
   cwd: z.string().optional(),
 });
+export const RoutingDraftClearSchema = z.strictObject({
+  itemId: z.string(),
+  version: z.number().int().positive(),
+  updatedAt: z.number(),
+});
 const DraftRecordSchema: z.ZodType<DraftRecord> = z.strictObject({
   input: CanonicalDraftInputSchema,
   lifecycle: z.enum(["active", "abandoned", "sent"]),
   updatedAt: z.number(),
   version: z.number().int().positive(),
+  routingClear: RoutingDraftClearSchema.optional(),
 });
 export const DraftStoreStateSchema: z.ZodType<DraftStoreState> = z.strictObject({
   drafts: z.record(z.string(), DraftRecordSchema),

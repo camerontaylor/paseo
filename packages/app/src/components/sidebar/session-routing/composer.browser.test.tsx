@@ -566,6 +566,75 @@ test("both persisted reads gate sending and restore an owned pending item with n
   }
 });
 
+for (const newer of [false, true]) {
+  test(`persisted tentative clear restores offline Retry and preserves newer ownership: ${newer}`, async () => {
+    const key = SESSION_ROUTING_DRAFT_KEY;
+    useDraftStore.getState().editDraftText({ draftKey: key, text: "continue" });
+    const record = useDraftStore.getState().drafts[key]!;
+    await useQueueOutboxStore.getState().add({
+      serverId: "host",
+      agentId: "chat",
+      itemId: "tentative-original",
+      text: "continue",
+      expectedWorkspaceId: "original-workspace",
+      expectedProjectId: "original-project",
+      routingOrigin: true,
+      routingDraftVersion: record.version,
+      routingDraftUpdatedAt: record.updatedAt,
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+    });
+    const { editDraftRecordText } = await import("@/stores/draft-store/state");
+    const cleared = editDraftRecordText(record, "", record.updatedAt + 1, true);
+    const saved = newer
+      ? { ...cleared, input: { text: "continue", attachments: [] } }
+      : {
+          ...cleared,
+          routingClear: {
+            itemId: "tentative-original",
+            version: cleared.version,
+            updatedAt: cleared.updatedAt,
+          },
+        };
+    const draftStorage = useDraftStore.persist.getOptions().storage!;
+    await draftStorage.setItem("routing-fixture-drafts", {
+      state: { drafts: { [key]: saved } },
+      version: 0,
+    });
+    await useDraftStore.persist.rehydrate();
+    await useQueueOutboxStore.persist.rehydrate();
+    fixture.directory = false;
+    fixture.enqueue.mockRejectedValue(new Error("host offline"));
+    const view = await render();
+    if (newer) {
+      act(() => view.getByTestId("routing-send-mode").click());
+      await waitFor(() =>
+        expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue"),
+      );
+      expect(view.queryByRole("button", { name: "Retry delivery" })).toBeNull();
+      expect(useDraftStore.getState().drafts[key]).toEqual(saved);
+    } else {
+      await waitFor(() =>
+        expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy(),
+      );
+      expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+      expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("continue");
+      act(() => view.getByRole("button", { name: "Retry delivery" }).click());
+      await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+      expect(fixture.enqueue.mock.calls[0]?.[0]).toMatchObject({
+        itemId: "tentative-original",
+        agentId: "chat",
+        text: "continue",
+        expectedWorkspaceId: "original-workspace",
+        expectedProjectId: "original-project",
+      });
+      expect(view.getByTestId("routing-submit").getAttribute("aria-disabled")).toBe("true");
+    }
+    expect(fixture.search).not.toHaveBeenCalled();
+  });
+}
+
 test("an acknowledgement during draft loading cannot pair stale text with new ownership", async () => {
   useDraftStore.getState().editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "continue" });
   const record = useDraftStore.getState().drafts[SESSION_ROUTING_DRAFT_KEY];

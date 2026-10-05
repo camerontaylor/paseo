@@ -57,6 +57,9 @@ does not require a loaded host/chat directory. Routing keeps durable outbox owne
 checkpoint succeeds, including after a failed storage write. Acknowledgement waits for persisted draft
 hydration before comparing ownership. Checkpoint writes serialize with background draft writes;
 failure restores matching in-memory draft ownership and retains the same outbox item for retry.
+A tentative clear persists its item identity with the cleared revision in the same draft record.
+On reload, that identity lets the retained outbox recover the original ownership before the composer
+unlocks; a later user draft has no matching clear identity and stays intact.
 Draft clearing is guarded by the submitted
 draft revision and update timestamp, so a late
 acknowledgement cannot erase a newly edited identical prompt. See [queue mirroring](queue-mirroring.md)

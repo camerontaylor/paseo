@@ -297,6 +297,8 @@ export function SessionRoutingComposer({
     let active = true;
     void Promise.all([awaitDraftHydration(), awaitOutboxHydration()])
       .then(async () => {
+        if (useDraftStore.getState().drafts[ROUTING_DRAFT_KEY]?.routingClear)
+          await useQueueOutboxStore.getState().recoverRoutingDraft();
         await useDraftStore.getState().hydrateDraftInput({ draftKey: ROUTING_DRAFT_KEY });
         if (!active) return undefined;
         // Migration/acknowledgement may change the record during an await. Read
