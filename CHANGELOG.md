@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0-beta.8 - 2026-10-05
+
+### Added
+
+- Find existing chats from the sidebar using natural-language queries ([#44](https://github.com/tmad4000/paseo/pull/44) by [@tmad4000](https://github.com/tmad4000))
+- Route prompts to existing chats with manual recipient selection or ambiguous-match review ([#44](https://github.com/tmad4000/paseo/pull/44))
+
 ## 0.10.0-beta.7 - 2026-10-03
 
 ### Fixed
