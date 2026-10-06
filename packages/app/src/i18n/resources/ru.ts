@@ -1262,9 +1262,11 @@ export const ru: TranslationResources = {
       clear: "Сбросить фильтр боковой панели",
       sortHeading: "Сортировка чатов",
       sortBy: "Сортировка чатов: {{value}}",
+      sortUpdateHost: "Update selected hosts to sort by message activity.",
       sort: {
         manual: "Ручной порядок",
-        recent: "Недавняя активность",
+        recent: "Latest conversation activity",
+        user: "Your last message",
         title: "Название А–Я",
       },
     },

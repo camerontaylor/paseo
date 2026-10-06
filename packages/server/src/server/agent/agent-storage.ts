@@ -5,7 +5,12 @@ import { CompanionEntrySchema } from "@getpaseo/protocol/companion-stream";
 import type { Logger } from "pino";
 
 import { writeJsonFileAtomic } from "../atomic-file.js";
-import { AgentArtifactSchema, AgentFeatureSchema, AgentStatusSchema } from "../messages.js";
+import {
+  AgentArtifactSchema,
+  AgentFeatureSchema,
+  AgentStatusSchema,
+  AgentMessageActivitySchema,
+} from "../messages.js";
 import { toStoredAgentRecord } from "./agent-projections.js";
 import type { ManagedAgent } from "./agent-manager.js";
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
@@ -52,6 +57,7 @@ const STORED_AGENT_SCHEMA = z.object({
   updatedAt: z.string(),
   lastActivityAt: z.string().optional(),
   lastUserMessageAt: z.string().nullable().optional(),
+  messageActivity: AgentMessageActivitySchema.optional(),
   title: z.string().nullable().optional(),
   labels: z.record(z.string(), z.string()).default({}),
   lastStatus: AgentStatusSchema.default("closed"),

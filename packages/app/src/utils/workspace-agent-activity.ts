@@ -7,6 +7,8 @@ export interface WorkspaceAgentActivity {
   status: WorkspaceDescriptor["status"];
   enteredAt: Date | null;
   lastActivityAt: Date;
+  lastMessageAt?: Date;
+  lastUserMessageAt?: Date;
 }
 
 function workspaceAgentStatus(agent: Agent): Agent["status"] {
@@ -21,6 +23,8 @@ export function buildWorkspaceAgentActivityIndex(
   const activityByWorkspaceId = new Map<string, WorkspaceAgentActivity>();
   const latestActivityAtByWorkspaceId = new Map<string, Date>();
   const latestMessageAtByWorkspaceId = new Map<string, Date>();
+  const conversationAt = new Map<string, Date>();
+  const userAt = new Map<string, Date>();
 
   for (const agent of agents.values()) {
     const parentAgent = agent.parentAgentId ? agents.get(agent.parentAgentId) : undefined;
@@ -29,6 +33,9 @@ export function buildWorkspaceAgentActivityIndex(
     }
 
     recordLatestActivity(latestMessageAtByWorkspaceId, agent.workspaceId, agent.lastActivityAt);
+    const clocks = agentMessageTimestamps(agent);
+    recordLatestActivity(userAt, agent.workspaceId, clocks.user);
+    recordLatestActivity(conversationAt, agent.workspaceId, clocks.conversation);
 
     const enteredAt = agent.attentionTimestamp ?? agent.updatedAt;
     const latestActivityAt = latestActivityAtByWorkspaceId.get(agent.workspaceId);
@@ -52,6 +59,8 @@ export function buildWorkspaceAgentActivityIndex(
   }
 
   for (const [workspaceId, activity] of activityByWorkspaceId) {
+    activity.lastMessageAt = conversationAt.get(workspaceId);
+    activity.lastUserMessageAt = userAt.get(workspaceId);
     activity.lastActivityAt =
       latestMessageAtByWorkspaceId.get(workspaceId) ?? activity.lastActivityAt;
     const previousActivity = previous?.get(workspaceId);
@@ -61,7 +70,7 @@ export function buildWorkspaceAgentActivityIndex(
     ) {
       activityByWorkspaceId.set(
         workspaceId,
-        previousActivity.lastActivityAt.getTime() === activity.lastActivityAt.getTime()
+        sameMessageActivity(previousActivity, activity)
           ? previousActivity
           : { ...activity, enteredAt: previousActivity.enteredAt },
       );
@@ -96,4 +105,24 @@ function areWorkspaceAgentActivityIndexesIdentical(
     }
   }
   return true;
+}
+
+function messageTimestamp(value: string | null | undefined): Date | undefined {
+  const time = Date.parse(value ?? "");
+  return Number.isFinite(time) ? new Date(time) : undefined;
+}
+
+function agentMessageTimestamps(agent: Agent): { user: Date; conversation: Date } {
+  const user = messageTimestamp(agent.messageActivity?.lastUserMessageAt);
+  const assistant = messageTimestamp(agent.messageActivity?.lastAssistantMessageAt);
+  let conversation = user ?? assistant ?? agent.createdAt;
+  if (user && assistant && assistant > user) conversation = assistant;
+  return { user: user ?? agent.createdAt, conversation };
+}
+function sameMessageActivity(left: WorkspaceAgentActivity, right: WorkspaceAgentActivity): boolean {
+  return (
+    left.lastActivityAt.getTime() === right.lastActivityAt.getTime() &&
+    left.lastMessageAt?.getTime() === right.lastMessageAt?.getTime() &&
+    left.lastUserMessageAt?.getTime() === right.lastUserMessageAt?.getTime()
+  );
 }

@@ -851,12 +851,13 @@ function WorkspacesSectionHeader() {
   );
 }
 
-const SIDEBAR_SORT_MODES: readonly SidebarSortMode[] = ["manual", "recent", "title"];
+const SIDEBAR_SORT_MODES: readonly SidebarSortMode[] = ["recent", "user", "manual", "title"];
 
 function SidebarSearchControls() {
   const { t } = useTranslation();
   const { theme } = useUnistyles();
-  const { searchQuery, setSearchQuery, sortMode, setSortMode } = useSidebarModel();
+  const { searchQuery, setSearchQuery, sortMode, setSortMode, messageSortAvailability } =
+    useSidebarModel();
   const searchInputRef = useRef<EditingTextInputHandle>(null);
   const clearSearch = useCallback(() => {
     searchInputRef.current?.reset();
@@ -908,14 +909,22 @@ function SidebarSearchControls() {
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            width={210}
+            width={280}
             sheetTitle={t("sidebar.filterSidebar.sortHeading")}
           >
+            {messageSortAvailability === "unsupported" ? (
+              <DropdownMenuItem disabled>
+                {t("sidebar.filterSidebar.sortUpdateHost")}
+              </DropdownMenuItem>
+            ) : null}
             {SIDEBAR_SORT_MODES.map((mode) => (
               <SidebarSortItem
                 key={mode}
                 mode={mode}
                 selected={sortMode === mode}
+                disabled={
+                  (mode === "recent" || mode === "user") && messageSortAvailability !== "ready"
+                }
                 onSelectMode={setSortMode}
               />
             ))}
@@ -923,7 +932,16 @@ function SidebarSearchControls() {
         </DropdownMenu>
       </View>
     ),
-    [theme, searchQuery, setSearchQuery, clearSearch, sortMode, setSortMode, t],
+    [
+      theme,
+      searchQuery,
+      setSearchQuery,
+      clearSearch,
+      sortMode,
+      setSortMode,
+      messageSortAvailability,
+      t,
+    ],
   );
   return <SessionRoutingComposer>{renderFindField}</SessionRoutingComposer>;
 }
@@ -931,16 +949,23 @@ function SidebarSearchControls() {
 function SidebarSortItem({
   mode,
   selected,
+  disabled,
   onSelectMode,
 }: {
   mode: SidebarSortMode;
   selected: boolean;
+  disabled: boolean;
   onSelectMode: (mode: SidebarSortMode) => void;
 }) {
   const { t } = useTranslation();
   const selectMode = useCallback(() => onSelectMode(mode), [mode, onSelectMode]);
   return (
-    <DropdownMenuItem selected={selected} onSelect={selectMode} testID={`sidebar-sort-${mode}`}>
+    <DropdownMenuItem
+      selected={selected}
+      disabled={disabled}
+      onSelect={selectMode}
+      testID={`sidebar-sort-${mode}`}
+    >
       {t(`sidebar.filterSidebar.sort.${mode}`)}
     </DropdownMenuItem>
   );

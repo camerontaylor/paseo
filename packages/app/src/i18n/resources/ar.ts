@@ -1244,9 +1244,11 @@ export const ar: TranslationResources = {
       clear: "مسح تصفية الشريط الجانبي",
       sortHeading: "ترتيب المحادثات",
       sortBy: "ترتيب المحادثات: {{value}}",
+      sortUpdateHost: "Update selected hosts to sort by message activity.",
       sort: {
         manual: "الترتيب اليدوي",
-        recent: "النشاط الأخير",
+        recent: "Latest conversation activity",
+        user: "Your last message",
         title: "العنوان أ–ي",
       },
     },

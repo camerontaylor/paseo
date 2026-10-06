@@ -115,3 +115,19 @@ describe("normalizeAgentSnapshot", () => {
     expect(nonString.parentAgentId).toBeNull();
   });
 });
+
+it("round-trips original conversation clocks and keeps old hosts without clocks compatible", () => {
+  const original = {
+    ...createSnapshot(),
+    messageActivity: {
+      lastUserMessageAt: "2025-01-01T00:00:00.000Z",
+      lastAssistantMessageAt: null,
+    },
+  };
+  expect(projectAgentSnapshot(normalizeAgentSnapshot(original, "host")).messageActivity).toEqual(
+    original.messageActivity,
+  );
+  expect(
+    projectAgentSnapshot(normalizeAgentSnapshot(createSnapshot(), "old-host")).messageActivity,
+  ).toBeUndefined();
+});

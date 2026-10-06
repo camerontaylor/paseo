@@ -146,6 +146,8 @@ describe("workspace agent activity index", () => {
             status: "needs_input",
             enteredAt: new Date("2026-06-01T10:01:00.000Z"),
             lastActivityAt: new Date("2026-06-01T10:01:00.000Z"),
+            lastMessageAt: new Date("2026-01-01T00:00:00.000Z"),
+            lastUserMessageAt: new Date("2026-01-01T00:00:00.000Z"),
           },
         ],
         [
@@ -155,6 +157,8 @@ describe("workspace agent activity index", () => {
             status: "attention",
             enteredAt: new Date("2026-06-01T10:02:00.000Z"),
             lastActivityAt: new Date("2026-06-01T10:00:00.000Z"),
+            lastMessageAt: new Date("2026-01-01T00:00:00.000Z"),
+            lastUserMessageAt: new Date("2026-01-01T00:00:00.000Z"),
           },
         ],
       ]),
@@ -202,6 +206,8 @@ describe("workspace agent activity index", () => {
       status: "running",
       enteredAt: new Date("2026-06-01T10:00:00.000Z"),
       lastActivityAt: new Date("2026-06-01T10:00:00.000Z"),
+      lastMessageAt: new Date("2026-01-01T00:00:00.000Z"),
+      lastUserMessageAt: new Date("2026-01-01T00:00:00.000Z"),
     });
   });
 
@@ -238,6 +244,8 @@ describe("workspace agent activity index", () => {
             status: "done",
             enteredAt: new Date("2026-06-01T10:00:00.000Z"),
             lastActivityAt: new Date("2026-06-01T10:00:00.000Z"),
+            lastMessageAt: new Date("2026-01-01T00:00:00.000Z"),
+            lastUserMessageAt: new Date("2026-01-01T00:00:00.000Z"),
           },
         ],
         [
@@ -247,6 +255,8 @@ describe("workspace agent activity index", () => {
             status: "running",
             enteredAt: new Date("2026-06-01T10:03:00.000Z"),
             lastActivityAt: new Date("2026-06-01T10:03:00.000Z"),
+            lastMessageAt: new Date("2026-01-01T00:00:00.000Z"),
+            lastUserMessageAt: new Date("2026-01-01T00:00:00.000Z"),
           },
         ],
       ]),
@@ -325,6 +335,8 @@ describe("workspace agent activity index", () => {
       status: "needs_input",
       enteredAt: new Date("2026-06-01T10:05:00.000Z"),
       lastActivityAt: new Date("2026-06-01T10:05:00.000Z"),
+      lastMessageAt: new Date("2026-01-01T00:00:00.000Z"),
+      lastUserMessageAt: new Date("2026-01-01T00:00:00.000Z"),
     });
   });
 
@@ -360,4 +372,43 @@ describe("workspace agent activity index", () => {
     expect(next.get("workspace-a")?.enteredAt).toEqual(new Date("2026-06-01T10:00:00.000Z"));
     expect(next.get("workspace-a")?.lastActivityAt).toEqual(new Date("2026-06-01T10:05:00.000Z"));
   });
+});
+
+it("aggregates actual root conversation clocks and falls back only when the role clock is unknown", () => {
+  const root = agent({ id: "root", workspaceId: "workspace", updatedAt: "2026-10-01T00:00:00Z" });
+  root.messageActivity = {
+    lastUserMessageAt: "2025-12-01T00:00:00.000Z",
+    lastAssistantMessageAt: null,
+  };
+  const initial = buildWorkspaceAgentActivityIndex(new Map([[root.id, root]]));
+  expect(initial.get("workspace")?.lastMessageAt?.toISOString()).toBe("2025-12-01T00:00:00.000Z");
+  const second = {
+    ...root,
+    id: "second",
+    messageActivity: {
+      lastUserMessageAt: "2026-01-03T00:00:00.000Z",
+      lastAssistantMessageAt: "2026-01-04T00:00:00.000Z",
+    },
+  };
+  const child = {
+    ...second,
+    id: "child",
+    parentAgentId: "root",
+    messageActivity: {
+      lastUserMessageAt: "2026-02-01T00:00:00.000Z",
+      lastAssistantMessageAt: null,
+    },
+  };
+  const archived = { ...child, id: "archived", parentAgentId: null, archivedAt: new Date() };
+  const indexed = buildWorkspaceAgentActivityIndex(
+    new Map([root, second, child, archived].map((a) => [a.id, a])),
+  );
+  expect(indexed.get("workspace")?.lastMessageAt?.toISOString()).toBe("2026-01-04T00:00:00.000Z");
+  expect(indexed.get("workspace")?.lastUserMessageAt?.toISOString()).toBe(
+    "2026-01-03T00:00:00.000Z",
+  );
+  root.messageActivity = { lastUserMessageAt: null, lastAssistantMessageAt: null };
+  const unknown = buildWorkspaceAgentActivityIndex(new Map([[root.id, root]]));
+  expect(unknown.get("workspace")?.lastMessageAt).toEqual(root.createdAt);
+  expect(unknown.get("workspace")?.lastUserMessageAt).toEqual(root.createdAt);
 });

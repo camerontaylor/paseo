@@ -21,6 +21,8 @@ function workspace(id: string, name: string, projectName: string, activity: stri
     ...placement,
     title: name,
     lastActivityAt: new Date(activity),
+    lastMessageAt: new Date(activity),
+    lastUserMessageAt: new Date(activity),
   } as SidebarWorkspaceEntry;
   return { placement, entry };
 }
@@ -132,4 +134,27 @@ describe("sidebar local filtering and sorting", () => {
       ["paseo", ["other"]],
     ]);
   });
+});
+
+it("distinguishes your messages from replies and ignores metadata timestamps with stable ties", () => {
+  const a = workspace("a", "Zulu", "Project", "2026-01-02T00:00:00Z");
+  const b = workspace("b", "Alpha", "Project", "2026-01-03T00:00:00Z");
+  a.entry.lastMessageAt = new Date("2026-01-04T00:00:00Z");
+  a.entry.lastActivityAt = new Date("2026-02-01T00:00:00Z");
+  const entries = new Map([a, b].map(({ entry }) => [entry.workspaceKey, entry]));
+  const placements = [a.placement, b.placement];
+  expect(sortSidebarWorkspaces(placements, entries, "recent").map((x) => x.workspaceKey)).toEqual([
+    "a",
+    "b",
+  ]);
+  expect(sortSidebarWorkspaces(placements, entries, "user").map((x) => x.workspaceKey)).toEqual([
+    "b",
+    "a",
+  ]);
+  b.entry.lastMessageAt = a.entry.lastMessageAt;
+  b.entry.lastActivityAt = new Date("2027-01-01T00:00:00Z");
+  expect(sortSidebarWorkspaces(placements, entries, "recent").map((x) => x.workspaceKey)).toEqual([
+    "a",
+    "b",
+  ]);
 });

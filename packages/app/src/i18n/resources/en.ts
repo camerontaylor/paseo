@@ -1254,9 +1254,11 @@ export const en = {
       clear: "Clear sidebar filter",
       sortHeading: "Sort chats",
       sortBy: "Sort chats: {{value}}",
+      sortUpdateHost: "Update selected hosts to sort by message activity.",
       sort: {
         manual: "Manual order",
-        recent: "Recent activity",
+        recent: "Latest conversation activity",
+        user: "Your last message",
         title: "Title A–Z",
       },
     },

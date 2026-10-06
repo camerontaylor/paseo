@@ -1254,9 +1254,11 @@ export const ko: TranslationResources = {
       clear: "사이드바 필터 지우기",
       sortHeading: "채팅 정렬",
       sortBy: "채팅 정렬: {{value}}",
+      sortUpdateHost: "Update selected hosts to sort by message activity.",
       sort: {
         manual: "수동 순서",
-        recent: "최근 활동",
+        recent: "Latest conversation activity",
+        user: "Your last message",
         title: "제목 가나다순",
       },
     },

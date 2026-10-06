@@ -591,3 +591,63 @@ test.describe("Half-screen desktop layout", () => {
     }
   });
 });
+
+test("sidebar conversation sort choices persist and metadata does not reorder activity", async ({
+  page,
+}) => {
+  const a = await seedMockAgentWorkspace({
+    repoPrefix: "sidebar-sort-a-",
+    title: "Sort option Alpha",
+  });
+  const b = await seedMockAgentWorkspace({
+    repoPrefix: "sidebar-sort-b-",
+    title: "Sort option Zulu",
+  });
+  try {
+    await gotoAppShell(page);
+    await waitForSidebarWorkspace(page, a.workspaceId);
+    await waitForSidebarWorkspace(page, b.workspaceId);
+    const trigger = page.getByTestId("sidebar-sort-trigger");
+    await expect(trigger).toHaveAttribute("aria-label", /Latest conversation activity/);
+    await trigger.click();
+    for (const mode of ["recent", "user", "manual", "title"])
+      await expect(page.getByTestId(`sidebar-sort-${mode}`)).toBeVisible();
+    await page.getByTestId("sidebar-sort-user").click();
+    await page.reload();
+    await expect(trigger).toHaveAttribute("aria-label", /Your last message/);
+    await trigger.click();
+    await page.getByTestId("sidebar-sort-manual").click();
+    await expect(trigger).toHaveAttribute("aria-label", /Manual/);
+    await trigger.click();
+    await page.getByTestId("sidebar-sort-title").click();
+    const rows = page.locator('[data-testid^="sidebar-workspace-row-"]');
+    const order = () =>
+      rows.evaluateAll(
+        (elements, ids) =>
+          elements.map((el) => el.getAttribute("data-testid")!).filter((id) => ids.includes(id)),
+        [getWorkspaceRowTestId(a.workspaceId), getWorkspaceRowTestId(b.workspaceId)],
+      );
+    await expect
+      .poll(order)
+      .toEqual([getWorkspaceRowTestId(a.workspaceId), getWorkspaceRowTestId(b.workspaceId)]);
+    await a.client.sendAgentMessage(a.agentId, "hello");
+    await a.client.waitForFinish(a.agentId);
+    await trigger.click();
+    await page.getByTestId("sidebar-sort-recent").click();
+    await expect
+      .poll(order)
+      .toEqual([getWorkspaceRowTestId(a.workspaceId), getWorkspaceRowTestId(b.workspaceId)]);
+    await b.client.updateAgent(b.agentId, { name: "Sort option Beta" });
+
+    await expect
+      .poll(order)
+      .toEqual([getWorkspaceRowTestId(a.workspaceId), getWorkspaceRowTestId(b.workspaceId)]);
+    await page.reload();
+    await expect
+      .poll(order)
+      .toEqual([getWorkspaceRowTestId(a.workspaceId), getWorkspaceRowTestId(b.workspaceId)]);
+  } finally {
+    await a.cleanup();
+    await b.cleanup();
+  }
+});

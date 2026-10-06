@@ -1274,9 +1274,11 @@ export const ptBR: TranslationResources = {
       clear: "Limpar filtro da barra lateral",
       sortHeading: "Ordenar chats",
       sortBy: "Ordenar chats: {{value}}",
+      sortUpdateHost: "Update selected hosts to sort by message activity.",
       sort: {
         manual: "Ordem manual",
-        recent: "Atividade recente",
+        recent: "Latest conversation activity",
+        user: "Your last message",
         title: "Título A–Z",
       },
     },

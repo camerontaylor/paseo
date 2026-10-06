@@ -32,6 +32,7 @@ function createMemoryStorage(entries: Record<string, string | null>): MemoryStor
 describe("sidebar view store", () => {
   beforeEach(() => {
     useSidebarViewStore.setState({
+      sortMode: "recent",
       groupMode: "project",
       hostFilters: [],
       projectFilters: [],
@@ -84,6 +85,7 @@ describe("sidebar view store", () => {
         },
       }),
     ).toEqual({
+      sortMode: "recent",
       groupMode: "status",
       hostFilters: [],
       projectFilters: [],
@@ -98,6 +100,7 @@ describe("sidebar view store", () => {
         hostFilter: "host-a",
       }),
     ).toEqual({
+      sortMode: "recent",
       groupMode: "status",
       hostFilters: ["host-a"],
       projectFilters: [],
@@ -112,6 +115,7 @@ describe("sidebar view store", () => {
         hostFilters: ["host-a", "host-b"],
       }),
     ).toEqual({
+      sortMode: "recent",
       groupMode: "status",
       hostFilters: ["host-a", "host-b"],
       projectFilters: [],
@@ -121,6 +125,7 @@ describe("sidebar view store", () => {
 
   it("clears only the label facet", () => {
     useSidebarViewStore.setState({
+      sortMode: "recent",
       groupMode: "status",
       hostFilters: ["host-a"],
       labelFilter: { labels: ["urgent", "blocked"] },
@@ -129,6 +134,7 @@ describe("sidebar view store", () => {
     useSidebarViewStore.getState().clearLabelFilter();
 
     expect(useSidebarViewStore.getState()).toMatchObject({
+      sortMode: "recent",
       groupMode: "status",
       hostFilters: ["host-a"],
       labelFilter: { labels: [] },
@@ -196,6 +202,7 @@ describe("sidebar view store", () => {
 
   it("keeps the other facets when the project filter is cleared", () => {
     useSidebarViewStore.setState({
+      sortMode: "recent",
       groupMode: "status",
       hostFilters: ["host-a"],
       projectFilters: ["project-a"],
@@ -205,6 +212,7 @@ describe("sidebar view store", () => {
     useSidebarViewStore.getState().clearProjectFilters();
 
     expect(useSidebarViewStore.getState()).toMatchObject({
+      sortMode: "recent",
       groupMode: "status",
       hostFilters: ["host-a"],
       projectFilters: [],
@@ -222,6 +230,7 @@ describe("sidebar view store", () => {
         projectFilters: ["project-a", "project-b"],
       }),
     ).toEqual({
+      sortMode: "recent",
       groupMode: "project",
       hostFilters: ["host-a"],
       projectFilters: ["project-a", "project-b"],
@@ -231,6 +240,7 @@ describe("sidebar view store", () => {
 
   it("never keeps project filters from state the schema rejects", () => {
     expect(migrateSidebarViewState({ projectFilters: "project-a" })).toEqual({
+      sortMode: "recent",
       groupMode: "project",
       hostFilters: [],
       projectFilters: [],
@@ -280,4 +290,15 @@ describe("sidebar view store", () => {
     );
     expect(storage.reads).toEqual(["sidebar-view"]);
   });
+});
+
+it("defaults old preferences to activity and round-trips every chosen sort mode", async () => {
+  expect(migrateSidebarViewState({ groupMode: "project" }).sortMode).toBe("recent");
+  for (const mode of ["recent", "user", "manual", "title"] as const) {
+    useSidebarViewStore.getState().setSortMode(mode);
+    const saved = useSidebarViewStore.persist.getOptions().partialize!(
+      useSidebarViewStore.getState(),
+    );
+    expect(migrateSidebarViewState(JSON.parse(JSON.stringify(saved))).sortMode).toBe(mode);
+  }
 });
