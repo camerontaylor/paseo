@@ -28,7 +28,10 @@ export function selectSessionSearchExcerpts(
         const from = Math.max(0, match.index + match[1].length - 800);
         const until = match.index + 1;
         if (from >= until) continue;
-        for (const [position, delta] of [[from, 1], [until, -1]]) {
+        for (const [position, delta] of [
+          [from, 1],
+          [until, -1],
+        ]) {
           const changes = events.get(position) ?? [];
           changes.push({ word, delta });
           events.set(position, changes);

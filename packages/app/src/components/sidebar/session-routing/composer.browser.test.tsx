@@ -13,6 +13,7 @@ import { AgentQueueDestinationChangedError } from "@getpaseo/client/internal/dae
 import { flushQueueOutboxForServer, useQueueOutboxStore } from "@/stores/queue-outbox-store";
 import { SESSION_ROUTING_DRAFT_KEY } from "@/stores/draft-keys";
 import { SessionRoutingComposer } from "./composer";
+import { searchExistingSessions } from "../../../../../server/src/server/session-search";
 void i18n;
 vi.mock("expo-router", () => ({
   router: {},
@@ -320,6 +321,56 @@ test("ambiguous send asks first and query edits clear stale Find results", async
   expect(fixture.enqueue).not.toHaveBeenCalled();
   act(() => view.getAllByRole("button", { name: "Send here" })[0]?.click());
   await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+});
+
+test("Find renders queued recording evidence with local dates without sending", async () => {
+  fixture.query = "Where were we discussing recording on Notestream Vision?";
+  const timestamp = "2026-10-04T19:38:08.993Z";
+  const text = "Start recording on Notestream Vision";
+  fixture.search.mockImplementation(async () =>
+    searchExistingSessions({
+      query: fixture.query,
+      workspaceIds: ["workspace"],
+      candidates: [
+        {
+          agentId: "chat",
+          workspaceId: "workspace",
+          projectId: "project",
+          projectName: "tmpworkspace",
+          title: "Recording discussion",
+          cwd: "/fixture",
+          updatedAt: timestamp,
+          excerpts: [{ text, source: "queued_message", timestamp }],
+        },
+      ],
+      readContext: async () => [],
+      generate: async () => ({ matches: [{ agentId: "chat", confidence: 0.98, excerptIndex: 0 }] }),
+    }),
+  );
+  const view = await mount();
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByText(text).textContent).toBe(text));
+  const localTime = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(timestamp));
+  expect(view.getByText(`Queued message · ${localTime}`).textContent).toBe(
+    `Queued message · ${localTime}`,
+  );
+  expect(view.getByText(`Updated ${localTime}`).textContent).toBe(`Updated ${localTime}`);
+  expect(view.getByText("tmpworkspace · M5").textContent).toBe("tmpworkspace · M5");
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+  await page.viewport(900, 640);
+  await page.screenshot({ element: container });
+  await page.viewport(390, 700);
+  await page.screenshot({ element: container });
+  act(() => view.getByRole("button", { name: "Open chat" }).click());
+  expect(fixture.open).toHaveBeenCalledTimes(1);
+  expect(fixture.enqueue).not.toHaveBeenCalled();
 });
 
 test("rendered desktop and compact fixture evidence", async () => {

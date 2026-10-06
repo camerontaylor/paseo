@@ -25,14 +25,16 @@ delivery also requires `agentMessageQueue`. Update an older host when prompted.
 
 `session.search.request` reuses existing agent/project/workspace metadata and the latest conversation
 context, including daemon-acknowledged queued messages (pending work, not delivered messages).
-Device-only drafts and unsent outbox items are not visible to host search. Each host shortlists at most 100 sessions before reading timelines; results expose
+Device-only drafts and unsent outbox items are not visible to host search. Each host shortlists at most
+100 sessions before reading timelines; results expose
 searched/total counts. Evidence snippets come verbatim from supplied context, and returned IDs and
 evidence indexes are validated. Archived and child/internal agents are excluded. No maintained index
 is required. Queue text participates in shortlisting. For each shortlisted chat, Find reads up to
-400 timeline items and supplies up to six recent messages plus six query hits, with excerpts capped
+400 projected timeline entries and supplies up to six recent messages plus six query hits, with excerpts capped
 at 800 characters around matching text. This is bounded recent-context matching, not full-history search.
-Results show session update time and the evidence message time in the viewer's local timezone;
-queued evidence is labeled explicitly. Older hosts omit the optional timestamps.
+Results show local date, time, and timezone for the session update and evidence message. The session
+update time includes newer queued-message creation times; queued evidence is labeled explicitly.
+Older hosts omit the optional timestamps.
 
 A chat belongs to its workspace's project even when its messages discuss another product. For
 example, a Vision discussion started in tmpworkspace is excluded by the Vision project scope;
