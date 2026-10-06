@@ -75,6 +75,12 @@ Commits are the fork commits that built the feature (`git show --stat <sha>` for
 - Wires into: workspace registry and directory payloads, session RPCs and permissions, daemon bootstrap and notification delivery, sidebar menus and group limits, app notification routing, and English resources.
 - Timed or Luna-evaluated snoozes hide workspaces under Show all. See [workspace snoozing](agent-lifecycle.md#workspace-snoozing).
 
+### Multiple transcripts in New Agent drafts
+
+- Owns: `packages/app/src/transcript-picker/`.
+- Wires into: `composer/draft/workspace-tab.tsx` and English draft labels.
+- Open workspace chats can be toggled into a draft as independent snapshots. Selection follows the draft's attachment scope, including preselected fork context and removals through attachment pills.
+
 ### Assistant text-selection toolbar
 
 - Owns: `packages/app/src/assistant-selection-toolbar/`.

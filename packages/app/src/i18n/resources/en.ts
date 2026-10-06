@@ -2089,6 +2089,12 @@ export const en = {
     draft: {
       newAgent: "New Agent",
       creatingAgent: "Creating agent",
+      // FORK(transcript-picker): snapshots from other open chats in this workspace.
+      addTranscripts: "Add chat transcripts:",
+      untitledChat: "Untitled chat",
+      transcriptTitle: "Chat history · {{title}}",
+      transcriptFailed: "Could not add chat transcript.",
+      transcriptsLoading: "Wait for the selected transcripts to finish loading.",
     },
     file: {
       directoryMissing: "Workspace directory not found.",

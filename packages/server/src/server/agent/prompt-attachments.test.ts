@@ -7,6 +7,19 @@ import {
 } from "./prompt-attachments.js";
 
 describe("prompt attachments", () => {
+  it("includes every selected transcript before the new user prompt", () => {
+    const histories = ["Alpha", "Beta"].map((title) => ({
+      type: "text" as const,
+      mimeType: "text/plain",
+      contextKind: "chat_history" as const,
+      title,
+      text: `History from ${title}`,
+    }));
+    expect(buildAgentPrompt("Compare both chats", undefined, histories)).toEqual([
+      ...histories,
+      { type: "text", text: "Compare both chats" },
+    ]);
+  });
   it("places fork history before the new user prompt", () => {
     const chatHistory = {
       type: "text" as const,

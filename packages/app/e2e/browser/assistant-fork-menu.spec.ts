@@ -10,6 +10,7 @@ import {
   observeForkAttachment,
 } from "../support/helpers/assistant-fork";
 import { expectComposerVisible, submitMessage } from "../support/helpers/composer";
+import { createAgentTabFromMenu } from "../support/helpers/workspace-tabs";
 import { getE2EDaemonPort } from "../support/helpers/daemon-port";
 import {
   openAgentRoute,
@@ -37,6 +38,111 @@ const test = base.extend<{
 
 test.describe("Assistant fork menu", () => {
   test.describe.configure({ timeout: 180_000 });
+
+  test("combines transcripts from open workspace chats and keeps toggles draft-local", async ({
+    page,
+    seedForkWorkspace,
+  }) => {
+    const session = await seedForkWorkspace({
+      repoPrefix: "multiple-transcripts-",
+      title: "Chat Alpha",
+      initialPrompt: "Alpha context is included.",
+      featureValues: { mockAssistantResponse: "Alpha transcript response." },
+    });
+    const beta = await session.client.createAgent({
+      provider: "mock",
+      cwd: session.cwd,
+      workspaceId: session.workspaceId,
+      modeId: "load-test",
+      model: "e2e-fast-stream",
+      title: "Chat Beta",
+      initialPrompt: "Beta context is included.",
+      featureValues: { mockAssistantResponse: "Beta transcript response." },
+    });
+    const unopened = await session.client.createAgent({
+      provider: "mock",
+      cwd: session.cwd,
+      workspaceId: session.workspaceId,
+      modeId: "load-test",
+      model: "e2e-fast-stream",
+      title: "Unopened chat",
+      initialPrompt: "Excluded unopened context.",
+    });
+    await Promise.all([
+      session.client.waitForFinish(session.agentId, 30_000),
+      session.client.waitForFinish(beta.id, 30_000),
+      session.client.waitForFinish(unopened.id, 30_000),
+    ]);
+    // Active root agents are opened automatically; archive this chat to close its tab.
+    await session.client.archiveAgent(unopened.id);
+    await openAgentRoute(page, session);
+    await expectComposerVisible(page);
+    await openAgentRoute(page, { ...session, agentId: beta.id });
+    await expectComposerVisible(page);
+    await page.getByTestId(`workspace-tab-agent_${session.agentId}`).click();
+    await forkMostRecentAssistantTurnToNewTab(page);
+    const picker = page.getByTestId("draft-transcript-picker").filter({ visible: true });
+    const alphaToggle = picker.getByRole("checkbox", { name: "Chat Alpha", exact: true });
+    const betaToggle = picker.getByRole("checkbox", { name: "Chat Beta", exact: true });
+    await expect(alphaToggle).toBeChecked();
+    await expect(betaToggle).not.toBeChecked();
+    await expect(picker.getByRole("checkbox")).toHaveCount(2);
+    await expect(picker.getByText("Unopened chat")).toHaveCount(0);
+    await alphaToggle.click();
+    await expect(alphaToggle).not.toBeChecked();
+    await expect(
+      page.getByTestId("composer-chat-history-attachment-pill").filter({ visible: true }),
+    ).toHaveCount(0);
+    await betaToggle.click();
+    await expect(betaToggle).toBeChecked();
+    await expect(betaToggle).toBeEnabled();
+    await alphaToggle.click();
+    await expect(alphaToggle).toBeChecked();
+    await expect(alphaToggle).toBeEnabled();
+    const pills = page
+      .getByTestId("composer-chat-history-attachment-pill")
+      .filter({ visible: true });
+    await expect(pills).toHaveCount(2);
+    const betaPill = pills.filter({ hasText: "Chat Beta" });
+    await betaPill.hover();
+    await betaPill
+      .locator("..")
+      .getByRole("button", { name: "Remove chat history attachment", exact: true })
+      .click();
+    await expect(betaToggle).not.toBeChecked();
+    await expect(pills).toHaveCount(1);
+    await betaToggle.click();
+    await expect(betaToggle).toBeEnabled();
+    await expect(pills).toHaveCount(2);
+    const input = page.getByRole("textbox", { name: "Message agent..." });
+    await input.fill("Use both chat transcripts.");
+    const firstDraft = await page
+      .locator('[data-testid^="workspace-tab-draft_"][aria-selected="true"]')
+      .getAttribute("data-testid");
+    expect(firstDraft).not.toBeNull();
+    await createAgentTabFromMenu(page);
+    await expect(
+      picker.getByRole("checkbox", { name: "Chat Alpha", exact: true }),
+    ).not.toBeChecked();
+    await expect(
+      picker.getByRole("checkbox", { name: "Chat Beta", exact: true }),
+    ).not.toBeChecked();
+    await expect(pills).toHaveCount(0);
+    await page.getByTestId(firstDraft!).click();
+    await expect(alphaToggle).toBeChecked();
+    await expect(betaToggle).toBeChecked();
+    await expect(pills).toHaveCount(2);
+    await expect(input).toHaveValue("Use both chat transcripts.");
+    await page.screenshot({ path: "/tmp/paseo-multiple-transcripts.png" });
+    await input.press("Enter");
+    const userMessage = page
+      .getByTestId("user-message")
+      .filter({ hasText: "Use both chat transcripts." })
+      .last();
+    await expect(userMessage).toBeVisible({ timeout: 30_000 });
+    await expect(userMessage).toContainText("Chat history · Chat Alpha");
+    await expect(userMessage).toContainText("Chat history · Chat Beta");
+  });
 
   test("forks a failed assistant turn that has no provider message id", async ({
     page,

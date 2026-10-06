@@ -7,6 +7,9 @@ import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import invariant from "tiny-invariant";
 import { Composer } from "@/composer";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
+// FORK(transcript-picker): draft-local context can combine several open chats.
+import { TranscriptPickerSection } from "@/transcript-picker/section";
+import { useTranscriptPicker } from "@/transcript-picker/use-transcript-picker";
 import { ComposerImportPill } from "@/composer/draft/import-pill";
 import { COMPOSER_PILL_CLEARANCE } from "@/composer/pill-styles";
 import { AgentStreamView } from "@/agent-stream/view";
@@ -323,6 +326,7 @@ export function WorkspaceDraftAgentTab({
   onOpenImportSheet,
 }: WorkspaceDraftAgentTabProps) {
   const { t } = useTranslation();
+  const transcriptPicker = useTranscriptPicker({ serverId, workspaceId, draftId });
   const client = useHostRuntimeClient(serverId);
   const workspaceFields = useWorkspaceFields(serverId, workspaceId, (w) => ({
     workspaceDirectory: w.workspaceDirectory,
@@ -452,6 +456,7 @@ export function WorkspaceDraftAgentTab({
     initialAttempt: initialCreateAttempt,
     allowEmptyText: allowsEmptyAutoSubmit,
     validateBeforeSubmit: ({ text, attachments }) => {
+      if (transcriptPicker.isLoading) return t("panels.draft.transcriptsLoading");
       const allowsEmptyDraftText = shouldAllowEmptyDraftText({
         allowsEmptyAutoSubmit,
         attachments,
@@ -651,6 +656,15 @@ export function WorkspaceDraftAgentTab({
       <ComposerDock>
         {dockContent}
         <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
+          <TranscriptPickerSection
+            serverId={serverId}
+            sources={transcriptPicker.sources}
+            state={transcriptPicker.state}
+            toggle={transcriptPicker.toggle}
+            supported={transcriptPicker.supported}
+            disabled={isSubmitting}
+            isCompact={isCompactFormFactor}
+          />
           {importPillPress ? (
             <View style={styles.importPillRow}>
               <View style={styles.importPillContent}>
@@ -664,7 +678,7 @@ export function WorkspaceDraftAgentTab({
             workspaceId={workspaceId}
             isPaneFocused={isPaneFocused}
             onSubmitMessage={handleCreateFromInput}
-            isSubmitLoading={isSubmitting}
+            isSubmitLoading={isSubmitting || transcriptPicker.isLoading}
             blurOnSubmit={true}
             textSource={draftInput.textSource}
             onChangeText={draftInput.editText}
