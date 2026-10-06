@@ -23,6 +23,9 @@ import {
   type FileTransferFrame,
 } from "@getpaseo/protocol/binary-frames/index";
 import { Session } from "./session.js";
+import * as sessionSearchGeneration from "./agent/providers/codex/session-search-generation.js";
+import { AgentQueueService } from "./agent-queue/service.js";
+import { AgentQueueStore } from "./agent-queue/store.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
 import { StructuredAgentFallbackError } from "./agent/agent-response-loop.js";
@@ -334,6 +337,7 @@ interface SessionForTestOptions {
   workspaceLabelService?: WorkspaceLabelService;
   metadataGeneration?: { providers: Array<{ provider: string; model?: string }> };
   messageReceipts?: SessionOptions["messageReceipts"];
+  agentQueueService?: SessionOptions["agentQueueService"];
 }
 
 function createSessionForTest(options: SessionForTestOptions = {}): Session {
@@ -370,6 +374,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
 
   const sessionOptions: SessionOptions = {
     messageReceipts: options.messageReceipts ?? createMessageReceiptsStub(),
+    agentQueueService: options.agentQueueService,
     creationService: createTestCreationService(),
     clientId: options.clientId ?? "test-client",
     onMessage: (message) => messages.push(message),
@@ -5812,6 +5817,150 @@ test("provider snapshots preserve versionless visibility while capabilities upda
     "plugin-provider",
   ]);
   expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
+});
+
+test("session Find exposes persisted pending recording evidence only in its exact workspace scope", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "paseo-queued-find-"));
+  const timestamp = "2026-10-04T19:38:08.993Z";
+  const text = "Start recording on Notestream Vision";
+  const project = createPersistedProjectRecord({
+    ...createProjectRecord("/fixture/tmpworkspace"),
+    displayName: "tmpworkspace",
+  });
+  const workspace = {
+    workspaceId: "tmpworkspace",
+    projectId: project.projectId,
+    cwd: project.rootPath,
+    kind: "local_checkout" as const,
+    displayName: "tmpworkspace",
+    archivedAt: null,
+  };
+  const record = createStoredAgentRecord({
+    id: "recording-chat",
+    cwd: workspace.cwd,
+    workspaceId: workspace.workspaceId,
+    title: "Recording discussion",
+  });
+  const send = vi.fn();
+  const resume = vi.fn();
+  const readContext = vi.fn(async () => []);
+  const messages: SessionOutboundMessage[] = [];
+  const emittedContexts: unknown[] = [];
+  const matcher = vi
+    .spyOn(sessionSearchGeneration, "createCodexSessionSearchGeneration")
+    .mockReturnValue({
+      generate: async ({ prompt, schema }) => {
+        emittedContexts.push(JSON.parse(prompt.split("\n").at(-1)!));
+        return schema.parse({
+          matches: [{ agentId: record.id, confidence: 0.98, excerptIndex: 1 }],
+        });
+      },
+    });
+  try {
+    const store = new AgentQueueStore(join(dir, "queues"));
+    await store.mutate(record.id, (queue) => ({
+      ...queue,
+      items: [{ id: "pending-recording", text, createdAt: timestamp }],
+    }));
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(join(dir, "queues")),
+      agentManager: asAgentManager({
+        getAgent: vi.fn(() => null),
+        subscribe: vi.fn(() => () => {}),
+      }),
+      agentStorage: asAgentStorage({}),
+      logger: pino({ level: "silent" }),
+      sendPrompt: send,
+    });
+    const before = await queueService.list(record.id);
+    const session = createSessionForTest({
+      messages,
+      agentQueueService: queueService,
+      agentStorage: { list: async () => [record] },
+      agentManager: {
+        readSessionSearchText: readContext,
+        resumeAgentFromPersistence: resume,
+        createAgent: send,
+      },
+      messageReceipts: { ...createMessageReceiptsStub(), send },
+      workspaceRegistry: { get: vi.fn(), list: vi.fn(async () => [workspace]) },
+      projectRegistry: { list: async () => [project] },
+    });
+    await session.handleMessage({
+      type: "session.search.request",
+      requestId: "vision-scope",
+      query: "recording on Notestream Vision",
+      workspaceIds: ["vision-workspace"],
+    });
+    expect(messages).toEqual([
+      {
+        type: "session.search.response",
+        payload: {
+          requestId: "vision-scope",
+          results: [],
+          searchedCount: 0,
+          totalCount: 0,
+          error: null,
+        },
+      },
+    ]);
+    expect(emittedContexts).toEqual([]);
+    expect(readContext).not.toHaveBeenCalled();
+    await session.handleMessage({
+      type: "session.search.request",
+      requestId: "all-projects",
+      query: "recording on Notestream Vision",
+      workspaceIds: ["vision-workspace", workspace.workspaceId],
+    });
+    expect(messages[1]).toEqual({
+      type: "session.search.response",
+      payload: {
+        requestId: "all-projects",
+        searchedCount: 1,
+        totalCount: 1,
+        error: null,
+        results: [
+          {
+            agentId: record.id,
+            workspaceId: workspace.workspaceId,
+            projectId: project.projectId,
+            projectName: "tmpworkspace",
+            title: record.title,
+            excerpt: text,
+            excerptSource: "queued_message",
+            excerptTimestamp: timestamp,
+            updatedAt: timestamp,
+            confidence: 0.98,
+          },
+        ],
+      },
+    });
+    expect(await queueService.list(record.id)).toEqual(before);
+    expect(send).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
+    const evidenceDir = process.env.PASEO_TEST_EVIDENCE_DIR;
+    if (evidenceDir) {
+      writeFileSync(
+        join(evidenceDir, "queued-search-rpc.json"),
+        JSON.stringify(
+          {
+            responses: messages,
+            classifierInput: emittedContexts,
+            queueBefore: before,
+            queueAfter: await queueService.list(record.id),
+            sends: send.mock.calls,
+            resumes: resume.mock.calls,
+            classifier: "Deterministic fixture; no live GPT inference",
+          },
+          null,
+          2,
+        ),
+      );
+    }
+  } finally {
+    matcher.mockRestore();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("session Find uses only Codex matching despite Claude metadata configuration and never sends", async () => {

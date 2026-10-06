@@ -58,6 +58,11 @@ export interface AgentTimelineStore {
     options?: AgentTimelineFetchOptions,
   ): Promise<AgentTimelineFetchResult>;
   getLatestCommittedSeq(agentId: string): Promise<number>;
+  /**
+   * Return canonical source rows, including complete source coverage for the latest
+   * projectedLimit entries when supplied. Search merges these with uncommitted writes
+   * before projection; partially overlapping projections cannot be merged safely.
+   */
   getCommittedRows(
     agentId: string,
     options?: { projectedLimit: number },

@@ -100,11 +100,16 @@ test("queued-only topics participate in shortlisting with original evidence and 
     excerpts: [
       { text: "Unrelated title", source: "title" },
       ...selectSessionSearchExcerpts(
-        [{
-          text: "We were checking setup " + "x".repeat(1000) + " Start recording on Notestream Vision",
-          source: "queued_message",
-          timestamp: "2026-10-01T14:22:00Z",
-        }],
+        [
+          {
+            text:
+              "We were checking setup " +
+              "x".repeat(1000) +
+              " Start recording on Notestream Vision",
+            source: "queued_message",
+            timestamp: "2026-10-01T14:22:00Z",
+          },
+        ],
         input.query,
       ),
     ],
