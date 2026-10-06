@@ -11509,3 +11509,128 @@ test("session search retains dated recording prompts behind tool activity withou
   ]);
   expect(manager.getAgent("saved-chat")).toBeNull();
 });
+
+test("session search merges reopened committed history with partial and uncommitted memory", async () => {
+  const pendingWrite = deferred<void>();
+  class PendingTimelineStore extends RecordingTimelineStore {
+    holdWrites = false;
+    override async bulkInsert(id: string, rows: readonly AgentTimelineRow[]) {
+      if (this.holdWrites) await pendingWrite.promise;
+      await super.bulkInsert(id, rows);
+    }
+  }
+  const store = new PendingTimelineStore();
+  const agentId = "00000000-0000-4000-8000-000000000199";
+  const timestamp = "2026-10-04T19:38:08.993Z";
+  await store.appendCommitted(
+    agentId,
+    { type: "user_message", text: "Start recording in Vision" },
+    {
+      timestamp,
+    },
+  );
+  for (let index = 0; index < 60; index++) {
+    await store.appendCommitted(agentId, {
+      type: "notification",
+      level: "info",
+      message: `Tool progress ${index}`,
+    });
+  }
+  const client = new TestAgentClient();
+  const resume = vi.spyOn(client, "resumeSession");
+  const manager = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "saved-chat", metadata: { cwd: tmpdir() } },
+      undefined,
+      agentId,
+    );
+    const session = manager.getAgent(agentId)?.session;
+    expect(session).toBeTruthy();
+    const history = vi.spyOn(session!, "streamHistory");
+    resume.mockClear();
+    expect(manager.getTimeline(agentId)).toEqual([]);
+    const saved = { text: "Start recording in Vision", source: "user_message", timestamp };
+    expect(await manager.readSessionSearchText(agentId, "recording")).toEqual([saved]);
+
+    await manager.appendTimelineItem(agentId, {
+      type: "user_message",
+      text: "Recording follow-up",
+    });
+    await manager.flush();
+    const partial = await manager.readSessionSearchText(agentId, "recording");
+    expect(partial).toEqual([
+      saved,
+      {
+        text: "Recording follow-up",
+        source: "user_message",
+        timestamp: expect.any(String),
+      },
+    ]);
+
+    store.holdWrites = true;
+    await manager.appendTimelineItem(agentId, {
+      type: "user_message",
+      text: "Uncommitted recording request",
+    });
+    const memoryRow = manager.fetchTimeline(agentId, { direction: "tail", limit: 1 }).rows[0];
+    expect(await manager.readSessionSearchText(agentId, "recording")).toEqual([
+      ...partial,
+      {
+        text: "Uncommitted recording request",
+        source: "user_message",
+        timestamp: memoryRow.timestamp,
+      },
+    ]);
+    expect((await store.fetchCommitted(agentId)).rows).toHaveLength(62);
+    expect(resume).not.toHaveBeenCalled();
+    expect(history).not.toHaveBeenCalled();
+  } finally {
+    pendingWrite.resolve();
+    await manager.flush();
+    await manager.closeAgent(agentId);
+  }
+});
+
+test("session search applies the 400-item bound after merging committed and memory tails", async () => {
+  const store = new RecordingTimelineStore();
+  const agentId = "00000000-0000-4000-8000-000000000198";
+  await store.appendCommitted(agentId, { type: "user_message", text: "Old recording request" });
+  await store.appendCommitted(agentId, {
+    type: "user_message",
+    text: "Retained recording request",
+  });
+  for (let index = 0; index < 398; index++) {
+    await store.appendCommitted(agentId, {
+      type: "notification",
+      level: "info",
+      message: `Tool progress ${index}`,
+    });
+  }
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "saved-chat", metadata: { cwd: tmpdir() } },
+      undefined,
+      agentId,
+    );
+    await manager.appendTimelineItem(agentId, {
+      type: "user_message",
+      text: "New recording request",
+    });
+    expect(
+      (await manager.readSessionSearchText(agentId, "recording")).map(({ text }) => text),
+    ).toEqual(["Retained recording request", "New recording request"]);
+  } finally {
+    await manager.flush();
+    await manager.closeAgent(agentId);
+  }
+});
