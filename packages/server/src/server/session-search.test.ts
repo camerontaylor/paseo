@@ -88,7 +88,7 @@ test("shortlists before timeline reads and exposes incomplete coverage", async (
 
 test("queued-only topics participate in shortlisting with original evidence and time", async () => {
   const input = fixture([{ agentId: "queued", confidence: 0.8, excerptIndex: 1 }]);
-  input.query = "recording";
+  input.query = "Where were we discussing recording on Notestream Vision?";
   input.candidates = Array.from({ length: 110 }, (_, index) => ({
     ...candidate,
     agentId: `recent-${index}`,
@@ -99,21 +99,58 @@ test("queued-only topics participate in shortlisting with original evidence and 
     updatedAt: "2026-09-01",
     excerpts: [
       { text: "Unrelated title", source: "title" },
-      {
-        text: "Fix recording on Vision",
-        source: "queued_message",
-        timestamp: "2026-10-01T14:22:00Z",
-      },
+      ...selectSessionSearchExcerpts(
+        [{
+          text: "We were checking setup " + "x".repeat(1000) + " Start recording on Notestream Vision",
+          source: "queued_message",
+          timestamp: "2026-10-01T14:22:00Z",
+        }],
+        input.query,
+      ),
     ],
   });
   const result = await searchExistingSessions(input);
   expect(result.results[0]).toMatchObject({
     agentId: "queued",
-    excerpt: "Fix recording on Vision",
     excerptSource: "queued_message",
     excerptTimestamp: "2026-10-01T14:22:00Z",
   });
+  expect(result.results[0].excerpt).toContain("Start recording on Notestream Vision");
+  expect(result.results[0].excerpt.length).toBeLessThanOrEqual(800);
   expect(input.readContext).toHaveBeenCalledWith("queued");
+});
+
+test.each(["user_message", "queued_message"] as const)(
+  "selects the strongest verbatim window for a long %s with common query terms first",
+  (source) => {
+    const text =
+      "We were checking setup recording " +
+      "x".repeat(1000) +
+      " Start recording on Notestream Vision " +
+      "y".repeat(1000);
+    const timestamp = "2026-10-01T14:22:00Z";
+    const [selected] = selectSessionSearchExcerpts(
+      [{ text, source, timestamp }],
+      "Where were we discussing recording on Notestream Vision?",
+    );
+    expect(selected).toMatchObject({ source, timestamp });
+    expect(selected.text).toContain("Start recording on Notestream Vision");
+    expect(selected.text).toHaveLength(800);
+    expect(text.includes(selected.text)).toBe(true);
+  },
+);
+
+test("distinct query coverage outweighs repeated terms and preserves widely spaced hits", () => {
+  const text =
+    "recording ".repeat(100) + "x".repeat(1000) + "Notestream" + "y".repeat(760) + " Vision";
+  const [selected] = selectSessionSearchExcerpts(
+    [{ text, source: "user_message" }],
+    "recording recording recording Notestream Vision",
+  );
+  expect(selected.text).toContain("Notestream");
+  expect(selected.text).toContain("Vision");
+  expect(selected.text).toHaveLength(800);
+  expect(text.includes(selected.text)).toBe(true);
 });
 
 test("queued evidence never escapes workspace scope", async () => {
