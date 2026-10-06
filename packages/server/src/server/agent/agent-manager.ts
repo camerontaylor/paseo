@@ -1,5 +1,6 @@
 import { selectSessionSearchExcerpts, type SessionSearchExcerpt } from "../session-search.js";
-import { projectTimelineRows, selectRecentTimelineSourceRows } from "./timeline-projection.js";
+import { projectTimelineRows } from "./timeline-projection.js";
+import { SessionSearchWriteBuffer } from "./session-search-write-buffer.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
@@ -761,7 +762,7 @@ export class AgentManager {
   private readonly durableTimelineStore?: AgentTimelineStore;
   private readonly previousStatuses = new Map<string, AgentLifecycleStatus>();
   private readonly backgroundTasks = new Set<Promise<void>>();
-  private readonly recentTimelineWriteRows = new Map<string, Map<number, AgentTimelineRow>>();
+  private readonly recentTimelineWriteRows = new Map<string, SessionSearchWriteBuffer>();
   private readonly agentRegistrationTasks = new Set<Promise<void>>();
   private readonly inFlightAgentCloses = new Map<string, Promise<void>>();
   private readonly reloadedSessionCloses = new WeakMap<AgentSession, Promise<void>>();
@@ -1265,7 +1266,7 @@ export class AgentManager {
   async readSessionSearchText(id: string, query: string): Promise<SessionSearchExcerpt[]> {
     let sourceRows: AgentTimelineRow[];
     if (this.durableTimelineStore) {
-      const pending = [...(this.recentTimelineWriteRows.get(id)?.values() ?? [])];
+      const pending = this.recentTimelineWriteRows.get(id)?.snapshot() ?? [];
       const committed = await this.durableTimelineStore.getCommittedRows(id, {
         projectedLimit: 400,
       });
@@ -5183,15 +5184,13 @@ export class AgentManager {
     agentId: string,
     rows: readonly AgentTimelineRow[],
   ): Promise<void> {
-    const retained =
-      this.recentTimelineWriteRows.get(agentId) ?? new Map<number, AgentTimelineRow>();
-    for (const row of rows) retained.set(row.seq, row);
-    const selectedRows = selectRecentTimelineSourceRows({
-      rows: [...retained.values()].sort((a, b) => a.seq - b.seq),
-      limit: 400,
+    const buffer = this.recentTimelineWriteRows.get(agentId) ?? new SessionSearchWriteBuffer();
+    buffer.retain(rows);
+    this.recentTimelineWriteRows.set(agentId, buffer);
+    return task.then(() => {
+      buffer.release(rows);
+      return undefined;
     });
-    this.recentTimelineWriteRows.set(agentId, new Map(selectedRows.map((row) => [row.seq, row])));
-    return task;
   }
 
   private trackBackgroundTask(task: Promise<void>): void {
