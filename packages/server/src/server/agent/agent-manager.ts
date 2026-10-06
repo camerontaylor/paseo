@@ -1,5 +1,6 @@
 import { selectSessionSearchExcerpts, type SessionSearchExcerpt } from "../session-search.js";
 import { projectTimelineRows } from "./timeline-projection.js";
+import { timelineItemIdentity } from "@getpaseo/protocol/timeline-identity";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
@@ -1262,13 +1263,20 @@ export class AgentManager {
   }
 
   async readSessionSearchText(id: string, query: string): Promise<SessionSearchExcerpt[]> {
-    let rows: AgentTimelineFetchResult["rows"] = [];
-    if (this.timelineStore.has(id)) {
-      rows = this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows;
-    } else if (this.durableTimelineStore) {
-      rows = (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 400 }))
-        .rows;
+    const committed = this.durableTimelineStore
+      ? (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 400 })).rows
+      : [];
+    const memory = this.timelineStore.has(id)
+      ? this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows
+      : [];
+    const byIdentity = new Map<string, AgentTimelineFetchResult["rows"][number]>();
+    for (const row of [...committed, ...memory]) {
+      const identity = timelineItemIdentity(row.item);
+      const key = identity === null ? `seq:${row.seq}` : `item:${identity}`;
+      const previous = byIdentity.get(key);
+      if (!previous || row.seq > previous.seq) byIdentity.set(key, row);
     }
+    const rows = [...byIdentity.values()].sort((a, b) => a.seq - b.seq).slice(-400);
     const excerpts: SessionSearchExcerpt[] = [];
     for (const { item, timestamp } of rows) {
       if (item.type === "user_message" || item.type === "assistant_message") {
