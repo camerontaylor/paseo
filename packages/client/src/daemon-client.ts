@@ -1,3 +1,4 @@
+import type { WorkspaceSnoozeInput } from "@getpaseo/protocol/workspace-snooze";
 import type {
   LinearGetIssuesRequest,
   LinearGetIssuesResponse,
@@ -3093,6 +3094,26 @@ export class DaemonClient {
       throw new Error(payload.error ?? "setWorkspaceTitle rejected");
     }
     return { title: payload.title };
+  }
+
+  // FORK(workspace-snooze): workspace-owned scheduling RPCs.
+  async setWorkspaceSnooze(
+    workspaceId: string,
+    snooze: WorkspaceSnoozeInput | null,
+  ): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"workspace.snooze.set.response">({
+        message: { type: "workspace.snooze.set.request", workspaceId, snooze },
+      });
+    if (!payload.success) throw new Error(payload.error ?? "Could not save snooze");
+  }
+
+  async checkWorkspaceSnooze(workspaceId: string): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"workspace.snooze.check.response">({
+        message: { type: "workspace.snooze.check.request", workspaceId },
+      });
+    if (!payload.success) throw new Error(payload.error ?? "Could not check snooze");
   }
 
   async setWorkspacePinned(

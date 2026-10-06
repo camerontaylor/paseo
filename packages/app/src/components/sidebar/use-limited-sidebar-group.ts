@@ -1,15 +1,17 @@
 import { useCallback, useMemo, useState } from "react";
+import { selectSnoozableGroup } from "@/workspace-snooze/sidebar";
+import type { SidebarWorkspacePlacement } from "@/hooks/sidebar-workspaces-view-model";
 
-const INITIAL_VISIBLE_ITEMS = 20;
-
-export function useLimitedSidebarGroup<T>(items: readonly T[]) {
+// FORK(workspace-snooze): hidden rows remain reachable even below the ordinary limit.
+export function useLimitedSidebarGroup<T extends SidebarWorkspacePlacement>(
+  items: readonly T[],
+  entries?: ReadonlyMap<string, SidebarWorkspacePlacement>,
+) {
   const [expanded, setExpanded] = useState(false);
-  const visibleItems = useMemo(
-    () => (expanded ? items.slice() : items.slice(0, INITIAL_VISIBLE_ITEMS)),
-    [expanded, items],
+  const { visibleItems, canToggle } = useMemo(
+    () => selectSnoozableGroup(items, expanded, entries),
+    [expanded, items, entries],
   );
-  const canToggle = items.length > INITIAL_VISIBLE_ITEMS;
   const toggleExpanded = useCallback(() => setExpanded((current) => !current), []);
-
   return { visibleItems, expanded, canToggle, toggleExpanded };
 }

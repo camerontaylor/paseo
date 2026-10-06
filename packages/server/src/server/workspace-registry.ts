@@ -1,3 +1,5 @@
+// FORK(workspace-snooze): workspace-owned state survives daemon restarts.
+import { WorkspaceSnoozeSchema } from "@getpaseo/protocol/workspace-snooze";
 import { promises as fs } from "node:fs";
 
 import type { Logger } from "pino";
@@ -95,6 +97,8 @@ const PersistedWorkspaceRecordSchema = z.object({
     .nullable()
     .optional()
     .transform((value) => value ?? null),
+  // FORK(workspace-snooze): absent on pre-snoozing records.
+  snooze: WorkspaceSnoozeSchema.nullable().optional(),
   pinnedAt: z
     .string()
     .nullable()
@@ -571,6 +575,8 @@ export class FileBackedWorkspaceRegistry
     const workspace = await super.update(workspaceId, (existing) => ({
       ...existing,
       updatedAt: archivedAt,
+      // FORK(workspace-snooze): archived workspaces never wake.
+      snooze: null,
       archivedAt,
       ...(context?.autoArchivedChangeRequestUrl
         ? { autoArchivedChangeRequestUrl: context.autoArchivedChangeRequestUrl }

@@ -23,6 +23,10 @@ function RequestRow({
   const open = useCallback(() => onOpen(request), [onOpen, request]);
   const attempt = request.attempts.at(-1);
   const duration = Math.max(0, ((request.finishedAt ?? now) - request.createdAt) / 1000).toFixed(1);
+  // FORK(workspace-snooze): checks share the background request inspector.
+  let title = t(`backgroundActivity.kind.${request.kind}`);
+  if (request.purpose === "chapters") title = t("chapters.title");
+  if (request.snoozeCheck) title = t("workspaceSnooze.checkTitle");
   return (
     <Pressable
       onPress={open}
@@ -32,10 +36,8 @@ function RequestRow({
       testID="background-request"
     >
       <Text style={styles.title}>
-        {request.purpose === "chapters"
-          ? t("chapters.title")
-          : t(`backgroundActivity.kind.${request.kind}`)}
-        {request.kind === "labels" ? ` · ${request.count}` : ""}
+        {title}
+        {request.kind === "labels" && !request.snoozeCheck ? ` · ${request.count}` : ""}
       </Text>
       <Text style={styles.muted} numberOfLines={1}>
         {request.sourceTitle ?? request.cwd}

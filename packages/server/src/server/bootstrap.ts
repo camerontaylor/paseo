@@ -1,3 +1,5 @@
+import { WorkspaceSnoozeService } from "./workspace-snooze/service.js";
+import { createWorkspaceSnoozeChecker } from "./workspace-snooze/check.js";
 import { ToolCallSummaryStore } from "./agent/tool-call-summaries/store.js";
 import type { AgentDefaults } from "@getpaseo/protocol/agent-defaults";
 import { ToolCallSummarizer } from "./agent/tool-call-summaries/service.js";
@@ -1396,6 +1398,20 @@ export async function createPaseoDaemon(
       },
     );
   };
+  // FORK(workspace-snooze): workspace scheduling uses internal agent runs.
+  const workspaceSnoozeService = new WorkspaceSnoozeService({
+    registry: workspaceRegistry,
+    logger,
+    check: createWorkspaceSnoozeChecker(agentManager, providerSnapshotManager),
+    wake: async (workspace, reason, id) => {
+      await wsServer?.notifyWorkspaceSnoozeWake(
+        workspace.workspaceId,
+        workspace.title ?? workspace.displayName,
+        reason,
+        id,
+      );
+    },
+  });
   const scheduleService = new ScheduleService({
     paseoHome: config.paseoHome,
     logger,
@@ -1789,10 +1805,14 @@ export async function createPaseoDaemon(
               pluginRuntime,
               orchestrationSkills,
               workspaceLabelService,
+              // FORK(workspace-snooze): share the scheduler with socket sessions.
+              workspaceSnoozeService,
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();
             providerSnapshotManager.settlePluginProviders();
+            // FORK(workspace-snooze): provider discovery is ready before overdue checks.
+            workspaceSnoozeService.start();
             wsServer.beginAcceptingConnections();
             relayRuntime = createRelayRuntime({
               config: {
@@ -1881,6 +1901,8 @@ export async function createPaseoDaemon(
     await pluginRuntime.stopAllPlugins();
     terminalManager.killAll();
     await speechService.stop();
+    // FORK(workspace-snooze): cancel helpers before tearing down providers.
+    await workspaceSnoozeService.stop();
     await scheduleService.stop().catch(() => undefined);
     await relayRuntime?.stop().catch(() => undefined);
     if (wsServer) {

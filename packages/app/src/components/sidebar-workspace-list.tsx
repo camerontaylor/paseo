@@ -1615,7 +1615,8 @@ function ProjectBlock({
     expanded: workspacesExpanded,
     canToggle: canToggleWorkspaces,
     toggleExpanded: toggleWorkspacesExpanded,
-  } = useLimitedSidebarGroup(project.workspaces);
+    // FORK(workspace-snooze): structural placements resolve live snooze state from entries.
+  } = useLimitedSidebarGroup(project.workspaces, workspaceEntriesByKey);
   const rowModel = useMemo(
     () =>
       buildSidebarProjectRowModel({
@@ -2167,7 +2168,8 @@ function ProjectModeList({
     expanded: pinnedChatsExpanded,
     canToggle: canTogglePinnedChats,
     toggleExpanded: togglePinnedChatsExpanded,
-  } = useLimitedSidebarGroup(pinnedChats);
+    // FORK(workspace-snooze): pinned workspaces obey the same hiding policy.
+  } = useLimitedSidebarGroup(pinnedChats, workspaceEntriesByKey);
   const nativeScrollGestureProps = useMemo(
     () =>
       parentGestureRef

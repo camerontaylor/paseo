@@ -1,4 +1,7 @@
 import "@/styles/unistyles";
+// FORK(workspace-snooze): dialog host and workspace-only notification navigation.
+import { WorkspaceSnoozeHost } from "@/workspace-snooze/dialog";
+import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { PortalProvider } from "@gorhom/portal";
 import * as Linking from "expo-linking";
@@ -172,6 +175,11 @@ function PushNotificationRouter() {
       return;
     }
 
+    // FORK(workspace-snooze): a wake notification selects its workspace.
+    if (serverId && workspaceId && !target.terminalId) {
+      navigateToWorkspace({ serverId, workspaceId });
+      return;
+    }
     router.navigate(buildNotificationRoute(data));
   });
 
@@ -649,7 +657,13 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
     surface
   );
 
-  return <CommandCenterProvider>{content}</CommandCenterProvider>;
+  return (
+    <CommandCenterProvider>
+      {content}
+      {/* FORK(workspace-snooze): preserve edits when the layout changes between sidebar and overlay. */}
+      <WorkspaceSnoozeHost />
+    </CommandCenterProvider>
+  );
 }
 
 function SidebarChrome({

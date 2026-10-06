@@ -69,6 +69,12 @@ One entry per fork feature: the commits that built it, the files that own it, an
 
 Commits are the fork commits that built the feature (`git show --stat <sha>` for the full file list). "Owns" lists the fork-owned entry points. "Wires into" lists the upstream files the feature edits, largest first.
 
+### Workspace snoozing
+
+- Owns: `packages/protocol/src/workspace-snooze.ts`, `packages/server/src/server/workspace-snooze/`, `packages/app/src/workspace-snooze/`.
+- Wires into: workspace registry and directory payloads, session RPCs and permissions, daemon bootstrap and notification delivery, sidebar menus and group limits, app notification routing, and English resources.
+- Timed or Luna-evaluated snoozes hide workspaces under Show all. See [workspace snoozing](agent-lifecycle.md#workspace-snoozing).
+
 ### Assistant text-selection toolbar
 
 - Owns: `packages/app/src/assistant-selection-toolbar/`.

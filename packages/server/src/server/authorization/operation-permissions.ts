@@ -213,6 +213,9 @@ const INBOUND_PERMISSION = {
   "workspace.label.delete.request": "workspace.manage",
   "workspace.label.list.request": "workspace.read",
   "workspace.label.update.request": "workspace.manage",
+  // FORK(workspace-snooze): background checks require automation management.
+  "workspace.snooze.set.request": "automation.manage",
+  "workspace.snooze.check.request": "automation.manage",
   "workspace.pin.set.request": "workspace.manage",
   "workspace.recovery.inspect.request": ["workspace.read", "hub.execute"],
   "workspace.recovery.restore.request": ["workspace.manage", "hub.execute"],
@@ -449,6 +452,10 @@ const OUTBOUND_PERMISSION = {
   "workspace.label.list.response": "workspace.read",
   "workspace.label.update": "workspace.read",
   "workspace.label.update.response": "workspace.manage",
+  "workspace.snooze.set.response": "automation.manage",
+  "workspace.snooze.check.response": "automation.manage",
+  // FORK(workspace-snooze): wake events disclose workspace state.
+  "workspace.snooze.woke": "workspace.read",
   "workspace.pin.set.response": "workspace.manage",
   "workspace.recovery.inspect.response": ["workspace.read", "hub.execute"],
   "workspace.recovery.restore.response": ["workspace.manage", "hub.execute"],

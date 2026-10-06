@@ -17,6 +17,8 @@ interface ConversationRecord {
   touched: number;
 }
 interface RequestInput {
+  // FORK(workspace-snooze): share the request recorder with snooze checks.
+  snoozeCheck?: boolean;
   purpose?: BackgroundRequest["purpose"];
   kind: BackgroundRequest["kind"];
   title: string;

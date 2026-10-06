@@ -49,6 +49,11 @@ describe("resolveNotificationTarget", () => {
 });
 
 describe("buildNotificationRoute", () => {
+  it("opens a woken workspace without needing an agent or terminal", () => {
+    expect(
+      buildNotificationRoute({ serverId: "srv-1", workspaceId: "ws-main", snoozeId: "snooze" }),
+    ).toBe("/h/srv-1/workspace/ws-main");
+  });
   it("routes to the agent path when workspace id is present", () => {
     expect(
       buildNotificationRoute({

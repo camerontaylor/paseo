@@ -1,3 +1,4 @@
+import type { WorkspaceSnoozeService } from "./workspace-snooze/service.js";
 import { getChaptersService } from "./chapters/generation.js";
 import { CodeLanguageSession } from "./code-language/session.js";
 import type { DiffStat } from "@getpaseo/protocol/diff-stat";
@@ -466,6 +467,8 @@ export interface SessionOptions {
   workspaceRegistry: WorkspaceRegistry;
   directorySync?: DirectorySyncService;
   workspaceLabelService?: WorkspaceLabelService;
+  // FORK(workspace-snooze): injected daemon scheduler.
+  workspaceSnoozeService?: WorkspaceSnoozeService;
   filesystem?: SessionFileSystem;
   scheduleService: ScheduleService;
   checkoutDiffManager: CheckoutDiffManager;
@@ -767,6 +770,8 @@ export class Session {
     string,
     WorkspaceUpdatesSubscriptionState
   >();
+  // FORK(workspace-snooze): shared across sessions.
+  private readonly workspaceSnoozeService: WorkspaceSnoozeService | undefined;
   private readonly workspaceLabelService: WorkspaceLabelService | null;
   private readonly eventSubscriptions = new Map<
     string,
@@ -829,6 +834,8 @@ export class Session {
       workspaceRegistry,
       directorySync,
       workspaceLabelService,
+      // FORK(workspace-snooze): scheduler injection.
+      workspaceSnoozeService,
       filesystem,
       scheduleService,
       checkoutDiffManager,
@@ -904,6 +911,8 @@ export class Session {
     this.projectRegistry = projectRegistry;
     this.workspaceRegistry = workspaceRegistry;
     this.directorySync = resolveDirectorySync(directorySync);
+    // FORK(workspace-snooze): scheduler injection.
+    this.workspaceSnoozeService = workspaceSnoozeService;
     this.workspaceLabelService = resolveWorkspaceLabelService(workspaceLabelService);
     this.filesystem = filesystem ?? nodeSessionFileSystem;
     this.github = github ?? createGitHubService();
@@ -3048,6 +3057,10 @@ export class Session {
         return this.handleProjectRemoveRequest(msg);
       case "workspace.title.set.request":
         return this.handleWorkspaceTitleSetRequest(msg.workspaceId, msg.title, msg.requestId);
+      // FORK(workspace-snooze): workspace scheduling RPCs.
+      case "workspace.snooze.set.request":
+      case "workspace.snooze.check.request":
+        return this.handleWorkspaceSnoozeRequest(msg);
       case "workspace.pin.set.request":
         return this.handleWorkspacePinSetRequest(msg.workspaceId, msg.pinned, msg.requestId);
       default:
@@ -3888,6 +3901,36 @@ export class Session {
         },
       });
     }
+  }
+
+  // FORK(workspace-snooze): the daemon owns scheduling even with no connected clients.
+  private async handleWorkspaceSnoozeRequest(
+    msg: Extract<
+      SessionInboundMessage,
+      { type: "workspace.snooze.set.request" | "workspace.snooze.check.request" }
+    >,
+  ): Promise<void> {
+    let error: string | null = null;
+    try {
+      if (!this.workspaceSnoozeService) throw new Error("Workspace snoozing unavailable");
+      if (msg.type === "workspace.snooze.set.request")
+        await this.workspaceSnoozeService.set(msg.workspaceId, msg.snooze);
+      else await this.workspaceSnoozeService.checkNow(msg.workspaceId);
+    } catch (cause) {
+      error = getErrorMessage(cause);
+    }
+    this.emit({
+      type:
+        msg.type === "workspace.snooze.set.request"
+          ? "workspace.snooze.set.response"
+          : "workspace.snooze.check.response",
+      payload: {
+        requestId: msg.requestId,
+        workspaceId: msg.workspaceId,
+        success: error === null,
+        error,
+      },
+    });
   }
 
   private async handleWorkspacePinSetRequest(
@@ -5695,6 +5738,8 @@ export class Session {
       name: resolveWorkspaceDisplayName(workspace),
       title: workspace.title,
       pinnedAt: workspace.pinnedAt,
+      // FORK(workspace-snooze): directory sync carries the durable snooze.
+      snooze: workspace.snooze ?? null,
       ...(workspace.labels && workspace.labels.length > 0 ? { labels: workspace.labels } : {}),
       archivingAt: null,
       status: "done",
@@ -5787,6 +5832,8 @@ export class Session {
       }),
       title: result.workspace.title,
       pinnedAt: result.workspace.pinnedAt,
+      // FORK(workspace-snooze): include snooze in operation results.
+      snooze: result.workspace.snooze ?? null,
       ...(result.workspace.labels && result.workspace.labels.length > 0
         ? { labels: result.workspace.labels }
         : {}),
@@ -8440,9 +8487,11 @@ export class Session {
     message: SessionOutboundMessage,
     notified: Set<object>,
   ): void {
+    // FORK(workspace-snooze): deduplicate wake notifications by source too.
     if (
       message.type !== "agent_attention_required" &&
-      message.type !== "terminal_attention_required"
+      message.type !== "terminal_attention_required" &&
+      message.type !== "workspace.snooze.woke"
     ) {
       subscription.owner.emit(message);
       return;
@@ -8451,11 +8500,18 @@ export class Session {
       message.payload.shouldNotify &&
       subscription.notifications &&
       !notified.has(subscription.owner.source);
-    subscription.owner.emit(
-      message.type === "agent_attention_required"
-        ? { ...message, payload: { ...message.payload, shouldNotify } }
-        : { ...message, payload: { ...message.payload, shouldNotify } },
-    );
+    switch (message.type) {
+      case "agent_attention_required":
+        subscription.owner.emit({ ...message, payload: { ...message.payload, shouldNotify } });
+        break;
+      case "terminal_attention_required":
+        subscription.owner.emit({ ...message, payload: { ...message.payload, shouldNotify } });
+        break;
+      // FORK(workspace-snooze): opt-in wake event category.
+      case "workspace.snooze.woke":
+        subscription.owner.emit({ ...message, payload: { ...message.payload, shouldNotify } });
+        break;
+    }
     if (shouldNotify) notified.add(subscription.owner.source);
   }
 
@@ -8672,26 +8728,15 @@ function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubs
     case "script_status_update":
     case "workspace_setup_progress":
     case "agent.provider_subagents.update":
+    // FORK(workspace-snooze): opt-in wake event category.
+    case "workspace.snooze.woke":
     case "terminal_attention_required":
     case "activity_log":
     case "hub.execution.agent.update":
     case "hub.execution.agent.stream":
       return message.type;
     case "status":
-      switch (message.payload.status) {
-        case "server_info":
-        // FORK(sleep-prevention): rides the host-status stream the app already subscribes to.
-        case "sleep_prevention_changed":
-          return "status.server_info";
-        case "daemon_config_changed":
-          return "status.daemon_config_changed";
-        case "plugin_catalog_changed":
-          return "status.plugin_catalog_changed";
-        case "plugin_settings_changed":
-          return "status.plugin_settings_changed";
-        default:
-          return null;
-      }
+      return statusEventCategory(message.payload.status);
     default:
       return null;
   }
@@ -8714,5 +8759,24 @@ function legacyWantsEvent(
       return capabilities.has(CLIENT_CAPS.providerSubagents);
     default:
       return true;
+  }
+}
+
+function statusEventCategory(
+  status: Extract<SessionOutboundMessage, { type: "status" }>["payload"]["status"],
+): SessionEventSubscription | null {
+  switch (status) {
+    case "server_info":
+    // FORK(sleep-prevention): rides the host-status stream the app already subscribes to.
+    case "sleep_prevention_changed":
+      return "status.server_info";
+    case "daemon_config_changed":
+      return "status.daemon_config_changed";
+    case "plugin_catalog_changed":
+      return "status.plugin_catalog_changed";
+    case "plugin_settings_changed":
+      return "status.plugin_settings_changed";
+    default:
+      return null;
   }
 }

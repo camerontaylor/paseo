@@ -1,3 +1,4 @@
+import type { WorkspaceSnoozeService } from "./workspace-snooze/service.js";
 import { stat } from "node:fs/promises";
 import type { CreationSnapshot } from "@getpaseo/protocol/messages";
 import { CreationService } from "./creation/index.js";
@@ -673,6 +674,8 @@ export class VoiceAssistantWebSocketServer {
     pluginRuntime?: SessionOptions["pluginRuntime"],
     orchestrationSkills?: SessionOptions["orchestrationSkills"],
     workspaceLabelService?: WorkspaceLabelService,
+    // FORK(workspace-snooze): shared daemon scheduler.
+    private readonly workspaceSnoozeService?: WorkspaceSnoozeService,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
@@ -1492,6 +1495,8 @@ export class VoiceAssistantWebSocketServer {
       projectRegistry: this.projectRegistry,
       workspaceRegistry: this.workspaceRegistry,
       workspaceLabelService: this.workspaceLabelService ?? undefined,
+      // FORK(workspace-snooze): expose scheduling to sessions.
+      workspaceSnoozeService: this.workspaceSnoozeService,
       directorySync: this.directorySync,
       scheduleService: this.scheduleService,
       checkoutDiffManager: this.checkoutDiffManager,
@@ -1918,6 +1923,8 @@ export class VoiceAssistantWebSocketServer {
         providerSubagentNesting: true,
         // COMPAT(workspacePinning): added in v0.1.107, remove gate after 2027-01-12.
         workspacePinning: true,
+        // FORK(workspace-snooze): advertise the scheduler capability.
+        ...(this.workspaceSnoozeService ? { workspaceSnoozing: true } : {}),
         // COMPAT(workspaceMarkUnread): added in v0.5.0, remove after 2027-08-20.
         workspaceMarkUnread: true,
         // COMPAT(hubRelationship): added in v0.1.X, drop the gate when floor >= v0.1.X.
@@ -2607,6 +2614,53 @@ export class VoiceAssistantWebSocketServer {
       focusedTerminalId: activity.focusedTerminalId,
       lastActivityAtMs: activity.lastActivityAt.getTime(),
     };
+  }
+
+  // FORK(workspace-snooze): explicit event subscribers keep older clients parse-compatible.
+  async notifyWorkspaceSnoozeWake(
+    workspaceId: string,
+    name: string,
+    body: string,
+    id: string,
+  ): Promise<void> {
+    const entries = [...this.sessions].filter(
+      ([ws, connection]) =>
+        connection.session.delivery.isModern(ws) &&
+        connection.session.wantsSourceNotification(ws, "workspace.snooze.woke"),
+    );
+    const plan = computeNotificationPlan({
+      allStates: entries.map(([ws, connection]) =>
+        this.getClientActivityState(connection.session, ws),
+      ),
+      focusTarget: null,
+      pushEligible: true,
+      nowMs: Date.now(),
+    });
+    const title = `${name} is ready`;
+    if (plan.shouldPush) {
+      void this.pushNotificationSender
+        .send({
+          title,
+          body,
+          data: { serverId: this.serverId, workspaceId, snoozeId: id },
+        })
+        .catch((err) => {
+          this.logger.warn({ err, workspaceId }, "Failed to send workspace wake notification");
+        });
+    }
+    for (const [index, [ws, connection]] of entries.entries()) {
+      connection.session.publishToSource(ws, {
+        type: "workspace.snooze.woke",
+        payload: {
+          id,
+          serverId: this.serverId,
+          workspaceId,
+          title,
+          body,
+          shouldNotify: index === plan.inAppRecipientIndex,
+        },
+      });
+    }
   }
 
   private async broadcastAgentAttention(params: {

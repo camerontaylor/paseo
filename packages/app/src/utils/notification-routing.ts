@@ -1,5 +1,9 @@
 import type { Href } from "expo-router";
-import { buildHostRootRoute, buildHostWorkspaceOpenRoute } from "@/utils/host-routes";
+import {
+  buildHostRootRoute,
+  buildHostWorkspaceRoute,
+  buildHostWorkspaceOpenRoute,
+} from "@/utils/host-routes";
 
 type NotificationData = Record<string, unknown> | null | undefined;
 type NotificationRoute = Extract<Href, string>;
@@ -35,6 +39,8 @@ export function buildNotificationRoute(data: NotificationData): NotificationRout
   if (serverId && workspaceId && terminalId) {
     return buildHostWorkspaceOpenRoute(serverId, workspaceId, `terminal:${terminalId}`);
   }
+  // FORK(workspace-snooze): wake links select the workspace without a chat target.
+  if (serverId && workspaceId) return buildHostWorkspaceRoute(serverId, workspaceId);
   if (serverId) {
     return buildHostRootRoute(serverId);
   }

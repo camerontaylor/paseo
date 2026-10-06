@@ -1,3 +1,4 @@
+import { useWorkspaceSnoozeNotifications } from "@/workspace-snooze/notifications";
 import { useRef, ReactNode, useCallback, useEffect } from "react";
 import { Buffer } from "buffer";
 import { AppState } from "react-native";
@@ -210,6 +211,8 @@ export function SessionProvider(props: SessionProviderProps) {
 }
 
 function SessionProviderInternal({ children, serverId, client }: SessionProviderClientProps) {
+  // FORK(workspace-snooze): one wake-notification feed per host session.
+  useWorkspaceSnoozeNotifications(serverId, client);
   const { t } = useTranslation();
   const voiceRuntime = useVoiceRuntimeOptional();
   const voiceAudioEngine = useVoiceAudioEngineOptional();

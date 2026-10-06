@@ -119,6 +119,8 @@ export interface WorkspaceDescriptor {
   name: string;
   title?: string | null;
   pinnedAt?: string | null;
+  // FORK(workspace-snooze): persisted daemon state drives sidebar visibility.
+  snooze?: WorkspaceDescriptorPayload["snooze"];
   labels?: string[];
   status: WorkspaceDescriptorPayload["status"];
   statusEnteredAt: Date | null;
@@ -156,6 +158,8 @@ export function normalizeWorkspaceDescriptor(
     name: payload.name,
     title: payload.title ?? null,
     pinnedAt: payload.pinnedAt ?? null,
+    // FORK(workspace-snooze): absent fields on older hosts mean awake.
+    snooze: payload.snooze ?? null,
     // COMPAT(workspaceLabels): old daemons omit assignments.
     labels: payload.labels ?? [],
     status: payload.status,

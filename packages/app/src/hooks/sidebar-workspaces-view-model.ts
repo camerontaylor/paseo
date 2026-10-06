@@ -29,6 +29,8 @@ export interface SidebarWorkspacePlacement {
   projectKind: WorkspaceStructureProject["projectKind"];
   workspaceKind: WorkspaceDescriptor["workspaceKind"];
   name: string;
+  // FORK(workspace-snooze): rows retain hidden-state metadata.
+  snooze?: WorkspaceDescriptor["snooze"];
 }
 
 export interface SidebarStatusWorkspacePlacement extends SidebarWorkspacePlacement {
@@ -168,6 +170,8 @@ export function createSidebarWorkspaceEntry(input: {
     name: input.workspace.name,
     title: input.workspace.title ?? null,
     pinnedAt: input.workspace.pinnedAt,
+    // FORK(workspace-snooze): expose snooze to every sidebar grouping.
+    snooze: input.workspace.snooze,
     labels: input.workspace.labels ?? EMPTY_WORKSPACE_LABELS,
     currentBranch: normalizeCurrentBranch(input.workspace.gitRuntime?.currentBranch),
     statusBucket: effectiveStatus.status,
@@ -277,7 +281,8 @@ export function deriveProjectStatus(input: {
         workspaceId,
       });
       const workspace = workspaceKey ? session.workspaces.get(workspaceKey) : undefined;
-      if (!workspace) continue;
+      // FORK(workspace-snooze): hidden workspaces do not drive project activity.
+      if (!workspace || workspace.snooze) continue;
       statuses.push(
         deriveEffectiveWorkspaceStatus({
           serverId,

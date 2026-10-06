@@ -1,3 +1,5 @@
+// FORK(workspace-snooze): shared context and kebab actions.
+import { WorkspaceSnoozeMenuItems } from "@/workspace-snooze/menu";
 import { useMemo, type ComponentProps, type PropsWithChildren, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { type PressableStateCallbackType } from "react-native";
@@ -231,6 +233,12 @@ function SidebarWorkspaceMenuItems({
         surface={surface}
         path={openInFileManagerPath}
         testID={`sidebar-workspace-menu-open-folder-${workspaceKey}`}
+      />
+      <WorkspaceSnoozeMenuItems
+        surface={surface}
+        serverId={serverId}
+        workspaceId={workspaceId}
+        workspaceKey={workspaceKey}
       />
       {onArchive ? (
         <WorkspaceMenuItem

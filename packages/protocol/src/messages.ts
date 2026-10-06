@@ -1,3 +1,12 @@
+// FORK(workspace-snooze): durable workspace snoozing and opt-in wake events.
+import {
+  WorkspaceSnoozeSchema,
+  WorkspaceSnoozeSetRequestSchema,
+  WorkspaceSnoozeCheckRequestSchema,
+  WorkspaceSnoozeSetResponseSchema,
+  WorkspaceSnoozeCheckResponseSchema,
+  WorkspaceSnoozeWokeSchema,
+} from "./workspace-snooze.js";
 // FORK(linear-toolbar): host CLI-backed linked issue actions.
 import {
   LinearGetIssuesRequestSchema,
@@ -916,6 +925,8 @@ export const BackgroundAttemptSchema = z.object({
 });
 export const BackgroundRequestSchema = z.object({
   purpose: z.literal("chapters").optional(),
+  // FORK(workspace-snooze): distinguish checks while preserving the legacy activity kind.
+  snoozeCheck: z.boolean().optional(),
   id: z.string(),
   kind: z.enum(["commit", "pull_request", "labels"]),
   title: z.string(),
@@ -3340,6 +3351,8 @@ export const SessionEventSubscriptionSchema = z.enum([
   "workspace_setup_progress",
   "agent.provider_subagents.update",
   "terminal_attention_required",
+  // FORK(workspace-snooze): clients explicitly subscribe to wake notifications.
+  "workspace.snooze.woke",
   "status.server_info",
   "status.daemon_config_changed",
   "status.plugin_catalog_changed",
@@ -3411,6 +3424,9 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ProjectRemoveRequestSchema,
   WorkspaceTitleSetRequestSchema,
   WorkspacePinSetRequestSchema,
+  // FORK(workspace-snooze): snooze control RPCs.
+  WorkspaceSnoozeSetRequestSchema,
+  WorkspaceSnoozeCheckRequestSchema,
   WorkspaceLabelListRequestSchema,
   WorkspaceLabelAssignmentSetRequestSchema,
   WorkspaceLabelUpdateRequestSchema,
@@ -3898,6 +3914,8 @@ export const ServerInfoStatusPayloadSchema = z
         providerSubagentNesting: z.boolean().optional(),
         // COMPAT(workspacePinning): added in v0.1.107, remove gate after 2027-01-12.
         workspacePinning: z.boolean().optional(),
+        // FORK(workspace-snooze): one feature gate for clients.
+        workspaceSnoozing: z.boolean().optional(),
         // COMPAT(workspaceMarkUnread): added in v0.5.0, remove after 2027-08-20.
         workspaceMarkUnread: z.boolean().optional(),
         // COMPAT(hubRelationship): added in v0.1.X, drop the gate when floor >= v0.1.X.
@@ -4270,6 +4288,8 @@ export const WorkspaceDescriptorPayloadSchema = z
     title: z.string().nullable().optional(),
     // COMPAT(workspacePinning): added in v0.1.107, remove optional after 2027-01-12.
     pinnedAt: z.string().nullable().optional(),
+    // FORK(workspace-snooze): optional for older daemon descriptors.
+    snooze: WorkspaceSnoozeSchema.nullable().optional(),
     // COMPAT(workspaceLabels): added in v0.5.0, remove optional after 2027-08-14.
     labels: z.array(z.string()).optional(),
     archivingAt: z.string().nullable().optional().default(null),
@@ -7166,6 +7186,10 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ProjectRemoveResponseSchema,
   WorkspaceTitleSetResponseSchema,
   WorkspacePinSetResponseSchema,
+  // FORK(workspace-snooze): responses and opt-in wake event.
+  WorkspaceSnoozeSetResponseSchema,
+  WorkspaceSnoozeCheckResponseSchema,
+  WorkspaceSnoozeWokeSchema,
   WorkspaceRecoveryInspectResponseSchema,
   WorkspaceRecoveryRestoreResponseSchema,
   WaitForFinishResponseMessageSchema,

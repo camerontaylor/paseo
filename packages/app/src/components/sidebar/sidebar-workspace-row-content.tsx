@@ -1,3 +1,5 @@
+// FORK(workspace-snooze): reveal snooze details under Show all.
+import { WorkspaceSnoozeIndicator } from "@/workspace-snooze/indicator";
 import { memo, useMemo, useCallback, useState, type ReactNode } from "react";
 import { Text, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -173,6 +175,7 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             </Text>
             <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
           </View>
+          {workspace.snooze ? <WorkspaceSnoozeIndicator snooze={workspace.snooze} /> : null}
           <View style={styles.workspaceMetaLine}>
             {/* The meta row renders nothing when it has no items; the trailing action still
                 has to appear, so it sits beside the row rather than inside it. */}

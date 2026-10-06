@@ -203,6 +203,27 @@ untouched. Forging either makes a background resume look like the user read a wo
 agent worked in it just now, which rewrites the sidebar timestamp permanently — persisted
 `updatedAt` is what workspace `statusEnteredAt` is re-derived from on the next daemon start.
 
+## Workspace snoozing
+
+Snoozing controls sidebar visibility. It leaves agents, scripts, tabs, pinning, and workspace order
+intact. **Show all** reveals snoozed rows in each sidebar group; opening one does not unsnooze it.
+Archiving cancels the snooze.
+
+The daemon owns the schedule so checking continues when the app closes. After host downtime, a
+timed snooze wakes immediately and an AI snooze performs one overdue check, without replaying missed
+intervals. Calendar presets use the selecting device's timezone and persist a UTC instant.
+
+AI checks use GPT Luna through Codex in auto-review mode, in the workspace's exact directory.
+They retain normal CLI and MCP access. Read-only behavior is a prompt instruction, not a sandbox
+guarantee. Manual approval requests end the check as inconclusive. Unavailable providers, denied
+access, and failed checks keep the workspace snoozed. Inspect evidence in
+[Background Activity](timeline-sync.md#background-request-inspection).
+
+Keep scheduling state on the workspace record, independent of helper session lifetime. A check
+belongs to the snooze revision that started it; editing or canceling the snooze invalidates that
+result. Helper cancellation must settle before another check starts. A successful wake sends one
+notification through the existing presence policy and never moves the user's focus.
+
 ## The subagents track
 
 The track is a pill at the foot of an agent's pane (`packages/app/src/subagents/track.tsx`): a count you can read at a glance, and a panel behind it — a popover on wide screens, a sheet on compact ones — holding the rows. It floats over the transcript rather than sitting in a band above the composer, so the timeline scrolls underneath it; `packages/app/src/panels/agent-tracks.tsx` owns that placement, and the pill frame is shared with the task list in `packages/app/src/composer/tracks.tsx`.
