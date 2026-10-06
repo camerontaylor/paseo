@@ -20,14 +20,46 @@ export function selectSessionSearchExcerpts(
   excerpts: SessionSearchExcerpt[],
   query: string,
 ): SessionSearchExcerpt[] {
-  const words = query.toLocaleLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+  const words = new Set(query.toLocaleLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
   const ranked = excerpts.map((excerpt, index) => {
-    const lower = excerpt.text.toLocaleLowerCase();
-    const positions = words.map((word) => lower.indexOf(word)).filter((pos) => pos >= 0);
-    const start = positions.length ? Math.max(0, Math.min(...positions) - 160) : 0;
+    const events = new Map<number, { word: string; delta: number }[]>();
+    for (const word of words) {
+      for (const match of excerpt.text.matchAll(new RegExp(`(?=(${word}))`, "giu"))) {
+        const from = Math.max(0, match.index + match[1].length - 800);
+        const until = match.index + 1;
+        if (from >= until) continue;
+        for (const [position, delta] of [[from, 1], [until, -1]]) {
+          const changes = events.get(position) ?? [];
+          changes.push({ word, delta });
+          events.set(position, changes);
+        }
+      }
+    }
+    const counts = new Map<string, number>();
+    let coverage = 0;
+    let score = 0;
+    let start = 0;
+    const sortedEvents = [...events].sort(([a], [b]) => a - b);
+    for (const [eventIndex, [position, changes]] of sortedEvents.entries()) {
+      for (const { word, delta } of changes) {
+        const before = counts.get(word) ?? 0;
+        const after = before + delta;
+        counts.set(word, after);
+        if (before === 0 && after > 0) coverage++;
+        if (before > 0 && after === 0) coverage--;
+      }
+      if (coverage > score) {
+        score = coverage;
+        start = Math.min(
+          position + 640,
+          (sortedEvents[eventIndex + 1]?.[0] ?? Infinity) - 1,
+          Math.max(0, excerpt.text.length - 800),
+        );
+      }
+    }
     return {
       index,
-      score: positions.length,
+      score,
       excerpt: { ...excerpt, text: excerpt.text.slice(start, start + 800) },
     };
   });
