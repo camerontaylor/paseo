@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
+import { isCompanionEntryPending, type CompanionEntry } from "@getpaseo/protocol/companion-stream";
 import type { AgentPermissionRequest, AgentStreamEvent } from "./agent-sdk-types.js";
 
 export const COMPANION_ENTRY_LIMIT = 50;
@@ -18,18 +18,20 @@ function excerpt(text: string): { text: string; truncated: boolean } {
   };
 }
 
-function requestText(request: AgentPermissionRequest): string {
+function requestQuestions(request: AgentPermissionRequest): string[] {
   const questions = request.input?.questions;
-  if (Array.isArray(questions)) {
-    const text = questions
-      .flatMap((question: unknown) => {
-        if (typeof question !== "object" || question === null || !("question" in question))
-          return [];
-        return typeof question.question === "string" ? [question.question] : [];
-      })
-      .join("\n\n");
-    if (text) return text;
-  }
+  if (!Array.isArray(questions)) return [];
+  return questions.flatMap((question: unknown) => {
+    if (typeof question !== "object" || question === null || !("question" in question)) return [];
+    return typeof question.question === "string" && question.question.trim()
+      ? [question.question]
+      : [];
+  });
+}
+
+function requestText(request: AgentPermissionRequest): string {
+  const text = requestQuestions(request).join("\n\n");
+  if (text) return text;
   if (request.kind === "plan") {
     if (typeof request.metadata?.planText === "string") return request.metadata.planText;
     if (typeof request.input?.plan === "string") return request.input.plan;
@@ -49,9 +51,19 @@ export function restoreCompanionEntries(options?: {
 }
 
 function expirePendingPermission(entry: CompanionEntry): CompanionEntry {
-  return entry.kind === "permission" && entry.status === "pending"
-    ? { ...entry, status: "expired" }
-    : entry;
+  if (entry.kind !== "permission" || entry.status !== "pending") return entry;
+  if (entry.requestKind === "question") {
+    // The provider request is no longer answerable, but the needed input survives.
+    return {
+      id: entry.id,
+      kind: "question",
+      status: "open",
+      timestamp: entry.timestamp,
+      text: entry.text,
+      truncated: entry.truncated,
+    };
+  }
+  return { ...entry, status: "expired" };
 }
 
 export class CompanionStreamCollector {
@@ -77,23 +89,30 @@ export class CompanionStreamCollector {
       return this.observeTimeline(agentId, entries, event, turnKey, turns);
     }
     if (event.type === "permission_requested") {
-      const entry: CompanionEntry = {
-        id: `permission:${event.request.id}`,
-        kind: "permission",
-        timestamp,
-        requestId: event.request.id,
-        requestKind: event.request.kind,
-        status: "pending",
-        ...excerpt(requestText(event.request)),
-      };
-      return upsert(entries, entry);
+      const questions = event.request.kind === "question" ? requestQuestions(event.request) : [];
+      let next = entries;
+      for (const [index, text] of (questions.length
+        ? questions
+        : [requestText(event.request)]
+      ).entries()) {
+        next = upsert(next, {
+          id: `permission:${event.request.id}${index ? `:question:${index}` : ""}`,
+          kind: "permission",
+          timestamp,
+          requestId: event.request.id,
+          requestKind: event.request.kind,
+          status: "pending",
+          ...excerpt(text),
+        });
+      }
+      return next;
     }
     if (event.type === "permission_resolved") {
-      return mapChanged(entries, (entry) =>
-        entry.kind === "permission" && entry.requestId === event.requestId
-          ? { ...entry, status: event.resolution.behavior === "allow" ? "allowed" : "denied" }
-          : entry,
-      );
+      return mapChanged(entries, (entry) => {
+        if (entry.kind !== "permission" || entry.requestId !== event.requestId) return entry;
+        if (event.disposition === "expired") return expirePendingPermission(entry);
+        return { ...entry, status: event.resolution.behavior === "allow" ? "allowed" : "denied" };
+      });
     }
     if (
       event.type !== "turn_completed" &&
@@ -130,13 +149,8 @@ export class CompanionStreamCollector {
       // Only the final response is a review card, not intermediate tool narration.
       turns.delete(turnKey);
     }
-    if (item.type === "user_message") {
-      return mapChanged(entries, (entry) =>
-        entry.kind === "question" && entry.status === "open"
-          ? { ...entry, status: "reply_sent" }
-          : entry,
-      );
-    }
+    // A message is not evidence that any particular question has been answered.
+    // Questions are resolved individually by an explicit status update.
     return entries;
   }
 }
@@ -154,20 +168,18 @@ function collectOutcome(
     next = mapChanged(next, expirePendingPermission);
   }
   const text = draft?.text.trim() ?? "";
-  // Plain prose questions are a hint, never a claim that a later reply resolved a decision.
-  const prose = text.replace(/```[\s\S]*?```|`[^`]*`|https?:\/\/\S+/g, "");
-  const question = event.type === "turn_completed" && /[?？]\s*$/.test(prose);
-  if (question) {
+  const questions = event.type === "turn_completed" ? extractCompanionQuestions(text) : [];
+  for (const [index, question] of questions.entries()) {
     next = upsert(next, {
-      id: `${id}:question`,
+      id: `${id}:question${index ? `:${index}` : ""}`,
       kind: "question",
       timestamp,
-      text,
+      text: question,
       truncated: draft?.truncated ?? false,
       status: "open",
     });
   }
-  let outcomeText = question ? "" : text;
+  let outcomeText = questions.length === 1 && questions[0] === text ? "" : text;
   let status: "completed" | "failed" | "canceled" = "completed";
   if (event.type === "turn_failed") {
     outcomeText = event.error;
@@ -213,5 +225,42 @@ function upsert(entries: CompanionEntry[], entry: CompanionEntry): CompanionEntr
   const next = existing
     ? entries.map((item) => (item.id === entry.id ? { ...entry, timestamp: item.timestamp } : item))
     : [...entries, entry];
-  return next.slice(-COMPANION_ENTRY_LIMIT);
+  return retainCompanionEntries(next);
+}
+
+export function retainCompanionEntries(entries: CompanionEntry[]): CompanionEntry[] {
+  // Durable user context and unresolved work do not compete with transient outcomes.
+  const durable = (entry: CompanionEntry) => entry.kind === "pin" || isCompanionEntryPending(entry);
+  const recent = new Set(entries.filter((entry) => !durable(entry)).slice(-COMPANION_ENTRY_LIMIT));
+  return entries.filter((entry) => durable(entry) || recent.has(entry));
+}
+
+/** Capture explicit question lines and lists explicitly labelled as needing input.
+ * This is syntax recognition, not a semantic claim about every question in history.
+ * Agents use set_stream_question for authoritative, individually resolvable items.
+ */
+export function extractCompanionQuestions(text: string): string[] {
+  const prose = text.replace(/```[\s\S]*?```/g, "\n");
+  const questions: string[] = [];
+  let inputSection = false;
+  for (const raw of prose.split("\n")) {
+    const originalLine = raw.trim();
+    const line = originalLine.replace(/`[^`]*`|https?:\/\/\S+/g, "").trim();
+    const heading = line.replace(/^[#*\s]+|[*:\s]+$/g, "");
+    if (
+      /^(?:still )?(?:need(?:s)? (?:your )?input|open questions|questions for you|pending decisions|awaiting your (?:answer|input))$/i.test(
+        heading,
+      )
+    ) {
+      inputSection = true;
+      continue;
+    }
+    if (/^#{1,6}\s|^\*\*[^*]+\*\*:?$/.test(line)) inputSection = false;
+    const listItem = line.match(/^(?:[-*+] |\d+[.)] )(.+)$/);
+    if (/[?？]\s*$/.test(line) || (inputSection && listItem)) {
+      const question = listItem ? originalLine.replace(/^(?:[-*+] |\d+[.)] )/, "") : originalLine;
+      if (question) questions.push(question);
+    } else if (line && !listItem) inputSection = false;
+  }
+  return [...new Set(questions)];
 }
