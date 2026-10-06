@@ -1,5 +1,8 @@
 import { selectSessionSearchExcerpts, type SessionSearchExcerpt } from "../session-search.js";
-import { projectTimelineRows } from "./timeline-projection.js";
+import {
+  projectTimelineRows,
+  selectTimelineWindowByProjectedLimit,
+} from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
@@ -761,13 +764,7 @@ export class AgentManager {
   private readonly durableTimelineStore?: AgentTimelineStore;
   private readonly previousStatuses = new Map<string, AgentLifecycleStatus>();
   private readonly backgroundTasks = new Set<Promise<void>>();
-  private readonly uncommittedTimelineWrites = new Map<
-    Promise<void>,
-    {
-      agentId: string;
-      rows: readonly AgentTimelineRow[];
-    }
-  >();
+  private readonly recentTimelineWriteRows = new Map<string, Map<number, AgentTimelineRow>>();
   private readonly agentRegistrationTasks = new Set<Promise<void>>();
   private readonly inFlightAgentCloses = new Map<string, Promise<void>>();
   private readonly reloadedSessionCloses = new WeakMap<AgentSession, Promise<void>>();
@@ -1271,9 +1268,7 @@ export class AgentManager {
   async readSessionSearchText(id: string, query: string): Promise<SessionSearchExcerpt[]> {
     let sourceRows: AgentTimelineRow[];
     if (this.durableTimelineStore) {
-      const pending = [...this.uncommittedTimelineWrites.values()]
-        .filter((write) => write.agentId === id)
-        .flatMap((write) => write.rows);
+      const pending = [...(this.recentTimelineWriteRows.get(id)?.values() ?? [])];
       const committed = await this.durableTimelineStore.getCommittedRows(id, {
         projectedLimit: 400,
       });
@@ -3400,13 +3395,7 @@ export class AgentManager {
 
   async deleteCommittedTimeline(agentId: string): Promise<void> {
     await this.durableTimelineStore?.deleteAgent(agentId);
-    this.clearUncommittedTimelineWrites(agentId);
-  }
-
-  private clearUncommittedTimelineWrites(agentId: string): void {
-    for (const [task, write] of this.uncommittedTimelineWrites) {
-      if (write.agentId === agentId) this.uncommittedTimelineWrites.delete(task);
-    }
+    this.recentTimelineWriteRows.delete(agentId);
   }
 
   async getLastAssistantMessage(agentId: string): Promise<string | null> {
@@ -3943,7 +3932,7 @@ export class AgentManager {
     this.artifactCollector.cancelTurn(agentId);
     this.companionCollector.clear(agentId);
     this.timelineStore.delete(agentId);
-    this.clearUncommittedTimelineWrites(agentId);
+    this.recentTimelineWriteRows.delete(agentId);
     this.paseoToolPolicies.delete(agentId);
     for (const event of this.providerSubagents.deleteParent(agentId)) {
       this.dispatch({ type: "provider_subagent", event });
@@ -5197,11 +5186,19 @@ export class AgentManager {
     agentId: string,
     rows: readonly AgentTimelineRow[],
   ): Promise<void> {
-    this.uncommittedTimelineWrites.set(task, { agentId, rows });
-    return task.then(() => {
-      this.uncommittedTimelineWrites.delete(task);
-      return undefined;
+    const retained =
+      this.recentTimelineWriteRows.get(agentId) ?? new Map<number, AgentTimelineRow>();
+    for (const row of rows) retained.set(row.seq, row);
+    const window = selectTimelineWindowByProjectedLimit({
+      rows: [...retained.values()].sort((a, b) => a.seq - b.seq),
+      direction: "tail",
+      limit: 400,
     });
+    this.recentTimelineWriteRows.set(
+      agentId,
+      new Map(window.selectedRows.map((row) => [row.seq, row])),
+    );
+    return task;
   }
 
   private trackBackgroundTask(task: Promise<void>): void {

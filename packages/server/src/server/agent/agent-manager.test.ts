@@ -11832,3 +11832,88 @@ test("session search reconstructs partial overlaps from reopened committed and p
     await manager.closeAgent(agentId);
   }
 });
+
+test("session search preserves complete recent messages through a sustained outage and recovery", async () => {
+  class RecoveringTimelineStore extends RecordingTimelineStore {
+    failWrites = false;
+    override async bulkInsert(id: string, rows: readonly AgentTimelineRow[]) {
+      if (this.failWrites) throw new Error("Storage unavailable");
+      await super.bulkInsert(id, rows);
+    }
+  }
+  const store = new RecoveringTimelineStore();
+  const agentId = "00000000-0000-4000-8000-000000000195";
+  await store.appendCommitted(agentId, {
+    type: "assistant_message",
+    text: "Recording on Notestream Vision ",
+  });
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "saved-chat", metadata: { cwd: tmpdir() } },
+      undefined,
+      agentId,
+    );
+    await manager.appendTimelineItem(agentId, { type: "assistant_message", text: "is " });
+    await manager.flush();
+    store.failWrites = true;
+    await manager.appendTimelineItem(agentId, { type: "assistant_message", text: "ready" });
+    await manager.flush();
+    expect((await manager.readSessionSearchText(agentId, "recording"))[0].text).toBe(
+      "Recording on Notestream Vision is ready",
+    );
+    for (let index = 0; index < 420; index++) {
+      await manager.appendTimelineItem(agentId, {
+        type: "user_message",
+        text: `Outage request ${index}`,
+      });
+      await manager.appendTimelineItem(agentId, {
+        type: "assistant_message",
+        text: `Recording answer ${index} `,
+      });
+      await manager.appendTimelineItem(agentId, { type: "assistant_message", text: "complete" });
+    }
+    await manager.flush();
+    expect(await manager.readSessionSearchText(agentId, "Outage request 219")).not.toContainEqual(
+      expect.objectContaining({ text: "Outage request 219" }),
+    );
+    expect(await manager.readSessionSearchText(agentId, "Outage request 220")).toContainEqual(
+      expect.objectContaining({ text: "Outage request 220", source: "user_message" }),
+    );
+    expect(await manager.readSessionSearchText(agentId, "Recording answer 220")).toContainEqual(
+      expect.objectContaining({
+        text: "Recording answer 220 complete",
+        source: "assistant_message",
+      }),
+    );
+    store.failWrites = false;
+    await manager.appendTimelineItem(agentId, {
+      type: "assistant_message",
+      text: " after recovery",
+    });
+    await manager.flush();
+    expect(await manager.readSessionSearchText(agentId, "Recording answer 419")).toContainEqual(
+      expect.objectContaining({
+        text: "Recording answer 419 complete after recovery",
+        source: "assistant_message",
+      }),
+    );
+    await manager.appendTimelineItem(agentId, { type: "user_message", text: "Recovered request" });
+    await manager.flush();
+    expect(await manager.readSessionSearchText(agentId, "Outage request 220")).not.toContainEqual(
+      expect.objectContaining({ text: "Outage request 220" }),
+    );
+    expect(await manager.readSessionSearchText(agentId, "Recording answer 220")).toContainEqual(
+      expect.objectContaining({ text: "Recording answer 220 complete" }),
+    );
+    await manager.deleteCommittedTimeline(agentId);
+    expect(await manager.readSessionSearchText(agentId, "recording")).toEqual([]);
+  } finally {
+    await manager.flush();
+    await manager.closeAgent(agentId);
+  }
+});
