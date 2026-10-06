@@ -11917,3 +11917,56 @@ test("session search preserves complete recent messages through a sustained outa
     await manager.closeAgent(agentId);
   }
 });
+
+test("session search releases committed writes without losing a concurrent read snapshot", async () => {
+  const pendingWrite = deferred<void>();
+  const readStarted = deferred<void>();
+  const allowRead = deferred<void>();
+  class ConcurrentTimelineStore extends RecordingTimelineStore {
+    holdWrites = false;
+    holdReads = false;
+    override async bulkInsert(id: string, rows: readonly AgentTimelineRow[]) {
+      if (this.holdWrites) await pendingWrite.promise;
+      await super.bulkInsert(id, rows);
+    }
+    override async getCommittedRows(id: string, options?: { projectedLimit: number }) {
+      const rows = await super.getCommittedRows(id, options);
+      if (this.holdReads) {
+        readStarted.resolve();
+        await allowRead.promise;
+      }
+      return rows;
+    }
+  }
+  const store = new ConcurrentTimelineStore();
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: tmpdir() }, undefined, {});
+  try {
+    store.holdWrites = true;
+    await manager.appendTimelineItem(agent.id, {
+      type: "user_message",
+      text: "Record on Notestream Vision",
+    });
+    store.holdReads = true;
+    const search = manager.readSessionSearchText(agent.id, "record");
+    await readStarted.promise;
+    pendingWrite.resolve();
+    await manager.flush();
+    allowRead.resolve();
+    expect(await search).toContainEqual(
+      expect.objectContaining({ text: "Record on Notestream Vision" }),
+    );
+    store.holdReads = false;
+    await store.deleteAgent(agent.id);
+    expect(await manager.readSessionSearchText(agent.id, "record")).toEqual([]);
+  } finally {
+    pendingWrite.resolve();
+    allowRead.resolve();
+    await manager.flush();
+    await manager.closeAgent(agent.id);
+  }
+});
