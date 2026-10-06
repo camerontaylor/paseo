@@ -99,12 +99,14 @@ vi.mock("@/runtime/host-runtime", () => ({
   }),
 }));
 vi.mock("@/stores/navigation-active-workspace-store", () => ({
+  navigateToWorkspace: fixture.open,
   useActiveWorkspaceSelection: () => ({ serverId: "host", workspaceId: "workspace" }),
 }));
 vi.mock("@/utils/navigate-to-agent", () => ({ navigateToAgent: fixture.open }));
 vi.mock("@/stores/session-store", async () => {
   const { create } = await import("zustand");
   return {
+    selectAgentTurnPresentation: () => ({ isActive: false, turnId: null }),
     useSessionStore: create(() => ({
       sessions: {
         host: {

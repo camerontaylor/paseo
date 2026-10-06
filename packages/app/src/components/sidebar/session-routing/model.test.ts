@@ -160,3 +160,57 @@ describe("session routing decisions", () => {
     ).toBe("continue");
   });
 });
+
+test("new conversation keeps manual workspace and text until scope or host excludes it", () => {
+  const workspace = {
+    serverId: recipient.serverId,
+    workspaceId: recipient.workspaceId,
+    projectViewKey: recipient.projectViewKey,
+    projectName: recipient.projectName,
+    name: "main",
+  };
+  let state = routingReducer(initialRoutingState, {
+    type: "restoreDraft",
+    text: "new task",
+    version: 1,
+  });
+  state = routingReducer(state, { type: "newConversation", workspace });
+  expect(state).toMatchObject({
+    newConversation: true,
+    newWorkspace: workspace,
+    sendDraft: "new task",
+    recipient: null,
+  });
+  expect(routingReducer(state, { type: "scope", scope: "another" }).newWorkspace).toBeNull();
+  expect(routingReducer(state, { type: "hosts", serverIds: [] }).newWorkspace).toBeNull();
+  expect(
+    routingReducer(state, { type: "hosts", serverIds: [recipient.serverId] }).newWorkspace,
+  ).toEqual(workspace);
+  expect(routingReducer(state, { type: "recipient", recipient }).newConversation).toBe(false);
+});
+
+test("delivery modes default to Queue and changing mode invalidates old matches without sending", () => {
+  expect(initialRoutingState.deliveryMode).toBe("queue");
+  const state = routingReducer(
+    { ...initialRoutingState, sendDraft: "keep" },
+    { type: "deliveryMode", mode: "interrupt" },
+  );
+  expect(state).toMatchObject({
+    deliveryMode: "interrupt",
+    sendDraft: "keep",
+    phase: { status: "idle" },
+  });
+});
+
+test("failed draft cleanup after direct acknowledgement retains receipt without a retry state", () => {
+  const state = routingReducer(
+    { ...initialRoutingState, phase: { status: "acknowledged", recipient, queued: false } },
+    { type: "receiptWarning", message: "Sent; draft cleanup failed" },
+  );
+  expect(state.phase).toEqual({
+    status: "acknowledged",
+    recipient,
+    queued: false,
+    warning: "Sent; draft cleanup failed",
+  });
+});

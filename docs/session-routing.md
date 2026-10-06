@@ -3,7 +3,7 @@
 The project sidebar combines its immediate project/title filter with deliberate intelligent Find
 and Send prompt actions. Find and Open chat never deliver the query. Use this chat pins an exact
 host/session, switches to Send, and restores the independent, persisted send draft. The destination
-chat owns all replies; sending does not navigate away or create a session. Press Enter/Search in the
+chat owns all replies; sending to an existing chat does not navigate away or create a session. Press Enter/Search in the
 filter field or choose Find to submit intelligent matching; typing alone keeps the ordinary filter.
 
 Choose All projects, Current project, or a named project in the scope menu. A project scope is a
@@ -15,13 +15,45 @@ Changing the independent draft or query leaves the other mode's lookup intact. C
 releases only the canceled request's loading state, even if a newer lookup has started. Host changes
 also clear excluded results and editable recipients; a pending delivery keeps its original destination
 and item ID until acknowledgement or rejection. Explicit recipient selection
-bypasses matching. Automatic Send requires one clear high-confidence result and complete coverage
+bypasses matching. Automatic Queue requires one clear high-confidence result and complete coverage
 of all scoped hosts; ambiguity,
 no matches, unavailable hosts, or incomplete shortlist coverage require manual selection first.
 In Find results, Open chat navigates and Use this chat selects without sending. In Send results,
 Send here delivers the saved prompt to the chosen chat. Choose an existing chat opens the manual
 picker when matching returns no results. Routing requires a host advertising `sessionSearch`;
 delivery also requires `agentMessageQueue`. Update an older host when prompted.
+
+## New conversation and delivery mode
+
+The recipient picker also offers **New conversation**, independently of intelligent matching.
+Its visible workspace picker identifies the project, workspace, and host. Under All projects,
+the default is the selected host's uniquely identified `tmpworkspace` root. An explicit project
+scope uses the active workspace within that project, or its sole workspace. Missing scratch
+workspaces, ambiguous choices, or multiple hosts without host context require a selection; the
+UI never guesses an unrelated workspace. Manual choice survives toggling destinations until
+scope or host selection excludes it.
+
+**Continue in new conversation** saves an independent draft, waits for durable persistence,
+then opens the chosen workspace's ordinary new-chat composer. The user chooses the provider/model
+and sends there using the established composer. Neither selecting a workspace nor Continue
+sends the prompt. The original dispatcher draft is retained as a copy; editing the new draft
+does not change it. Controls lock during handoff, and the captured destination is revalidated
+after persistence. A failure preserves the source prompt.
+
+Existing-chat delivery offers **Queue** (default), **Steer**, and **Interrupt**. Queue retains
+the durable outbox contract below. Steer and Interrupt use the ordinary chat composer submission
+path and require an explicitly selected conversation; intelligent matching presents candidates
+rather than automatically steering or interrupting one. Steer uses strict `steer_only` and never
+falls back to interruption. Active steering requires the host capability; idle sending follows
+the ordinary composer's compatibility behavior. Interrupt sets the cancellation flag only for
+an active turn. Both recheck host, chat/workspace identity, project, and scope immediately before
+sending. The direct-send protocol has no atomic expected-workspace guard, so this is a preflight
+check rather than Queue's atomic admission guarantee.
+
+Direct sends are never replayed by the queue outbox. An uncertain response preserves the draft
+and tells the user to inspect the destination before resending. A successful send remains
+acknowledged even if saved-draft cleanup fails; the receipt warns about the restored draft
+without offering a delivery retry. Later edits are protected by draft revision and timestamp.
 
 `session.search.request` reuses existing agent/project/workspace metadata and the latest conversation
 context. Each host shortlists at most 100 sessions before reading timelines; results expose
