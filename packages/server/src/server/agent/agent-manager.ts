@@ -1,8 +1,5 @@
 import { selectSessionSearchExcerpts, type SessionSearchExcerpt } from "../session-search.js";
-import {
-  projectTimelineRows,
-  selectTimelineWindowByProjectedLimit,
-} from "./timeline-projection.js";
+import { projectTimelineRows, selectRecentTimelineSourceRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
@@ -5189,15 +5186,11 @@ export class AgentManager {
     const retained =
       this.recentTimelineWriteRows.get(agentId) ?? new Map<number, AgentTimelineRow>();
     for (const row of rows) retained.set(row.seq, row);
-    const window = selectTimelineWindowByProjectedLimit({
+    const selectedRows = selectRecentTimelineSourceRows({
       rows: [...retained.values()].sort((a, b) => a.seq - b.seq),
-      direction: "tail",
       limit: 400,
     });
-    this.recentTimelineWriteRows.set(
-      agentId,
-      new Map(window.selectedRows.map((row) => [row.seq, row])),
-    );
+    this.recentTimelineWriteRows.set(agentId, new Map(selectedRows.map((row) => [row.seq, row])));
     return task;
   }
 
