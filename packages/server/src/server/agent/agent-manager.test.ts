@@ -11634,3 +11634,85 @@ test("session search applies the 400-item bound after merging committed and memo
     await manager.closeAgent(agentId);
   }
 });
+
+test.each([false, true])(
+  "session search counts a pending assistant extension once at the 400-item boundary (reopened: %s)",
+  async (reopened) => {
+    const pendingWrite = deferred<void>();
+    class PendingTimelineStore extends RecordingTimelineStore {
+      holdWrites = false;
+      override async bulkInsert(id: string, rows: readonly AgentTimelineRow[]) {
+        if (this.holdWrites) await pendingWrite.promise;
+        await super.bulkInsert(id, rows);
+      }
+    }
+    const store = new PendingTimelineStore();
+    const agentId = "00000000-0000-4000-8000-000000000197";
+    const client = new TestAgentClient();
+    const resume = vi.spyOn(client, "resumeSession");
+    const options = {
+      clients: { codex: client },
+      durableTimelineStore: store,
+      logger,
+      idFactory: () => agentId,
+    };
+    let manager = new AgentManager(options);
+    try {
+      await manager.createAgent({ provider: "codex", cwd: tmpdir() }, undefined, {
+        workspaceId: undefined,
+      });
+      await manager.appendTimelineItem(agentId, {
+        type: "user_message",
+        text: "Start recording on Notestream Vision",
+      });
+      const promptTimestamp = manager.fetchTimeline(agentId).rows[0].timestamp;
+      for (let index = 0; index < 398; index++) {
+        await manager.appendTimelineItem(agentId, {
+          type: "notification",
+          level: "info",
+          message: `Tool progress ${index}`,
+        });
+      }
+      await manager.appendTimelineItem(agentId, {
+        type: "assistant_message",
+        text: "Recording setup ",
+      });
+      await manager.flush();
+      if (reopened) {
+        await manager.closeAgent(agentId);
+        manager = new AgentManager(options);
+        await manager.resumeAgentFromPersistence(
+          { provider: "codex", sessionId: "saved-chat", metadata: { cwd: tmpdir() } },
+          undefined,
+          agentId,
+        );
+      }
+      const history = vi.spyOn(manager.getAgent(agentId)!.session!, "streamHistory");
+      resume.mockClear();
+      store.holdWrites = true;
+      await manager.appendTimelineItem(agentId, { type: "assistant_message", text: "is ready" });
+      const extension = manager.fetchTimeline(agentId, { direction: "tail", limit: 1 }).rows[0];
+      expect(extension.seqEnd).toBe(401);
+      expect(extension.seqStart).toBe(reopened ? 401 : 400);
+      expect(await manager.readSessionSearchText(agentId, "recording Notestream Vision")).toEqual([
+        {
+          text: "Start recording on Notestream Vision",
+          source: "user_message",
+          timestamp: promptTimestamp,
+        },
+        {
+          text: "Recording setup is ready",
+          source: "assistant_message",
+          timestamp: extension.timestamp,
+        },
+      ]);
+      expect((await store.fetchCommitted(agentId)).endSeq).toBe(400);
+      expect(resume).not.toHaveBeenCalled();
+      expect(history).not.toHaveBeenCalled();
+    } finally {
+      pendingWrite.resolve();
+      await manager.flush();
+      await manager.closeAgent(agentId);
+    }
+  },
+);

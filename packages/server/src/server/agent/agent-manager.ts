@@ -1,6 +1,5 @@
 import { selectSessionSearchExcerpts, type SessionSearchExcerpt } from "../session-search.js";
 import { projectTimelineRows } from "./timeline-projection.js";
-import { timelineItemIdentity } from "@getpaseo/protocol/timeline-identity";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
@@ -1269,14 +1268,23 @@ export class AgentManager {
     const memory = this.timelineStore.has(id)
       ? this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows
       : [];
-    const byIdentity = new Map<string, AgentTimelineFetchResult["rows"][number]>();
-    for (const row of [...committed, ...memory]) {
-      const identity = timelineItemIdentity(row.item);
-      const key = identity === null ? `seq:${row.seq}` : `item:${identity}`;
-      const previous = byIdentity.get(key);
-      if (!previous || row.seq > previous.seq) byIdentity.set(key, row);
+    const retained: AgentTimelineFetchResult["rows"] = [];
+    for (const row of [...committed, ...memory].sort(
+      (a, b) => b.seqEnd - a.seqEnd || a.seqStart - b.seqStart,
+    )) {
+      const overlaps = retained.some((newer) =>
+        newer.sourceSeqRanges.some((a) =>
+          row.sourceSeqRanges.some((b) => a.startSeq <= b.endSeq && b.startSeq <= a.endSeq),
+        ),
+      );
+      if (!overlaps) retained.push(row);
     }
-    const rows = [...byIdentity.values()].sort((a, b) => a.seq - b.seq).slice(-400);
+    const rows = projectTimelineRows({
+      rows: retained.sort((a, b) => a.seqStart - b.seqStart),
+      mode: "projected",
+    })
+      .sort((a, b) => a.seqEnd - b.seqEnd)
+      .slice(-400);
     const excerpts: SessionSearchExcerpt[] = [];
     for (const { item, timestamp } of rows) {
       if (item.type === "user_message" || item.type === "assistant_message") {
