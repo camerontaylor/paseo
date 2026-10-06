@@ -1279,6 +1279,7 @@ export const ptBR: TranslationResources = {
         manual: "Ordem manual",
         recent: "Latest conversation activity",
         user: "Your last message",
+        assistant: "AI’s last reply",
         title: "Título A–Z",
       },
     },

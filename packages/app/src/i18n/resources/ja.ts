@@ -1263,6 +1263,7 @@ export const ja: TranslationResources = {
         manual: "手動の順序",
         recent: "Latest conversation activity",
         user: "Your last message",
+        assistant: "AI’s last reply",
         title: "タイトル順",
       },
     },

@@ -851,7 +851,13 @@ function WorkspacesSectionHeader() {
   );
 }
 
-const SIDEBAR_SORT_MODES: readonly SidebarSortMode[] = ["recent", "user", "manual", "title"];
+const SIDEBAR_SORT_MODES: readonly SidebarSortMode[] = [
+  "recent",
+  "user",
+  "assistant",
+  "manual",
+  "title",
+];
 
 function SidebarSearchControls() {
   const { t } = useTranslation();
@@ -923,7 +929,8 @@ function SidebarSearchControls() {
                 mode={mode}
                 selected={sortMode === mode}
                 disabled={
-                  (mode === "recent" || mode === "user") && messageSortAvailability !== "ready"
+                  (mode === "recent" || mode === "user" || mode === "assistant") &&
+                  messageSortAvailability !== "ready"
                 }
                 onSelectMode={setSortMode}
               />

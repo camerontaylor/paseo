@@ -158,3 +158,38 @@ it("distinguishes your messages from replies and ignores metadata timestamps wit
     "b",
   ]);
 });
+
+it("sorts replies independently of user messages for rows and project groups with stable ties", () => {
+  const a = workspace("a", "Zulu", "Project A", "2026-01-05T00:00:00Z");
+  const b = workspace("b", "Alpha", "Project B", "2026-01-04T00:00:00Z");
+  a.entry.lastAssistantMessageAt = new Date("2026-01-01T00:00:00Z");
+  b.entry.lastAssistantMessageAt = new Date("2026-01-02T00:00:00Z");
+  const entries = new Map([a, b].map(({ entry }) => [entry.workspaceKey, entry]));
+  const placements = [a.placement, b.placement];
+  expect(sortSidebarWorkspaces(placements, entries, "user").map((x) => x.workspaceKey)).toEqual([
+    "a",
+    "b",
+  ]);
+  expect(
+    sortSidebarWorkspaces(placements, entries, "assistant").map((x) => x.workspaceKey),
+  ).toEqual(["b", "a"]);
+  const projects = [a, b].map(({ placement }) => ({
+    viewKey: placement.workspaceKey,
+    projectName: placement.projectName,
+    workspaces: [placement],
+  })) as SidebarProjectEntry[];
+  expect(
+    filterAndSortSidebarProjects({ projects, entries, query: "", mode: "user" }).map(
+      (x) => x.viewKey,
+    ),
+  ).toEqual(["a", "b"]);
+  expect(
+    filterAndSortSidebarProjects({ projects, entries, query: "", mode: "assistant" }).map(
+      (x) => x.viewKey,
+    ),
+  ).toEqual(["b", "a"]);
+  a.entry.lastAssistantMessageAt = b.entry.lastAssistantMessageAt;
+  expect(
+    sortSidebarWorkspaces(placements, entries, "assistant").map((x) => x.workspaceKey),
+  ).toEqual(["a", "b"]);
+});

@@ -1267,6 +1267,7 @@ export const ru: TranslationResources = {
         manual: "Ручной порядок",
         recent: "Latest conversation activity",
         user: "Your last message",
+        assistant: "AI’s last reply",
         title: "Название А–Я",
       },
     },

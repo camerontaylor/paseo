@@ -1259,6 +1259,7 @@ export const ko: TranslationResources = {
         manual: "수동 순서",
         recent: "Latest conversation activity",
         user: "Your last message",
+        assistant: "AI’s last reply",
         title: "제목 가나다순",
       },
     },

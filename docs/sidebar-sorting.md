@@ -1,13 +1,14 @@
 # Sidebar conversation sorting
 
-The sidebar offers Latest conversation activity (the default), Your last message, Manual order,
+The sidebar offers Latest conversation activity (the default), Your last message, AI’s last reply, Manual order,
 and Title A–Z. The chosen mode persists on this device. Select Manual order to arrange rows by dragging.
 Pinned rows retain their saved order. Message sorts order unpinned rows within project/status
 groups and order project groups by their newest eligible conversation. Ties retain stored
 order, so renaming a tied row does not move it.
 
 Latest conversation activity uses the newer of the last accepted user message and the last completed
-assistant reply. Your last message uses only accepted user messages. Queue submission is not delivery:
+assistant reply. Your last message uses only accepted user messages; AI’s last reply uses only
+completed assistant replies. Queue submission is not delivery:
 the user clock advances when the host accepts the actual prompt. Streaming tokens, tool output,
 settings, and title changes do not advance either clock. System-injected notifications are excluded.
 An assistant turn must finish with visible reply text to advance its clock; stale completions and
@@ -20,11 +21,12 @@ History import uses only original provider message timestamps. Undated history a
 timeline rows cannot be safely backfilled: some older rows were stamped at hydration time. These
 remain unknown until authoritative dated history is refreshed or a new message arrives. If both
 roles are unknown, Latest conversation activity falls back to creation time; Your last message
-falls back to creation time when its user clock is unknown. A known original timestamp wins even
+falls back to creation time when its user clock is unknown. AI’s last reply likewise falls back to
+creation time when its assistant clock is unknown. A known original timestamp wins even
 when it predates an imported conversation's creation time. Reopening, refreshing undated history,
 or reconnecting does not synthesize new activity.
 
-Both message sorts require every selected host to advertise `conversationMessageActivity`.
+All three message sorts require every selected host to advertise `conversationMessageActivity`.
 Until server info arrives, or while an older host is selected, the sidebar uses stored manual order
 and retains the user's selected preference. Known older hosts show an update notice and disable the
 message choices. Manual and Title remain available; supporting hosts automatically restore the

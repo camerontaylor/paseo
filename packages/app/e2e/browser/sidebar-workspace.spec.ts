@@ -610,11 +610,15 @@ test("sidebar conversation sort choices persist and metadata does not reorder ac
     const trigger = page.getByTestId("sidebar-sort-trigger");
     await expect(trigger).toHaveAttribute("aria-label", /Latest conversation activity/);
     await trigger.click();
-    for (const mode of ["recent", "user", "manual", "title"])
+    for (const mode of ["recent", "user", "assistant", "manual", "title"])
       await expect(page.getByTestId(`sidebar-sort-${mode}`)).toBeVisible();
     await page.getByTestId("sidebar-sort-user").click();
     await page.reload();
     await expect(trigger).toHaveAttribute("aria-label", /Your last message/);
+    await trigger.click();
+    await page.getByTestId("sidebar-sort-assistant").click();
+    await page.reload();
+    await expect(trigger).toHaveAttribute("aria-label", /AI’s last reply/);
     await trigger.click();
     await page.getByTestId("sidebar-sort-manual").click();
     await expect(trigger).toHaveAttribute("aria-label", /Manual/);

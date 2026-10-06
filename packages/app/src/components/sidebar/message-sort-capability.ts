@@ -12,6 +12,7 @@ export function effectiveSidebarSortMode(
   mode: SidebarSortMode,
   availability: ReturnType<typeof messageSortAvailability>,
 ): SidebarSortMode {
-  if ((mode === "recent" || mode === "user") && availability !== "ready") return "manual";
+  if ((mode === "recent" || mode === "user" || mode === "assistant") && availability !== "ready")
+    return "manual";
   return mode;
 }

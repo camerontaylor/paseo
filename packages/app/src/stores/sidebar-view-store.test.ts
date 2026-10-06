@@ -294,7 +294,7 @@ describe("sidebar view store", () => {
 
 it("defaults old preferences to activity and round-trips every chosen sort mode", async () => {
   expect(migrateSidebarViewState({ groupMode: "project" }).sortMode).toBe("recent");
-  for (const mode of ["recent", "user", "manual", "title"] as const) {
+  for (const mode of ["recent", "user", "assistant", "manual", "title"] as const) {
     useSidebarViewStore.getState().setSortMode(mode);
     const saved = useSidebarViewStore.persist.getOptions().partialize!(
       useSidebarViewStore.getState(),

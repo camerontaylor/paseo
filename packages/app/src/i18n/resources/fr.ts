@@ -1289,6 +1289,7 @@ export const fr: TranslationResources = {
         manual: "Ordre manuel",
         recent: "Latest conversation activity",
         user: "Your last message",
+        assistant: "AI’s last reply",
         title: "Titre A–Z",
       },
     },

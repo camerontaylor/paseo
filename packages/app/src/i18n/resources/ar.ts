@@ -1249,6 +1249,7 @@ export const ar: TranslationResources = {
         manual: "الترتيب اليدوي",
         recent: "Latest conversation activity",
         user: "Your last message",
+        assistant: "AI’s last reply",
         title: "العنوان أ–ي",
       },
     },

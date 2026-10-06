@@ -5,7 +5,7 @@ it("waits for server info, detects old hosts, and restores the selected activity
   expect(messageSortAvailability([true, undefined])).toBe("loading");
   expect(messageSortAvailability([true, false])).toBe("unsupported");
   expect(messageSortAvailability([true, true])).toBe("ready");
-  for (const mode of ["recent", "user"] as const) {
+  for (const mode of ["recent", "user", "assistant"] as const) {
     expect(effectiveSidebarSortMode(mode, "loading")).toBe("manual");
     expect(effectiveSidebarSortMode(mode, "unsupported")).toBe("manual");
     expect(effectiveSidebarSortMode(mode, "ready")).toBe(mode);

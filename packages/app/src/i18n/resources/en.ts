@@ -1259,6 +1259,7 @@ export const en = {
         manual: "Manual order",
         recent: "Latest conversation activity",
         user: "Your last message",
+        assistant: "AI’s last reply",
         title: "Title A–Z",
       },
     },

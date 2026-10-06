@@ -1238,6 +1238,7 @@ export const zhCN: TranslationResources = {
         manual: "手动排序",
         recent: "Latest conversation activity",
         user: "Your last message",
+        assistant: "AI’s last reply",
         title: "标题 A–Z",
       },
     },

@@ -5767,12 +5767,20 @@ describe("agent snapshot MCP serialization", () => {
     expect(spies.agentStorage.get).toHaveBeenCalledWith("archived-agent");
   });
 
-  it("returns full-detail snapshots from get_agent_status", async () => {
+  it.each([
+    undefined,
+    { lastUserMessageAt: null, lastAssistantMessageAt: null },
+    {
+      lastUserMessageAt: "2026-01-01T00:00:00.000Z",
+      lastAssistantMessageAt: "2026-01-02T00:00:00.000Z",
+    },
+  ])("returns full-detail snapshots with optional message activity %j", async (messageActivity) => {
     const { agentManager, agentStorage, spies } = createTestDeps();
     spies.agentStorage.get.mockResolvedValue({ title: "Full detail agent" });
     spies.agentManager.getAgent.mockReturnValue(
       createManagedAgent({
         id: "full-detail-agent",
+        messageActivity,
         provider: "codex",
         cwd: "/tmp/full-detail",
         config: { model: "gpt-5.4", thinkingOptionId: "high" },
@@ -5833,6 +5841,7 @@ describe("agent snapshot MCP serialization", () => {
         `get_agent_status response failed AgentSnapshotPayloadSchema: ${JSON.stringify(parsed.error.issues, null, 2)}`,
       );
     }
+    expect(snapshot.messageActivity).toEqual(messageActivity);
     expect(response.structuredContent.status).toBe("idle");
     expect(snapshot).toEqual(
       expect.objectContaining({
