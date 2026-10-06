@@ -761,6 +761,13 @@ export class AgentManager {
   private readonly durableTimelineStore?: AgentTimelineStore;
   private readonly previousStatuses = new Map<string, AgentLifecycleStatus>();
   private readonly backgroundTasks = new Set<Promise<void>>();
+  private readonly uncommittedTimelineWrites = new Map<
+    Promise<void>,
+    {
+      agentId: string;
+      rows: readonly AgentTimelineRow[];
+    }
+  >();
   private readonly agentRegistrationTasks = new Set<Promise<void>>();
   private readonly inFlightAgentCloses = new Map<string, Promise<void>>();
   private readonly reloadedSessionCloses = new WeakMap<AgentSession, Promise<void>>();
@@ -1262,25 +1269,24 @@ export class AgentManager {
   }
 
   async readSessionSearchText(id: string, query: string): Promise<SessionSearchExcerpt[]> {
-    const committed = this.durableTimelineStore
-      ? (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 400 })).rows
-      : [];
-    const memory = this.timelineStore.has(id)
-      ? this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows
-      : [];
-    const retained: AgentTimelineFetchResult["rows"] = [];
-    for (const row of [...committed, ...memory].sort(
-      (a, b) => b.seqEnd - a.seqEnd || a.seqStart - b.seqStart,
-    )) {
-      const overlaps = retained.some((newer) =>
-        newer.sourceSeqRanges.some((a) =>
-          row.sourceSeqRanges.some((b) => a.startSeq <= b.endSeq && b.startSeq <= a.endSeq),
-        ),
-      );
-      if (!overlaps) retained.push(row);
+    let sourceRows: AgentTimelineRow[];
+    if (this.durableTimelineStore) {
+      const pending = [...this.uncommittedTimelineWrites.values()]
+        .filter((write) => write.agentId === id)
+        .flatMap((write) => write.rows);
+      const committed = await this.durableTimelineStore.getCommittedRows(id, {
+        projectedLimit: 400,
+      });
+      const bySeq = new Map(committed.map((row) => [row.seq, row]));
+      for (const row of pending) bySeq.set(row.seq, row);
+      sourceRows = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+    } else {
+      sourceRows = this.timelineStore.has(id)
+        ? this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows
+        : [];
     }
     const rows = projectTimelineRows({
-      rows: retained.sort((a, b) => a.seqStart - b.seqStart),
+      rows: sourceRows,
       mode: "projected",
     })
       .sort((a, b) => a.seqEnd - b.seqEnd)
@@ -3394,6 +3400,13 @@ export class AgentManager {
 
   async deleteCommittedTimeline(agentId: string): Promise<void> {
     await this.durableTimelineStore?.deleteAgent(agentId);
+    this.clearUncommittedTimelineWrites(agentId);
+  }
+
+  private clearUncommittedTimelineWrites(agentId: string): void {
+    for (const [task, write] of this.uncommittedTimelineWrites) {
+      if (write.agentId === agentId) this.uncommittedTimelineWrites.delete(task);
+    }
   }
 
   async getLastAssistantMessage(agentId: string): Promise<string | null> {
@@ -3930,6 +3943,7 @@ export class AgentManager {
     this.artifactCollector.cancelTurn(agentId);
     this.companionCollector.clear(agentId);
     this.timelineStore.delete(agentId);
+    this.clearUncommittedTimelineWrites(agentId);
     this.paseoToolPolicies.delete(agentId);
     for (const event of this.providerSubagents.deleteParent(agentId)) {
       this.dispatch({ type: "provider_subagent", event });
@@ -5130,7 +5144,11 @@ export class AgentManager {
     if (!this.durableTimelineStore) {
       return;
     }
-    const task = this.durableTimelineStore.bulkInsert(agentId, [row]).catch((err) => {
+    const task = this.trackTimelineWrite(
+      this.durableTimelineStore.bulkInsert(agentId, [row]),
+      agentId,
+      [row],
+    ).catch((err) => {
       this.logger.error(
         { err, agentId, seq: row.seq, itemType: row.item.type },
         "Failed to append timeline row to durable store",
@@ -5146,7 +5164,11 @@ export class AgentManager {
     if (!this.durableTimelineStore || rows.length === 0) {
       return;
     }
-    const task = this.durableTimelineStore.bulkInsert(agentId, rows).catch((err) => {
+    const task = this.trackTimelineWrite(
+      this.durableTimelineStore.bulkInsert(agentId, rows),
+      agentId,
+      rows,
+    ).catch((err) => {
       this.logger.error(
         { err, agentId, rowCount: rows.length },
         "Failed to seed durable timeline store",
@@ -5157,13 +5179,29 @@ export class AgentManager {
 
   private enqueueDurableTimelineUpdate(agentId: string, row: AgentTimelineRow): void {
     if (!this.durableTimelineStore) return;
-    const task = this.durableTimelineStore.updateCommittedRow(agentId, row).catch((err) => {
+    const task = this.trackTimelineWrite(
+      this.durableTimelineStore.updateCommittedRow(agentId, row),
+      agentId,
+      [row],
+    ).catch((err) => {
       this.logger.error(
         { err, agentId, seq: row.seq, itemType: row.item.type },
         "Failed to enrich durable timeline row",
       );
     });
     this.trackBackgroundTask(task);
+  }
+
+  private trackTimelineWrite(
+    task: Promise<void>,
+    agentId: string,
+    rows: readonly AgentTimelineRow[],
+  ): Promise<void> {
+    this.uncommittedTimelineWrites.set(task, { agentId, rows });
+    return task.then(() => {
+      this.uncommittedTimelineWrites.delete(task);
+      return undefined;
+    });
   }
 
   private trackBackgroundTask(task: Promise<void>): void {
