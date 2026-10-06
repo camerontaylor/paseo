@@ -16,7 +16,10 @@ import {
 import { AgentStorage } from "./agent-storage.js";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
 import { toAgentPayload } from "./agent-projections.js";
-import { projectTimelineRows } from "./timeline-projection.js";
+import {
+  projectTimelineRows,
+  selectTimelineWindowByProjectedLimit,
+} from "./timeline-projection.js";
 import { getOpenAgentTabLabel, PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { formatSystemNotificationPrompt, startAgentRun } from "./agent-prompt.js";
 import { StaleProviderSessionError } from "./stale-provider-session-error.js";
@@ -111,6 +114,7 @@ const TEST_CAPABILITIES = {
 class RecordingTimelineStore implements AgentTimelineStore {
   readonly writes: AgentTimelineRow[][] = [];
   private readonly memory = new InMemoryAgentTimelineStore();
+  private readonly canonical = new Map<string, Map<number, AgentTimelineRow>>();
 
   private ensure(agentId: string): void {
     if (!this.memory.has(agentId)) this.memory.initialize(agentId);
@@ -122,7 +126,11 @@ class RecordingTimelineStore implements AgentTimelineStore {
     options?: { timestamp?: string; turnId?: string },
   ): Promise<AgentTimelineRow> {
     this.ensure(agentId);
-    return this.memory.append(agentId, item, options);
+    const row = this.memory.append(agentId, item, options);
+    const rows = this.canonical.get(agentId) ?? new Map<number, AgentTimelineRow>();
+    rows.set(row.seq, row);
+    this.canonical.set(agentId, rows);
+    return row;
   }
 
   async fetchCommitted(
@@ -137,8 +145,18 @@ class RecordingTimelineStore implements AgentTimelineStore {
     return this.memory.has(agentId) ? (this.memory.getRows(agentId).at(-1)?.seq ?? 0) : 0;
   }
 
-  async getCommittedRows(agentId: string): Promise<AgentTimelineRow[]> {
-    return this.memory.has(agentId) ? this.memory.getRows(agentId) : [];
+  async getCommittedRows(
+    agentId: string,
+    options?: { projectedLimit: number },
+  ): Promise<AgentTimelineRow[]> {
+    const rows = [...(this.canonical.get(agentId)?.values() ?? [])].sort((a, b) => a.seq - b.seq);
+    return options
+      ? selectTimelineWindowByProjectedLimit({
+          rows,
+          direction: "tail",
+          limit: options.projectedLimit,
+        }).selectedRows
+      : rows;
   }
 
   async getLastItem(agentId: string): Promise<AgentTimelineItem | null> {
@@ -151,25 +169,28 @@ class RecordingTimelineStore implements AgentTimelineStore {
 
   async deleteAgent(agentId: string): Promise<void> {
     this.memory.delete(agentId);
+    this.canonical.delete(agentId);
   }
 
   async bulkInsert(agentId: string, rows: readonly AgentTimelineRow[]): Promise<void> {
     this.writes.push(rows.map((row) => ({ ...row })));
-    this.ensure(agentId);
+    const canonical = this.canonical.get(agentId) ?? new Map<number, AgentTimelineRow>();
     for (const row of rows) {
-      this.memory.append(agentId, row.item, {
-        timestamp: row.timestamp,
-        turnId: row.turnId,
-      });
+      canonical.set(row.seq, row);
     }
+    this.canonical.set(agentId, canonical);
+    this.memory.initialize(agentId, {
+      rows: [...canonical.values()].sort((a, b) => a.seq - b.seq),
+    });
   }
 
   async updateCommittedRow(agentId: string, row: AgentTimelineRow): Promise<void> {
     this.ensure(agentId);
-    const rows = this.memory.getRows(agentId);
+    const rows = await this.getCommittedRows(agentId);
     const index = rows.findIndex((candidate) => candidate.seq === row.seq);
     if (index >= 0) {
       rows[index] = row;
+      this.canonical.get(agentId)?.set(row.seq, row);
       this.memory.initialize(agentId, { rows });
     }
   }
@@ -11716,3 +11737,98 @@ test.each([false, true])(
     }
   },
 );
+
+test("session search reconstructs partial overlaps from reopened committed and pending assistant chunks", async () => {
+  const pendingWrite = deferred<void>();
+  const readStarted = deferred<void>();
+  const allowRead = deferred<void>();
+  class PendingTimelineStore extends RecordingTimelineStore {
+    holdWrites = false;
+    holdRead = false;
+    failWrites = false;
+    override async bulkInsert(id: string, rows: readonly AgentTimelineRow[]) {
+      if (this.holdWrites) await pendingWrite.promise;
+      if (this.failWrites) throw new Error("Storage unavailable");
+      await super.bulkInsert(id, rows);
+    }
+    override async getCommittedRows(id: string, options?: { projectedLimit: number }) {
+      const rows = await super.getCommittedRows(id, options);
+      if (this.holdRead) {
+        readStarted.resolve();
+        await allowRead.promise;
+      }
+      return rows;
+    }
+  }
+  const store = new PendingTimelineStore();
+  const agentId = "00000000-0000-4000-8000-000000000196";
+  await store.appendCommitted(agentId, {
+    type: "assistant_message",
+    text: "Recording on Notestream Vision ",
+  });
+  const client = new TestAgentClient();
+  const resume = vi.spyOn(client, "resumeSession");
+  const manager = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "saved-chat", metadata: { cwd: tmpdir() } },
+      undefined,
+      agentId,
+    );
+    const history = vi.spyOn(manager.getAgent(agentId)!.session!, "streamHistory");
+    resume.mockClear();
+    await manager.appendTimelineItem(agentId, { type: "assistant_message", text: "is " });
+    await manager.flush();
+    store.holdWrites = true;
+    await manager.appendTimelineItem(agentId, { type: "assistant_message", text: "ready" });
+    const memory = manager.fetchTimeline(agentId, { direction: "tail", limit: 1 }).rows[0];
+    const committed = (await store.fetchCommitted(agentId)).rows[0];
+    expect([committed.seqStart, committed.seqEnd, memory.seqStart, memory.seqEnd]).toEqual([
+      1, 2, 2, 3,
+    ]);
+    const expected = [
+      {
+        text: "Recording on Notestream Vision is ready",
+        source: "assistant_message",
+        timestamp: memory.timestamp,
+      },
+    ];
+    expect(await manager.readSessionSearchText(agentId, "recording Notestream Vision")).toEqual(
+      expected,
+    );
+
+    store.holdRead = true;
+    const search = manager.readSessionSearchText(agentId, "recording Notestream Vision");
+    await readStarted.promise;
+    pendingWrite.resolve();
+    await manager.flush();
+    allowRead.resolve();
+    expect(await search).toEqual(expected);
+    expect(await manager.readSessionSearchText(agentId, "recording Notestream Vision")).toEqual(
+      expected,
+    );
+    store.holdRead = false;
+    store.failWrites = true;
+    await manager.appendTimelineItem(agentId, { type: "assistant_message", text: " today" });
+    await manager.flush();
+    const failed = manager.fetchTimeline(agentId, { direction: "tail", limit: 1 }).rows[0];
+    expect(await manager.readSessionSearchText(agentId, "recording Notestream Vision")).toEqual([
+      {
+        text: "Recording on Notestream Vision is ready today",
+        source: "assistant_message",
+        timestamp: failed.timestamp,
+      },
+    ]);
+    expect(resume).not.toHaveBeenCalled();
+    expect(history).not.toHaveBeenCalled();
+  } finally {
+    pendingWrite.resolve();
+    allowRead.resolve();
+    await manager.flush();
+    await manager.closeAgent(agentId);
+  }
+});
