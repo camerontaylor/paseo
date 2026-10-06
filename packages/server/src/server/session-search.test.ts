@@ -1,6 +1,9 @@
 import { expect, test, vi } from "vitest";
+import { SessionSearchResultSchema } from "@getpaseo/protocol/messages";
 import {
   searchExistingSessions,
+  selectSessionSearchExcerpts,
+  type SessionSearchExcerpt,
   type SessionSearchCandidate,
   type SessionSearchRanking,
 } from "./session-search.js";
@@ -12,14 +15,22 @@ const candidate: SessionSearchCandidate = {
   title: "Offline indicator",
   cwd: "/fixture",
   updatedAt: "2026-10-01",
-  excerpts: ["Offline indicator"],
+  excerpts: [{ text: "Offline indicator", source: "title" }],
 };
 function fixture(matches: SessionSearchRanking["matches"]) {
   return {
     query: "Where were we working on the offline indicator?",
     workspaceIds: ["workspace"],
     candidates: [candidate],
-    readContext: vi.fn(async () => ["Relay reconnect investigation"]),
+    readContext: vi.fn(
+      async (): Promise<SessionSearchExcerpt[]> => [
+        {
+          text: "Relay reconnect investigation",
+          source: "user_message",
+          timestamp: "2026-10-01T12:30:00Z",
+        },
+      ],
+    ),
     generate: vi.fn(async () => ({ matches })),
   };
 }
@@ -35,6 +46,9 @@ test("returns only existing scoped IDs and verbatim evidence", async () => {
       title: "Offline indicator",
       excerpt: "Relay reconnect investigation",
       confidence: 0.95,
+      excerptTimestamp: "2026-10-01T12:30:00Z",
+      excerptSource: "user_message",
+      updatedAt: "2026-10-01",
     },
   ]);
   expect(input.readContext).toHaveBeenCalledTimes(1);
@@ -70,4 +84,91 @@ test("shortlists before timeline reads and exposes incomplete coverage", async (
     totalCount: 150,
   });
   expect(input.readContext).toHaveBeenCalledTimes(100);
+});
+
+test("queued-only topics participate in shortlisting with original evidence and time", async () => {
+  const input = fixture([{ agentId: "queued", confidence: 0.8, excerptIndex: 1 }]);
+  input.query = "recording";
+  input.candidates = Array.from({ length: 110 }, (_, index) => ({
+    ...candidate,
+    agentId: `recent-${index}`,
+  }));
+  input.candidates.push({
+    ...candidate,
+    agentId: "queued",
+    updatedAt: "2026-09-01",
+    excerpts: [
+      { text: "Unrelated title", source: "title" },
+      {
+        text: "Fix recording on Vision",
+        source: "queued_message",
+        timestamp: "2026-10-01T14:22:00Z",
+      },
+    ],
+  });
+  const result = await searchExistingSessions(input);
+  expect(result.results[0]).toMatchObject({
+    agentId: "queued",
+    excerpt: "Fix recording on Vision",
+    excerptSource: "queued_message",
+    excerptTimestamp: "2026-10-01T14:22:00Z",
+  });
+  expect(input.readContext).toHaveBeenCalledWith("queued");
+});
+
+test("queued evidence never escapes workspace scope", async () => {
+  const input = fixture([]);
+  input.candidates.push({
+    ...candidate,
+    agentId: "outside",
+    workspaceId: "outside",
+    excerpts: [{ text: "recording", source: "queued_message" }],
+  });
+  await searchExistingSessions(input);
+  expect(input.readContext).not.toHaveBeenCalledWith("outside");
+  expect(input.generate.mock.calls[0]).not.toBeUndefined();
+});
+
+test("keeps older matching prompts and finds hits beyond the old 800-character prefix", () => {
+  const excerpts: SessionSearchExcerpt[] = [
+    {
+      text: "x".repeat(1000) + " start recording on Vision",
+      source: "user_message",
+      timestamp: "2026-10-01T12:30:00Z",
+    },
+    ...Array.from(
+      { length: 20 },
+      (_, index): SessionSearchExcerpt => ({
+        text: `Unrelated progress ${index}`,
+        source: "assistant_message",
+      }),
+    ),
+  ];
+  const selected = selectSessionSearchExcerpts(excerpts, "recording");
+  expect(selected).toHaveLength(7);
+  expect(selected[0]).toMatchObject({ source: "user_message", timestamp: "2026-10-01T12:30:00Z" });
+  expect(selected[0].text).toContain("start recording on Vision");
+  expect(selected.at(-1)?.text).toBe("Unrelated progress 19");
+  expect(selected.every(({ text }) => text.length <= 800)).toBe(true);
+});
+
+test("result schema accepts old hosts without timestamp metadata", () => {
+  const legacy = {
+    agentId: "chat",
+    workspaceId: "workspace",
+    projectId: "project",
+    projectName: "Paseo",
+    title: "Recording",
+    excerpt: "Start recording",
+    confidence: 0.9,
+  };
+  expect(SessionSearchResultSchema.parse(legacy)).toEqual(legacy);
+  expect(
+    SessionSearchResultSchema.parse({
+      ...legacy,
+      excerptSource: "queued_message",
+      excerptTimestamp: "2026-10-05T12:30:00Z",
+      updatedAt: "2026-10-05T12:30:00Z",
+    }),
+  ).toMatchObject({ excerptSource: "queued_message" });
 });

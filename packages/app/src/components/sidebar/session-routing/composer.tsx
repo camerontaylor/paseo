@@ -1080,6 +1080,17 @@ function PickerRecipientRow({
     </Button>
   );
 }
+function formatMatchTimestamp(value: string): string {
+  return new Date(value).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+}
+
 function RoutingResult({
   recipient,
   mode,
@@ -1105,6 +1116,17 @@ function RoutingResult({
       <Text style={styles.muted}>
         {recipient.projectName} · {recipient.hostLabel}
       </Text>
+      {recipient.updatedAt ? (
+        <Text style={styles.muted}>Updated {formatMatchTimestamp(recipient.updatedAt)}</Text>
+      ) : null}
+      {recipient.excerptSource && recipient.excerptSource !== "title" ? (
+        <Text style={styles.muted}>
+          {recipient.excerptSource === "queued_message" ? "Queued message" : "Message"}
+          {recipient.excerptTimestamp
+            ? ` · ${formatMatchTimestamp(recipient.excerptTimestamp)}`
+            : ""}
+        </Text>
+      ) : null}
       <Text numberOfLines={3} style={styles.muted}>
         {recipient.excerpt}
       </Text>

@@ -5848,7 +5848,9 @@ test("session Find uses only Codex matching despite Claude metadata configuratio
       ],
     },
     agentManager: {
-      readSessionSearchText: async () => ["Existing fixture context"],
+      readSessionSearchText: async () => [
+        { text: "Existing fixture context", source: "user_message" as const },
+      ],
       createAgent: send,
     },
     workspaceRegistry: { get: vi.fn(), list: vi.fn(async () => [workspace]) },
