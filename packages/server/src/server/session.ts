@@ -1,6 +1,10 @@
 import { createCodexSessionSearchGeneration } from "./agent/providers/codex/session-search-generation.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
-import { searchExistingSessions, type SessionSearchCandidate } from "./session-search.js";
+import {
+  searchExistingSessions,
+  selectSessionSearchExcerpts,
+  type SessionSearchCandidate,
+} from "./session-search.js";
 import type { StructuredTextGeneration } from "./session/checkout/git-metadata-generator.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
@@ -8186,6 +8190,21 @@ export class Session {
         if (record.internal || record.archivedAt || record.labels["paseo.parent-agent-id"])
           continue;
         const title = record.title || resolveWorkspaceDisplayName(workspace);
+        const queued = this.agentQueueService
+          ? (await this.agentQueueService.list(record.id)).items
+          : [];
+        const queuedExcerpts = selectSessionSearchExcerpts(
+          queued.map((item) => ({
+            text: item.text,
+            source: "queued_message" as const,
+            timestamp: item.createdAt,
+          })),
+          msg.query,
+        );
+        const updatedAt = queued.reduce(
+          (latest, item) => (item.createdAt > latest ? item.createdAt : latest),
+          record.updatedAt,
+        );
         candidates.push({
           agentId: record.id,
           workspaceId: workspace.workspaceId,
@@ -8193,8 +8212,8 @@ export class Session {
           projectName: resolveProjectDisplayName(project),
           title,
           cwd: workspace.cwd,
-          updatedAt: record.updatedAt,
-          excerpts: [title],
+          updatedAt,
+          excerpts: [{ text: title, source: "title" }, ...queuedExcerpts],
         });
         signal.throwIfAborted();
       }
@@ -8204,7 +8223,7 @@ export class Session {
         candidates,
         readContext: async (agentId) => {
           signal.throwIfAborted();
-          return this.agentManager.readSessionSearchText(agentId);
+          return this.agentManager.readSessionSearchText(agentId, msg.query);
         },
         generate: ({ cwd, prompt, schema }) =>
           this.sessionSearchGeneration.generate({

@@ -1,3 +1,4 @@
+import { selectSessionSearchExcerpts, type SessionSearchExcerpt } from "../session-search.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
@@ -1260,20 +1261,21 @@ export class AgentManager {
     return this.timelineStore.fetch(id, options);
   }
 
-  async readSessionSearchText(id: string): Promise<string[]> {
+  async readSessionSearchText(id: string, query: string): Promise<SessionSearchExcerpt[]> {
     let rows: AgentTimelineFetchResult["rows"] = [];
     if (this.timelineStore.has(id)) {
-      rows = this.timelineStore.fetch(id, { direction: "tail", limit: 40 }).rows;
+      rows = this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows;
     } else if (this.durableTimelineStore) {
-      rows = (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 40 }))
+      rows = (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 400 }))
         .rows;
     }
-    return rows
-      .flatMap(({ item }) => {
-        if (item.type !== "user_message" && item.type !== "assistant_message") return [];
-        return [item.text.slice(0, 800)];
-      })
-      .slice(-6);
+    const excerpts: SessionSearchExcerpt[] = [];
+    for (const { item, timestamp } of rows) {
+      if (item.type === "user_message" || item.type === "assistant_message") {
+        excerpts.push({ text: item.text, source: item.type, timestamp });
+      }
+    }
+    return selectSessionSearchExcerpts(excerpts, query);
   }
 
   listProviderSubagents(parentAgentId: string): ProviderSubagentDescriptor[] {

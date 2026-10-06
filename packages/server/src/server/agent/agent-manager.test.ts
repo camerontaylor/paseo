@@ -11484,3 +11484,28 @@ test("failed startup history closes the session without registering an agent", a
     for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
   }
 });
+
+test("session search retains dated recording prompts behind tool activity without resuming an agent", async () => {
+  const store = new RecordingTimelineStore();
+  await store.appendCommitted(
+    "saved-chat",
+    { type: "user_message", text: "Start recording in Vision" },
+    { timestamp: "2026-10-04T19:38:08.993Z" },
+  );
+  for (let index = 0; index < 60; index++) {
+    await store.appendCommitted("saved-chat", {
+      type: "notification",
+      level: "info",
+      message: `Tool progress ${index}`,
+    });
+  }
+  const manager = new AgentManager({ clients: {}, durableTimelineStore: store, logger });
+  expect(await manager.readSessionSearchText("saved-chat", "recording")).toEqual([
+    {
+      text: "Start recording in Vision",
+      source: "user_message",
+      timestamp: "2026-10-04T19:38:08.993Z",
+    },
+  ]);
+  expect(manager.getAgent("saved-chat")).toBeNull();
+});
