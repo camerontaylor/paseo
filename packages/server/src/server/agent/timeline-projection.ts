@@ -353,6 +353,21 @@ export function projectTimelineRows(input: {
   return mergeReasoningChunks(assistantMerged);
 }
 
+export function selectRecentTimelineSourceRows(input: {
+  rows: readonly AgentTimelineRow[];
+  limit: number;
+}): AgentTimelineRow[] {
+  const limit = Math.max(0, Math.floor(input.limit));
+  if (limit === 0) return [];
+  const entries = projectTimelineRows({ rows: input.rows, mode: "projected" })
+    .sort((a, b) => a.seqEnd - b.seqEnd)
+    .slice(-limit);
+  const ranges = entries.flatMap((entry) => entry.sourceSeqRanges);
+  return input.rows.filter((row) =>
+    ranges.some((range) => row.seq >= range.startSeq && row.seq <= range.endSeq),
+  );
+}
+
 /**
  * Select a timeline window based on projected-entry count, then map it back to
  * contiguous canonical rows. This avoids cutting through merged assistant

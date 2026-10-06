@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import type { AgentTimelineRow } from "./agent-manager.js";
 import {
   projectTimelineRows,
+  selectRecentTimelineSourceRows,
   selectProjectedTimelinePage,
   selectTimelineWindowByProjectedLimit,
 } from "./timeline-projection.js";
@@ -777,4 +778,59 @@ describe("selectProjectedTimelinePage", () => {
     expect(page.entries.some((entry) => entry.item.type === "tool_call")).toBe(true);
     expect(page.endSeq).toBe(501);
   });
+});
+
+test("recent source retention bounds notifications interleaved with updates to one tool", () => {
+  const timestamp = "2026-10-04T19:38:08.993Z";
+  const tool = {
+    type: "tool_call",
+    callId: "long-running-tool",
+    name: "bash",
+    status: "running",
+    detail: { type: "shell", command: "record" },
+    error: null,
+  } as const;
+  let retained: AgentTimelineRow[] = [{ seq: 1, timestamp, turnId: "turn", item: tool }];
+  let seq = 1;
+  const toolSequences = [1];
+  const notificationSequences: number[] = [];
+  for (let round = 0; round < 5; round++) {
+    for (let index = 0; index < 300; index++) {
+      notificationSequences.push(++seq);
+      retained = selectRecentTimelineSourceRows({
+        rows: [
+          ...retained,
+          {
+            seq,
+            timestamp,
+            item: { type: "notification", level: "info", message: `Progress ${seq}` },
+          },
+        ],
+        limit: 400,
+      });
+    }
+    toolSequences.push(++seq);
+    retained = selectRecentTimelineSourceRows({
+      rows: [
+        ...retained,
+        { seq, timestamp, turnId: "turn", item: { ...tool, status: "completed" } },
+      ],
+      limit: 400,
+    });
+    expect(
+      retained.filter((row) => row.item.type === "notification").map((row) => row.seq),
+    ).toEqual(notificationSequences.slice(-399));
+    expect(retained.filter((row) => row.item.type === "tool_call").map((row) => row.seq)).toEqual(
+      toolSequences,
+    );
+    expect(retained).toHaveLength(
+      Math.min(notificationSequences.length, 399) + toolSequences.length,
+    );
+    const projected = projectTimelineRows({ rows: retained, mode: "projected" });
+    expect(projected).toHaveLength(Math.min(notificationSequences.length, 399) + 1);
+    expect(projected.find((entry) => entry.item.type === "tool_call")?.item).toEqual({
+      ...tool,
+      status: "completed",
+    });
+  }
 });

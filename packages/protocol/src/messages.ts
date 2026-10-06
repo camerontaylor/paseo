@@ -2613,6 +2613,11 @@ export const SessionSearchResultSchema = z.object({
   projectName: z.string(),
   title: z.string(),
   excerpt: z.string(),
+  excerptTimestamp: z.string().optional(),
+  excerptSource: z
+    .enum(["title", "user_message", "assistant_message", "queued_message"])
+    .optional(),
+  updatedAt: z.string().optional(),
   confidence: z.number().min(0).max(1),
 });
 
