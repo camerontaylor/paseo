@@ -49,6 +49,23 @@ function canUseExplorerSidebar(
   return resolveExplorerSidebarPresentation(input) === "pane";
 }
 
+// FORK(selection-toolbar): quoted drafts use the existing Explorer dock, not a main-pane split.
+export function openWorkspaceTargetInExplorer(input: {
+  workspaceKey: string | null;
+  target: WorkspaceTabTarget;
+}): string | null {
+  if (!input.workspaceKey) return null;
+  const store = useWorkspaceLayoutStore.getState();
+  const paneId = store.showExplorerSidebar(input.workspaceKey);
+  if (!paneId) return null;
+  return store.openTab({
+    workspaceKey: input.workspaceKey,
+    target: input.target,
+    intent: "reveal",
+    placement: { mode: "pane", paneId },
+  });
+}
+
 /** Reveals the Explorer sidebar and selects one of its navigation trees. */
 export function openExplorerSidebarView(
   input: ExplorerSidebarInput & { view: ExplorerSidebarView },

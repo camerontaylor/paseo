@@ -15,7 +15,7 @@ export function useSelectionToolbarActions(input: {
       agentId: input.agentId,
       agent: input.context,
       workspaceId: input.context.workspaceId,
-      target: "side",
+      target: "explorer",
       boundary: selection.boundary,
       initialPrompt: selection.quote,
     });

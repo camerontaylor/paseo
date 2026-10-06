@@ -79,7 +79,7 @@ Commits are the fork commits that built the feature (`git show --stat <sha>` for
 
 - Owns: `packages/app/src/assistant-selection-toolbar/`.
 - Wires into: `agent-stream/view.tsx`, `panels/agent-panel.tsx`, `hooks/use-fork-agent.ts`, `lib/overlay-root.ts`, and English action labels.
-- Desktop selections can quote into the source draft or open a transcript-backed draft in the ordinary side pane. The toolbar receives overlay keys without taking focus from the browser selection or composer.
+- Desktop selections can quote into the source draft or open a transcript-backed draft in the Explorer sidebar. The toolbar receives overlay keys without taking focus from the browser selection or composer.
 
 ### Fork from the latest response
 

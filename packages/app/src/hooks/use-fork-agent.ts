@@ -13,7 +13,7 @@ import { useHostFeature } from "@/runtime/host-features";
 // FORK(selection-toolbar): side-chat drafts reuse the existing transcript snapshot flow.
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import { useDraftStore } from "@/stores/draft-store";
-import { openWorkspaceTargetBeside } from "@/workspace-tabs/open-beside";
+import { openWorkspaceTargetInExplorer } from "@/workspace-tabs/explorer-sidebar";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import { useSessionStore } from "@/stores/session-store";
@@ -59,7 +59,7 @@ export interface ForkAgentRequest {
   agentId: string;
   agent: ForkAgentSource;
   workspaceId?: string;
-  target: AssistantForkTarget | "side";
+  target: AssistantForkTarget | "explorer";
   initialPrompt?: string;
   boundary?: ForkAgentBoundary;
 }
@@ -171,13 +171,13 @@ export function useForkAgent(
           return draftId;
         };
 
-        if (target === "tab" || target === "side") {
+        if (target === "tab" || target === "explorer") {
           if (!workspaceId) {
             throw new Error(t("message.actions.forkMissingWorkspace"));
           }
           const draftId = await prepareForkDraft();
-          if (target === "side") {
-            openWorkspaceTargetBeside({
+          if (target === "explorer") {
+            openWorkspaceTargetInExplorer({
               workspaceKey: buildWorkspaceTabPersistenceKey({ serverId, workspaceId }),
               target: buildForkDraftTabTarget(draftSetup, draftId),
             });

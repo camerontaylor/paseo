@@ -644,7 +644,7 @@ test("selection toolbar adds a formatted quote to the source draft without sendi
   }
 });
 
-test("selection toolbar opens a side draft with history through the selected response", async ({
+test("selection toolbar opens an Explorer draft with history through the selected response", async ({
   page,
 }) => {
   const attachment = observeForkAttachment(page);
@@ -674,6 +674,9 @@ test("selection toolbar opens a side draft with history through the selected res
     );
     await page.screenshot({ path: "/tmp/paseo-selection-toolbar.png" });
     await page.getByTestId("selection-reply-in-side-chat").click();
+    const explorer = page.getByTestId("workspace-explorer-sidebar").filter({ visible: true });
+    await expect(explorer).toBeVisible();
+    await expect(explorer.getByRole("button", { name: "New Agent", exact: true })).toHaveCount(1);
     await expectChatHistoryAttachment(page);
     const transcript = await attachment.waitForText();
     expect(transcript).toContain("Original question included in snapshot.");
@@ -683,7 +686,9 @@ test("selection toolbar opens a side draft with history through the selected res
     await expect(inputs).toHaveCount(2);
     await expect(inputs.nth(0)).toHaveValue("Keep this source draft");
     await expect(inputs.nth(1)).toHaveValue("> selected phrase\n\n");
-    await expect(inputs.nth(1)).toBeFocused();
+    await expect(explorer.getByRole("textbox", { name: "Message agent..." })).toHaveValue(
+      "> selected phrase\n\n",
+    );
     const sourceBounds = await inputs.nth(0).boundingBox();
     const sideBounds = await inputs.nth(1).boundingBox();
     expect(sourceBounds).not.toBeNull();
@@ -692,10 +697,10 @@ test("selection toolbar opens a side draft with history through the selected res
     await expect(page.getByTestId("user-message")).toHaveCount(2);
     await expect(page.getByTestId("assistant-selection-toolbar")).toHaveCount(0);
     await page.screenshot({ path: "/tmp/paseo-selection-side-chat.png" });
-    // A subsequent side reply adds another draft tab to the same pane.
+    // A subsequent side reply adds another draft tab to the same Explorer dock.
     await selectAssistantText(page, "selected phrase");
     await page.getByTestId("selection-reply-in-side-chat").click();
-    await expect(page.getByRole("button", { name: "New Agent", exact: true })).toHaveCount(2);
+    await expect(explorer.getByRole("button", { name: "New Agent", exact: true })).toHaveCount(2);
     await expect(inputs).toHaveCount(2);
     await expect(inputs.nth(0)).toHaveValue("Keep this source draft");
     await expect(inputs.nth(1)).toHaveValue("> selected phrase\n\n");
