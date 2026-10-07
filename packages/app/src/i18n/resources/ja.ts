@@ -1274,9 +1274,12 @@ export const ja: TranslationResources = {
       clear: "サイドバーの絞り込みを解除",
       sortHeading: "チャットの並び替え",
       sortBy: "チャットの並び替え: {{value}}",
+      sortUpdateHost: "Update selected hosts to sort by message activity.",
       sort: {
         manual: "手動の順序",
-        recent: "最近のアクティビティ",
+        recent: "Latest conversation activity",
+        user: "Your last message",
+        assistant: "AI’s last reply",
         title: "タイトル順",
       },
     },

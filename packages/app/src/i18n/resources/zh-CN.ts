@@ -1249,9 +1249,12 @@ export const zhCN: TranslationResources = {
       clear: "清除侧边栏筛选",
       sortHeading: "聊天排序",
       sortBy: "聊天排序：{{value}}",
+      sortUpdateHost: "Update selected hosts to sort by message activity.",
       sort: {
         manual: "手动排序",
-        recent: "最近活动",
+        recent: "Latest conversation activity",
+        user: "Your last message",
+        assistant: "AI’s last reply",
         title: "标题 A–Z",
       },
     },

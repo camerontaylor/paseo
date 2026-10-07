@@ -1300,9 +1300,12 @@ export const es: TranslationResources = {
       clear: "Borrar filtro lateral",
       sortHeading: "Ordenar chats",
       sortBy: "Ordenar chats: {{value}}",
+      sortUpdateHost: "Update selected hosts to sort by message activity.",
       sort: {
         manual: "Orden manual",
-        recent: "Actividad reciente",
+        recent: "Latest conversation activity",
+        user: "Your last message",
+        assistant: "AI’s last reply",
         title: "Título A–Z",
       },
     },

@@ -1,3 +1,6 @@
+import { useShallow } from "zustand/react/shallow";
+import { useSessionStore } from "@/stores/session-store";
+import { effectiveSidebarSortMode, messageSortAvailability } from "./message-sort-capability";
 import React, {
   createContext,
   useContext,
@@ -53,6 +56,7 @@ interface SidebarModel extends SidebarWorkspacesListResult {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   sortMode: SidebarSortMode;
+  messageSortAvailability: "ready" | "loading" | "unsupported";
   setSortMode: (mode: SidebarSortMode) => void;
   groupMode: SidebarGroupMode;
   workspaceGroups: SidebarWorkspaceGroup[];
@@ -77,7 +81,18 @@ export function SidebarModelProvider({
   const labelFilter = useSidebarViewStore((state) => state.labelFilter);
   const projectFilters = useSidebarViewStore((state) => state.projectFilters);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortMode, setSortMode] = useState<SidebarSortMode>("manual");
+  const sortMode = useSidebarViewStore((state) => state.sortMode);
+  const setSortMode = useSidebarViewStore((state) => state.setSortMode);
+  const hostMessageActivitySupport = useSessionStore(
+    useShallow((state) =>
+      list.serverIds.map((serverId) => {
+        const info = state.sessions[serverId]?.serverInfo;
+        return info ? info.features?.conversationMessageActivity === true : undefined;
+      }),
+    ),
+  );
+  const sortAvailability = messageSortAvailability(hostMessageActivitySupport);
+  const effectiveSort = effectiveSidebarSortMode(sortMode, sortAvailability);
   const normalizedQuery = useMemo(() => normalizeSidebarQuery(searchQuery), [searchQuery]);
   const reconcileLabelFilter = useSidebarViewStore((state) => state.reconcileLabelFilter);
   const { hosts: labelHosts } = useWorkspaceLabelProjection();
@@ -133,9 +148,9 @@ export function SidebarModelProvider({
     const filtered = filterWorkspacesByLabels({ workspaces: byProject, ...labelFilter }).filter(
       (workspace) => workspaceMatchesSidebarQuery(workspace, normalizedQuery),
     );
-    const sorted = sortSidebarWorkspaces(filtered, workspaceEntriesByKey, sortMode);
+    const sorted = sortSidebarWorkspaces(filtered, workspaceEntriesByKey, effectiveSort);
     return new Map(sorted.map((workspace) => [workspace.workspaceKey, workspace]));
-  }, [labelFilter, normalizedQuery, resolvedProjectFilters, sortMode, workspaceEntriesByKey]);
+  }, [labelFilter, normalizedQuery, resolvedProjectFilters, effectiveSort, workspaceEntriesByKey]);
   const visibleWorkspaceKeys = useMemo(
     () => new Set(filteredWorkspaceEntriesByKey.keys()),
     [filteredWorkspaceEntriesByKey],
@@ -169,13 +184,13 @@ export function SidebarModelProvider({
       projects,
       entries: filteredWorkspaceEntriesByKey,
       query: normalizedQuery,
-      mode: sortMode,
+      mode: effectiveSort,
     });
   }, [
     hasActiveLabelFilter,
     hasActiveProjectFilter,
     normalizedQuery,
-    sortMode,
+    effectiveSort,
     filteredWorkspaceEntriesByKey,
     resolvedProjectFilters,
     list.projects,
@@ -191,7 +206,7 @@ export function SidebarModelProvider({
       projectNamesByViewKey: list.projectNamesByViewKey,
       groupMode,
       pinnedCollapsed,
-      sortMode,
+      sortMode: effectiveSort,
       collapsedProjectKeys: normalizedQuery ? new Set<string>() : collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
     }),
@@ -201,7 +216,7 @@ export function SidebarModelProvider({
       collapsedWorkspaceGroupKeys,
       groupMode,
       list.projectNamesByViewKey,
-      sortMode,
+      effectiveSort,
       filteredProjects,
       pinnedCollapsed,
       pinnedKeys,
@@ -221,6 +236,7 @@ export function SidebarModelProvider({
       setSearchQuery,
       sortMode,
       setSortMode,
+      messageSortAvailability: sortAvailability,
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
       groupMode,
       workspaceGroups: projection.workspaceGroups,
@@ -236,6 +252,8 @@ export function SidebarModelProvider({
       normalizedQuery,
       searchQuery,
       sortMode,
+      setSortMode,
+      sortAvailability,
       groupMode,
       list,
       filteredProjects,
