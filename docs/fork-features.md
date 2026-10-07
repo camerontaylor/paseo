@@ -29,6 +29,39 @@ covers the known workflows below, not an exhaustive audit of every historical fo
 Pending rows become preservation requirements for the release that first includes them. Keep a
 regressed row visible until its restoration is verified; documenting it does not mark it fixed.
 
+## Dispatcher follow-up checklist
+
+Jacob requested these together on 2026-10-06. [PR50](https://github.com/tmad4000/paseo/pull/50)
+owns implementation and validation; its PR checklist tracks code completion. The checks below are
+release acceptance for the build that includes that PR. Keep them open until the corresponding
+installed-build receipt records the observation. Repository issues are disabled, so these stable
+IDs also serve as the follow-up issue list.
+
+- [ ] `dispatcher-queue`: show an explicit Queue delivery option, alongside Steer and Interrupt;
+      queueing a prompt to a busy disposable chat preserves its active turn and acknowledges the item.
+- [ ] `dispatcher-clear`: provide an accessible Clear control for the Send prompt input and a
+      consistent explicit clear path for Find. Clearing removes that input and its visible results;
+      the other mode's independent draft/query stays intact. It must not cancel or discard an uncertain
+      delivery already owned by the outbox.
+- [ ] `dispatcher-edit-results`: after Find or Send matching returns chats, editing the input keeps
+      those results visible. They remain tied to the prior lookup until an explicit new lookup replaces
+      them; a delayed old response must not overwrite a newer lookup. Scope/host changes still exclude
+      invalid destinations.
+- [ ] `dispatcher-find-first`: when the main action searches for a destination, label it **Find first**
+      in Send mode and do not deliver to an unseen match. After explicit recipient selection, label the
+      action for its actual delivery mode. Find remains search-only.
+- [ ] `dispatcher-current-draft`: after editing a prompt while prior results are visible, explicitly
+      choosing a destination sends the current prompt exactly once; a stale lookup must never send an
+      older draft or silently route the new one.
+- [ ] `dispatcher-new-chat`: expose New conversation directly from the dispatcher and preserve the
+      prompt through the new-chat composer handoff; choosing a destination alone does not send it.
+- [ ] `dispatcher-workspace`: default new conversations to the unambiguous selected-host
+      `tmpworkspace`, with project/workspace/host visible and manually selectable. Respect an explicit
+      project scope; require a choice when the default is missing or ambiguous.
+
+These extend `dispatcher-create-modes` and `session-routing`; preserve them when an upstream
+implementation replaces either feature. The deferred footer test below remains a separate task.
+
 ## Reviewing an upstream update or reconciliation
 
 1. Record the previous shipped fork commit, candidate fork commit, and incoming upstream tag/commit.
