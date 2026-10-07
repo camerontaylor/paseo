@@ -29,6 +29,16 @@ Rules that apply to both steps:
 - Invoking a release skill is intent to start the flow, not blanket authorization to publish.
 - If the user asks for a release preview, show the prospective changelog/release contents and answer questions, but do not commit, tag, publish, or run release commands until they explicitly authorize the release.
 
+## Fork feature preservation
+
+For Paseo Fork releases, private hotfixes, and installed betas, follow the
+[fork feature preservation workflow](fork-features.md). During preparation, attach the candidate's
+feature disposition matrix and identify unresolved regressions. After an authorized installation,
+attach the installed-build smoke receipt for each target. Keep source integration, build, installation,
+and verified behavior separate in the completion report. These lightweight checks apply to betas
+even when the stable-only review below is skipped; new browser automation is tracked separately in
+the register. This adds no publication or restart authorization.
+
 ## Release source and CI
 
 The default release source is `origin/main`. Fetch `origin`, then record the
@@ -639,6 +649,8 @@ Changelog scope follows the release being described:
 Each beta entry records what its testers receive. Promotion produces the single stable record for the full jump from one stable version to the next.
 
 ## Completion checklist
+
+- [ ] For a fork build, the [feature preservation matrix and applicable installed-build smoke receipts](fork-features.md) account for included features, known regressions, and checks not performed.
 
 ### Beta release
 

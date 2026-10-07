@@ -9,16 +9,12 @@ stock Paseo rather than replacing it.
 
 Every branch starts from an upstream release tag, never from another fork branch.
 
-| Branch          | Base                         | Contents                                                                        | Goes upstream? |
-| --------------- | ---------------------------- | ------------------------------------------------------------------------------- | -------------- |
-| `main`          | upstream tag + fork features | **The canonical branch.** What gets built, installed, and cut to TestFlight.    | no             |
-| `feat/<name>`   | upstream tag                 | One self-contained feature. One per PR.                                         | **yes**        |
-| `fork/branding` | upstream tag                 | Fork identity: app name, icon, `paseo-fork` CLI and URL scheme, FORK badge.     | **never**      |
-| `jacob/daily`   | retired 2026-09-28           | Former integration branch. Everything it carried is on `main`; do not build it. | no             |
-
-Current feature branches:
-
-- `feat/artifact-feed` — per-chat artifact feed (see [NOTES.md](NOTES.md))
+| Branch          | Base                         | Contents                                                                                | Goes upstream? |
+| --------------- | ---------------------------- | --------------------------------------------------------------------------------------- | -------------- |
+| `main`          | upstream tag + fork features | **The canonical branch.** What gets built, installed, and cut to TestFlight.            | no             |
+| `feat/<name>`   | upstream tag                 | One self-contained feature. One per PR.                                                 | **yes**        |
+| `fork/branding` | upstream tag                 | Fork identity: app name, icon, `paseo-fork` CLI and URL scheme, FORK badge.             | **never**      |
+| `jacob/daily`   | retired 2026-09-28           | Retired integration branch; do not build it. Feature parity is tracked in the register. | no             |
 
 ### Why it is shaped this way
 
@@ -44,7 +40,15 @@ ours; the fork augments upstream, it never keeps a rival implementation alive
 behind a flag. Chat find is the worked example: the fork's search scaffold and
 its `agent.timeline.search` schema were dropped for upstream's, and only the
 native wrapper (`packages/app/src/agent-stream/chat-find/index.tsx`) is fork
-code. Ambiguous cases resolve to upstream.
+code. Use the feature register to verify that the upstream replacement preserves the intended behavior;
+record deliberate behavior changes and unresolved gaps in the integration PR.
+
+## Feature preservation
+
+The [fork feature register](docs/fork-features.md) is the maintained record of intended fork
+behavior, source status, regressions, and pending work. Update it with feature PRs. Read it before
+an upstream update, lineage reconciliation, or fork release, and attach its preservation matrix
+and installed-build smoke receipt as applicable. Historical merges do not prove feature parity.
 
 ## Rules
 
@@ -57,6 +61,10 @@ code. Ambiguous cases resolve to upstream.
   fork before. Resolve by shape where possible rather than by literal name.
 
 ## Build and install
+
+Record the candidate and feature dispositions using the [preservation workflow](docs/fork-features.md#reviewing-an-upstream-update-or-reconciliation).
+After an authorized install, complete the [installed-build smoke receipt](docs/fork-features.md#installed-build-smoke-receipt)
+before reporting the rollout verified. This applies to private hotfixes and betas as well as stable builds.
 
 ```bash
 git checkout main
@@ -164,6 +172,10 @@ The branch is already based on an upstream tag and contains nothing else, so it
 applies cleanly. Do not include `fork/branding` in the PR.
 
 ## Moving to a newer upstream release
+
+First read the feature register from both the previous fork and the candidate, then complete its
+[preservation matrix](docs/fork-features.md#reviewing-an-upstream-update-or-reconciliation).
+Keep this step and its register when resolving documentation conflicts.
 
 ```bash
 git fetch upstream --tags
