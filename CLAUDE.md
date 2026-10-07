@@ -64,6 +64,7 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 | [docs/browser-capture-harness.md](docs/browser-capture-harness.md)   | Real-Electron browser screenshot harness and compositor-surface gotcha                                                         |
 | [docs/android.md](docs/android.md)                                   | App variants, local/cloud builds, EAS workflows, version codes, F-Droid source builds and store metadata                       |
 | [docs/docker.md](docs/docker.md)                                     | Running the daemon and bundled web UI in Docker, volumes, agent images, security                                               |
+| [docs/fork-features.md](docs/fork-features.md) | Fork behavior register, reconciliation matrix, installed-build smoke receipts, and deferred regression coverage |
 | [docs/release.md](docs/release.md)                                   | Release playbook, draft releases, completion checklist                                                                         |
 | [docs/terminal-activity.md](docs/terminal-activity.md)               | Terminal activity indicators — source-agnostic tracker, agent hook reporting, adding a new hook provider                       |
 | [SECURITY.md](SECURITY.md)                                           | Relay threat model, E2E encryption, DNS rebinding, agent auth                                                                  |
@@ -119,6 +120,8 @@ retarget the PR to `next` and preserve that destination through delivery. Follow
 and updating `next`, integrating it after a release, and releasing a hotfix from a tag.
 
 ## Critical rules
+
+- **For fork feature changes, upstream updates, reconciliation, and fork releases, read and update [the fork feature register](docs/fork-features.md).** Preserve its user-visible acceptance checks and account for each included feature before declaring parity or an installation verified.
 
 - **NEVER restart the main Paseo daemon on port 6767 without permission** — it manages all running agents. If you're an agent, restarting it kills your own process.
 - **NEVER assume a timeout means the service needs restarting** — timeouts can be transient.

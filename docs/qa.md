@@ -39,6 +39,10 @@ The two things that go wrong most often:
 
 ## Does it regress anything else
 
+For fork updates and reconciliation, use the [feature register and preservation matrix](fork-features.md).
+For installed fork upgrades, attach its smoke receipt; passing source tests alone does not establish
+which behavior the installed artifact exposes.
+
 Paseo is composable by design, which means your change sits next to features you didn't touch. Open the surfaces around it. A change to the agent list affects archive, subagents, and tabs; a change to git actions affects worktrees and the checkout flow.
 
 Performance is part of this. The app is Expo React Native, not a web app in a native shell. You are not writing CSS, styles resolve differently, and performance characteristics differ per platform. What feels instant in a desktop dev build can be visibly slow on a phone.
