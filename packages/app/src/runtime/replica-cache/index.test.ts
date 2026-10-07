@@ -890,3 +890,18 @@ describe("ReplicaCache", () => {
     expect(storage.cleanups).toBe(1);
   });
 });
+
+it("round-trips authoritative message clocks through the directory cache without using updatedAt", async () => {
+  const storage = new MemoryStorage();
+  const writer = createCache(storage);
+  const state = directory();
+  const original = state.agents.get("agent-1")!;
+  original.messageActivity = {
+    lastUserMessageAt: "2025-01-01T00:00:00.000Z",
+    lastAssistantMessageAt: "2025-01-02T00:00:00.000Z",
+  };
+  commitDirectory(writer, SERVER_ID, state);
+  await writer.flush();
+  const restored = await createCache(storage).readDirectory(SERVER_ID);
+  expect(restored.agents.get("agent-1")?.messageActivity).toEqual(original.messageActivity);
+});

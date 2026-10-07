@@ -1284,9 +1284,12 @@ export const fr: TranslationResources = {
       clear: "Effacer le filtre latéral",
       sortHeading: "Trier les discussions",
       sortBy: "Trier les discussions : {{value}}",
+      sortUpdateHost: "Update selected hosts to sort by message activity.",
       sort: {
         manual: "Ordre manuel",
-        recent: "Activité récente",
+        recent: "Latest conversation activity",
+        user: "Your last message",
+        assistant: "AI’s last reply",
         title: "Titre A–Z",
       },
     },

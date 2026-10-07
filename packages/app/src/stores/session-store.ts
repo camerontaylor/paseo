@@ -37,6 +37,7 @@ import type {
 } from "@getpaseo/protocol/agent-types";
 import type {
   AgentQueueSnapshot,
+  AgentSnapshotPayload,
   ServerInfoStatusPayload,
   ProjectPlacementPayload,
   ServerCapabilities,
@@ -83,6 +84,7 @@ export interface Agent {
   createdAt: Date;
   updatedAt: Date;
   lastUserMessageAt: Date | null;
+  messageActivity?: AgentSnapshotPayload["messageActivity"];
   lastActivityAt: Date;
   capabilities: AgentCapabilityFlags;
   currentModeId: string | null;

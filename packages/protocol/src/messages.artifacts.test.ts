@@ -70,6 +70,20 @@ describe("agent artifact snapshots", () => {
       ],
     });
 
+    expect(snapshot.messageActivity).toBeUndefined();
+    const withActivity = {
+      ...snapshot,
+      messageActivity: {
+        lastUserMessageAt: "2026-07-22T00:00:30.000Z",
+        lastAssistantMessageAt: null,
+      },
+    };
+    expect(AgentSnapshotPayloadSchema.parse(withActivity).messageActivity).toEqual(
+      withActivity.messageActivity,
+    );
+    expect(AgentSnapshotPayloadSchema.omit({ messageActivity: true }).parse(withActivity)).toEqual(
+      snapshot,
+    );
     expect(snapshot.artifacts?.[0]?.path).toBe("report.html");
     expect(snapshot.companionEntries).toBeUndefined();
     const upgraded = {
