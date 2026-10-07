@@ -865,15 +865,11 @@ function SidebarSearchControls() {
   const { searchQuery, setSearchQuery, sortMode, setSortMode, messageSortAvailability } =
     useSidebarModel();
   const searchInputRef = useRef<EditingTextInputHandle>(null);
-  const clearSearch = useCallback(() => {
-    searchInputRef.current?.reset();
-    setSearchQuery("");
-  }, [setSearchQuery]);
   useEffect(() => {
     if (!searchQuery && searchInputRef.current?.getText()) searchInputRef.current.reset();
   }, [searchQuery]);
   const renderFindField = useCallback(
-    (submit: () => void) => (
+    (submit: () => void, clear: () => void) => (
       <View style={styles.sidebarSearchControls}>
         <View style={styles.sidebarSearchField}>
           <Search size={15} color={theme.colors.foregroundMuted} />
@@ -893,7 +889,7 @@ function SidebarSearchControls() {
           />
           {searchQuery ? (
             <Pressable
-              onPress={clearSearch}
+              onPress={clear}
               accessibilityRole="button"
               accessibilityLabel={t("sidebar.filterSidebar.clear")}
               testID="sidebar-title-project-filter-clear"
@@ -939,16 +935,7 @@ function SidebarSearchControls() {
         </DropdownMenu>
       </View>
     ),
-    [
-      theme,
-      searchQuery,
-      setSearchQuery,
-      clearSearch,
-      sortMode,
-      setSortMode,
-      messageSortAvailability,
-      t,
-    ],
+    [theme, searchQuery, setSearchQuery, sortMode, setSortMode, messageSortAvailability, t],
   );
   return <SessionRoutingComposer>{renderFindField}</SessionRoutingComposer>;
 }

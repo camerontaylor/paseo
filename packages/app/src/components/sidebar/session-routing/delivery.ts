@@ -6,6 +6,89 @@ import type {
 import { serializeQueueOperation } from "@/stores/queue-outbox-store/model";
 import type { Recipient } from "./model";
 import { AgentQueueDestinationChangedError } from "@getpaseo/client/internal/daemon-client";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import {
+  dispatchComposerAgentMessage,
+  type ComposerSendClient,
+  type MessageSubmissionWriter,
+} from "@/composer/actions";
+import type { SendBehavior } from "@/composer/input/state";
+
+export interface DirectRouteDeliveryInput {
+  recipient: Recipient;
+  text: string;
+  mode: Exclude<SendBehavior, "queue">;
+  client: ComposerSendClient & Pick<DaemonClient, "fetchAgent">;
+  submission: MessageSubmissionWriter;
+  isHostEligible: () => boolean;
+  isDestinationCurrent: () => boolean;
+  supportsSteerOnly: () => boolean;
+  getTurn: () => { isActive: boolean; turnId: string | null };
+}
+
+export class DirectRouteDeliveryError extends Error {
+  constructor(public readonly reason: "host" | "destination" | "steerUnsupported" | "uncertain") {
+    const messages = {
+      host: "The selected host is unavailable or excluded. Choose a destination again.",
+      destination:
+        "The selected conversation moved or is no longer available. Choose a destination again.",
+      steerUnsupported: "Update the selected host to steer an active conversation.",
+      uncertain:
+        "Delivery could not be confirmed. Check the destination conversation before sending again.",
+    };
+    super(messages[reason]);
+    this.name = "DirectRouteDeliveryError";
+  }
+}
+
+export async function deliverDirectRoutedPrompt(
+  input: DirectRouteDeliveryInput,
+): Promise<{ queued: false }> {
+  if (!input.isHostEligible()) throw new DirectRouteDeliveryError("host");
+  const activeTurnBehavior = input.mode === "steer" ? "steer_only" : "interrupt";
+  await dispatchComposerAgentMessage({
+    client: {
+      uploadFile: (value) => input.client.uploadFile(value),
+      sendAgentMessage: async (agentId, text, options) => {
+        // Direct sends have no atomic expected-destination guard. Revalidate at
+        // the wire boundary, after the composer's asynchronous preparation.
+        const current = await input.client.fetchAgent(agentId);
+        if (!input.isHostEligible()) throw new DirectRouteDeliveryError("host");
+        const matchesDestination =
+          current?.agent.id === input.recipient.agentId &&
+          current.agent.workspaceId === input.recipient.workspaceId &&
+          !current.agent.archivedAt &&
+          input.isDestinationCurrent();
+        if (!matchesDestination) throw new DirectRouteDeliveryError("destination");
+        const turn = input.getTurn();
+        let behavior: typeof options.activeTurnBehavior = activeTurnBehavior;
+        if (input.mode === "steer" && !input.supportsSteerOnly()) {
+          if (turn.isActive) throw new DirectRouteDeliveryError("steerUnsupported");
+          behavior = undefined;
+        }
+        try {
+          return await input.client.sendAgentMessage(agentId, text, {
+            ...options,
+            activeTurnBehavior: behavior,
+            ...(input.mode === "interrupt" && turn.isActive ? { interrupt: true } : {}),
+          });
+        } catch (cause) {
+          const error = new DirectRouteDeliveryError("uncertain");
+          error.cause = cause;
+          throw error;
+        }
+      },
+    },
+    agentId: input.recipient.agentId,
+    text: input.text,
+    attachments: [],
+    encodeImages: async () => undefined,
+    submission: input.submission,
+    activeTurnBehavior,
+    activeTurnId: input.mode === "steer" ? (input.getTurn().turnId ?? undefined) : undefined,
+  });
+  return { queued: false };
+}
 
 export interface RouteDeliveryInput {
   recipient: Recipient;
