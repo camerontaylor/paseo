@@ -2,6 +2,7 @@ import type { StreamItem } from "@/types/stream";
 import { startsNewTurn } from "@/agent-stream/turn-membership";
 
 export interface TurnTiming {
+  startedAt?: Date;
   completedAt: Date;
   durationMs: number | null;
 }
@@ -28,6 +29,7 @@ export function deriveStreamTurnTiming(params: {
       return;
     }
     const timing: TurnTiming = {
+      ...(currentUserAt ? { startedAt: currentUserAt } : {}),
       completedAt: currentLastItemAt,
       durationMs: currentUserAt
         ? Math.max(0, currentLastItemAt.getTime() - currentUserAt.getTime())

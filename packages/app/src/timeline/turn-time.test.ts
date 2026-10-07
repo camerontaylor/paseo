@@ -70,6 +70,7 @@ describe("deriveStreamTurnTiming", () => {
     });
 
     assert.deepEqual(timing.byAssistantId.get("a1"), {
+      startedAt: userAt,
       completedAt: assistantAt,
       durationMs: 7000,
     });
@@ -92,6 +93,7 @@ describe("deriveStreamTurnTiming", () => {
     });
 
     const expected = {
+      startedAt: userAt,
       completedAt: lastAssistantAt,
       durationMs: 7000,
     };
