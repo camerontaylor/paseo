@@ -1,12 +1,12 @@
 import { page } from "vitest/browser";
 import type { DraftRecord, DraftInput } from "@/stores/draft-store/state";
 import type { Theme } from "@/styles/theme";
-import React, { act, useCallback, useState } from "react";
+import React, { act, useCallback, useState, useRef, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { within, waitFor } from "@testing-library/dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, afterEach, expect, test, vi } from "vitest";
-import { EditingTextInput } from "@/components/ui/text-input";
+import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { i18n } from "@/i18n/i18next";
 import { useDraftStore } from "@/stores/draft-store";
 import { AgentQueueDestinationChangedError } from "@getpaseo/client/internal/daemon-client";
@@ -77,6 +77,7 @@ vi.mock("react", async () => {
 vi.mock("@/components/sidebar/sidebar-model", () => ({
   useSidebarModel: () => ({
     searchQuery: fixture.query,
+    setSearchQuery: fixture.changeQuery,
     serverIds: fixture.serverIds,
     hostRegistryLoaded: true,
     allProjects: [{ viewKey: "view", projectName: "Paseo" }],
@@ -140,6 +141,7 @@ vi.mock("@/stores/draft-store", async () => {
   interface FixtureDraftState {
     drafts: Record<string, DraftRecord>;
     editDraftText: (input: { draftKey: string; text: string }) => void;
+    saveDraftInput: (input: { draftKey: string; draft: DraftInput }) => void;
     getDraftInput: (key: string) => DraftInput | undefined;
     hydrateDraftInput: (input: { draftKey: string }) => Promise<DraftInput | undefined>;
   }
@@ -154,6 +156,8 @@ vi.mock("@/stores/draft-store", async () => {
               [draftKey]: editDraftRecordText(state.drafts[draftKey], text, Date.now()),
             },
           })),
+        saveDraftInput: ({ draftKey, draft }) =>
+          get().editDraftText({ draftKey, text: draft.text }),
         getDraftInput: (key) =>
           get().drafts[key]?.lifecycle === "active" ? get().drafts[key].input : undefined,
         hydrateDraftInput: async ({ draftKey }) => get().getDraftInput(draftKey),
@@ -221,9 +225,14 @@ function Fixture() {
   const [query, setQuery] = useState(fixture.query);
   fixture.changeQuery = setQuery;
   fixture.query = query;
+  const inputRef = useRef<EditingTextInputHandle>(null);
+  useEffect(() => {
+    if (!query && inputRef.current?.getText()) inputRef.current.reset();
+  }, [query]);
   const renderInput = useCallback(
     (submit: () => void) => (
       <EditingTextInput
+        ref={inputRef}
         style={fixtureFindStyle}
         accessibilityLabel="Find query"
         initialValue={query}
@@ -302,12 +311,13 @@ test("Find and Open never deliver; Use restores independent draft and explicit s
   await act(async () => acknowledge({ agentId: "chat", revision: 1, items: [] }));
   await waitFor(() => expect(view.getByText("Routed to Paseo · Offline indicator")).toBeTruthy());
 });
-test("ambiguous send asks first and query edits clear stale Find results", async () => {
+test("ambiguous send asks first and query edits retain previous Find results", async () => {
   const view = await mount();
   act(() => view.getByTestId("routing-submit").click());
   await waitFor(() => expect(view.getByText("Relay reconnect investigation")).toBeTruthy());
   type(view.getByRole<HTMLInputElement>("textbox", { name: "Find query" }), "different query");
-  await waitFor(() => expect(view.queryByText("Relay reconnect investigation")).toBeNull());
+  await waitFor(() => expect(view.getByText("Relay reconnect investigation")).toBeTruthy());
+  expect(view.getByText("Results from previous text. Find again to refresh.")).toBeTruthy();
   fixture.search.mockResolvedValue({
     results: [
       result,
@@ -319,9 +329,9 @@ test("ambiguous send asks first and query edits clear stale Find results", async
   act(() => view.getByTestId("routing-send-mode").click());
   type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
   act(() => view.getByTestId("routing-submit").click());
-  await waitFor(() => expect(view.getAllByRole("button", { name: "Send here" })).toHaveLength(2));
+  await waitFor(() => expect(view.getAllByRole("button", { name: "Queue here" })).toHaveLength(2));
   expect(fixture.enqueue).not.toHaveBeenCalled();
-  act(() => view.getAllByRole("button", { name: "Send here" })[0]?.click());
+  act(() => view.getAllByRole("button", { name: "Queue here" })[0]?.click());
   await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
 });
 
@@ -409,7 +419,7 @@ test("no match and incomplete coverage preserve the prompt and require manual ch
   expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("do the task");
   fixture.search.mockResolvedValue({ results: [result], searchedCount: 100, totalCount: 150 });
   act(() => view.getByTestId("routing-submit").click());
-  await waitFor(() => expect(view.getByRole("button", { name: "Send here" })).toBeTruthy());
+  await waitFor(() => expect(view.getByRole("button", { name: "Queue here" })).toBeTruthy());
   expect(fixture.enqueue).not.toHaveBeenCalled();
 });
 test("an old failed Find cannot override a newer lookup", async () => {
@@ -447,7 +457,7 @@ test("a selected host without a directory prevents automatic delivery", async ()
   act(() => view.getByTestId("routing-send-mode").click());
   type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
   act(() => view.getByTestId("routing-submit").click());
-  await waitFor(() => expect(view.getAllByRole("button", { name: "Send here" })).toHaveLength(1));
+  await waitFor(() => expect(view.getAllByRole("button", { name: "Queue here" })).toHaveLength(1));
   expect(view.getByText(/Host directories are still loading/).textContent).toContain(
     "Choose a chat manually.",
   );
@@ -471,6 +481,8 @@ test("a pushed acknowledgement survives a lost enqueue response", async () => {
   act(() => view.getByTestId("routing-send-mode").click());
   type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
   act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Queue here" })).toBeTruthy());
+  act(() => view.getByRole("button", { name: "Queue here" }).click());
   await waitFor(() =>
     expect(view.getByText("Queued for Paseo · Offline indicator").textContent).toBe(
       "Queued for Paseo · Offline indicator",
@@ -515,7 +527,7 @@ test("changing selected hosts ignores an in-flight automatic send and clears edi
   act(() => view.getByRole("button", { name: "Use this chat" }).click());
   fixture.serverIds = ["cold-host"];
   await render();
-  expect(view.getByTestId("routing-recipient").textContent).toContain("Automatic");
+  expect(view.getByTestId("routing-recipient").textContent).toContain("Find a chat");
 });
 
 test("host changes ignore stale Find failure and success", async () => {
@@ -542,6 +554,8 @@ test("filtering out an uncertain destination preserves its lock and original ret
   act(() => view.getByTestId("routing-send-mode").click());
   type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "continue");
   act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Queue here" })).toBeTruthy());
+  act(() => view.getByRole("button", { name: "Queue here" }).click());
   await waitFor(() => expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy());
   const itemId = fixture.enqueue.mock.calls[0]?.[0].itemId;
   fixture.serverIds = ["cold-host"];
@@ -743,9 +757,9 @@ test("visible Find and Send actions have matching voice-accessible names", async
   const view = await mount();
   expect(view.getByRole("button", { name: "Find existing chats" }).textContent).toContain("Find");
   act(() => view.getByRole("button", { name: "Send prompt mode" }).click());
-  expect(
-    view.getByRole("button", { name: "Send message to an existing chat" }).textContent,
-  ).toContain("Send");
+  expect(view.getByRole("button", { name: "Find first" }).textContent).toBe("Find first");
+  for (const mode of ["queue", "steer", "interrupt"])
+    expect(view.getByTestId(`routing-delivery-${mode}`)).toBeTruthy();
 });
 
 for (const outcome of ["acknowledged", "rejected"] as const) {
@@ -761,7 +775,7 @@ for (const outcome of ["acknowledged", "rejected"] as const) {
     const itemId = fixture.enqueue.mock.calls[0]?.[0].itemId;
     fixture.serverIds = ["cold-host"];
     await render();
-    expect(view.getByTestId("routing-recipient").textContent).toContain("Automatic");
+    expect(view.getByTestId("routing-recipient").textContent).toContain("Find a chat");
     expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy();
     await act(async () => {
       if (outcome === "acknowledged") {
@@ -785,7 +799,7 @@ for (const outcome of ["acknowledged", "rejected"] as const) {
       }
     });
     await waitFor(() => expect(view.queryByRole("button", { name: "Retry delivery" })).toBeNull());
-    expect(view.getByTestId("routing-recipient").textContent).toContain("Automatic");
+    expect(view.getByTestId("routing-recipient").textContent).toContain("Find a chat");
     fixture.serverIds = ["host"];
     await render();
     act(() => view.getByTestId("routing-recipient").click());
@@ -859,6 +873,8 @@ for (const capability of [false, null] as const) {
     });
     try {
       act(() => view.getByTestId("routing-submit").click());
+      await waitFor(() => expect(view.getByRole("button", { name: "Queue here" })).toBeTruthy());
+      act(() => view.getByRole("button", { name: "Queue here" }).click());
       await waitFor(() => expect(saving).toBe(true));
       fixture.routingSupported = capability;
       await act(async () => release());
@@ -895,6 +911,8 @@ test("host exclusion during durable outbox acceptance releases an unsent draft s
   });
   try {
     act(() => view.getByTestId("routing-submit").click());
+    await waitFor(() => expect(view.getByRole("button", { name: "Queue here" })).toBeTruthy());
+    act(() => view.getByRole("button", { name: "Queue here" }).click());
     await waitFor(() => expect(saving).toBe(true));
     fixture.serverIds = ["cold-host"];
     await render();
@@ -953,6 +971,8 @@ for (const rejection of ["direct", "reconnect"] as const) {
     });
     try {
       act(() => view.getByTestId("routing-submit").click());
+      await waitFor(() => expect(view.getByRole("button", { name: "Queue here" })).toBeTruthy());
+      act(() => view.getByRole("button", { name: "Queue here" }).click());
       await waitFor(() =>
         expect(view.getByRole("button", { name: "Retry delivery" })).toBeTruthy(),
       );
@@ -1060,6 +1080,9 @@ test("automatic Send remains independent of the Find query", async () => {
     fixture.changeQuery("unrelated Find query");
   });
   await act(async () => resolve({ results: [result], searchedCount: 1, totalCount: 1 }));
+  await waitFor(() => expect(view.getByRole("button", { name: "Queue here" })).toBeTruthy());
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+  act(() => view.getByRole("button", { name: "Queue here" }).click());
   await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
   expect(fixture.enqueue.mock.calls[0][0].text).toBe("  continue\n");
 });
@@ -1334,4 +1357,119 @@ test("cold suppressed acknowledgement ownership permits only the original delive
     text: "continue",
   });
   await waitFor(() => expect(view.queryByRole("button", { name: "Retry delivery" })).toBeNull());
+});
+
+test("Find first never auto-sends, retains choices during edits, and queues only the newest explicit prompt", async () => {
+  const view = await mount();
+  act(() => view.getByTestId("routing-send-mode").click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "first prompt");
+  expect(view.getByTestId("routing-submit").textContent).toBe("Find first");
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Queue here" })).toBeTruthy());
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+  act(() => view.getByTestId("routing-delivery-steer").click());
+  expect(view.getByRole("button", { name: "Steer here" })).toBeTruthy();
+  act(() => view.getByTestId("routing-delivery-interrupt").click());
+  expect(view.getByRole("button", { name: "Interrupt here" })).toBeTruthy();
+  act(() => view.getByTestId("routing-delivery-queue").click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "  newest prompt\n");
+  expect(view.getByText("Relay reconnect investigation")).toBeTruthy();
+  expect(view.getByText("Results from previous text. Find again to refresh.")).toBeTruthy();
+  expect(fixture.search).toHaveBeenCalledTimes(1);
+  act(() => view.getByRole("button", { name: "Queue here" }).click());
+  await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+  expect(fixture.enqueue.mock.calls[0][0].text).toBe("  newest prompt\n");
+});
+
+test("explicit Clear resets the visible Find input and results while preserving the separate Send draft", async () => {
+  useDraftStore
+    .getState()
+    .editDraftText({ draftKey: SESSION_ROUTING_DRAFT_KEY, text: "keep send draft" });
+  const view = await mount();
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByText("Relay reconnect investigation")).toBeTruthy());
+  act(() => view.getByRole("button", { name: "Clear search" }).click());
+  expect(view.getByRole<HTMLInputElement>("textbox", { name: "Find query" }).value).toBe("");
+  expect(view.queryByText("Relay reconnect investigation")).toBeNull();
+  act(() => view.getByTestId("routing-send-mode").click());
+  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("keep send draft");
+  act(() => view.getByRole("button", { name: "Clear prompt" }).click());
+  expect(view.getByTestId<HTMLTextAreaElement>("routing-send-draft").value).toBe("");
+  expect(useDraftStore.getState().getDraftInput(SESSION_ROUTING_DRAFT_KEY)?.text ?? "").toBe("");
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+});
+
+test("delivery options are visible and explicit recipient actions name the selected mode", async () => {
+  const view = await mount();
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Use this chat" })).toBeTruthy());
+  act(() => view.getByRole("button", { name: "Use this chat" }).click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "draft");
+  for (const mode of ["queue", "steer", "interrupt"] as const) {
+    act(() => view.getByTestId(`routing-delivery-${mode}`).click());
+    expect(view.getByTestId("routing-submit").textContent?.toLowerCase()).toBe(mode);
+  }
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+});
+
+test("Clear can dismiss retained candidates after the prompt is manually emptied", async () => {
+  const view = await mount();
+  act(() => view.getByTestId("routing-send-mode").click());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "find a destination");
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Queue here" })).toBeTruthy());
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), "");
+  expect(view.getByRole("button", { name: "Queue here" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+  expect(view.getByRole("button", { name: "Clear prompt" }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
+  act(() => view.getByRole("button", { name: "Clear prompt" }).click());
+  expect(view.queryByText("Relay reconnect investigation")).toBeNull();
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+});
+
+test("an explicitly selected recipient receives the latest prompt when editing and submitting in one render batch", async () => {
+  const view = await mount();
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(view.getByRole("button", { name: "Use this chat" })).toBeTruthy());
+  act(() => view.getByRole("button", { name: "Use this chat" }).click());
+  const input = view.getByTestId<HTMLTextAreaElement>("routing-send-draft");
+  type(input, "old prompt");
+  act(() => {
+    type(input, "same-tick latest prompt");
+    view.getByTestId("routing-submit").click();
+  });
+  await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+  expect(fixture.enqueue.mock.calls[0][0].text).toBe("same-tick latest prompt");
+});
+
+test("new conversation stores the prompt under the existing workspace draft-tab key before navigation", async () => {
+  const view = await mount();
+  act(() => view.getByTestId("routing-scope").click());
+  await waitFor(() =>
+    expect(within(document.body).getByText("Current project · Paseo")).toBeTruthy(),
+  );
+  act(() => within(document.body).getByText("Current project · Paseo").click());
+  act(() => view.getByTestId("routing-send-mode").click());
+  const text = "  A new task\nwith preserved whitespace.  ";
+  type(view.getByTestId<HTMLTextAreaElement>("routing-send-draft"), text);
+  act(() => view.getByTestId("routing-new-conversation").click());
+  await waitFor(() =>
+    expect(view.getByTestId("routing-new-workspace").textContent).toContain("Paseo"),
+  );
+  act(() => view.getByTestId("routing-submit").click());
+  await waitFor(() => expect(fixture.open).toHaveBeenCalledTimes(1));
+  const destination = fixture.open.mock.calls[0][0];
+  expect(destination).toMatchObject({
+    serverId: "host",
+    workspaceId: "workspace",
+    target: { kind: "draft" },
+  });
+  expect(
+    useDraftStore.getState().getDraftInput(`draft:host:${destination.target.draftId}`)?.text,
+  ).toBe(text);
+  expect(fixture.enqueue).not.toHaveBeenCalled();
+  expect(fixture.search).not.toHaveBeenCalled();
 });

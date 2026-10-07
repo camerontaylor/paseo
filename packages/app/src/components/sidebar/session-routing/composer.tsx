@@ -41,12 +41,11 @@ import {
   navigateToWorkspace,
 } from "@/stores/navigation-active-workspace-store";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
-import { buildNewWorkspaceDraftKey, generateDraftId } from "@/stores/draft-keys";
+import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import { defaultNewConversationWorkspace, prepareNewConversationDraft } from "./new-conversation";
 import { createMessageSubmissionWriter } from "@/composer/submission/writer";
 import { deliverDirectRoutedPrompt, deliverRoutedPrompt } from "./delivery";
 import {
-  automaticRecipient,
   initialRoutingState,
   recipientInScope,
   routingReducer,
@@ -62,7 +61,6 @@ interface MatchRequest {
 interface MatchResponse {
   recipients: Recipient[];
   notice: string;
-  complete: boolean;
 }
 interface ActiveMatch {
   requestId: string;
@@ -73,7 +71,6 @@ interface ActiveMatch {
   draft: string;
   draftVersion: number;
   draftUpdatedAt: number;
-  deliveryMode: RoutingState["deliveryMode"];
 }
 
 function ownsRoutingDelivery(phase: RoutingState["phase"], itemId: string): boolean {
@@ -83,11 +80,17 @@ function ownsRoutingDelivery(phase: RoutingState["phase"], itemId: string): bool
 export function SessionRoutingComposer({
   children,
 }: {
-  children: (submit: () => void) => ReactNode;
+  children: (submit: () => void, clear: () => void) => ReactNode;
 }) {
   const { t } = useTranslation();
-  const { searchQuery, allProjects, workspacePlacements, serverIds, hostRegistryLoaded } =
-    useSidebarModel();
+  const {
+    searchQuery,
+    setSearchQuery,
+    allProjects,
+    workspacePlacements,
+    serverIds,
+    hostRegistryLoaded,
+  } = useSidebarModel();
   const [state, reduce] = useReducer(routingReducer, initialRoutingState);
   const pendingItemId =
     state.phase.status === "pending" || state.phase.status === "sending"
@@ -128,7 +131,6 @@ export function SessionRoutingComposer({
     if (
       current.state.mode !== context.mode ||
       current.state.scope !== context.scope ||
-      current.state.deliveryMode !== context.deliveryMode ||
       current.hostMembership !== context.hosts
     )
       return false;
@@ -268,7 +270,6 @@ export function SessionRoutingComposer({
       return {
         recipients,
         notice: notices.join(" "),
-        complete: failures.length === 0 && searched === total,
       };
     },
   });
@@ -523,18 +524,29 @@ export function SessionRoutingComposer({
   }, []);
   const continueNewConversation = useCallback(async () => {
     const current = latest.current.state;
-    if (!current.newWorkspace || !current.sendDraft.trim() || submitting.current || locked) return;
+    if (
+      !current.newWorkspace ||
+      !current.sendDraft.trim() ||
+      submitting.current ||
+      isRoutingLocked(current)
+    )
+      return;
+    const workspace = current.newWorkspace;
     const draftId = generateDraftId();
     submitting.current = draftId;
     dispatch({ type: "phase", phase: { status: "handoff" } });
     try {
       await prepareNewConversationDraft({
-        workspace: current.newWorkspace,
+        workspace,
         text: current.sendDraft,
         draftId,
         save: (id, text) =>
           useDraftStore.getState().saveDraftInput({
-            draftKey: buildNewWorkspaceDraftKey(id),
+            draftKey: buildDraftStoreKey({
+              serverId: workspace.serverId,
+              agentId: id,
+              draftId: id,
+            }),
             draft: { text, attachments: [] },
           }),
         flush: flushDraftPersistStorageDurably,
@@ -558,62 +570,61 @@ export function SessionRoutingComposer({
     } finally {
       if (submitting.current === draftId) submitting.current = null;
     }
-  }, [locked, newWorkspaceEligible, t, dispatch]);
+  }, [newWorkspaceEligible, t, dispatch]);
 
   const submit = useCallback(async () => {
-    if (state.mode === "send" && state.newConversation) {
+    const current = latest.current;
+    const submitted = current.state;
+    if (submitted.mode === "send" && submitted.newConversation) {
       await continueNewConversation();
       return;
     }
-    if (submitting.current || locked) return;
-    const text = state.mode === "find" ? searchQuery : state.sendDraft;
+    if (submitting.current || isRoutingLocked(submitted)) return;
+    const text = submitted.mode === "find" ? current.searchQuery : submitted.sendDraft;
     if (!text.trim()) return;
-    const mode = state.mode;
-    const submitted = latest.current.state;
+    const mode = submitted.mode;
     const requestId = uuid();
     const context: ActiveMatch = {
       requestId,
       mode,
       scope: submitted.scope,
-      hosts: latest.current.hostMembership,
-      query: latest.current.searchQuery,
+      hosts: current.hostMembership,
+      query: current.searchQuery,
       draft: submitted.sendDraft,
       draftVersion: submitted.draftVersion,
       draftUpdatedAt: submitted.draftUpdatedAt,
-      deliveryMode: submitted.deliveryMode,
     };
     const isCurrentMatch = () => {
-      const current = latest.current;
+      const matchCurrent = latest.current;
       return (
         request.current === requestId &&
-        current.state.phase.status === "matching" &&
-        current.state.phase.requestId === requestId &&
+        matchCurrent.state.phase.status === "matching" &&
+        matchCurrent.state.phase.requestId === requestId &&
         matchesContext(context)
       );
     };
     submitting.current = requestId;
     try {
-      if (mode === "send" && state.recipient) {
-        await send(state.recipient, text);
+      if (mode === "send" && submitted.recipient) {
+        await send(
+          submitted.recipient,
+          text,
+          undefined,
+          submitted.draftVersion,
+          submitted.draftUpdatedAt,
+        );
         return;
       }
       request.current = requestId;
       activeMatch.current = context;
       dispatch({ type: "phase", phase: { status: "matching", requestId, mode, text } });
-      const result = await match.mutateAsync({ query: text, scope: state.scope });
+      const result = await match.mutateAsync({ query: text, scope: submitted.scope });
       if (!isCurrentMatch()) {
         cancelMatch(requestId);
         return;
       }
-      const recipient =
-        result.complete && submitted.deliveryMode === "queue"
-          ? automaticRecipient(result.recipients)
-          : null;
-      if (mode === "send" && recipient) {
-        request.current = null;
-        await send(recipient, text, undefined, submitted.draftVersion, submitted.draftUpdatedAt);
-        return;
-      }
+      request.current = null;
+      activeMatch.current = null;
       dispatch({
         type: "matched",
         requestId,
@@ -635,18 +646,7 @@ export function SessionRoutingComposer({
     } finally {
       if (submitting.current === requestId) submitting.current = null;
     }
-  }, [
-    locked,
-    state,
-    searchQuery,
-    match,
-    send,
-    t,
-    dispatch,
-    matchesContext,
-    cancelMatch,
-    continueNewConversation,
-  ]);
+  }, [match, send, t, dispatch, matchesContext, cancelMatch, continueNewConversation]);
 
   const select = useCallback(
     (recipient: Recipient | null) => {
@@ -692,6 +692,7 @@ export function SessionRoutingComposer({
   }, [dispatch]);
   const setDraft = useCallback(
     (text: string) => {
+      if (isRoutingLocked(latest.current.state)) return;
       useDraftStore.getState().editDraftText({ draftKey: ROUTING_DRAFT_KEY, text });
       dispatch({
         type: "draft",
@@ -702,6 +703,16 @@ export function SessionRoutingComposer({
     },
     [dispatch],
   );
+  const clearInput = useCallback(() => {
+    if (isRoutingLocked(latest.current.state)) return;
+    if (request.current) cancelMatch(request.current);
+    if (latest.current.state.mode === "find") setSearchQuery("");
+    else setDraft("");
+    dispatch({ type: "clear" });
+  }, [cancelMatch, dispatch, setDraft, setSearchQuery]);
+  const resultsStale =
+    state.phase.status === "results" &&
+    state.phase.text !== (state.mode === "find" ? searchQuery : state.sendDraft);
   const setPickerQuery = useCallback(
     (text: string) => {
       dispatch({ type: "pickerQuery", text });
@@ -734,11 +745,22 @@ export function SessionRoutingComposer({
       if (submitting.current) return;
       const submissionId = uuid();
       submitting.current = submissionId;
-      void send(recipient, state.sendDraft).finally(() => {
+      const current = latest.current.state;
+      if (!current.sendDraft.trim()) {
+        submitting.current = null;
+        return;
+      }
+      void send(
+        recipient,
+        current.sendDraft,
+        undefined,
+        current.draftVersion,
+        current.draftUpdatedAt,
+      ).finally(() => {
         if (submitting.current === submissionId) submitting.current = null;
       });
     },
-    [send, state.sendDraft],
+    [send],
   );
   const retryDelivery = useCallback(() => {
     const phase = state.phase;
@@ -823,13 +845,14 @@ export function SessionRoutingComposer({
         </DropdownMenu>
       </View>
       {state.mode === "find" ? (
-        children(submitFromButton)
+        children(submitFromButton, clearInput)
       ) : (
         <>
           <RoutingDestinationControls
             state={state}
             locked={locked}
             togglePicker={togglePicker}
+            selectNewConversation={selectNewConversation}
             dispatch={dispatch}
             hosts={hosts}
             workspaces={workspacePlacements}
@@ -859,14 +882,6 @@ export function SessionRoutingComposer({
             testID="routing-picker-query"
             style={styles.input}
           />
-          <Button
-            size="sm"
-            variant="ghost"
-            onPress={selectNewConversation}
-            testID="routing-new-conversation"
-          >
-            {t("sidebar.routing.newConversation")}
-          </Button>
           <Button size="sm" variant="ghost" onPress={selectAutomatic}>
             {t("sidebar.routing.automatic")}
           </Button>
@@ -892,14 +907,22 @@ export function SessionRoutingComposer({
         </Text>
         <Button
           size="xs"
+          variant="ghost"
+          disabled={isClearDisabled(state, searchQuery, locked)}
+          onPress={clearInput}
+          accessibilityLabel={t(
+            state.mode === "find" ? "sidebar.routing.clearSearch" : "sidebar.routing.clearPrompt",
+          )}
+          testID="routing-clear-input"
+        >
+          {t("sidebar.routing.clear")}
+        </Button>
+        <Button
+          size="xs"
           disabled={isSubmitDisabled(state, searchQuery, locked, newWorkspaceEligible())}
           loading={state.phase.status === "matching" || state.phase.status === "sending"}
           onPress={submitFromButton}
-          accessibilityLabel={t(
-            state.mode === "send" && state.newConversation
-              ? "sidebar.routing.continueNewConversation"
-              : routingSubmitLabel(state.mode),
-          )}
+          accessibilityLabel={t(routingSubmitLabel(state))}
           testID="routing-submit"
         >
           {t(submitButtonLabel(state))}
@@ -907,6 +930,9 @@ export function SessionRoutingComposer({
       </View>
       <RoutingOutcome
         phase={state.phase}
+        resultsStale={resultsStale}
+        deliveryMode={state.deliveryMode}
+        canSend={Boolean(state.sendDraft.trim()) && !locked}
         onSelect={select}
         onOpen={open}
         onSend={sendChoice}
@@ -918,6 +944,12 @@ export function SessionRoutingComposer({
         </Button>
       ) : null}
     </View>
+  );
+}
+
+function isClearDisabled(state: RoutingState, query: string, locked: boolean): boolean {
+  return (
+    locked || (!(state.mode === "find" ? query : state.sendDraft) && state.phase.status === "idle")
   );
 }
 
@@ -968,12 +1000,18 @@ function pendingRecovery(
 
 function RoutingOutcome({
   phase,
+  resultsStale,
+  deliveryMode,
+  canSend,
   onSelect,
   onOpen,
   onSend,
   onRetry,
 }: {
   phase: import("./model").RoutingPhase;
+  resultsStale: boolean;
+  deliveryMode: RoutingState["deliveryMode"];
+  canSend: boolean;
   onSelect: (recipient: Recipient) => void;
   onOpen: (recipient: Recipient) => void;
   onSend: (recipient: Recipient) => void;
@@ -1028,6 +1066,9 @@ function RoutingOutcome({
   return (
     <View style={styles.results}>
       {phase.notice ? <Text style={styles.muted}>{phase.notice}</Text> : null}
+      {resultsStale ? (
+        <Text style={styles.muted}>{t("sidebar.routing.previousResults")}</Text>
+      ) : null}
       <Text accessibilityLiveRegion="polite" style={styles.muted}>
         {t(headingKey)}
       </Text>
@@ -1037,6 +1078,8 @@ function RoutingOutcome({
             key={JSON.stringify([recipient.serverId, recipient.agentId])}
             recipient={recipient}
             mode={phase.mode}
+            deliveryMode={deliveryMode}
+            canSend={canSend}
             onOpen={onOpen}
             onSelect={onSelect}
             onSend={onSend}
@@ -1074,6 +1117,8 @@ function PickerRecipientRow({
       size="sm"
       variant="ghost"
       onPress={selectRecipient}
+      style={styles.boundedButton}
+      textStyle={styles.boundedButtonText}
       accessibilityLabel={t("sidebar.routing.useNamedChat", { name })}
     >
       {name}
@@ -1094,12 +1139,16 @@ function formatMatchTimestamp(value: string): string {
 function RoutingResult({
   recipient,
   mode,
+  deliveryMode,
+  canSend,
   onOpen,
   onSelect,
   onSend,
 }: {
   recipient: Recipient;
   mode: "find" | "send";
+  deliveryMode: RoutingState["deliveryMode"];
+  canSend: boolean;
   onOpen: (recipient: Recipient) => void;
   onSelect: (recipient: Recipient) => void;
   onSend: (recipient: Recipient) => void;
@@ -1134,8 +1183,8 @@ function RoutingResult({
         <Button size="xs" variant="ghost" onPress={open}>
           {t("sidebar.routing.openChat")}
         </Button>
-        <Button size="xs" variant="outline" onPress={choose}>
-          {t(mode === "find" ? "sidebar.routing.useChat" : "sidebar.routing.sendHere")}
+        <Button size="xs" variant="outline" onPress={choose} disabled={mode === "send" && !canSend}>
+          {t(mode === "find" ? "sidebar.routing.useChat" : `sidebar.routing.${deliveryMode}Here`)}
         </Button>
       </View>
     </View>
@@ -1149,6 +1198,8 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
   },
   row: { flexDirection: "row", alignItems: "center", gap: theme.spacing[1], flexWrap: "wrap" },
+  boundedButton: { maxWidth: "100%" },
+  boundedButtonText: { flexShrink: 1 },
   input: {
     color: theme.colors.foreground,
     backgroundColor: theme.colors.surface1,
@@ -1174,14 +1225,15 @@ const styles = StyleSheet.create((theme) => ({
   },
 }));
 
-function routingSubmitLabel(mode: "find" | "send") {
-  return mode === "find" ? "sidebar.routing.findAction" : "sidebar.routing.sendAction";
+function routingSubmitLabel(state: RoutingState) {
+  return state.mode === "find" ? "sidebar.routing.findAction" : submitButtonLabel(state);
 }
 
 function RoutingDestinationControls({
   state,
   locked,
   togglePicker,
+  selectNewConversation,
   dispatch,
   hosts,
   workspaces,
@@ -1190,6 +1242,7 @@ function RoutingDestinationControls({
   state: RoutingState;
   locked: boolean;
   togglePicker: () => void;
+  selectNewConversation: () => void;
   dispatch: Dispatch<RoutingAction>;
   hosts: readonly { serverId: string; label?: string }[];
   workspaces: readonly import("./new-conversation").NewConversationCandidate[];
@@ -1201,18 +1254,30 @@ function RoutingDestinationControls({
   if (state.newConversation) recipientName = t("sidebar.routing.newConversation");
   return (
     <>
-      {" "}
-      <Button
-        size="xs"
-        variant="ghost"
-        disabled={locked}
-        testID="routing-recipient"
-        onPress={togglePicker}
-      >
-        {t("sidebar.routing.to", {
-          name: recipientName,
-        })}
-      </Button>
+      <View style={styles.row}>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={locked}
+          testID="routing-recipient"
+          style={styles.boundedButton}
+          textStyle={styles.boundedButtonText}
+          onPress={togglePicker}
+        >
+          {t("sidebar.routing.to", {
+            name: recipientName,
+          })}
+        </Button>
+        <Button
+          size="xs"
+          variant={state.newConversation ? "secondary" : "outline"}
+          disabled={locked}
+          onPress={selectNewConversation}
+          testID="routing-new-conversation"
+        >
+          {t("sidebar.routing.newConversation")}
+        </Button>
+      </View>
       {state.newConversation ? (
         <DropdownMenu compactMode="sheet">
           <DropdownMenuTrigger
@@ -1249,21 +1314,17 @@ function RoutingDestinationControls({
         </DropdownMenu>
       ) : null}
       {!state.newConversation ? (
-        <DropdownMenu compactMode="sheet">
-          <DropdownMenuTrigger
-            disabled={locked}
-            accessibilityRole="button"
-            accessibilityLabel={t("sidebar.routing.deliveryMode")}
-            testID="routing-delivery-mode"
-          >
-            <Text style={styles.muted}>{t(`sidebar.routing.${state.deliveryMode}`)}</Text>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent sheetTitle={t("sidebar.routing.deliveryMode")}>
-            {(["queue", "steer", "interrupt"] as const).map((mode) => (
-              <RoutingDeliveryOption key={mode} mode={mode} dispatch={dispatch} />
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <View style={styles.row} testID="routing-delivery-mode">
+          {(["queue", "steer", "interrupt"] as const).map((mode) => (
+            <RoutingDeliveryOption
+              key={mode}
+              mode={mode}
+              selected={state.deliveryMode === mode}
+              disabled={locked}
+              dispatch={dispatch}
+            />
+          ))}
+        </View>
       ) : null}
     </>
   );
@@ -1289,19 +1350,37 @@ function RoutingWorkspaceOption({
 }
 function RoutingDeliveryOption({
   mode,
+  selected,
+  disabled,
   dispatch,
 }: {
   mode: RoutingState["deliveryMode"];
+  selected: boolean;
+  disabled: boolean;
   dispatch: Dispatch<RoutingAction>;
 }) {
   const { t } = useTranslation();
+  const accessibilityState = useMemo(() => ({ selected }), [selected]);
   const select = useCallback(() => dispatch({ type: "deliveryMode", mode }), [dispatch, mode]);
-  return <DropdownMenuItem onSelect={select}>{t(`sidebar.routing.${mode}`)}</DropdownMenuItem>;
+  return (
+    <Button
+      size="xs"
+      variant={selected ? "secondary" : "ghost"}
+      disabled={disabled}
+      accessibilityState={accessibilityState}
+      aria-pressed={selected}
+      onPress={select}
+      testID={`routing-delivery-${mode}`}
+    >
+      {t(`sidebar.routing.${mode}`)}
+    </Button>
+  );
 }
 function submitButtonLabel(state: RoutingState) {
   if (state.mode === "find") return "sidebar.routing.find";
   if (state.newConversation) return "sidebar.routing.continueNewConversation";
-  return "sidebar.routing.send";
+  if (!state.recipient) return "sidebar.routing.findFirst";
+  return `sidebar.routing.${state.deliveryMode}` as const;
 }
 
 async function sendDirectFromComposer({

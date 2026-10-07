@@ -1,6 +1,7 @@
 import { expect, test } from "../support/fixtures";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
+import { openMobileAgentSidebar } from "../support/helpers/sidebar";
 import { writeFile } from "node:fs/promises";
 
 test("manual routing restores its draft and delivers to an existing chat without navigating or creating a chat", async ({
@@ -28,6 +29,13 @@ test("manual routing restores its draft and delivers to an existing chat without
     await waitForSidebarHydration(page);
     const before = (await source.client.fetchAgents()).entries.map(({ agent }) => agent.id).sort();
     const composer = page.getByTestId("session-routing-composer");
+    const findInput = composer.getByTestId("sidebar-title-project-filter");
+    await findInput.fill("Routing destination");
+    await composer.getByTestId("sidebar-title-project-filter-clear").click();
+    await expect(findInput).toHaveValue("");
+    await findInput.fill("Source chat");
+    await composer.getByRole("button", { name: "Clear search" }).click();
+    await expect(findInput).toHaveValue("");
     await composer.getByTestId("routing-send-mode").click();
     await composer.getByTestId("routing-send-draft").fill(prompt);
     await page.reload();
@@ -36,6 +44,13 @@ test("manual routing restores its draft and delivers to an existing chat without
     await expect(composer.getByTestId("routing-send-draft")).toHaveValue(prompt);
     await composer.getByTestId("routing-recipient").click();
     await composer.getByRole("button", { name: /Use .*Routing destination/ }).click();
+    const recipientBounds = await composer.getByTestId("routing-recipient").boundingBox();
+    const composerBounds = await composer.boundingBox();
+    expect(recipientBounds).not.toBeNull();
+    expect(composerBounds).not.toBeNull();
+    expect(recipientBounds!.x + recipientBounds!.width).toBeLessThanOrEqual(
+      composerBounds!.x + composerBounds!.width,
+    );
     await page.screenshot({ path: testInfo.outputPath("manual-routing-ready.png") });
     const originalUrl = page.url();
     await composer.getByTestId("routing-submit").click();
@@ -87,7 +102,7 @@ test("manual routing restores its draft and delivers to an existing chat without
 
 test("new conversation handoff keeps the prompt and chosen workspace without sending", async ({
   page,
-}) => {
+}, testInfo) => {
   test.setTimeout(120_000);
   const source = await seedMockAgentWorkspace({
     repoPrefix: "routing-new-",
@@ -101,15 +116,39 @@ test("new conversation handoff keeps the prompt and chosen workspace without sen
     const text = "  A completely new task\nwith its own context.  ";
     await composer.getByTestId("routing-send-mode").click();
     await composer.getByTestId("routing-send-draft").fill(text);
-    await expect(composer.getByTestId("routing-delivery-mode")).toHaveText("Queue");
+    await expect(composer.getByTestId("routing-delivery-queue")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     for (const mode of ["Steer", "Interrupt", "Queue"]) {
-      await composer.getByTestId("routing-delivery-mode").click();
-      await page.getByRole("menuitem", { name: mode, exact: true }).click();
-      await expect(composer.getByTestId("routing-delivery-mode")).toHaveText(mode);
+      await composer.getByTestId(`routing-delivery-${mode.toLowerCase()}`).click();
+      await expect(composer.getByTestId(`routing-delivery-${mode.toLowerCase()}`)).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
       await expect(composer.getByTestId("routing-send-draft")).toHaveValue(text);
     }
 
-    await composer.getByTestId("routing-recipient").click();
+    await expect(composer.getByTestId("routing-submit")).toHaveText("Find first");
+    await composer.getByRole("button", { name: "Clear prompt" }).click();
+    await expect(composer.getByTestId("routing-send-draft")).toHaveValue("");
+    await composer.getByTestId("routing-send-draft").fill(text);
+    await page.screenshot({ path: testInfo.outputPath("dispatcher-send-desktop.png") });
+    const desktopViewport = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobileOpen = page.getByRole("button", { name: "Open menu", exact: true });
+    await expect(mobileOpen).toBeVisible();
+    await openMobileAgentSidebar(page);
+    await composer.getByTestId("routing-send-mode").click();
+    await expect(composer.getByTestId("routing-send-draft")).toHaveValue(text);
+    await expect(composer.getByTestId("routing-delivery-queue")).toBeInViewport();
+    await expect(composer.getByTestId("routing-new-conversation")).toBeInViewport();
+    await expect(composer.getByRole("button", { name: "Clear prompt" })).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath("dispatcher-send-compact.png") });
+    if (desktopViewport) await page.setViewportSize(desktopViewport);
+    await expect(page.getByTestId("sidebar-close")).toHaveCount(0);
+    await composer.getByTestId("routing-send-mode").click();
+    await expect(composer.getByTestId("routing-send-draft")).toHaveValue(text);
     await composer.getByTestId("routing-new-conversation").click();
     await expect(composer.getByTestId("routing-new-workspace")).toHaveText("Choose workspace");
     await expect(composer.getByTestId("routing-submit")).toBeDisabled();

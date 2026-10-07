@@ -9,23 +9,27 @@ filter field or choose Find to submit intelligent matching; typing alone keeps t
 Choose All projects, Current project, or a named project in the scope menu. A project scope is a
 sidebar project view identity, including its host/clone grouping. Search sends only that scope's
 workspace IDs to each host. Changing scope clears a selected recipient outside it. Scope and selected
-host changes invalidate matching successes and failures in either mode. Find matching depends on its
-search query; Send matching depends on its draft and durable ownership revision and update timestamp.
-Changing the independent draft or query leaves the other mode's lookup intact. Cancellation
-releases only the canceled request's loading state, even if a newer lookup has started. Host changes
+host changes invalidate matching successes and failures in either mode. Editing the Find query or
+Send draft keeps the previous results visible until an explicit new lookup replaces them. Those
+results describe the submitted lookup, not a live search of the edited text. A new lookup captures
+its query or durable draft revision; later edits cancel that request's ownership so its late response
+cannot replace a newer lookup. Explicit Clear removes the active input and its results, while leaving
+the other mode's independent input intact. Cancellation releases only the canceled request's loading
+state, even if a newer lookup has started. Host changes
 also clear excluded results and editable recipients; a pending delivery keeps its original destination
 and item ID until acknowledgement or rejection. Explicit recipient selection
-bypasses matching. Automatic Queue requires one clear high-confidence result and complete coverage
-of all scoped hosts; ambiguity,
-no matches, unavailable hosts, or incomplete shortlist coverage require manual selection first.
+bypasses matching. In Send mode, **Find first** only presents candidate chats, including when one
+match has high confidence. Delivery requires an explicit destination choice and uses the current
+saved draft. Once a destination is selected, the main action names its actual delivery mode: Queue,
+Steer, or Interrupt. Find remains search-only.
 In Find results, Open chat navigates and Use this chat selects without sending. In Send results,
-Send here delivers the saved prompt to the chosen chat. Choose an existing chat opens the manual
+the Queue here, Steer here, or Interrupt here action delivers the current saved prompt to that chat. Choose an existing chat opens the manual
 picker when matching returns no results. Routing requires a host advertising `sessionSearch`;
 delivery also requires `agentMessageQueue`. Update an older host when prompted.
 
 ## New conversation and delivery mode
 
-The recipient picker also offers **New conversation**, independently of intelligent matching.
+Send mode offers **New conversation** directly, independently of intelligent matching.
 Its visible workspace picker identifies the project, workspace, and host. Under All projects,
 the default is the selected host's uniquely identified `tmpworkspace` root. An explicit project
 scope uses the active workspace within that project, or its sole workspace. Missing scratch

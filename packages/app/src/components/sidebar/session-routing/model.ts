@@ -14,6 +14,7 @@ export type RoutingPhase =
       status: "results";
       requestId: string;
       mode: "find" | "send";
+      text: string;
       recipients: Recipient[];
       notice: string;
     }
@@ -86,7 +87,7 @@ export type RoutingAction =
       updatedAt?: number;
       pending?: Extract<RoutingAction, { type: "restorePending" }>;
     }
-  | { type: "invalidateFind" }
+  | { type: "clear" }
   | { type: "cancelMatch"; requestId: string }
   | { type: "hosts"; serverIds: readonly string[] }
   | {
@@ -118,14 +119,6 @@ export function recipientInScope(
   return scope === null || recipient.projectViewKey === scope;
 }
 
-export function automaticRecipient(recipients: readonly Recipient[]): Recipient | null {
-  const [first, second] = recipients;
-  if (!first || first.confidence < 0.9) return null;
-  if (second && (second.confidence >= 0.7 || first.confidence - second.confidence < 0.2))
-    return null;
-  return first;
-}
-
 export function routingReducer(state: RoutingState, action: RoutingAction): RoutingState {
   switch (action.type) {
     case "syncDraft":
@@ -137,8 +130,8 @@ export function routingReducer(state: RoutingState, action: RoutingAction): Rout
       return restoreRoutingDraft(state, action);
     case "hosts":
       return updateRoutingHosts(state, action.serverIds);
-    case "invalidateFind":
-      return invalidateFind(state);
+    case "clear":
+      return clearRoutingInput(state);
     case "cancelMatch":
       return cancelRoutingMatch(state, action.requestId);
     case "restorePending":
@@ -159,15 +152,11 @@ export function routingReducer(state: RoutingState, action: RoutingAction): Rout
     case "mode":
       return { ...state, mode: action.mode, phase: { status: "idle" }, picker: false };
     case "draft":
-      return {
-        ...state,
-        ...routingDraftFields(action),
-        phase: { status: "idle" },
-      };
+      return editRoutingDraft(state, action);
     case "scope":
       return updateRoutingScope(state, action.scope);
     case "deliveryMode":
-      return { ...state, deliveryMode: action.mode, phase: { status: "idle" } };
+      return { ...state, deliveryMode: action.mode };
     case "newConversation":
       return {
         ...state,
@@ -204,9 +193,25 @@ export function routingReducer(state: RoutingState, action: RoutingAction): Rout
   }
 }
 
+function clearRoutingInput(state: RoutingState): RoutingState {
+  if (ownsUnresolvedDelivery(state.phase)) return state;
+  return { ...state, phase: { status: "idle" }, picker: false, pickerQuery: "" };
+}
+
+function editRoutingDraft(
+  state: RoutingState,
+  action: Extract<RoutingAction, { type: "draft" }>,
+): RoutingState {
+  if (ownsUnresolvedDelivery(state.phase)) return state;
+  return {
+    ...state,
+    ...routingDraftFields(action),
+    phase: state.phase.status === "results" ? state.phase : { status: "idle" },
+  };
+}
+
 function cancelRoutingMatch(state: RoutingState, requestId: string): RoutingState {
-  return (state.phase.status === "matching" || state.phase.status === "results") &&
-    state.phase.requestId === requestId
+  return state.phase.status === "matching" && state.phase.requestId === requestId
     ? { ...state, phase: { status: "idle" } }
     : state;
 }
@@ -230,11 +235,8 @@ function acknowledgeRoutingState(
   };
 }
 
-function invalidateFind(state: RoutingState): RoutingState {
-  const phase = state.phase;
-  if ((phase.status === "results" || phase.status === "matching") && phase.mode === "find")
-    return { ...state, phase: { status: "idle" } };
-  return state;
+function ownsUnresolvedDelivery(phase: RoutingPhase): boolean {
+  return phase.status === "sending" || phase.status === "pending" || phase.status === "handoff";
 }
 
 function routingDraftFields(
@@ -257,6 +259,7 @@ function restoreRoutingDraft(
 function updateRoutingHosts(state: RoutingState, serverIds: readonly string[]): RoutingState {
   return {
     ...state,
+    phase: ownsUnresolvedDelivery(state.phase) ? state.phase : { status: "idle" },
     recipient:
       state.recipient && serverIds.includes(state.recipient.serverId) ? state.recipient : null,
     newWorkspace:
@@ -294,6 +297,7 @@ function applyRoutingMatches(
       status: "results",
       requestId: action.requestId,
       mode: state.phase.mode,
+      text: state.phase.text,
       recipients,
       notice: action.notice,
     },
