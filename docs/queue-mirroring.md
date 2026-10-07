@@ -133,7 +133,15 @@ agent-facing result.
 Serialize drains per agent so a burst of state events cannot double-send. Keep the head until a
 durable receipt confirms provider submission. If a competing turn reserves the run first, leave the
 head in place and retry at the next idle boundary. A pending permission blocks drain even without a
-foreground run. An ambiguous provider outcome remains unknown and is not retried automatically.
+foreground run. An ambiguous provider outcome remains unknown and is not retried automatically. A Codex start
+cancelled before issuing `turn/start` reports `AGENT_PROMPT_NOT_SUBMITTED`, so its pending
+receipt is cleared and the queue can retry at the next idle boundary. Do not classify a timeout
+or a failure after issuing `turn/start` as safe to retry.
+
+A successful direct-send RPC can report `queued: true`. The composer then retires its optimistic
+chat bubble and submission activity; the daemon-owned queue remains visible until delivery. A
+canonical provider echo that raced the response is preserved. Queue admission alone is not proof
+that the agent received the message.
 
 `wait_for_finish` observes pending dispatch before checking the provider's state. Admission can
 precede run reservation, so an idle provider alone does not mean accepted input finished. A waiter's

@@ -17,6 +17,7 @@ import {
 } from "@/types/stream";
 import {
   acceptMessageSubmission,
+  observeMessageSubmissionCanonical,
   beginMessageSubmission,
   rejectMessageSubmission,
   type MessageSubmissionRecord,
@@ -426,6 +427,38 @@ describe("pickAndPersistImages", () => {
 });
 
 describe("dispatchComposerAgentMessage", () => {
+  it.each([false, true])(
+    "retires queued optimism while preserving a raced canonical echo (%s)",
+    async (canonicalEcho) => {
+      const stream = createFakeStream();
+      const client = createFakeSendClient();
+      client.sendAgentMessage = async (_agentId, _text, options) => {
+        if (canonicalEcho) {
+          const current = readSubmission(stream, "agent");
+          writeSubmission(stream, "agent", {
+            ...current,
+            submissions: observeMessageSubmissionCanonical(current.submissions, [
+              options.messageId,
+            ]),
+          });
+        }
+        return { queued: true };
+      };
+
+      await dispatchComposerAgentMessage({
+        client,
+        agentId: "agent",
+        text: "wait for the current turn",
+        attachments: [],
+        encodeImages: async () => [],
+        submission: stream,
+      });
+
+      expect(stream.tail.get("agent")).toHaveLength(canonicalEcho ? 1 : 0);
+      expect(readSubmission(stream, "agent").submissions).toEqual([]);
+    },
+  );
+
   it("forwards the configured active-turn intent without provider capability checks", async () => {
     const client = createFakeSendClient();
     const stream = createFakeStream();
