@@ -1,3 +1,4 @@
+import { SessionPinButton } from "@/session-pins/pin-button";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -1369,18 +1370,17 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
         {/* Floats over the chat instead of sitting in its vertical stack: the host
             capability can arrive after the first prompt has painted, and a band that
             appears then would shift every row (upstream's hydration specs pin that). */}
-        {showViewSwitcher ? (
-          <View style={styles.viewSwitcher} pointerEvents="box-none">
-            <SegmentedControl
+        <View style={styles.viewSwitcher} pointerEvents="box-none">
+          {showViewSwitcher ? <SegmentedControl
               options={viewOptions}
               value={selectedView}
               onValueChange={handleSetSelectedView}
               size={isCompact ? "sm" : "xs"}
               testID="agent-view-switcher"
               segmentStyle={isCompact ? styles.compactSegment : undefined}
-            />
-          </View>
-        ) : null}
+            /> : null}
+          <SessionPinButton serverId={serverId} agentId={agentId} />
+        </View>
         {dock}
         {!isChatVisible ? (
           <CompanionFeed
@@ -1837,6 +1837,9 @@ const styles = StyleSheet.create((theme) => ({
   hiddenPane: { display: "none" },
   compactSegment: { minHeight: 44 },
   viewSwitcher: {
+    flexWrap: "wrap",
+    gap: theme.spacing[2],
+    right: theme.spacing[3],
     position: "absolute",
     top: theme.spacing[2],
     left: theme.spacing[3],
