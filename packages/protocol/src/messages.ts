@@ -815,6 +815,11 @@ const AgentActiveTurnPayloadSchema = z.object({
   startedAt: z.string().nullable(),
 });
 
+export const AgentMessageActivitySchema = z.object({
+  lastUserMessageAt: z.string().nullable(),
+  lastAssistantMessageAt: z.string().nullable(),
+});
+
 export const AgentSnapshotPayloadSchema = z.object({
   id: z.string(),
   provider: AgentProviderSchema,
@@ -827,6 +832,7 @@ export const AgentSnapshotPayloadSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   lastUserMessageAt: z.string().nullable(),
+  messageActivity: AgentMessageActivitySchema.optional(),
   status: AgentStatusSchema,
   activeTurn: AgentActiveTurnPayloadSchema.nullable().optional(),
   capabilities: AgentCapabilityFlagsSchema,
@@ -863,6 +869,7 @@ export const AgentListItemPayloadSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   lastUserMessageAt: z.string().nullable(),
+  messageActivity: AgentMessageActivitySchema.optional(),
   archivedAt: z.string().nullable().optional(),
   requiresAttention: z.boolean().optional(),
   attentionReason: z.enum(["finished", "error", "permission"]).nullable().optional(),
@@ -4042,6 +4049,8 @@ export const ServerInfoStatusPayloadSchema = z
         agentHistorySearch: z.boolean().optional(),
         // COMPAT(sessionSearch): added in v0.10.0, remove gate after 2027-04-04.
         sessionSearch: z.boolean().optional(),
+        // COMPAT(conversationMessageActivity): added in v0.10.0; remove gate after 2027-04-06.
+        conversationMessageActivity: z.boolean().optional(),
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: z.boolean().optional(),
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97

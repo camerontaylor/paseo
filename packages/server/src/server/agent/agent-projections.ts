@@ -83,6 +83,7 @@ export function toStoredAgentRecord(
     updatedAt: agent.updatedAt.toISOString(),
     lastActivityAt: agent.updatedAt.toISOString(),
     lastUserMessageAt: agent.lastUserMessageAt ? agent.lastUserMessageAt.toISOString() : null,
+    ...(agent.messageActivity ? { messageActivity: agent.messageActivity } : {}),
     title: options?.title ?? null,
     labels: agent.labels,
     lastStatus: agent.lifecycle,
@@ -127,6 +128,7 @@ export function toAgentPayload(
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     lastUserMessageAt: agent.lastUserMessageAt ? agent.lastUserMessageAt.toISOString() : null,
+    ...(agent.messageActivity ? { messageActivity: agent.messageActivity } : {}),
     status: agent.lifecycle,
     activeTurn: agent.activeTurnId
       ? {
@@ -241,6 +243,7 @@ export function buildStoredAgentPayload(
     createdAt: createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
     lastUserMessageAt: lastUserMessageAt ? lastUserMessageAt.toISOString() : null,
+    ...(record.messageActivity ? { messageActivity: record.messageActivity } : {}),
     status: record.lastStatus,
     capabilities: defaultCapabilities,
     currentModeId: record.lastModeId ?? null,
@@ -273,6 +276,7 @@ export function toAgentListItemPayload(agent: AgentSnapshotPayload): AgentListIt
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
     lastUserMessageAt: agent.lastUserMessageAt,
+    ...(agent.messageActivity ? { messageActivity: agent.messageActivity } : {}),
     archivedAt: agent.archivedAt ?? null,
     requiresAttention: agent.requiresAttention ?? false,
     attentionReason: agent.attentionReason ?? null,

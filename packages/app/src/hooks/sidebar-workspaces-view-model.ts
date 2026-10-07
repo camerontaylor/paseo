@@ -42,6 +42,9 @@ export interface SidebarWorkspaceEntry extends SidebarStatusWorkspacePlacement {
   // Prefills the rename input and signals whether a reset is available.
   title: string | null;
   lastActivityAt?: Date | null;
+  lastMessageAt?: Date | null;
+  lastUserMessageAt?: Date | null;
+  lastAssistantMessageAt?: Date | null;
   pinnedAt?: string | null;
   labels?: string[];
   // Checkout branch (null when not a git checkout or detached HEAD).
@@ -153,6 +156,7 @@ export function createSidebarWorkspaceEntry(input: {
 }): SidebarWorkspaceEntry {
   const projectViewKey = input.projectViewKey ?? input.workspace.projectId;
   const effectiveStatus = deriveEffectiveWorkspaceStatus(input);
+  const activity = input.workspaceAgentActivity?.get(input.workspace.id);
   return {
     workspaceKey: `${input.serverId}:${input.workspace.id}`,
     serverId: input.serverId,
@@ -167,7 +171,10 @@ export function createSidebarWorkspaceEntry(input: {
     workspaceKind: input.workspace.workspaceKind,
     name: input.workspace.name,
     title: input.workspace.title ?? null,
-    lastActivityAt: input.workspaceAgentActivity?.get(input.workspace.id)?.lastActivityAt ?? null,
+    lastActivityAt: activity?.lastActivityAt ?? null,
+    lastMessageAt: activity?.lastMessageAt ?? null,
+    lastUserMessageAt: activity?.lastUserMessageAt ?? null,
+    lastAssistantMessageAt: activity?.lastAssistantMessageAt ?? null,
     pinnedAt: input.workspace.pinnedAt,
     labels: input.workspace.labels ?? EMPTY_WORKSPACE_LABELS,
     currentBranch: normalizeCurrentBranch(input.workspace.gitRuntime?.currentBranch),

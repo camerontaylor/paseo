@@ -12059,3 +12059,181 @@ test("stream writes await persistence without overwriting concurrent provider ev
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+test("message activity advances once on a current completed reply and survives reopen", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-message-activity-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const session = new TestAgentSession({ provider: "codex", cwd: workdir });
+  const client = new (class extends TestAgentClient {
+    override async createSession(): Promise<AgentSession> {
+      return session;
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  let agentId: string | undefined;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    session.pushEvent({ type: "turn_started", provider: "codex", turnId: "current" });
+    session.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      turnId: "current",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      item: { type: "user_message", text: "hello" },
+    });
+    await vi.waitFor(() =>
+      expect(manager.getAgent(agent.id)?.messageActivity?.lastUserMessageAt).toBe(
+        "2026-01-01T00:00:00.000Z",
+      ),
+    );
+    const userClock = manager.getAgent(agent.id)?.messageActivity?.lastUserMessageAt;
+    session.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      turnId: "current",
+      item: { type: "assistant_message", text: "First token" },
+    });
+    await manager.flush();
+    await manager.updateAgentMetadata(agent.id, { title: "Renamed" });
+    expect(manager.getAgent(agent.id)?.messageActivity?.lastAssistantMessageAt).toBeNull();
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "stale" });
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.messageActivity?.lastAssistantMessageAt).toBeNull();
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "current" });
+    await manager.flush();
+    await vi.waitFor(() =>
+      expect(manager.getAgent(agent.id)?.messageActivity?.lastAssistantMessageAt).toEqual(
+        expect.any(String),
+      ),
+    );
+    const activity = manager.getAgent(agent.id)?.messageActivity;
+    expect(activity?.lastUserMessageAt).toBe(userClock);
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "current" });
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.messageActivity).toEqual(activity);
+    session.pushEvent({ type: "turn_started", provider: "codex", turnId: "tools-only" });
+    session.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      turnId: "tools-only",
+      item: {
+        type: "tool_call",
+        callId: "read",
+        name: "Read",
+        status: "completed",
+        error: null,
+        detail: { type: "unknown", input: {}, output: null },
+      },
+    });
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "tools-only" });
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.messageActivity).toEqual(activity);
+    await manager.closeAgent(agent.id);
+    await storage.flush();
+    expect((await storage.get(agent.id))?.messageActivity).toEqual(activity);
+    await ensureAgentLoaded(agent.id, { agentManager: manager, agentStorage: storage, logger });
+    expect(manager.getAgent(agent.id)?.messageActivity).toEqual(activity);
+    expect(toAgentPayload(manager.getAgent(agent.id)!).messageActivity).toEqual(activity);
+  } finally {
+    if (agentId) await manager.closeAgent(agentId);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("message activity ignores submitted system notifications while accepted user prompts advance", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-message-notification-"));
+  const manager = new AgentManager({ clients: { codex: new TestAgentClient() }, logger });
+  let agentId: string | undefined;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    await manager.runAgent(agent.id, formatSystemNotificationPrompt("child finished"), {
+      clientMessageId: "system",
+    });
+    expect(manager.getAgent(agent.id)?.messageActivity).toEqual({
+      lastUserMessageAt: null,
+      lastAssistantMessageAt: null,
+    });
+    await manager.runAgent(agent.id, "real prompt", { clientMessageId: "user" });
+    expect(manager.getAgent(agent.id)?.messageActivity?.lastUserMessageAt).toEqual(
+      expect.any(String),
+    );
+  } finally {
+    if (agentId) await manager.closeAgent(agentId);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("message activity imports only original dated messages and preserves clocks on repeated hydration", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-message-history-"));
+  let history: AgentStreamEvent[] = [
+    {
+      type: "timeline",
+      provider: "codex",
+      timestamp: "2025-01-01T00:00:00.000Z",
+      item: { type: "user_message", text: "original" },
+    },
+    {
+      type: "timeline",
+      provider: "codex",
+      timestamp: "2025-01-02T00:00:00.000Z",
+      item: { type: "assistant_message", text: "reply" },
+    },
+    {
+      type: "timeline",
+      provider: "codex",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      item: { type: "user_message", text: formatSystemNotificationPrompt("system") },
+    },
+    {
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text: "unknown date" },
+    },
+  ];
+  class HistorySession extends TestAgentSession {
+    override async *streamHistory() {
+      yield* history;
+    }
+  }
+  const manager = new AgentManager({
+    clients: {
+      codex: new (class extends TestAgentClient {
+        override async createSession(config: AgentSessionConfig) {
+          return new HistorySession(config);
+        }
+      })(),
+    },
+    logger,
+  });
+  let agentId: string | undefined;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    await manager.hydrateTimelineFromProvider(agent.id, { force: true });
+    const expected = {
+      lastUserMessageAt: "2025-01-01T00:00:00.000Z",
+      lastAssistantMessageAt: "2025-01-02T00:00:00.000Z",
+    };
+    expect(manager.getAgent(agent.id)?.messageActivity).toEqual(expected);
+    history = [
+      {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "user_message", text: "no source date" },
+      },
+    ];
+    await manager.hydrateTimelineFromProvider(agent.id, { force: true });
+    expect(manager.getAgent(agent.id)?.messageActivity).toEqual(expected);
+  } finally {
+    if (agentId) await manager.closeAgent(agentId);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

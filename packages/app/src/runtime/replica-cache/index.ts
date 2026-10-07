@@ -240,6 +240,12 @@ const StoredAgentSnapshotSchema = z.strictObject({
   createdAt: IsoDateSchema,
   updatedAt: IsoDateSchema,
   lastUserMessageAt: IsoDateSchema.nullable(),
+  messageActivity: z
+    .strictObject({
+      lastUserMessageAt: IsoDateSchema.nullable(),
+      lastAssistantMessageAt: IsoDateSchema.nullable(),
+    })
+    .optional(),
   status: AgentStatusSchema,
   activeTurn: z
     .strictObject({
@@ -633,6 +639,7 @@ function serializeAgent(agent: Agent): StoredAgent {
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     lastUserMessageAt: agent.lastUserMessageAt?.toISOString() ?? null,
+    messageActivity: agent.messageActivity,
     status: agent.status,
     ...(agent.turn.phase === "open" && agent.turn.turnId
       ? {
