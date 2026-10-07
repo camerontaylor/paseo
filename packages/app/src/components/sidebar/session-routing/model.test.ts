@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { automaticRecipient, initialRoutingState, routingReducer, type Recipient } from "./model";
+import { initialRoutingState, routingReducer, type Recipient } from "./model";
 
 const recipient: Recipient = {
   serverId: "host-a",
@@ -15,7 +15,7 @@ const recipient: Recipient = {
 };
 
 describe("session routing decisions", () => {
-  test("cancellation clears only its owned lookup and cannot clear a newer lookup", () => {
+  test("cancellation clears only its pending lookup and preserves completed results", () => {
     const matching = routingReducer(initialRoutingState, {
       type: "phase",
       phase: { status: "matching", mode: "find", requestId: "new", text: "offline" },
@@ -28,9 +28,7 @@ describe("session routing decisions", () => {
       notice: "",
     });
     expect(routingReducer(results, { type: "cancelMatch", requestId: "old" })).toBe(results);
-    expect(routingReducer(results, { type: "cancelMatch", requestId: "new" }).phase.status).toBe(
-      "idle",
-    );
+    expect(routingReducer(results, { type: "cancelMatch", requestId: "new" })).toBe(results);
     expect(routingReducer(matching, { type: "cancelMatch", requestId: "new" }).phase.status).toBe(
       "idle",
     );
@@ -79,7 +77,7 @@ describe("session routing decisions", () => {
       }).phase,
     ).toMatchObject({ recipients: [] });
   });
-  test("superseded matching results and invalidated Find results cannot survive", () => {
+  test("superseded matching results and explicitly cleared Find results cannot survive", () => {
     let state = routingReducer(initialRoutingState, {
       type: "phase",
       phase: { status: "matching", mode: "find", requestId: "new", text: "offline" },
@@ -92,7 +90,7 @@ describe("session routing decisions", () => {
         notice: "",
       }),
     ).toBe(state);
-    state = routingReducer(state, { type: "invalidateFind" });
+    state = routingReducer(state, { type: "clear" });
     expect(
       routingReducer(state, {
         type: "matched",
@@ -101,14 +99,6 @@ describe("session routing decisions", () => {
         notice: "",
       }).phase.status,
     ).toBe("idle");
-  });
-  test("ambiguous, weak, and missing destinations require a choice", () => {
-    expect(automaticRecipient([])).toBeNull();
-    expect(automaticRecipient([{ ...recipient, confidence: 0.89 }])).toBeNull();
-    expect(
-      automaticRecipient([recipient, { ...recipient, agentId: "other", confidence: 0.8 }]),
-    ).toBeNull();
-    expect(automaticRecipient([recipient])).toEqual(recipient);
   });
   test("only the matching item acknowledgement clears its owned draft; equal new text survives", () => {
     let state = routingReducer(initialRoutingState, {
@@ -158,5 +148,178 @@ describe("session routing decisions", () => {
     expect(
       routingReducer(state, { type: "acknowledged", itemId: "old", queued: false }).sendDraft,
     ).toBe("continue");
+  });
+});
+
+test("new conversation keeps manual workspace and text until scope or host excludes it", () => {
+  const workspace = {
+    serverId: recipient.serverId,
+    workspaceId: recipient.workspaceId,
+    projectViewKey: recipient.projectViewKey,
+    projectName: recipient.projectName,
+    name: "main",
+  };
+  let state = routingReducer(initialRoutingState, {
+    type: "restoreDraft",
+    text: "new task",
+    version: 1,
+  });
+  state = routingReducer(state, { type: "newConversation", workspace });
+  expect(state).toMatchObject({
+    newConversation: true,
+    newWorkspace: workspace,
+    sendDraft: "new task",
+    recipient: null,
+  });
+  expect(routingReducer(state, { type: "scope", scope: "another" }).newWorkspace).toBeNull();
+  expect(routingReducer(state, { type: "hosts", serverIds: [] }).newWorkspace).toBeNull();
+  expect(
+    routingReducer(state, { type: "hosts", serverIds: [recipient.serverId] }).newWorkspace,
+  ).toEqual(workspace);
+  expect(routingReducer(state, { type: "recipient", recipient }).newConversation).toBe(false);
+});
+
+test("delivery modes default to Queue and changing mode does not send", () => {
+  expect(initialRoutingState.deliveryMode).toBe("queue");
+  const state = routingReducer(
+    { ...initialRoutingState, sendDraft: "keep" },
+    { type: "deliveryMode", mode: "interrupt" },
+  );
+  expect(state).toMatchObject({
+    deliveryMode: "interrupt",
+    sendDraft: "keep",
+    phase: { status: "idle" },
+  });
+});
+
+test("failed draft cleanup after direct acknowledgement retains receipt without a retry state", () => {
+  const state = routingReducer(
+    { ...initialRoutingState, phase: { status: "acknowledged", recipient, queued: false } },
+    { type: "receiptWarning", message: "Sent; draft cleanup failed" },
+  );
+  expect(state.phase).toEqual({
+    status: "acknowledged",
+    recipient,
+    queued: false,
+    warning: "Sent; draft cleanup failed",
+  });
+});
+
+describe("retained lookup results", () => {
+  function results(mode: "find" | "send") {
+    const matching = routingReducer(
+      { ...initialRoutingState, mode, sendDraft: "original" },
+      {
+        type: "phase",
+        phase: { status: "matching", mode, requestId: "first", text: "original" },
+      },
+    );
+    return routingReducer(matching, {
+      type: "matched",
+      requestId: "first",
+      recipients: [recipient],
+      notice: "Coverage",
+    });
+  }
+
+  test.each(["find", "send"] as const)(
+    "%s keeps candidates and original query when draft changes",
+    (mode) => {
+      const matched = results(mode);
+      const edited = routingReducer(matched, { type: "draft", text: "revised", version: 2 });
+      expect(edited.sendDraft).toBe("revised");
+      expect(edited.phase).toBe(matched.phase);
+      expect(edited.phase).toMatchObject({ text: "original", recipients: [recipient] });
+      expect(routingReducer(edited, { type: "cancelMatch", requestId: "first" }).phase).toBe(
+        matched.phase,
+      );
+      const synced = routingReducer(edited, { type: "syncDraft", text: "remote edit", version: 3 });
+      expect(synced.phase).toBe(matched.phase);
+    },
+  );
+
+  test.each(["find", "send"] as const)(
+    "%s refresh replaces candidates only for the newly submitted request",
+    (mode) => {
+      const refreshing = routingReducer(results(mode), {
+        type: "phase",
+        phase: { status: "matching", mode, requestId: "second", text: "revised" },
+      });
+      expect(
+        routingReducer(refreshing, {
+          type: "matched",
+          requestId: "first",
+          recipients: [recipient],
+          notice: "old response",
+        }),
+      ).toBe(refreshing);
+      const updated = routingReducer(refreshing, {
+        type: "matched",
+        requestId: "second",
+        recipients: [],
+        notice: "new response",
+      });
+      expect(updated.phase).toMatchObject({
+        status: "results",
+        text: "revised",
+        recipients: [],
+        notice: "new response",
+      });
+    },
+  );
+
+  test("changing delivery mode keeps candidate matches and never sends", () => {
+    const matched = results("send");
+    const changed = routingReducer(matched, { type: "deliveryMode", mode: "steer" });
+    expect(changed.deliveryMode).toBe("steer");
+    expect(changed.phase).toBe(matched.phase);
+  });
+
+  test("editing a pending Send lookup rejects its eventual response", () => {
+    const matching = routingReducer(results("send"), {
+      type: "phase",
+      phase: { status: "matching", mode: "send", requestId: "second", text: "original" },
+    });
+    const edited = routingReducer(matching, { type: "draft", text: "revised", version: 2 });
+    expect(
+      routingReducer(edited, {
+        type: "matched",
+        requestId: "second",
+        recipients: [recipient],
+        notice: "old response",
+      }),
+    ).toBe(edited);
+  });
+
+  test.each(["find", "send"] as const)(
+    "%s Clear and scope or host changes discard candidates",
+    (mode) => {
+      const matched = results(mode);
+      expect(routingReducer(matched, { type: "clear" })).toMatchObject({
+        sendDraft: "original",
+        phase: { status: "idle" },
+      });
+      expect(routingReducer(matched, { type: "scope", scope: "elsewhere" }).phase.status).toBe(
+        "idle",
+      );
+      expect(routingReducer(matched, { type: "hosts", serverIds: ["host-b"] }).phase.status).toBe(
+        "idle",
+      );
+    },
+  );
+
+  test("Clear and host changes preserve uncertain delivery ownership", () => {
+    const pending = routingReducer(results("send"), {
+      type: "restorePending",
+      recipient,
+      text: "original",
+      itemId: "owned-item",
+      draftVersion: 1,
+    });
+    expect(routingReducer(pending, { type: "clear" })).toBe(pending);
+    expect(routingReducer(pending, { type: "draft", text: "lost edit", version: 2 })).toBe(pending);
+    expect(routingReducer(pending, { type: "hosts", serverIds: [] }).phase).toBe(pending.phase);
+    const handoff = routingReducer(pending, { type: "phase", phase: { status: "handoff" } });
+    expect(routingReducer(handoff, { type: "clear" })).toBe(handoff);
   });
 });

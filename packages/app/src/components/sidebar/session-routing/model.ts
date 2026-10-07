@@ -8,11 +8,13 @@ export interface Recipient extends SessionSearchResult {
 
 export type RoutingPhase =
   | { status: "idle" }
+  | { status: "handoff" }
   | { status: "matching"; requestId: string; mode: "find" | "send"; text: string }
   | {
       status: "results";
       requestId: string;
       mode: "find" | "send";
+      text: string;
       recipients: Recipient[];
       notice: string;
     }
@@ -33,8 +35,16 @@ export type RoutingPhase =
       draftUpdatedAt?: number;
       error: string;
     }
-  | { status: "acknowledged"; recipient: Recipient; queued: boolean }
+  | { status: "acknowledged"; recipient: Recipient; queued: boolean; warning?: string }
   | { status: "error"; message: string };
+
+export interface NewConversationWorkspace {
+  serverId: string;
+  workspaceId: string;
+  projectViewKey: string;
+  projectName: string;
+  name: string;
+}
 
 export interface RoutingState {
   mode: "find" | "send";
@@ -44,6 +54,9 @@ export interface RoutingState {
   draftUpdatedAt: number;
   scope: string | null;
   recipient: Recipient | null;
+  deliveryMode: "queue" | "steer" | "interrupt";
+  newConversation: boolean;
+  newWorkspace: NewConversationWorkspace | null;
   picker: boolean;
   pickerQuery: string;
   phase: RoutingPhase;
@@ -57,6 +70,9 @@ export const initialRoutingState: RoutingState = {
   draftUpdatedAt: 0,
   scope: null,
   recipient: null,
+  deliveryMode: "queue",
+  newConversation: false,
+  newWorkspace: null,
   picker: false,
   pickerQuery: "",
   phase: { status: "idle" },
@@ -71,7 +87,7 @@ export type RoutingAction =
       updatedAt?: number;
       pending?: Extract<RoutingAction, { type: "restorePending" }>;
     }
-  | { type: "invalidateFind" }
+  | { type: "clear" }
   | { type: "cancelMatch"; requestId: string }
   | { type: "hosts"; serverIds: readonly string[] }
   | {
@@ -86,22 +102,21 @@ export type RoutingAction =
   | { type: "draft"; text: string; version: number; updatedAt?: number }
   | { type: "scope"; scope: string | null }
   | { type: "recipient"; recipient: Recipient | null }
+  | { type: "deliveryMode"; mode: RoutingState["deliveryMode"] }
+  | { type: "newConversation"; workspace: NewConversationWorkspace | null }
+  | { type: "newWorkspace"; workspace: NewConversationWorkspace }
   | { type: "picker"; open: boolean }
   | { type: "pickerQuery"; text: string }
+  | { type: "receiptWarning"; message: string }
   | { type: "phase"; phase: RoutingPhase }
   | { type: "matched"; requestId: string; recipients: Recipient[]; notice: string }
   | { type: "acknowledged"; itemId: string; queued: boolean };
 
-export function recipientInScope(recipient: Recipient, scope: string | null): boolean {
+export function recipientInScope(
+  recipient: Pick<Recipient, "projectViewKey">,
+  scope: string | null,
+): boolean {
   return scope === null || recipient.projectViewKey === scope;
-}
-
-export function automaticRecipient(recipients: readonly Recipient[]): Recipient | null {
-  const [first, second] = recipients;
-  if (!first || first.confidence < 0.9) return null;
-  if (second && (second.confidence >= 0.7 || first.confidence - second.confidence < 0.2))
-    return null;
-  return first;
 }
 
 export function routingReducer(state: RoutingState, action: RoutingAction): RoutingState {
@@ -115,8 +130,8 @@ export function routingReducer(state: RoutingState, action: RoutingAction): Rout
       return restoreRoutingDraft(state, action);
     case "hosts":
       return updateRoutingHosts(state, action.serverIds);
-    case "invalidateFind":
-      return invalidateFind(state);
+    case "clear":
+      return clearRoutingInput(state);
     case "cancelMatch":
       return cancelRoutingMatch(state, action.requestId);
     case "restorePending":
@@ -137,20 +152,28 @@ export function routingReducer(state: RoutingState, action: RoutingAction): Rout
     case "mode":
       return { ...state, mode: action.mode, phase: { status: "idle" }, picker: false };
     case "draft":
+      return editRoutingDraft(state, action);
+    case "scope":
+      return updateRoutingScope(state, action.scope);
+    case "deliveryMode":
+      return { ...state, deliveryMode: action.mode };
+    case "newConversation":
       return {
         ...state,
-        ...routingDraftFields(action),
+        mode: "send",
+        newConversation: true,
+        newWorkspace: action.workspace,
+        recipient: null,
+        picker: false,
         phase: { status: "idle" },
       };
-    case "scope": {
-      const recipient =
-        state.recipient && recipientInScope(state.recipient, action.scope) ? state.recipient : null;
-      return { ...state, scope: action.scope, recipient, picker: false, phase: { status: "idle" } };
-    }
+    case "newWorkspace":
+      return { ...state, newWorkspace: action.workspace, phase: { status: "idle" } };
     case "recipient":
       return {
         ...state,
         recipient: action.recipient,
+        newConversation: false,
         mode: "send",
         picker: false,
         phase: { status: "idle" },
@@ -159,33 +182,36 @@ export function routingReducer(state: RoutingState, action: RoutingAction): Rout
       return { ...state, picker: action.open };
     case "pickerQuery":
       return { ...state, pickerQuery: action.text };
+    case "receiptWarning":
+      return applyReceiptWarning(state, action.message);
     case "phase":
       return { ...state, phase: action.phase };
-    case "matched": {
-      if (state.phase.status !== "matching" || state.phase.requestId !== action.requestId)
-        return state;
-      const recipients = action.recipients.filter((recipient) =>
-        recipientInScope(recipient, state.scope),
-      );
-      return {
-        ...state,
-        phase: {
-          status: "results",
-          requestId: action.requestId,
-          mode: state.phase.mode,
-          recipients,
-          notice: action.notice,
-        },
-      };
-    }
+    case "matched":
+      return applyRoutingMatches(state, action);
     case "acknowledged":
       return acknowledgeRoutingState(state, action);
   }
 }
 
+function clearRoutingInput(state: RoutingState): RoutingState {
+  if (ownsUnresolvedDelivery(state.phase)) return state;
+  return { ...state, phase: { status: "idle" }, picker: false, pickerQuery: "" };
+}
+
+function editRoutingDraft(
+  state: RoutingState,
+  action: Extract<RoutingAction, { type: "draft" }>,
+): RoutingState {
+  if (ownsUnresolvedDelivery(state.phase)) return state;
+  return {
+    ...state,
+    ...routingDraftFields(action),
+    phase: state.phase.status === "results" ? state.phase : { status: "idle" },
+  };
+}
+
 function cancelRoutingMatch(state: RoutingState, requestId: string): RoutingState {
-  return (state.phase.status === "matching" || state.phase.status === "results") &&
-    state.phase.requestId === requestId
+  return state.phase.status === "matching" && state.phase.requestId === requestId
     ? { ...state, phase: { status: "idle" } }
     : state;
 }
@@ -209,11 +235,8 @@ function acknowledgeRoutingState(
   };
 }
 
-function invalidateFind(state: RoutingState): RoutingState {
-  const phase = state.phase;
-  if ((phase.status === "results" || phase.status === "matching") && phase.mode === "find")
-    return { ...state, phase: { status: "idle" } };
-  return state;
+function ownsUnresolvedDelivery(phase: RoutingPhase): boolean {
+  return phase.status === "sending" || phase.status === "pending" || phase.status === "handoff";
 }
 
 function routingDraftFields(
@@ -236,7 +259,53 @@ function restoreRoutingDraft(
 function updateRoutingHosts(state: RoutingState, serverIds: readonly string[]): RoutingState {
   return {
     ...state,
+    phase: ownsUnresolvedDelivery(state.phase) ? state.phase : { status: "idle" },
     recipient:
       state.recipient && serverIds.includes(state.recipient.serverId) ? state.recipient : null,
+    newWorkspace:
+      state.newWorkspace && serverIds.includes(state.newWorkspace.serverId)
+        ? state.newWorkspace
+        : null,
   };
+}
+
+function updateRoutingScope(state: RoutingState, scope: string | null): RoutingState {
+  const recipient =
+    state.recipient && recipientInScope(state.recipient, scope) ? state.recipient : null;
+  return {
+    ...state,
+    scope: scope,
+    recipient,
+    newWorkspace:
+      state.newWorkspace && recipientInScope(state.newWorkspace, scope) ? state.newWorkspace : null,
+    picker: false,
+    phase: { status: "idle" },
+  };
+}
+
+function applyRoutingMatches(
+  state: RoutingState,
+  action: Extract<RoutingAction, { type: "matched" }>,
+): RoutingState {
+  if (state.phase.status !== "matching" || state.phase.requestId !== action.requestId) return state;
+  const recipients = action.recipients.filter((recipient) =>
+    recipientInScope(recipient, state.scope),
+  );
+  return {
+    ...state,
+    phase: {
+      status: "results",
+      requestId: action.requestId,
+      mode: state.phase.mode,
+      text: state.phase.text,
+      recipients,
+      notice: action.notice,
+    },
+  };
+}
+
+function applyReceiptWarning(state: RoutingState, warning: string): RoutingState {
+  return state.phase.status === "acknowledged"
+    ? { ...state, phase: { ...state.phase, warning } }
+    : state;
 }
