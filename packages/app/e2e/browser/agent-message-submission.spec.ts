@@ -364,7 +364,7 @@ async function replaySteeredSleepTurnInBrowser(
     await agent.client.waitForFinish(agent.agentId, 30_000);
 
     await expect(page.getByText("hello", { exact: true })).toHaveCount(1);
-    await expect(page.getByRole("button", { name: /^Worked for/ })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /^Finished .+ · / })).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Fork chat" }).last()).toBeVisible();
   } finally {
     gate.restore();
@@ -1286,7 +1286,7 @@ test.describe("Agent message submission", () => {
       await submitMessage(page, "hello");
       await gate.waitForHeldServerMessage("send_agent_message_response");
       await expect(page.getByText("hello", { exact: true })).toHaveCount(1);
-      await expect(page.getByText(/^Worked for/)).toHaveCount(0);
+      await expect(page.getByText(/^(Finished |Worked for )/)).toHaveCount(0);
       gate.releaseHeldServerMessage("send_agent_message_response");
       await expect(page.getByText("hello", { exact: true })).toHaveCount(1);
     } finally {
