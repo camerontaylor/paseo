@@ -185,6 +185,7 @@ function buildFirstAgentContext(input: {
 }
 
 interface NewWorkspaceScreenProps {
+  initialChangeRequest?: ForgeSearchItem;
   serverId: string;
   sourceDirectory?: string;
   projectId?: string;
@@ -710,13 +711,16 @@ interface WorkspaceIsolationState {
 function useWorkspaceIsolation(input: {
   supportsMultiplicity: boolean;
   worktreeSupport: "supported" | "unsupported" | "unknown";
+  initialWorktree?: boolean;
 }): WorkspaceIsolationState {
   const { supportsMultiplicity, worktreeSupport } = input;
   // The last isolation choice is remembered alongside the other New Workspace
   // form preferences (provider, model, mode). A manual in-screen pick overrides
   // the remembered default until the screen remounts.
   const { preferences, updatePreferences } = useFormPreferences();
-  const [manualIsolation, setManualIsolation] = useState<"local" | "worktree" | null>(null);
+  const [manualIsolation, setManualIsolation] = useState<"local" | "worktree" | null>(
+    input.initialWorktree ? "worktree" : null,
+  );
   const isolation = manualIsolation ?? preferences.isolation ?? "local";
   const canCreateWorktree = supportsMultiplicity && worktreeSupport !== "unsupported";
   const isWorktree = isolation === "worktree" && canCreateWorktree;
@@ -1631,6 +1635,7 @@ export function NewWorkspaceScreen({
   projectId,
   displayName: displayNameProp,
   draftId,
+  initialChangeRequest,
 }: NewWorkspaceScreenProps) {
   const queryClient = useQueryClient();
   const { theme } = useUnistyles();
@@ -1780,7 +1785,11 @@ export function NewWorkspaceScreen({
   const composerState = chatDraft.composerState;
   const [pickerSelection, dispatchPickerSelection] = useReducer(
     reducePickerSelection,
-    initialPickerSelectionState,
+    initialChangeRequest,
+    (item) =>
+      item
+        ? { selectedItem: { kind: "github-pr" as const, item }, allowAutoPrSelection: false }
+        : initialPickerSelectionState,
   );
   const selectedItem = pickerSelection.selectedItem;
 
@@ -1820,6 +1829,7 @@ export function NewWorkspaceScreen({
     useWorkspaceIsolation({
       supportsMultiplicity: supportsWorkspaceMultiplicity,
       worktreeSupport,
+      initialWorktree: Boolean(initialChangeRequest),
     });
 
   const branchSuggestionsQuery = useQuery({
@@ -1895,6 +1905,13 @@ export function NewWorkspaceScreen({
     },
     [chatDraft],
   );
+
+  const initialRequestAttached = useRef(false);
+  useEffect(() => {
+    if (!initialChangeRequest || initialRequestAttached.current) return;
+    initialRequestAttached.current = true;
+    selectPickerItem({ kind: "github-pr", item: initialChangeRequest });
+  }, [initialChangeRequest, selectPickerItem]);
 
   const handleSelectOption = useCallback(
     (id: string) => {
