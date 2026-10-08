@@ -22,24 +22,24 @@ rationale, rather than copying its changing list into this document.
 
 ## A clean merge proves nothing
 
-The `custom` syncs recorded below merged with zero conflicts and then failed
+Several earlier `custom` syncs merged with zero conflicts and then failed
 to build. The fork adds to files upstream also grows, and git is happy as long
 as the two sides touch different lines — or different files entirely.
 
 Run, in this order, before believing a sync:
 
 ```sh
-npm install                     # the tag may have moved dependencies
-git checkout -- package-lock.json   # npm rewrites hundreds of "peer": true markers
+npm ci                          # install the pinned lockfile and apply repo patches
 npm run build:server            # generated declarations, or you chase phantom type errors
 npm run typecheck
 npm run lint
 ```
 
-`npm install` is not optional when the tag changed `package.json` anywhere.
-Reverting the lockfile after it is: the rewrite is pure churn and pure future
-conflict. Confirm that is all it was — `git diff package-lock.json`, strip the
-`"peer": true` lines, and nothing should remain.
+Use an isolated candidate tree when a daemon serves the current build. Keep
+its lazy-loaded `dist/` files intact. Share third-party dependencies through
+[init-worktree](worktrees.md), which keeps workspace links and built output
+local. A whole `node_modules` or `dist` symlink invalidates source verification.
+
 
 After the Desvio rebuild, run focused tests for changed code and a client/daemon
 smoke test before deploying. Desvio's own gate runs typecheck and lint but does

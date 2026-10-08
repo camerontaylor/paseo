@@ -13,6 +13,19 @@ cleanup only after the fork accepts the terminal's foreground identity.
 Rebuild the ordered carries and validate the Usage compatibility and native
 ZCode lanes before advancing the live Desvio base or deploying the fleet.
 
+## 0.11.1 base decision — 2026-10-08
+
+Advance `custom` to upstream `v0.11.1`. Preserve cancellation ownership,
+side conversations and canonical host SDK identity. Repair Usage negotiation
+for mixed versions. Move ZCode to the pinned native provider plugin and put
+its daemon policy in global and project `AGENTS.md`; keep the system-policy
+path for other providers.
+
+Retire observer fanout #3117 and thinking display #4355. Keep only command
+argument hints from #3369. Port the remaining six PR carries and fourteen
+infi features onto the new base. The validated external basket stays separate
+from `custom`; no deployment or publication is implied by this source sync.
+
 ## 0.11.0-beta.3 base decision — 2026-10-02
 
 Advance `custom` and the Desvio base to upstream `v0.11.0-beta.3`. The two
