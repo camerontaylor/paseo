@@ -601,6 +601,7 @@ export class OpenAiRealtime {
     }
   }
   private async drainTranscripts() {
+    const generation = this.generation;
     while (this.pendingSegments.length && this.transcripts.has(this.pendingSegments[0])) {
       const id = this.pendingSegments.shift()!;
       const text = this.transcripts.get(id)!.trim();
@@ -642,6 +643,7 @@ export class OpenAiRealtime {
         this.save();
         if (this.context.destination === "agent") {
           await this.submit(text, id);
+          if (generation !== this.generation) return;
           continue;
         }
         this.activeUserText = text;
@@ -649,15 +651,19 @@ export class OpenAiRealtime {
         this.requestResponse();
       }
     }
-    if (!this.pendingSegments.length && this.inputBytes === 0 && !this.commitPending) {
+    if (this.inputFinalized()) {
       this.context.unconfirmedInput = false;
       this.save();
     }
     await this.finishDraft();
   }
+  private inputFinalized() {
+    return !this.pendingSegments.length && this.inputBytes === 0 && !this.commitPending;
+  }
   private async finishDraft() {
     if (!this.ending || this.finishing || this.commitPending || this.pendingSegments.length) return;
     this.finishing = true;
+    const generation = this.generation;
     if (this.finalTimer) clearTimeout(this.finalTimer);
     this.finalTimer = null;
     const text = this.context.draft.map((x) => x.text).join("\n");
@@ -668,6 +674,7 @@ export class OpenAiRealtime {
       return;
     }
     if (text) await this.submit(text, `draft-${this.context.epoch}-${this.context.draft[0].id}`);
+    if (generation !== this.generation) return;
     this.context.entries.push(...this.context.draft);
     this.context.draft = [];
     this.context.mode = "conversation";
@@ -680,7 +687,7 @@ export class OpenAiRealtime {
   }
   private async submit(text: string, id: string) {
     if (!text || !id) throw new Error("No finalized request to deliver");
-    const state = this.context.deliveries[id];
+    const state = this.options.store.read().deliveries[id];
     if (state === "accepted") return;
     if (state)
       throw new Error("Prior delivery is unresolved; inspect the agent queue before resending.");
@@ -689,11 +696,15 @@ export class OpenAiRealtime {
     try {
       await this.options.host.submit(text, id);
     } catch {
-      this.context.deliveries[id] = "unknown";
-      this.save();
+      this.recordDelivery(id, "unknown");
       throw new Error("Delivery outcome unknown; no automatic resend.");
     }
-    this.context.deliveries[id] = "accepted";
-    this.save();
+    this.recordDelivery(id, "accepted");
+  }
+  private recordDelivery(id: string, outcome: "accepted" | "unknown") {
+    const current = this.options.store.read();
+    current.deliveries[id] = outcome;
+    this.options.store.write(current);
+    this.context.deliveries[id] = current.deliveries[id];
   }
 }

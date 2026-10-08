@@ -35,6 +35,16 @@ export class RealtimeContextStore {
     return Context.parse(JSON.parse(readFileSync(this.path, "utf8")));
   }
   write(context: RealtimeContext): void {
+    // A revoked attachment may finish an already-admitted operation after a new attachment starts.
+    // Receipt states only advance; stale context snapshots cannot erase a settled outcome.
+    if (existsSync(this.path)) {
+      const previous = Context.parse(JSON.parse(readFileSync(this.path, "utf8")));
+      const rank = { pending: 0, unknown: 1, accepted: 2 };
+      for (const [id, state] of Object.entries(previous.deliveries)) {
+        const next = context.deliveries[id];
+        if (!next || rank[state] > rank[next]) context.deliveries[id] = state;
+      }
+    }
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     const temp = `${this.path}.${randomUUID()}.tmp`;
     writeFileSync(temp, JSON.stringify(context), { mode: 0o600 });

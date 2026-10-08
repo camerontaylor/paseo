@@ -275,4 +275,30 @@ describe("GPT Realtime attachment", () => {
     write.mockRestore();
     f.voice.stop();
   });
+  it("late admission after stop preserves newer attachment context and its receipt", async () => {
+    const f = await fixture();
+    let admitted!: () => void;
+    f.host.submit.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          admitted = resolve;
+        }),
+    );
+    f.voice.listen();
+    await f.transcript("old", "old request");
+    void f.voice.endListening();
+    await f.settle();
+    f.voice.stop();
+    const next = f.store.read();
+    next.draft = [{ id: "new", role: "user", text: "new attachment draft" }];
+    f.store.write(next);
+    admitted();
+    await f.settle();
+    expect(f.store.read().draft).toEqual(next.draft);
+    expect(Object.values(f.store.read().deliveries)).toEqual(["accepted"]);
+    // A still-live attachment with an earlier snapshot also cannot regress the settled ledger.
+    f.store.write(next);
+    expect(Object.values(f.store.read().deliveries)).toEqual(["accepted"]);
+    expect(f.host.submit).toHaveBeenCalledTimes(1);
+  });
 });
