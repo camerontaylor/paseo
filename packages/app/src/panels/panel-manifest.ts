@@ -46,6 +46,8 @@ const manifests = {
   side_conversation: {
     kind: "side_conversation",
     supportedHosts: ["main", "explorer"],
+    showCloseButton: true,
+    singleton: false,
     resourceKey: (target) => `${target.parentAgentId}:${target.threadId}`,
   },
   terminal: {
