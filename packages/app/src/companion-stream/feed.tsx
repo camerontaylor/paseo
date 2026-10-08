@@ -14,6 +14,8 @@ import { useHostRuntimeConnectionStatus, useHostRuntimeClient } from "@/runtime/
 import { formatMessageTimestamp } from "@/utils/time";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { buildCompanionFeed, type CompanionFeedItem } from "./model";
+import { useGlobalStream } from "./use-global-stream";
+import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { ArtifactPinOperations } from "./artifact-pin-operations";
 
 interface CompanionFeedProps {
@@ -34,14 +36,13 @@ const NoteInput = withUnistyles(EditingTextInput, (theme) => ({
   placeholderTextColor: theme.colors.foregroundMuted,
 }));
 
-type ViewTab = "stream" | "pinned";
+type ViewTab = "checklist" | "stream" | "pinned";
 type StreamFilter = "all" | "question" | "feature_request" | "permission" | "outcome" | "q_and_a";
 
 export function CompanionFeed({
   serverId,
   agentId,
   cwd,
-  entries,
   artifacts,
   isSupported,
   artifactsSupported,
@@ -55,18 +56,45 @@ export function CompanionFeed({
   const supportsWrites = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.globalStream === true,
   );
+  // COMPAT(durableStream): added in fork beta.11; remove after 2027-04-07 once host floor includes durable Stream.
+  const supportsDurableStream = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.durableStream === true,
+  );
   const [saving, setSaving] = useState(false);
   const draftEntryId = useRef<string | null>(null);
   const artifactPins = useRef(new ArtifactPinOperations());
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const [viewTab, setViewTab] = useState<ViewTab>("stream");
+  const [viewTab, setViewTab] = useState<ViewTab>("checklist");
   const [filter, setFilter] = useState<StreamFilter>("all");
   const [onlyOpen, setOnlyOpen] = useState(true);
   const [pinText, setPinText] = useState("");
   const noteInput = useRef<EditingTextInputHandle>(null);
 
-  const items = useMemo(() => buildCompanionFeed(entries, artifacts), [entries, artifacts]);
+  const pendingFilter = onlyOpen ? "pending" : "all";
+  const query = useGlobalStream({
+    serverId,
+    agentId,
+    asksOnly: viewTab === "checklist",
+    filter: viewTab === "pinned" ? "pinned" : pendingFilter,
+    includeArchived: true,
+    enabled: isSupported && supportsDurableStream,
+  });
+  const { refetch, fetchNextPage } = query;
+  const items = useMemo(
+    () =>
+      buildCompanionFeed(
+        query.rows.flatMap((row) => (row.item.kind === "entry" ? [row.item.entry] : [])),
+        query.rows.flatMap((row) => (row.item.kind === "artifact" ? [row.item.artifact] : [])),
+      ),
+    [query.rows],
+  );
+  const refresh = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+  const loadMore = useCallback(() => {
+    fetchNextPage();
+  }, [fetchNextPage]);
 
   const visible = useMemo(() => {
     return items.filter((item) => {
@@ -80,7 +108,7 @@ export function CompanionFeed({
           return filter === "all" && !onlyOpen;
         }
 
-        if (filter !== "all" && item.entry.kind !== filter) return false;
+        if (viewTab !== "checklist" && filter !== "all" && item.entry.kind !== filter) return false;
 
         if (onlyOpen) {
           if (item.entry.kind === "question" || item.entry.kind === "feature_request") {
@@ -113,6 +141,7 @@ export function CompanionFeed({
         if (!client || !supportsWrites || connection !== "online")
           throw new Error(t("globalStream.writeUnavailable"));
         await client.updateStreamEntry(input);
+        await refetch();
       } catch (error) {
         setSaveError(error instanceof Error ? error.message : t("globalStream.saveFailed"));
         throw error;
@@ -120,13 +149,17 @@ export function CompanionFeed({
         setSaving(false);
       }
     },
-    [client, connection, supportsWrites, t],
+    [client, connection, supportsWrites, t, refetch],
   );
   const handleUpdateStatus = useCallback(
     (entryId: string, status: "open" | "reviewed" | "done") => {
-      void save({ agentId, entryId, action: "update_status", status }).catch(() => undefined);
+      const entry = items.find((item) => item.id === entryId);
+      const expectedRevision = entry?.kind === "entry" ? entry.entry.ask?.revision : undefined;
+      void save({ agentId, entryId, action: "update_status", status, expectedRevision }).catch(
+        () => undefined,
+      );
     },
-    [save, agentId],
+    [save, agentId, items],
   );
   const handleRemovePin = useCallback(
     (entryId: string) => {
@@ -155,6 +188,7 @@ export function CompanionFeed({
       ) : (
         <EntryCard
           entry={item.entry}
+          serverId={serverId}
           onReturnToChat={onReturnToChat}
           onReplyInChat={onReplyInChat}
           onUpdateStatus={handleUpdateStatus}
@@ -182,7 +216,12 @@ export function CompanionFeed({
     if (!pinText.trim() || saving) return;
     void save({
       agentId,
-      action: viewTab === "pinned" ? "add_pin" : "add_question",
+      action: ({ pinned: "add_pin", checklist: "set_ask", stream: "add_question" } as const)[
+        viewTab
+      ],
+      ...(viewTab === "checklist"
+        ? { expectedRevision: 0, ask: { state: "open" as const, remaining: "", evidence: "" } }
+        : {}),
       entryId: (draftEntryId.current ??= globalThis.crypto.randomUUID()),
       text: pinText.trim(),
     })
@@ -212,11 +251,30 @@ export function CompanionFeed({
           value={viewTab}
           onValueChange={setViewTab}
           options={[
+            { value: "checklist", label: "Checklist" },
             { value: "stream", label: t("agentPanel.stream.queueTab") },
             { value: "pinned", label: t("agentPanel.stream.pinnedTab") },
           ]}
         />
 
+        <Button
+          variant="ghost"
+          onPress={refresh}
+          disabled={query.isFetching || connection !== "online"}
+        >
+          Refresh
+        </Button>
+        {query.notices.map((notice) => (
+          <Text key={notice} accessibilityRole="alert" style={styles.description}>
+            {notice}
+          </Text>
+        ))}
+        {viewTab === "checklist" ? (
+          <Text style={styles.description}>
+            Explicitly tracked asks. Turn endings never mark work done. Ask your agent to record
+            progress, blockers and evidence.
+          </Text>
+        ) : null}
         {saveError ? (
           <Text accessibilityRole="alert" style={styles.description}>
             {saveError}
@@ -226,28 +284,30 @@ export function CompanionFeed({
         {!supportsWrites ? (
           <Text style={styles.description}>{t("globalStream.writeUnavailable")}</Text>
         ) : null}
-        {viewTab === "stream" && (
+        {viewTab !== "pinned" && (
           <View style={styles.segmentContainer}>
-            <SegmentedControl
-              value={filter}
-              onValueChange={setFilter}
-              size="sm"
-              options={[
-                { value: "all", label: t("agentPanel.stream.filterAll") },
-                { value: "question", label: t("agentPanel.stream.filterQuestions") },
-                { value: "q_and_a", label: t("agentPanel.stream.filterQAndA") },
-                { value: "feature_request", label: t("agentPanel.stream.filterFeatures") },
-                { value: "permission", label: t("agentPanel.stream.filterDecisions") },
-                { value: "outcome", label: t("agentPanel.stream.filterOutcomes") },
-              ]}
-            />
+            {viewTab === "stream" ? (
+              <SegmentedControl
+                value={filter}
+                onValueChange={setFilter}
+                size="sm"
+                options={[
+                  { value: "all", label: t("agentPanel.stream.filterAll") },
+                  { value: "question", label: t("agentPanel.stream.filterQuestions") },
+                  { value: "q_and_a", label: t("agentPanel.stream.filterQAndA") },
+                  { value: "feature_request", label: t("agentPanel.stream.filterFeatures") },
+                  { value: "permission", label: t("agentPanel.stream.filterDecisions") },
+                  { value: "outcome", label: t("agentPanel.stream.filterOutcomes") },
+                ]}
+              />
+            ) : null}
             <Button
               variant={onlyOpen ? "secondary" : "outline"}
               style={styles.touchTarget}
               onPress={handleToggleOnlyOpen}
               testID="companion-stream-pending"
             >
-              {onlyOpen ? "Show All" : "Show Open Only"}
+              {onlyOpen ? "Show completed too" : "Show unresolved only"}
             </Button>
           </View>
         )}
@@ -257,11 +317,15 @@ export function CompanionFeed({
             <NoteInput
               ref={noteInput}
               style={styles.pinInput}
-              placeholder={t(
-                viewTab === "pinned"
-                  ? "agentPanel.stream.notePlaceholder"
-                  : "globalStream.questionPlaceholder",
-              )}
+              placeholder={
+                viewTab === "checklist"
+                  ? "A request to track…"
+                  : t(
+                      viewTab === "pinned"
+                        ? "agentPanel.stream.notePlaceholder"
+                        : "globalStream.questionPlaceholder",
+                    )
+              }
               maxLength={4000}
               editable={!saving}
               initialValue=""
@@ -272,7 +336,11 @@ export function CompanionFeed({
               onPress={handleSubmitPin}
               disabled={saving || connection !== "online" || !pinText.trim()}
             >
-              {t(viewTab === "pinned" ? "agentPanel.stream.addNote" : "globalStream.addQuestion")}
+              {viewTab === "checklist"
+                ? "Add ask"
+                : t(
+                    viewTab === "pinned" ? "agentPanel.stream.addNote" : "globalStream.addQuestion",
+                  )}
             </Button>
           </View>
         )}
@@ -280,6 +348,9 @@ export function CompanionFeed({
     ),
     [
       connection,
+      refresh,
+      query.isFetching,
+      query.notices,
       viewTab,
       filter,
       onlyOpen,
@@ -307,19 +378,25 @@ export function CompanionFeed({
     [viewTab, onReturnToChat, t],
   );
 
-  const hasItems = visible.length > 0;
   const footer = useMemo(
-    () =>
-      hasItems && viewTab === "stream" ? (
-        <View style={styles.footer}>
-          <Text style={styles.description}>{t("agentPanel.stream.outcomeDescription")}</Text>
-          <Text style={styles.description}>{t("agentPanel.stream.retention")}</Text>
-        </View>
-      ) : null,
-    [hasItems, viewTab, t],
+    () => (
+      <View style={styles.footer}>
+        {query.hasNextPage ? (
+          <Button onPress={loadMore} disabled={query.isFetching || connection !== "online"}>
+            Load more
+          </Button>
+        ) : null}
+        {query.isLoading ? <ActivityIndicator /> : null}
+        <Text style={styles.description}>
+          All captured Stream history is kept. Pages load 50 items at a time. Earlier pruned entries
+          are not restored.
+        </Text>
+      </View>
+    ),
+    [query.hasNextPage, query.isFetching, query.isLoading, loadMore, connection],
   );
 
-  if (!isSupported) {
+  if (!isSupported || !supportsDurableStream) {
     return (
       <View style={styles.root}>
         <View style={styles.notice} testID="companion-stream-unsupported">
@@ -362,6 +439,7 @@ function CardSeparator() {
 // eslint-disable-next-line complexity
 export function EntryCard({
   entry,
+  serverId,
   onReturnToChat,
   onReplyInChat,
   onUpdateStatus,
@@ -369,6 +447,7 @@ export function EntryCard({
   disabled = false,
 }: {
   entry: CompanionEntry;
+  serverId?: string;
   disabled?: boolean;
   onReturnToChat: () => void;
   onReplyInChat: () => void;
@@ -391,6 +470,10 @@ export function EntryCard({
     [onUpdateStatus, entry.id],
   );
   const handleRemovePinLocal = useCallback(() => onRemovePin(entry.id), [onRemovePin, entry.id]);
+  const openDelegated = useCallback(() => {
+    if (serverId && entry.ask?.delegatedAgentId)
+      navigateToAgent({ serverId, agentId: entry.ask.delegatedAgentId });
+  }, [serverId, entry.ask?.delegatedAgentId]);
   const pending = isCompanionEntryPending(entry);
   const expandedAccessibilityState = useMemo(() => ({ expanded }), [expanded]);
 
@@ -398,7 +481,13 @@ export function EntryCard({
   let status: string = "";
   if (entry.kind === "question") {
     title = t("agentPanel.stream.question");
-    status = entry.status;
+    if (entry.id.startsWith("turn:")) title = "Question · inferred from text";
+    if (entry.ask) title = "Tracked ask · explicit";
+    status = entry.ask
+      ? { open: "Open", in_progress: "In progress", blocked: "Blocked", done: "Done" }[
+          entry.ask.state
+        ]
+      : entry.status;
   } else if (entry.kind === "feature_request") {
     title = "Feature Request";
     status = entry.status;
@@ -473,6 +562,40 @@ export function EntryCard({
       ) : null}
 
       {body}
+      {entry.ask ? (
+        <View style={styles.notice}>
+          {entry.ask.subtasks?.length ? (
+            <Text style={styles.description}>
+              {entry.ask.subtasks.filter((task) => task.done).length} / {entry.ask.subtasks.length}{" "}
+              subtasks done
+            </Text>
+          ) : null}
+          {entry.ask.subtasks?.map((task) => (
+            <Text key={task.id} style={styles.body}>
+              {task.done ? "✓" : "○"} {task.text}
+            </Text>
+          ))}
+          <Text selectable style={styles.description}>
+            {entry.ask.state === "done" ? "Completion evidence" : "Evidence so far"}:{" "}
+            {entry.ask.evidence || "None recorded"}
+          </Text>
+          {entry.ask.state !== "done" ? (
+            <Text selectable style={styles.body}>
+              Remaining: {entry.ask.remaining || "Not yet specified"}
+            </Text>
+          ) : null}
+          {entry.ask.sourceMessageId ? (
+            <Text selectable style={styles.description}>
+              Source message: {entry.ask.sourceMessageId}
+            </Text>
+          ) : null}
+          {entry.ask.delegatedAgentId && serverId ? (
+            <Button variant="outline" onPress={openDelegated}>
+              Open delegated session
+            </Button>
+          ) : null}
+        </View>
+      ) : null}
 
       {entry.truncated ? (
         <Text style={styles.description}>{t("agentPanel.stream.excerpt")}</Text>
@@ -503,9 +626,13 @@ export function EntryCard({
               Open
             </Button>
             <Button variant="outline" onPress={handleSetReviewed} disabled={disabled}>
-              Reviewed
+              {entry.ask ? "In progress" : "Reviewed"}
             </Button>
-            <Button variant="outline" onPress={handleSetDone} disabled={disabled}>
+            <Button
+              variant="outline"
+              onPress={handleSetDone}
+              disabled={disabled || Boolean(entry.ask)}
+            >
               Done
             </Button>
           </View>
@@ -517,7 +644,13 @@ export function EntryCard({
 
 const styles = StyleSheet.create((theme) => ({
   root: { flex: 1, backgroundColor: theme.colors.surface0 },
-  feed: { width: "100%", maxWidth: 760, alignSelf: "center", padding: theme.spacing[4] },
+  feed: {
+    width: "100%",
+    maxWidth: 760,
+    alignSelf: "center",
+    padding: theme.spacing[4],
+    paddingTop: theme.spacing[12],
+  },
   header: { gap: theme.spacing[2], paddingBottom: theme.spacing[6] },
   notice: {
     padding: theme.spacing[3],

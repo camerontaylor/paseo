@@ -18,8 +18,8 @@ archive. Paired hosts are combined on the client; no additional cloud copy is ma
 
 ## Questions and pins
 
-Unanswered questions and pinned notes are retained independently of the most recent **50**
-other entries. Text remains bounded to **4,000** characters; Chat holds full context.
+All captured entries are retained, including completed questions and old outcomes.
+The 50-item bound applies only to wire snapshots and default read pages, never storage. Text remains bounded to **4,000** characters; Chat holds full context.
 Sending an unrelated message never changes another question's status. Open, Reviewed and
 legacy Reply sent questions remain unresolved until explicitly marked Done. Each item can
 be resolved or reopened independently, including from global Stream. Pin removal is explicit.
@@ -54,6 +54,50 @@ Codex foreground turn IDs now include a fresh UUID. A recreated provider cannot 
 counter at the same ID and suppress new Stream outcomes. Duplicate delivery of the same turn
 still deduplicates. This does not repair previously missing historical cards.
 
+## Durable ask checklist
+
+Per-chat Stream opens on **Checklist**, showing unresolved explicitly tracked asks first.
+Use **Show completed too** to include completed work, and **Load more** to read older pages.
+Queue and Pinned retain their existing meanings. Refresh and reconnect reread durable records;
+offline pages remain readable with a stale-data notice. Cached data is not an offline archive.
+
+Use the existing agent MCP interface:
+
+1. `set_stream_ask` with a stable `askId`, `expectedRevision: 0`, the request `text`, and an
+   `ask` object containing `state`, `remaining`, and `evidence` creates an ask.
+2. `list_stream_asks` defaults to the caller's conversation. Follow `nextCursor` until null;
+   use `unresolvedOnly: true` when reviewing outstanding work. Read the revision before editing.
+3. Reuse the same ID and current `expectedRevision` with the full updated ask. States are
+   `open`, `in_progress`, `blocked`, and `done`. Repeating an identical write after a lost
+   acknowledgement is safe; a stale differing update returns a conflict rather than overwriting.
+4. Record a blocker in `remaining`. Done requires nonempty evidence, empty remaining work,
+   and every supplied subtask done. Reopen or correct the same ask with a new revision.
+
+The ask belongs to its source conversation. Include `sourceMessageId` when known and
+`delegatedAgentId` for a managed Paseo child; the card opens that session. Provider-native child
+IDs are not Paseo IDs and must not be passed as delegatedAgentId. Optional subtasks each have a
+stable ID, text, and explicit done boolean. A partial task remains in progress. No percentage is
+invented when subtasks are absent. Evidence is an agent/user assertion, not independent verification.
+
+Orchestrators should create one ask per request before delegation, keep IDs on the parent
+conversation, and revise each ask when evidence or blockers change. Read unresolved asks on
+resume. This is an explicit tool contract, not automatic semantic extraction: natural-language
+requests are not guaranteed to be inventoried unless the orchestrator records them. No background
+model, paid API, agent execution loop, provider-history edit, or transcript backfill is added.
+Automatic question cards remain distinct from explicit asks. Neither a turn ending, a child
+becoming idle, nor all subtasks being checked automatically completes an ask.
+
+Users can add an open ask in Checklist, reopen it or mark it in progress. Detailed progress,
+blockers, corrections and completion evidence use `set_stream_ask` in v1; ask Done cannot bypass
+that evidence contract through the old question status buttons. Completed asks stay accessible.
+This change preserves history present at upgrade and subsequent captured entries. It does not
+recover previously pruned records. Original provider history remains untouched.
+
+Persistence remains in the existing atomic agent JSON record. Reads page the response; the
+host still loads the complete per-agent metadata and sorts matching feed rows in memory. This
+avoids a storage migration but is not a disk-indexed archive for unlimited scale. Entry excerpts
+remain 4,000 characters. A refresh restarts pagination so state changes during browsing are visible.
+
 ## Protocol and ownership
 
 `packages/protocol/src/companion-stream.ts` defines the existing entry shapes;
@@ -61,6 +105,9 @@ still deduplicates. This does not repair previously missing historical cards.
 `stream.entry.update.request/response` RPCs. `server_info.features.globalStream` gates global
 reads and acknowledged writes; older hosts need updating. The old mutation RPC remains
 accepted for old clients. Existing entry kinds/statuses and snapshot fields are unchanged.
+Ask data is optional metadata on the existing question shape, with open/done mirrored for older
+readers; no new entry kind or legacy status is emitted. `durableStream` gates per-chat pagination
+and checklist. New list scoping and mutation fields are additive and only used on capable hosts.
 New response types are sent only when requested. Read/write permissions match other workspace
 metadata operations. Mutation serialization prevents concurrent question/pin writes from
 replacing each other, and missing items return errors rather than silent success.

@@ -1963,6 +1963,7 @@ export class VoiceAssistantWebSocketServer {
         // COMPAT(companionStream): fork feature, added in fork v0.10.0-beta.1, drop the gate after 2027-03-28.
         companionStream: true,
         globalStream: true,
+        durableStream: true,
         queueEdit: this.agentQueueService !== null,
         queueSendNow: this.agentQueueService !== null,
         steerOnly: true,
