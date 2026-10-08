@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import type { CreationSnapshot } from "@getpaseo/protocol/messages";
+import type { AgentQueueService } from "./agent-queue/service.js";
 import { CreationService } from "./creation/index.js";
 import { MessageReceipts } from "./message-receipts/index.js";
 import { WebSocket, WebSocketServer } from "ws";
@@ -379,6 +380,11 @@ function resolveCapabilityReason(params: {
   return state.message;
 }
 
+/** Collapses an optional injected subsystem to its settled nullable form. */
+function nullable<T>(value?: T | null): T | null {
+  return value ?? null;
+}
+
 function buildServerCapabilities(params: {
   readiness: SpeechReadinessSnapshot | null;
 }): ServerCapabilities | undefined {
@@ -596,6 +602,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly directorySync = new DirectorySyncService();
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
+  private readonly agentQueueService: AgentQueueService | null;
 
   private async validateCompletedCreation(snapshot: CreationSnapshot): Promise<void> {
     if (snapshot.workspace && snapshot.kind === "workspace") {
@@ -662,6 +669,7 @@ export class VoiceAssistantWebSocketServer {
     pluginRuntime?: SessionOptions["pluginRuntime"],
     orchestrationSkills?: SessionOptions["orchestrationSkills"],
     workspaceLabelService?: WorkspaceLabelService,
+    agentQueueService?: AgentQueueService | null,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
@@ -679,6 +687,7 @@ export class VoiceAssistantWebSocketServer {
     this.hubRelationships = hubRelationships ?? null;
     this.pluginRuntime = pluginRuntime;
     this.orchestrationSkills = orchestrationSkills;
+    this.agentQueueService = nullable(agentQueueService);
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.messageReceipts = new MessageReceipts(join(paseoHome, "agent-requests"));
@@ -1481,6 +1490,7 @@ export class VoiceAssistantWebSocketServer {
       worktreesRoot: this.worktreesRoot,
       agentManager: this.agentManager,
       agentStorage: this.agentStorage,
+      agentQueueService: this.agentQueueService ?? undefined,
       messageReceipts: this.messageReceipts,
       creationService: this.creationService,
       projectRegistry: this.projectRegistry,
@@ -1864,6 +1874,10 @@ export class VoiceAssistantWebSocketServer {
         agentTimelinePromptIndex: true,
         // COMPAT(agentHistorySearch): added in v0.3.0, remove gate after 2027-02-07.
         agentHistorySearch: true,
+        // COMPAT(durableAgentQueue): added in 0.11.0-beta.3.fork.1, fork-only —
+        // stock peers never gain it, so the gate lasts as long as stock peers
+        // are supported. Gates the agent.queue.* surface end to end.
+        durableAgentQueueV1: true,
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: true,
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97

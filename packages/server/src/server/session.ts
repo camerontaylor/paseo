@@ -6,6 +6,7 @@ import type {
   SessionEventSubscription,
   UsageReportEntry,
   ProviderUsage,
+  AgentQueueSnapshot,
 } from "@getpaseo/protocol/messages";
 import { relative } from "node:path";
 import { isAbsolute } from "node:path";
@@ -101,6 +102,7 @@ import {
 } from "./workspace-labels/index.js";
 
 import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
+import type { AgentQueueService } from "./agent-queue/service.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
 import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import type {
@@ -441,6 +443,26 @@ const nodeSessionFileSystem: SessionFileSystem = {
 // Stub types for features under development (modules not yet available)
 type AgentMcpTransportFactory = () => Promise<unknown>;
 
+/** Collapses an optional injected subsystem to its settled nullable form. */
+function nullable<T>(value?: T | null): T | null {
+  return value ?? null;
+}
+
+const AGENT_QUEUE_RESPONSE_TYPES = {
+  "agent.queue.enqueue.request": "agent.queue.enqueue.response",
+  "agent.queue.update.request": "agent.queue.update.response",
+  "agent.queue.reorder.request": "agent.queue.reorder.response",
+  "agent.queue.delete.request": "agent.queue.delete.response",
+  "agent.queue.retry.request": "agent.queue.retry.response",
+  "agent.queue.send_now.request": "agent.queue.send_now.response",
+  "agent.queue.list.request": "agent.queue.list.response",
+} as const;
+
+type AgentQueueRequestMessage = Extract<
+  SessionInboundMessage,
+  { type: keyof typeof AGENT_QUEUE_RESPONSE_TYPES }
+>;
+
 export interface SessionOptions {
   browserToolsBroker?: BrowserToolsBroker | null;
   clientId: string;
@@ -461,6 +483,8 @@ export interface SessionOptions {
   worktreesRoot?: string;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
+  /** Absent when the daemon runs without the durable queue (pre-fork peer). */
+  agentQueueService?: AgentQueueService | null;
   messageReceipts: Pick<MessageReceipts, "send">;
   creationService: Pick<CreationService, "create" | "subscribe">;
   projectRegistry: ProjectRegistry;
@@ -717,6 +741,8 @@ export class Session {
   private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
   private readonly clientId: string;
   private readonly authorization: SessionAuthorization;
+  private readonly agentQueueService: AgentQueueService | null;
+  private unsubscribeAgentQueue: (() => void) | null = null;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
   private readonly sessionId: string;
@@ -912,6 +938,8 @@ export class Session {
     });
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
+    this.agentQueueService = nullable(options.agentQueueService);
+    this.unsubscribeAgentQueue = this.subscribeToAgentQueueMutations();
     this.projectRegistry = projectRegistry;
     this.workspaceRegistry = workspaceRegistry;
     this.directorySync = resolveDirectorySync(directorySync);
@@ -2755,6 +2783,10 @@ export class Session {
   }
 
   private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    return this.dispatchAgentQueueMessage(msg) ?? this.dispatchAgentLifecycleOperation(msg);
+  }
+
+  private dispatchAgentLifecycleOperation(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "fetch_agents_request":
         return this.handleFetchAgents(msg);
@@ -3233,6 +3265,9 @@ export class Session {
     try {
       await this.agentStorage.remove(agentId);
       await this.agentManager.deleteAgentState(agentId);
+      // Deleting an agent removes its queue through the normal lifecycle; a
+      // re-created agent with the same id starts from an empty queue.
+      await this.agentQueueService?.deleteForAgent(agentId);
     } catch (error) {
       this.sessionLogger.error({ err: error, agentId }, `Failed to fully delete agent ${agentId}`);
     }
@@ -8400,6 +8435,176 @@ export class Session {
     }
   }
 
+  /**
+   * Mirrors queue mutations to this session's clients. Delivery is gated per
+   * source on the durableAgentQueue capability, so a client whose outbound
+   * union predates the fork never sees an event type it cannot parse.
+   */
+  private subscribeToAgentQueueMutations(): (() => void) | null {
+    const service = this.agentQueueService;
+    if (!service) {
+      return null;
+    }
+    return service.subscribeToMutations((snapshot) => {
+      this.emit({ type: "agent.queue.update", payload: snapshot });
+    });
+  }
+
+  private dispatchAgentQueueMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    if (msg.type === "agent.queue.get_item_images.request") {
+      return this.handleAgentQueueGetItemImagesRequest(msg);
+    }
+    if ((AGENT_QUEUE_RESPONSE_TYPES as Record<string, string>)[msg.type]) {
+      return this.handleAgentQueueRequest(msg as AgentQueueRequestMessage);
+    }
+    return undefined;
+  }
+
+  /**
+   * Queue errors carry a machine-readable code on the response (`error` field)
+   * so clients can branch on revision conflicts without parsing prose.
+   */
+  private agentQueueErrorText(error: unknown): string {
+    if (error instanceof Error && "code" in error && typeof error.code === "string") {
+      return error.code;
+    }
+    return errorToFriendlyMessage(error);
+  }
+
+  private async handleAgentQueueRequest(msg: AgentQueueRequestMessage): Promise<void> {
+    const responseType = AGENT_QUEUE_RESPONSE_TYPES[msg.type];
+    const service = this.agentQueueService;
+    if (!service) {
+      this.emit({
+        type: responseType,
+        payload: {
+          requestId: msg.requestId,
+          agentId: msg.agentId,
+          queue: null,
+          error: "This daemon does not support the durable agent message queue.",
+        },
+      });
+      return;
+    }
+
+    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    if (!resolved.ok) {
+      this.emit({
+        type: responseType,
+        payload: {
+          requestId: msg.requestId,
+          agentId: msg.agentId,
+          queue: null,
+          error: resolved.error,
+        },
+      });
+      return;
+    }
+
+    const agentId = resolved.agentId;
+    try {
+      const queue = await this.applyAgentQueueRequest(service, agentId, msg);
+      this.emit({
+        type: responseType,
+        payload: { requestId: msg.requestId, agentId, queue, error: null },
+      });
+    } catch (error) {
+      this.sessionLogger.warn(
+        { err: error, agentId, type: msg.type },
+        "Agent queue request failed",
+      );
+      this.emit({
+        type: responseType,
+        payload: {
+          requestId: msg.requestId,
+          agentId,
+          queue: null,
+          error: this.agentQueueErrorText(error),
+        },
+      });
+    }
+  }
+
+  private applyAgentQueueRequest(
+    service: AgentQueueService,
+    agentId: string,
+    msg: AgentQueueRequestMessage,
+  ): Promise<AgentQueueSnapshot> {
+    switch (msg.type) {
+      case "agent.queue.enqueue.request":
+        return service.enqueue({
+          agentId,
+          itemId: msg.itemId,
+          text: msg.text,
+          intent: msg.intent,
+          images: msg.images,
+          attachments: msg.attachments,
+          composerAttachments: msg.composerAttachments,
+        });
+      case "agent.queue.update.request":
+        return service.update(agentId, msg.itemId, msg.expectedRevision, {
+          text: msg.text,
+          images: msg.images,
+          attachments: msg.attachments,
+          composerAttachments: msg.composerAttachments,
+        });
+      case "agent.queue.reorder.request":
+        return service.reorder(agentId, msg.itemIds, msg.expectedRevision);
+      case "agent.queue.delete.request":
+        return service.remove(agentId, msg.itemId, msg.expectedRevision);
+      case "agent.queue.retry.request":
+        return service.retry(agentId, msg.itemId, msg.expectedRevision);
+      case "agent.queue.send_now.request":
+        return service.sendNow(agentId, msg.itemId, msg.expectedRevision);
+      case "agent.queue.list.request":
+        return service.list(agentId);
+    }
+  }
+
+  private async handleAgentQueueGetItemImagesRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.queue.get_item_images.request" }>,
+  ): Promise<void> {
+    const emitError = (agentId: string, error: string) => {
+      this.emit({
+        type: "agent.queue.get_item_images.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId,
+          itemId: msg.itemId,
+          images: [],
+          error,
+        },
+      });
+    };
+
+    const service = this.agentQueueService;
+    if (!service) {
+      emitError(msg.agentId, "This daemon does not support the durable agent message queue.");
+      return;
+    }
+    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    if (!resolved.ok) {
+      emitError(msg.agentId, resolved.error);
+      return;
+    }
+
+    try {
+      const images = await service.getItemImages(resolved.agentId, msg.itemId);
+      this.emit({
+        type: "agent.queue.get_item_images.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId: resolved.agentId,
+          itemId: msg.itemId,
+          images,
+          error: null,
+        },
+      });
+    } catch (error) {
+      emitError(resolved.agentId, this.agentQueueErrorText(error));
+    }
+  }
+
   private async handleWaitForFinish(
     agentIdOrIdentifier: string,
     requestId: string,
@@ -8570,6 +8775,23 @@ export class Session {
     if (shouldNotify) notified.add(subscription.owner.source);
   }
 
+  /**
+   * COMPAT(durableAgentQueue): fork addition. Only clients advertising the
+   * capability may receive the queue broadcast, so a client whose outbound
+   * union predates the fork never sees an event type it cannot parse.
+   */
+  private canDeliverEventToSource(
+    message: SessionOutboundMessage,
+    source: object | undefined,
+  ): boolean {
+    if (message.type !== "agent.queue.update") {
+      return true;
+    }
+    return source
+      ? this.supportsForSource(CLIENT_CAPS.durableAgentQueue, source)
+      : this.supports(CLIENT_CAPS.durableAgentQueue);
+  }
+
   private emitSubscribedEvent(message: SessionOutboundMessage, onlySource?: object): boolean {
     const event = sessionEventCategory(message);
     if (!event) return false;
@@ -8579,25 +8801,43 @@ export class Session {
     for (const subscription of this.eventSubscriptions.values()) {
       if (
         !subscription.events.has(event) ||
-        (onlySource && subscription.owner.source !== onlySource)
+        (onlySource && subscription.owner.source !== onlySource) ||
+        !this.canDeliverEventToSource(message, subscription.owner.source)
       )
         continue;
       this.emitEventToOwner(subscription, message, notified);
       delivered.add(subscription.owner.source);
     }
-    // COMPAT(ownedSubscriptions): added in v0.8.0, remove implicit event delivery after 2027-03-09.
+    this.emitImplicitLegacyEvent(message, event, onlySource, delivered);
+    return true;
+  }
+
+  // COMPAT(ownedSubscriptions): added in v0.8.0, remove implicit event delivery after 2027-03-09.
+  private emitImplicitLegacyEvent(
+    message: SessionOutboundMessage,
+    event: SessionEventSubscription,
+    onlySource: object | undefined,
+    delivered: Set<object>,
+  ): void {
     if (this.onMessageToSource && this.clientSources.size > 0) {
       for (const source of this.clientSources.keys()) {
         if (
           (!onlySource || source === onlySource) &&
           !delivered.has(source) &&
           !this.delivery.isModern(source) &&
-          this.wantsEvent(event, source)
+          this.wantsEvent(event, source) &&
+          this.canDeliverEventToSource(message, source)
         )
           this.onMessageToSource(source, this.workspaceSetupMessageForClient(message, source));
       }
-    } else if (delivered.size === 0 && this.wantsEvent(event)) this.onMessage(message);
-    return true;
+      return;
+    }
+    if (
+      delivered.size === 0 &&
+      this.wantsEvent(event) &&
+      this.canDeliverEventToSource(message, undefined)
+    )
+      this.onMessage(message);
   }
 
   private emit(msg: SessionOutboundMessage): void {
@@ -8702,6 +8942,8 @@ export class Session {
     this.unsubscribePluginChanges = null;
     this.unsubscribeWorkspaceMutations?.();
     this.unsubscribeWorkspaceMutations = null;
+    this.unsubscribeAgentQueue?.();
+    this.unsubscribeAgentQueue = null;
     this.agentUpdates.dispose();
     await this.hubExecutionController?.cleanup();
     if (this.unsubscribeTerminalWorkspaceContributionEvents) {
@@ -8780,6 +9022,7 @@ function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubs
     case "script_status_update":
     case "workspace_setup_progress":
     case "agent.provider_subagents.update":
+    case "agent.queue.update":
     case "terminal_attention_required":
     case "activity_log":
     case "hub.execution.agent.update":
