@@ -65,4 +65,13 @@ Android’s release build succeeded from the final assembly. Signature verificat
 
 [Final CI 37728476105](https://github.com/camerontaylor/paseo/actions/runs/37728476105) passed typecheck, lint, formatting, Linux server tests, macOS watcher tests, app tests, SDK, relay, all CLI shards, and both desktop suites. Windows passed 6,359 tests and failed one unchanged worktree-bootstrap assertion comparing the equivalent `RUNNER~1` and `runneradmin` temporary paths.
 
-Browser shard 3 passed 160 tests, failed pinned-prompt transition and archived side-conversation removal, and recovered two flaky tests on retry. The side-conversation failure also occurs in pre-port [baseline CI 37718194103](https://github.com/camerontaylor/paseo/actions/runs/37718194103); the carried broadcast unit test passing does not establish the browser archive flow. Browser shard 2 passed 196 tests and failed an unchanged chat-find setup locator that matches both the user row and pinned prompt; one creation-idempotency test passed on retry. Browser shard 1 also failed; shard 4 is still running. CI is not fully green. Two CodeRabbit attempts failed to connect to its review service; neither produced a review verdict.
+Final browser results:
+
+| Shard | Passed | Failed | Remaining failures |
+| --- | --- | --- | --- |
+| 1 | 157 | 2 | First-prompt authoritative hydration and upward-scroll position |
+| 2 | 196 | 1 | Chat-find setup locator matches both user row and pinned prompt; one other test passed on retry |
+| 3 | 160 | 2 | Pinned-prompt transition and archived side-conversation removal; two other tests passed on retry |
+| 4 | 195 | 5 | Four viewed-timeline locators match both user row and pinned prompt; nested script completion timeout |
+
+The side-conversation archive failure also occurs in pre-port [baseline CI 37718194103](https://github.com/camerontaylor/paseo/actions/runs/37718194103); the carried broadcast unit test passing does not establish the browser archive flow. The baseline also failed upward-scroll position. The other failures remain unresolved; do not label them baseline failures without matching evidence. CI completed with failure. Two CodeRabbit attempts failed to connect to its review service; neither produced a review verdict.
