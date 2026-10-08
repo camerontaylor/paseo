@@ -28,9 +28,13 @@ contains the historical custom CI failure and corrected CLI declaration-resoluti
 commit `fddb4fa8587ae377286ffbea3137df4c53bdc7a9` is independently approved and is an integration
 candidate outside `custom`/`mine`; it awaits integration and CI, and has not been promoted.
 
-The next port gate is the isolated frozen-P0 basket rehearsal using the already approved SHAs. Updating
-the queue root to current `custom` belongs to a later, separately reviewed update-loop batch; it is
-not a prerequisite to the frozen-basket rehearsal. The live manifest is unavailable in this
+The approved four-feature frozen-P0 assembly is P6 HEAD
+`e423a8666a30075a584f4a8e6f646a28054e6af0`. Active integrator follow-up covers isolated runtime
+rollback, a queue-free build, and a full P0 + current-custom + independently approved side-fix
+rehearsal that preserves P0 external/infi carries. The current-custom scratch is unbuilt and omits
+those carries; neither removal nor current-custom inclusion gates are closed. Keep TMAD out of the
+live manifest pending those checks and the remaining review/human gates. Updating the queue root to
+current `custom` remains a separate update-loop decision. The live manifest is unavailable in this
 environment and remains untouched. The npm `fork` tag is a documented trusted-publishing limitation:
 consumers use `latest`/the default install path; a credentialed operator can repair the stale tag if
 needed.
@@ -52,6 +56,7 @@ needed.
 | --- | --- | --- | --- | --- | --- |
 | P0 | `tmad-port/baseline-assembly` (on origin) | frozen manifest SHAs (`tmad-port/evidence/P0-inputs.txt`) | `2bfcd2e19` | APPROVED ([review](tmad-port/evidence/review-P0.md); 3 non-blocking dispositioned) | — (baseline, not a feature) |
 | P2 | `tmad-with-stream` (clone-local, `/tmp/tmad-port/baseline-clone`) | P0 `2bfcd2e19` | `0ff83cbc5` | APPROVED ([review](tmad-port/evidence/review-P2.md)) | — (with/without proof) |
+| P6 frozen basket | `build/tmad-readiness-2026-10-08` (local assembly) | P0 + approved TM-01/02/03/07 | `e423a8666a30075a584f4a8e6f646a28054e6af0` | Four-feature frozen assembly approved; build/server, root typecheck/lint, and scoped tests passed. Queue-free build/runtime rollback and full carry-preserving current-custom rehearsal remain active follow-up ([report](tmad-port/evidence/P6-assembly-2026-10-08.md)). | Queue+Voice / Native Find / Stream |
 | TM-01 Stream | `intake/tmad-stream-flow` (on origin) | `6166a7aca` (release) | `a8241e535` (10 commits) | APPROVED twice ([review](tmad-port/evidence/review-TM-01.md), [delta](tmad-port/evidence/review-TM-01-delta.md)) | Stream |
 | TM-01B bridge | not created | — | — | NOT NEEDED (TM-01 green on beta.3 alone) | Stream |
 | TM-02 queue daemon | `intake/tmad-message-queue` (on origin) | custom floor `cbd1210c7` | `91392d6be` (6 commits) | APPROVED ([review](tmad-port/evidence/review-TM-02.md); no blocking) | Queue+Voice |
