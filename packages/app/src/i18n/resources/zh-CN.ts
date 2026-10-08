@@ -13,6 +13,7 @@ export const zhCN: TranslationResources = {
 
     title: "查找",
     placeholder: "在窗格中查找",
+    updateHost: "更新主机以使用查找",
     close: "关闭查找",
     matches: "查找结果",
     previous: "上一个匹配项",
@@ -751,6 +752,7 @@ export const zhCN: TranslationResources = {
         reloadAgent: "重新加载 Agent",
         reloadAgentTooltip: "重新加载 Agent 以更新 skills、MCPs 或登录状态。",
         close: "关闭",
+        findInChat: "在聊天中查找",
         renameTerminal: "重命名 Terminal",
         viewArtifacts: "查看产出文件",
         renameAgent: "重命名 Agent",

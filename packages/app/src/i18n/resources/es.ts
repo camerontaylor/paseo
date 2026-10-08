@@ -14,6 +14,7 @@ export const es: TranslationResources = {
 
     title: "Buscar",
     placeholder: "Buscar en el panel",
+    updateHost: "Actualiza el host para usar Buscar",
     close: "Cerrar búsqueda",
     matches: "Coincidencias",
     previous: "Coincidencia anterior",
@@ -765,6 +766,7 @@ export const es: TranslationResources = {
         reloadAgentTooltip:
           "Vuelva a cargar el agente para actualizar habilidades, MCP o estado de inicio de sesión.",
         close: "Cerrar",
+        findInChat: "Buscar en el chat",
         renameTerminal: "Cambiar nombre de terminal",
         viewArtifacts: "Ver artefactos",
         renameAgent: "Cambiar nombre del agente",

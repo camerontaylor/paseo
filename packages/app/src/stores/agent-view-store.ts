@@ -6,12 +6,16 @@ interface AgentViewStoreState {
   selectedViews: Record<string, AgentView>;
   setSelectedView: (serverId: string, agentId: string, view: AgentView) => void;
   getSelectedView: (serverId: string, agentId: string) => AgentView;
+  /**
+   * Find is an overlay on Chat, not a sibling view, so it is tracked separately.
+   * Keyed by `${serverId}:${agentId}` because the tab menu opens it for an agent
+   * the panel may not be mounted for yet.
+   */
+  findOpen: Record<string, boolean>;
+  setFindOpen: (serverId: string, agentId: string, open: boolean) => void;
 }
 
-// The source fork's reconciliation (#21) also tracks a per-agent `findOpen`
-// overlay here for native chat Find. Find ships separately (TM-07); when it
-// lands, restore its state alongside this store rather than widening the
-// selected-view union.
+// Find state and the Chat/Artifacts selection have separate lifetimes and keys.
 export const useAgentViewStore = create<AgentViewStoreState>()((set, get) => ({
   selectedViews: {},
   setSelectedView: (serverId, agentId, view) => {
@@ -24,5 +28,14 @@ export const useAgentViewStore = create<AgentViewStoreState>()((set, get) => ({
   },
   getSelectedView: (serverId, agentId) => {
     return get().selectedViews[`${serverId}:${agentId}`] || "chat";
+  },
+  findOpen: {},
+  setFindOpen: (serverId, agentId, open) => {
+    set((state) => ({
+      findOpen: {
+        ...state.findOpen,
+        [`${serverId}:${agentId}`]: open,
+      },
+    }));
   },
 }));
