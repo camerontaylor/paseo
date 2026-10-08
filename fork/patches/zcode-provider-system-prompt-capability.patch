@@ -1,0 +1,11 @@
+diff --git a/server/provider.ts b/server/provider.ts
+--- a/server/provider.ts
++++ b/server/provider.ts
+@@ -118,6 +118,7 @@ export function createProvider(
+   return {
+     id: "zcode",
+     label: "ZCode",
++    supportsSystemPrompt: false,
+     description:
+       "ZCode workspace agent with native planning, tools, and model selection",
+     icon: "icon.svg",
