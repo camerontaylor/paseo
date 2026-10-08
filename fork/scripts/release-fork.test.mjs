@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -488,7 +489,20 @@ test("native migration preserves symlinks, credentials and other provider policy
     symlinkSync("CLAUDE.md", path.join(directory, "AGENTS.md"));
     const source = path.join(directory, "config.json");
     const input = {
-      daemon: { appendSystemPrompt: "Exact policy." },
+      daemon: {
+        appendSystemPrompt: "Exact policy.",
+        agentProfiles: [
+          {
+            id: "zcode",
+            provider: "zcode",
+            model: "GLM-5.3-Flash",
+            modeId: "yolo",
+            thinkingOptionId: "high",
+            featureValues: { plan_mode: false },
+          },
+          { id: "auto", provider: "zcode", thinkingOptionId: "auto" },
+        ],
+      },
       agents: {
         providers: {
           zcode: {
@@ -504,6 +518,7 @@ test("native migration preserves symlinks, credentials and other provider policy
     writeFileSync(source, JSON.stringify(input));
     const options = {
       source,
+      modelProvider: "zai-api",
       output: path.join(directory, "candidate.json"),
       backup: path.join(directory, "backup"),
       agents: [path.join(directory, ".zcode/AGENTS.md"), path.join(directory, "AGENTS.md")],
@@ -511,15 +526,34 @@ test("native migration preserves symlinks, credentials and other provider policy
       runtime: directory,
       node: process.execPath,
     };
+    assert.throws(
+      () => prepareMigration({ ...options, modelProvider: undefined }),
+      /--model-provider/,
+    );
+    input.daemon.agentProfiles[0].thinkingOptionId = "medium";
+    writeFileSync(source, JSON.stringify(input));
+    assert.throws(() => prepareMigration(options), /thinking option is unsupported/);
+    assert.equal(existsSync(options.backup), false);
+    input.daemon.agentProfiles[0].thinkingOptionId = "high";
+    writeFileSync(source, JSON.stringify(input));
     prepareMigration(options);
     assert.equal(readlinkSync(path.join(directory, "AGENTS.md")), "CLAUDE.md");
     assert.match(readFileSync(path.join(directory, "CLAUDE.md"), "utf8"), /^Existing instructions/);
     assert.match(readFileSync(path.join(directory, ".zcode/AGENTS.md"), "utf8"), /Exact policy\./);
     const candidate = JSON.parse(readFileSync(options.output, "utf8"));
     assert.equal(candidate.daemon.appendSystemPrompt, "Exact policy.");
+    assert.equal(
+      candidate.daemon.agentProfiles[0].model,
+      JSON.stringify(["zai-api", "GLM-5.3-Flash", null]),
+    );
+    assert.equal(candidate.daemon.agentProfiles[0].modeId, "yolo");
+    assert.equal(candidate.daemon.agentProfiles[0].thinkingOptionId, "high");
+    assert.deepEqual(candidate.daemon.agentProfiles[0].featureValues, { plan_mode: false });
+    assert.equal(candidate.daemon.agentProfiles[1].thinkingOptionId, undefined);
     assert.deepEqual(candidate.daemon.appendSystemPromptExcludedProviders, ["zcode"]);
     assert.equal(candidate.agents.providers.zcode.extends, undefined);
     assert.equal(candidate.agents.providers.zcode.command, undefined);
+    assert.equal(candidate.agents.providers.zcode.models, undefined);
     assert.equal(candidate.agents.providers.zcode.env.KEEP, "secret-value");
     assert.deepEqual(candidate.agents.providers.codex, input.agents.providers.codex);
     assert.deepEqual(JSON.parse(readFileSync(source, "utf8")), input);
@@ -537,6 +571,20 @@ test("native migration preserves symlinks, credentials and other provider policy
     );
   } finally {
     process.env.HOME = previousHome;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("native catalog setup refuses an unpinned bridge", async () => {
+  const { prepareNativeCatalog } = await import("./prepare-zcode-native-entry.mjs");
+  const directory = mkdtempSync(path.join(tmpdir(), "zcode-catalog-"));
+  try {
+    mkdirSync(path.join(directory, "server/host"), { recursive: true });
+    const bridge = path.join(directory, "server/host/bridge.ts");
+    writeFileSync(bridge, "unreviewed source");
+    assert.throws(() => prepareNativeCatalog(directory), /differs from pinned/);
+    assert.equal(readFileSync(bridge, "utf8"), "unreviewed source");
+  } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 });

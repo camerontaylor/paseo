@@ -4,15 +4,6 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
-## 0.11.1 upgrade candidate — 2026-10-08
-
-Merge upstream `v0.11.1` into the isolated upgrade candidate. Preserve the
-fork's ACP/GJC cancellation proof, side conversations, system-instruction
-refusal and canonical SDK host imports. Apply ACP failed-turn permission
-cleanup only after the fork accepts the terminal's foreground identity.
-Rebuild the ordered carries and validate the Usage compatibility and native
-ZCode lanes before advancing the live Desvio base or deploying the fleet.
-
 ## 0.11.1 base decision — 2026-10-08
 
 Advance `custom` to upstream `v0.11.1`. Preserve cancellation ownership,

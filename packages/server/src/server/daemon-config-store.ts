@@ -261,6 +261,17 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
   return Array.from(compacted).sort();
 }
 
+function pickPolicyPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
+  return {
+    ...(patch.appendSystemPromptExcludedProviders !== undefined
+      ? { appendSystemPromptExcludedProviders: patch.appendSystemPromptExcludedProviders }
+      : {}),
+    ...(patch.appendSystemPrompt !== undefined
+      ? { appendSystemPrompt: patch.appendSystemPrompt }
+      : {}),
+  };
+}
+
 function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
   return {
     ...(patch.relay?.enabled !== undefined ? { relay: { enabled: patch.relay.enabled } } : {}),
@@ -283,12 +294,7 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.enableTerminalAgentHooks !== undefined
       ? { enableTerminalAgentHooks: patch.enableTerminalAgentHooks }
       : {}),
-    ...(patch.appendSystemPromptExcludedProviders !== undefined
-      ? { appendSystemPromptExcludedProviders: patch.appendSystemPromptExcludedProviders }
-      : {}),
-    ...(patch.appendSystemPrompt !== undefined
-      ? { appendSystemPrompt: patch.appendSystemPrompt }
-      : {}),
+    ...pickPolicyPatchFields(patch),
     ...(patch.terminalProfiles !== undefined ? { terminalProfiles: patch.terminalProfiles } : {}),
     ...(patch.agentProfiles !== undefined ? { agentProfiles: patch.agentProfiles } : {}),
     ...(patch.pluginsEnabled !== undefined ? { pluginsEnabled: patch.pluginsEnabled } : {}),

@@ -33,6 +33,9 @@ function configureNativeProvider(config, pluginPath, runtime, node) {
   const provider = config.agents?.providers?.zcode ?? {};
   delete provider.extends;
   delete provider.command;
+  // ACP replacement models have raw IDs and can advertise unsupported thinking.
+  // The native catalog owns model identities and options; the backup retains it.
+  delete provider.models;
   provider.enabled = true;
   provider.env = {
     ...provider.env,
@@ -52,8 +55,35 @@ function configureNativeProvider(config, pluginPath, runtime, node) {
   ];
 }
 
+function migrateNativeProfiles(config, modelProvider) {
+  for (const profile of config.daemon?.agentProfiles ?? []) {
+    if (profile.provider !== "zcode") continue;
+    if (profile.model && !profile.model.startsWith("[")) {
+      if (!modelProvider)
+        throw new Error("Use --model-provider from the verified native catalog for ZCode profiles");
+      profile.model = JSON.stringify([modelProvider, profile.model, null]);
+    }
+    if (profile.thinkingOptionId === "auto") delete profile.thinkingOptionId;
+    if (profile.thinkingOptionId && !["low", "high", "max"].includes(profile.thinkingOptionId))
+      throw new Error(
+        "ZCode profile thinking option is unsupported by the verified native catalog",
+      );
+    if (profile.modeId && !["build", "edit", "yolo", "plan"].includes(profile.modeId))
+      throw new Error("ZCode profile mode is unsupported by the verified native catalog");
+  }
+}
+
 // Produce a candidate config; the operator owns live reload after native validation.
-export function prepareMigration({ source, output, agents, plugin, runtime, node, backup }) {
+export function prepareMigration({
+  source,
+  output,
+  agents,
+  plugin,
+  runtime,
+  node,
+  backup,
+  modelProvider,
+}) {
   const sourcePath = realpathSync(source);
   const outputPath = resolve(output);
   if (
@@ -65,6 +95,7 @@ export function prepareMigration({ source, output, agents, plugin, runtime, node
   if (existsSync(outputPath) || existsSync(backup))
     throw new Error("Use fresh output and backup destinations");
   const config = JSON.parse(readFileSync(sourcePath, "utf8"));
+  migrateNativeProfiles(config, modelProvider);
   const policy = config.daemon?.appendSystemPrompt;
   if (typeof policy !== "string" || !policy.trim())
     throw new Error("Expected a nonempty daemon policy");
@@ -120,11 +151,20 @@ if (process.argv[1] && import.meta.url === new URL(`file://${resolve(process.arg
       runtime: { type: "string" },
       node: { type: "string" },
       backup: { type: "string" },
+      "model-provider": { type: "string" },
     },
   });
   for (const key of ["source", "output", "plugin", "runtime", "node", "backup"])
     if (!values[key]) throw new Error(`Missing --${key}`);
   console.log(
-    JSON.stringify(prepareMigration({ ...values, agents: values.agents ?? [] }), null, 2),
+    JSON.stringify(
+      prepareMigration({
+        ...values,
+        modelProvider: values["model-provider"],
+        agents: values.agents ?? [],
+      }),
+      null,
+      2,
+    ),
   );
 }
