@@ -197,11 +197,11 @@ function captureAgentManagerEvents(): {
   subscribe: ReturnType<typeof vi.fn>;
   dispatch: (event: AgentManagerEvent) => void;
 } {
-  const callbacks: Array<(event: AgentManagerEvent) => void> = [];
+  const callbacks = new Set<(event: AgentManagerEvent) => void>();
   return {
     subscribe: vi.fn((callback: (event: AgentManagerEvent) => void) => {
-      callbacks.push(callback);
-      return () => {};
+      callbacks.add(callback);
+      return () => callbacks.delete(callback);
     }),
     dispatch: (event) => {
       for (const callback of callbacks) callback(event);
@@ -287,6 +287,98 @@ test("side conversation manager events stay off the wire for clients without the
   });
 
   expect(messages).toEqual([]);
+});
+
+test.each([true, false])(
+  "side conversation delivery respects each source capability (capable source last: %s)",
+  async (capableLast) => {
+    const messages: SessionOutboundMessage[] = [];
+    const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+    const events = captureAgentManagerEvents();
+    const session = createSessionForTest({
+      messages,
+      targetedMessages,
+      agentManager: { subscribe: events.subscribe },
+    });
+    const capableSource = {};
+    const otherCapableSource = {};
+    const incapableSource = {};
+    const sources = capableLast
+      ? [incapableSource, capableSource, otherCapableSource]
+      : [capableSource, otherCapableSource, incapableSource];
+    for (const source of sources) {
+      session.updateClientCapabilities(
+        {
+          [CLIENT_CAPS.ownedSubscriptions]: true,
+          [CLIENT_CAPS.sideConversations]: source !== incapableSource,
+        },
+        source,
+      );
+    }
+
+    events.dispatch({
+      type: "side_conversation",
+      event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+    });
+    expect(messages).toEqual([]);
+    expect(targetedMessages).toEqual(
+      [capableSource, otherCapableSource].map((source) => ({
+        source,
+        message: {
+          type: "agent.side_conversation.update",
+          payload: SIDE_CONVERSATION_SNAPSHOT,
+        },
+      })),
+    );
+
+    session.clearAgentTimelineSubscription(capableSource);
+    targetedMessages.length = 0;
+    events.dispatch({
+      type: "side_conversation",
+      event: {
+        type: "remove",
+        parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+        threadId: SIDE_CONVERSATION_RECORD.threadId,
+      },
+    });
+    expect(targetedMessages).toEqual([
+      {
+        source: otherCapableSource,
+        message: {
+          type: "agent.side_conversation.removed",
+          payload: {
+            parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+            threadId: SIDE_CONVERSATION_RECORD.threadId,
+          },
+        },
+      },
+    ]);
+    session.clearAgentTimelineSubscription(otherCapableSource);
+    session.clearAgentTimelineSubscription(incapableSource);
+    targetedMessages.length = 0;
+    events.dispatch({
+      type: "side_conversation",
+      event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+    });
+    expect(messages).toEqual([]);
+    expect(targetedMessages).toEqual([]);
+    await session.cleanup();
+  },
+);
+
+test("side conversation events stop when the client removes its capability", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({ messages, agentManager: { subscribe: events.subscribe } });
+  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true });
+  session.updateClientCapabilities({});
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  expect(messages).toEqual([]);
+  await session.cleanup();
 });
 
 test("side conversation ask leaves the update broadcast to the manager", async () => {
