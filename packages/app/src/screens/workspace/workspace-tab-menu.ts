@@ -21,6 +21,7 @@ export interface WorkspaceTabMenuLabels {
   newSideConversation: string;
   close: string;
   viewArtifacts: string;
+  findInChat: string;
 }
 
 export const DEFAULT_WORKSPACE_TAB_MENU_LABELS: WorkspaceTabMenuLabels = {
@@ -39,6 +40,7 @@ export const DEFAULT_WORKSPACE_TAB_MENU_LABELS: WorkspaceTabMenuLabels = {
   newSideConversation: i18n.t("sideConversations.actions.new"),
   close: i18n.t("workspace.tabs.menu.close"),
   viewArtifacts: i18n.t("workspace.tabs.menu.viewArtifacts", { defaultValue: "View artifacts" }),
+  findInChat: i18n.t("workspace.tabs.menu.findInChat", { defaultValue: "Find in chat" }),
 };
 
 export type WorkspaceTabMenuEntry =
@@ -55,7 +57,8 @@ export type WorkspaceTabMenuEntry =
         | "pencil"
         | "message-circle-plus"
         | "file-code-2"
-        | "x";
+        | "x"
+        | "search";
       hint?: string;
       tooltip?: string;
       disabled?: boolean;
@@ -90,6 +93,7 @@ interface BuildWorkspaceTabMenuEntriesInput {
   onCloseTabsAfter: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
   onViewArtifacts?: (agentId: string) => void;
+  onFindInChat?: (agentId: string) => void;
   labels?: WorkspaceTabMenuLabels;
 }
 
@@ -235,9 +239,30 @@ export function buildWorkspaceTabMenuEntries(
           input.onViewArtifacts?.(agentId);
         },
       });
+      if (!input.onFindInChat) {
+        entries.push({
+          kind: "separator",
+          key: "view-artifacts-separator",
+        });
+      }
+    }
+
+    // Native has no Cmd+F equivalent, so the tab menu is how Find is reached.
+    // Web opens it from the keyboard shortcut in `chat-find/index.web.tsx`.
+    if (surface === "mobile" && input.onFindInChat) {
+      entries.push({
+        kind: "item",
+        key: "find-in-chat",
+        label: labels.findInChat,
+        icon: "search",
+        testID: `${menuTestIDBase}-find-in-chat`,
+        onSelect: () => {
+          input.onFindInChat?.(agentId);
+        },
+      });
       entries.push({
         kind: "separator",
-        key: "view-artifacts-separator",
+        key: "find-in-chat-separator",
       });
     }
     entries.push({
