@@ -240,6 +240,12 @@ export interface SendPromptToAgentParams {
   unarchive?: boolean;
   /** See {@link StartAgentRunOptions.clearPendingPermissions}. */
   clearPendingPermissions?: boolean;
+  /**
+   * Default true: an explicit send replaces an in-flight turn. Queue delivery
+   * passes false, so losing a busy race fails the attempt instead of
+   * interrupting the turn that won it.
+   */
+  replaceRunning?: boolean;
   logger: Logger;
 }
 
@@ -331,7 +337,7 @@ export async function sendPromptToAgent(
     : params.runOptions;
 
   return await startAgentRun(params.agentManager, params.agentId, params.prompt, params.logger, {
-    replaceRunning: true,
+    replaceRunning: params.replaceRunning ?? true,
     activeTurnBehavior: params.activeTurnBehavior,
     clearPendingPermissions: params.clearPendingPermissions,
     runOptions,

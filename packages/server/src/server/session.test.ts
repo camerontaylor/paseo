@@ -524,7 +524,9 @@ vi.mock("./worktree-bootstrap.js", async (importOriginal) => {
 
 interface SessionForTestOptions {
   clientId?: string;
+  clientCapabilities?: Record<string, unknown>;
   permissions?: readonly DaemonPermission[];
+  agentQueueService?: SessionOptions["agentQueueService"];
   agentManager?: { [K in keyof SessionOptions["agentManager"]]?: unknown };
   agentStorage?: { [K in keyof SessionOptions["agentStorage"]]?: unknown };
   github?: Partial<ForgeService & GitHubService>;
@@ -605,6 +607,8 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
     messageReceipts: createMessageReceiptsStub(),
     creationService: createTestCreationService(),
     clientId: options.clientId ?? "test-client",
+    clientCapabilities: options.clientCapabilities,
+    agentQueueService: options.agentQueueService,
     onMessage: (message) => messages.push(message),
     ...(options.targetedMessages
       ? {
@@ -6046,4 +6050,214 @@ test("provider snapshots preserve versionless visibility while capabilities upda
     "plugin-provider",
   ]);
   expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
+});
+
+test("a legacy send_agent_message_request never reaches the queue service", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-legacy-send-queue-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({
+        get: vi.fn().mockResolvedValue(undefined),
+      }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      agentQueueService: queueService,
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
+        hasInFlightRun: vi.fn(() => false),
+        tryRunOutOfBand: vi.fn(() => false),
+        streamAgent: vi.fn(() => (async function* () {})()),
+        waitForAgentRunStart: vi.fn(async () => {}),
+        waitForAgentClose: vi.fn(async () => {}),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue({ id: agentId, provider: "codex", cwd: "/tmp/x" }),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+
+    await session.handleMessage({
+      type: "send_agent_message_request",
+      requestId: "legacy-1",
+      agentId,
+      text: "keep working",
+      messageId: "legacy-msg-1",
+    });
+
+    // The released response shape, produced by the receipt-backed legacy path.
+    expect(messages).toEqual([
+      {
+        type: "send_agent_message_response",
+        payload: { requestId: "legacy-1", agentId, accepted: true, error: null },
+      },
+    ]);
+    // Queue admission never happened and nothing was stored.
+    expect((await queueService.list(agentId)).items).toEqual([]);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("agent.queue.enqueue.request admits through the queue service and mirrors the broadcast", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-rpc-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      agentQueueService: queueService,
+      clientCapabilities: { [CLIENT_CAPS.durableAgentQueue]: true },
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue(undefined),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+
+    await session.handleMessage({
+      type: "agent.queue.enqueue.request",
+      requestId: "q-1",
+      agentId,
+      itemId: "item-1",
+      text: "queued from the phone",
+      intent: "queue",
+    });
+
+    const response = messages.find(
+      (message) => message.type === "agent.queue.enqueue.response",
+    ) as Extract<SessionOutboundMessage, { type: "agent.queue.enqueue.response" }>;
+    expect(response.payload.error).toBeNull();
+    expect(response.payload.queue?.items[0]).toMatchObject({
+      id: "item-1",
+      text: "queued from the phone",
+      intent: "queue",
+      deliveryState: "pending",
+    });
+
+    // The mutation broadcast reaches the capability-advertising client.
+    const broadcast = messages.find((message) => message.type === "agent.queue.update") as Extract<
+      SessionOutboundMessage,
+      { type: "agent.queue.update" }
+    >;
+    expect(broadcast.payload.items.map((item) => item.id)).toEqual(["item-1"]);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("a client without the durableAgentQueue capability never sees the queue broadcast", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-gate-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      agentQueueService: queueService,
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue(undefined),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+
+    await session.handleMessage({
+      type: "agent.queue.enqueue.request",
+      requestId: "q-1",
+      agentId,
+      itemId: "item-1",
+      text: "hidden from old clients",
+      intent: "queue",
+    });
+
+    expect(messages.some((message) => message.type === "agent.queue.update")).toBe(false);
+    expect(messages.some((message) => message.type === "agent.queue.enqueue.response")).toBe(true);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("delete_agent_request removes the agent's queue through the lifecycle", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-delete-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    await queueService.enqueue({
+      agentId,
+      itemId: "item-1",
+      text: "queued",
+      intent: "queue",
+    });
+    const session = createSessionForTest({
+      messages,
+      agentQueueService: queueService,
+      agentManager: {
+        listAgents: vi.fn(() => []),
+        getAgent: vi.fn(() => null),
+        deleteAgentState: vi.fn(async () => {}),
+        flush: vi.fn(async () => {}),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue({ id: agentId, provider: "codex", cwd: "/tmp/x" }),
+        list: vi.fn().mockResolvedValue([]),
+        remove: vi.fn(async () => {}),
+      },
+    });
+
+    await session.handleMessage({
+      type: "delete_agent_request",
+      agentId,
+      requestId: "del-1",
+    });
+
+    expect(messages.some((message) => message.type === "agent_deleted")).toBe(true);
+    expect((await queueService.list(agentId)).items).toEqual([]);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
 });
