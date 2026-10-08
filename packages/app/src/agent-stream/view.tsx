@@ -70,6 +70,8 @@ import { resolveStreamRenderStrategy } from "./strategy-resolver";
 import { type StreamSegmentRenderers, type StreamViewportHandle } from "./strategy";
 import { ChatOutlineRail } from "@/agent-stream/chat-outline/rail";
 import { useChatOutline } from "@/agent-stream/chat-outline/use-chat-outline";
+import { PinnedPrompt } from "@/agent-stream/pinned-prompt/pinned-prompt";
+import { usePinnedPrompt } from "@/agent-stream/pinned-prompt/use-pinned-prompt";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { planTimelineTailFetch } from "@/timeline/timeline-sync-plan";
 import {
@@ -640,6 +642,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       visibleMessageIds,
       revealLoadedMessage: revealLoadedHistory,
     });
+    const pinnedPrompt = usePinnedPrompt({
+      history: baseRenderModel.history,
+      liveHead: baseRenderModel.segments.liveHead,
+    });
+    const jumpToPinnedPrompt = useStableEvent((itemId: string) => {
+      viewportRef.current?.scrollToMessage?.(itemId);
+    });
 
     useImperativeHandle(
       ref,
@@ -1034,6 +1043,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           ? undefined
           : (layoutHistoryItemById.get(rowId) ?? layoutLiveHeadItemById.get(rowId));
       chatOutline.reportReadingPosition(row?.item.timelineCursor?.seq ?? null);
+      pinnedPrompt.reportReadingPosition(rowId);
     });
 
     const renderHistoryRow = useCallback(
@@ -1152,6 +1162,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               prompts={chatOutline.prompts}
               activePrompt={chatOutline.activePrompt}
               onJumpToPrompt={chatOutline.jumpToPrompt}
+            />
+            <PinnedPrompt
+              pinnedId={pinnedPrompt.pinnedId}
+              promptById={pinnedPrompt.promptById}
+              onJumpToPrompt={jumpToPinnedPrompt}
             />
             {(!isNearBottom || isTimelineDetached) && (
               <View style={scrollToBottomContainerStyle} pointerEvents="box-none">
