@@ -2,6 +2,7 @@ import { searchTimeline } from "./agent/chat-search/index.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type {
+  AgentCompanionUpdateEntryRequestMessage,
   SessionEventSubscription,
   UsageReportEntry,
   ProviderUsage,
@@ -119,6 +120,7 @@ import {
   detachAgentCommand,
   setAgentModeCommand,
   updateAgentCommand,
+  updateCompanionEntryCommand,
 } from "./agent/lifecycle-command.js";
 import { buildStoredAgentPayload, toAgentPayload } from "./agent/agent-projections.js";
 import {
@@ -3102,6 +3104,12 @@ export class Session {
 
   private async dispatchMiscMessage(msg: SessionInboundMessage): Promise<void> {
     switch (msg.type) {
+      case "agent.companion.update_entry.request":
+        await this.handleCompanionUpdateEntryRequest(msg);
+        return;
+      case "agent.artifacts.scan.request":
+        await this.handleAgentArtifactsScanRequest(msg.agentId, msg.requestId, msg.limit);
+        return;
       case "list_commands_request":
         await this.handleListCommandsRequest(msg);
         return;
@@ -3407,6 +3415,102 @@ export class Session {
       didUnarchive,
       originalArchivedAt: matched.archivedAt ?? null,
     };
+  }
+
+  private async handleAgentArtifactsScanRequest(
+    agentId: string,
+    requestId: string,
+    limit: number | undefined,
+  ): Promise<void> {
+    this.sessionLogger.info(
+      { agentId, requestId, limit },
+      "Scanning agent working dir for artifacts",
+    );
+    try {
+      // Backfill targets are usually closed agents, which are not resident in
+      // the manager until something loads them.
+      await ensureAgentLoaded(agentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      const result = await this.agentManager.scanAgentArtifacts(
+        agentId,
+        limit !== undefined ? { limit } : {},
+      );
+      this.emit({
+        type: "agent.artifacts.scan.response",
+        payload: {
+          requestId,
+          agentId,
+          accepted: true,
+          error: null,
+          addedOrUpdated: result.addedOrUpdated,
+          total: result.total,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.artifacts.scan.response",
+        payload: {
+          requestId,
+          agentId,
+          accepted: false,
+          error: error instanceof Error ? error.message : String(error),
+          addedOrUpdated: 0,
+          total: 0,
+        },
+      });
+    }
+  }
+
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  private async handleCompanionUpdateEntryRequest(
+    msg: AgentCompanionUpdateEntryRequestMessage,
+  ): Promise<void> {
+    this.sessionLogger.info(
+      {
+        agentId: msg.agentId,
+        requestId: msg.requestId,
+        action: msg.action,
+      },
+      "session: agent.companion.update_entry.request",
+    );
+
+    let accepted = true;
+    let error: string | null = null;
+    try {
+      const result = await updateCompanionEntryCommand(
+        { agentManager: this.agentManager },
+        {
+          agentId: msg.agentId,
+          entryId: msg.entryId,
+          action: msg.action,
+          status: msg.status,
+          text: msg.text,
+          answerText: msg.answerText,
+          sourceId: msg.sourceId,
+        },
+      );
+      if (!result.accepted) {
+        accepted = false;
+        error = result.error ?? "Failed to update companion entry";
+        this.sessionLogger.warn({ error }, "Failed to update companion entry");
+      }
+    } catch (err) {
+      accepted = false;
+      error = err instanceof Error ? err.message : String(err);
+      this.sessionLogger.error({ err }, "session: agent.companion.update_entry.request error");
+    }
+    this.emit({
+      type: "agent.companion.update_entry.response",
+      payload: {
+        requestId: msg.requestId,
+        agentId: msg.agentId,
+        accepted,
+        error,
+      },
+    });
   }
 
   private async handleUpdateAgentRequest(

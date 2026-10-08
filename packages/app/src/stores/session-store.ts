@@ -24,6 +24,7 @@ import {
 import type { PendingPermission } from "@/types/shared";
 import type { ComposerAttachment } from "@/attachments/types";
 import type { AgentLifecycleStatus } from "@getpaseo/protocol/agent-lifecycle";
+import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 import type {
   AgentPermissionRequest,
   AgentFeature,
@@ -31,6 +32,7 @@ import type {
   AgentMode,
   AgentCapabilityFlags,
   AgentUsage,
+  AgentArtifact,
   AgentPersistenceHandle,
 } from "@getpaseo/protocol/agent-types";
 import type {
@@ -100,6 +102,8 @@ export interface Agent {
   parentAgentId: string | null;
   labels: Record<string, string>;
   projectPlacement?: ProjectPlacementPayload | null;
+  artifacts?: AgentArtifact[];
+  companionEntries?: CompanionEntry[];
 }
 
 export interface WorkspaceDescriptor {

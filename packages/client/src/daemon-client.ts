@@ -3022,6 +3022,56 @@ export class DaemonClient {
     }
   }
 
+  async updateCompanionEntry(input: {
+    agentId: string;
+    entryId?: string;
+    action: "update_status" | "add_pin" | "remove_pin" | "add_q_and_a";
+    status?: "open" | "reviewed" | "done";
+    text?: string;
+    answerText?: string;
+    sourceId?: string;
+  }): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.companion.update_entry.response">({
+        message: {
+          type: "agent.companion.update_entry.request",
+          agentId: input.agentId,
+          entryId: input.entryId,
+          action: input.action,
+          status: input.status,
+          text: input.text,
+          answerText: input.answerText,
+          sourceId: input.sourceId,
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "updateCompanionEntry rejected");
+    }
+  }
+
+  /**
+   * Backfills an agent's artifact feed from files already on disk. Needed for
+   * agents whose work predates the artifact feed, whose feeds are otherwise
+   * permanently empty.
+   */
+  async scanAgentArtifacts(
+    agentId: string,
+    options?: { limit?: number },
+  ): Promise<{ addedOrUpdated: number; total: number }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.artifacts.scan.response">({
+        message: {
+          type: "agent.artifacts.scan.request",
+          agentId,
+          ...(options?.limit !== undefined ? { limit: options.limit } : {}),
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "scanAgentArtifacts rejected");
+    }
+    return { addedOrUpdated: payload.addedOrUpdated, total: payload.total };
+  }
+
   async renameProject(
     projectId: string,
     customName: string | null,

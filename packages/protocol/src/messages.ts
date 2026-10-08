@@ -17,6 +17,7 @@ export {
 import { TerminalProfileSchema } from "./terminal-profile.js";
 export { TerminalProfileSchema, type TerminalProfile } from "./terminal-profile.js";
 import { z } from "zod";
+import { CompanionEntrySchema } from "./companion-stream.js";
 import { TerminalActivitySchema } from "./terminal-activity.js";
 import { CLIENT_CAPS } from "./client-capabilities.js";
 import { AGENT_LIFECYCLE_STATUSES } from "./agent-lifecycle.js";
@@ -807,6 +808,18 @@ const AgentActiveTurnPayloadSchema = z.object({
   startedAt: z.string().nullable(),
 });
 
+export const AgentArtifactSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  kind: z.enum(["html", "markdown", "image", "svg", "pdf", "diff"]),
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type AgentArtifactPayload = z.infer<typeof AgentArtifactSchema>;
+
 export const AgentSnapshotPayloadSchema = z.object({
   id: z.string(),
   provider: AgentProviderSchema,
@@ -836,6 +849,8 @@ export const AgentSnapshotPayloadSchema = z.object({
   attentionTimestamp: z.string().nullable().optional(),
   archivedAt: z.string().nullable().optional(),
   providerUnavailable: z.boolean().optional(),
+  artifacts: z.array(AgentArtifactSchema).optional(),
+  companionEntries: z.array(CompanionEntrySchema).optional(),
 });
 
 export type AgentSnapshotPayload = z.infer<typeof AgentSnapshotPayloadSchema>;
@@ -934,6 +949,53 @@ export const UpdateAgentRequestMessageSchema = z.object({
   name: z.string().optional(),
   labels: z.record(z.string(), z.string()).optional(),
   requestId: z.string(),
+});
+
+// COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+// Ported from the source fork's flat `update_companion_entry_request`; renamed to the
+// dotted namespace so the two contracts stay distinct on the wire.
+export const AgentCompanionUpdateEntryRequestMessageSchema = z.object({
+  type: z.literal("agent.companion.update_entry.request"),
+  agentId: z.string(),
+  entryId: z.string().optional(),
+  action: z.enum(["update_status", "add_pin", "remove_pin", "add_q_and_a"]),
+  status: z.enum(["open", "reviewed", "done"]).optional(),
+  text: z.string().optional(),
+  answerText: z.string().optional(),
+  sourceId: z.string().optional(),
+  requestId: z.string(),
+});
+
+export const AgentCompanionUpdateEntryResponseMessageSchema = z.object({
+  type: z.literal("agent.companion.update_entry.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const AgentArtifactsScanRequestMessageSchema = z.object({
+  type: z.literal("agent.artifacts.scan.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+  /** Overrides the daemon's default retention ceiling for this scan. */
+  limit: z.number().int().positive().optional(),
+});
+
+export const AgentArtifactsScanResponseMessageSchema = z.object({
+  type: z.literal("agent.artifacts.scan.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+    /** Files newly recorded or refreshed by this scan. */
+    addedOrUpdated: z.number().int().nonnegative(),
+    /** Size of the agent's artifact list after the scan. */
+    total: z.number().int().nonnegative(),
+  }),
 });
 
 // The daemon accepts only image bytes chosen or acquired by the client. It must
@@ -3200,6 +3262,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ArchiveAgentRequestMessageSchema,
   CloseItemsRequestMessageSchema,
   UpdateAgentRequestMessageSchema,
+  AgentCompanionUpdateEntryRequestMessageSchema,
+  AgentArtifactsScanRequestMessageSchema,
   ProjectRenameRequestSchema,
   ProjectIconSetRequestSchema,
   ProjectRemoveRequestSchema,
@@ -3652,6 +3716,11 @@ export const ServerInfoStatusPayloadSchema = z
         workspaceRecovery: z.boolean().optional(),
         // COMPAT(workspaceFileEditing): added in v0.2.0, remove after 2027-01-18 once daemon floor >= v0.2.0.
         workspaceFileEditing: z.boolean().optional(),
+        // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+        // Deliberately not the source fork's `companionStream`/`artifactFeed` flags: a client
+        // that saw those names would expect the source's flat companion RPC, which this
+        // daemon does not accept.
+        companionStreamPortV1: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: z.boolean().optional(),
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
@@ -6885,6 +6954,8 @@ export const AgentSkillsImportLegacySelectionResponseSchema = z.object({
 });
 
 export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
+  AgentCompanionUpdateEntryResponseMessageSchema,
+  AgentArtifactsScanResponseMessageSchema,
   BrowserHostRegisterResponseSchema,
   SubscriptionReleaseResponseSchema,
   SessionEventsSetSubscriptionResponseSchema,
@@ -7362,6 +7433,18 @@ export type LoopStopRequest = z.infer<typeof LoopStopRequestSchema>;
 export type ResumeAgentRequestMessage = z.infer<typeof ResumeAgentRequestMessageSchema>;
 export type DeleteAgentRequestMessage = z.infer<typeof DeleteAgentRequestMessageSchema>;
 export type UpdateAgentRequestMessage = z.infer<typeof UpdateAgentRequestMessageSchema>;
+export type AgentCompanionUpdateEntryRequestMessage = z.infer<
+  typeof AgentCompanionUpdateEntryRequestMessageSchema
+>;
+export type AgentCompanionUpdateEntryResponseMessage = z.infer<
+  typeof AgentCompanionUpdateEntryResponseMessageSchema
+>;
+export type AgentArtifactsScanRequestMessage = z.infer<
+  typeof AgentArtifactsScanRequestMessageSchema
+>;
+export type AgentArtifactsScanResponseMessage = z.infer<
+  typeof AgentArtifactsScanResponseMessageSchema
+>;
 export type ProjectIconSource = z.infer<typeof ProjectIconSourceSchema>;
 export type ProjectRenameRequest = z.infer<typeof ProjectRenameRequestSchema>;
 export type ProjectIconSetRequest = z.infer<typeof ProjectIconSetRequestSchema>;
