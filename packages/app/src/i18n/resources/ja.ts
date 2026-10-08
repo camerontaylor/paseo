@@ -277,6 +277,11 @@ export const ja: TranslationResources = {
       implement: "実装",
       question: "どのように続けますか？",
       proposedPlan: "提案されたプラン",
+      copyContent: "内容をコピー",
+      copyLink: "リンクをコピー",
+      contentCopied: "プランをコピーしました",
+      linkCopied: "セッションリンクをコピーしました",
+      copyFailed: "プランをコピーできませんでした。",
     },
   },
   agentPanel: {

@@ -274,6 +274,11 @@ export const ar: TranslationResources = {
       implement: "ينفذ",
       question: "كيف تريد المتابعة؟",
       proposedPlan: "الخطة المقترحة",
+      copyContent: "نسخ المحتوى",
+      copyLink: "نسخ الرابط",
+      contentCopied: "تم نسخ الخطة",
+      linkCopied: "تم نسخ رابط الجلسة",
+      copyFailed: "تعذر نسخ الخطة.",
     },
   },
   agentPanel: {
