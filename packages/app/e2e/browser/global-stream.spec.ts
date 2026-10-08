@@ -161,20 +161,17 @@ test("durable checklist pages, evidence and reopen survive reconnect", async ({
     await feed.getByRole("button", { name: "Load more" }).click();
     await expect(feed.getByRole("button", { name: "Load more" })).toHaveCount(0);
     const completed = feed.getByTestId("companion-entry-ask:ask-1");
-    // FlatList unmounts distant rows. Scroll its viewport to mount the target
-    // before asking Playwright to scroll the card itself into view.
-    await feed.evaluate((element) => element.scrollTo({ top: 0 }));
-    await expect
-      .poll(
-        async () => {
-          if (await completed.count()) return true;
-          await feed.evaluate((element) => element.scrollBy({ top: element.clientHeight * 0.75 }));
-          return false;
-        },
-        { timeout: 30_000, intervals: [100] },
-      )
-      .toBe(true);
-    await completed.scrollIntoViewIfNeeded();
+    // FlatList may mount then evict a row while correcting estimated heights.
+    // Move incrementally until the row mounts, then center it synchronously in
+    // the browser. Retry the viewport assertion if height correction evicts it.
+    await expect(async () => {
+      await feed.evaluate((element) => {
+        const target = element.querySelector('[data-testid="companion-entry-ask:ask-1"]');
+        if (target) target.scrollIntoView({ block: "center", behavior: "instant" });
+        else element.scrollBy({ top: element.clientHeight * 0.5 });
+      });
+      await expect(completed).toBeInViewport({ timeout: 1_000 });
+    }).toPass({ timeout: 30_000, intervals: [500] });
     await expect(
       completed.getByText("Completion evidence: Acceptance recorded", { exact: true }),
     ).toBeVisible();

@@ -37,6 +37,9 @@ Prepared from main `4357e22db` (including queue receipt fix PR56), Stream PR57
 `7f24232a6`, session favorites PR58 `b25764ec9`, and optional voice PR59 `f93c83685`.
 The pre-version combined tree is `4adbc80e5b5e807bed926e22a7483f0b7742d399`.
 This records source scope, not merge approval or installed acceptance.
+Stream test-only follow-up `4eebe5136` waits for a virtualized completed card to settle
+in the viewport. It changes no runtime source; retain exact old/new test blobs in the
+release source-equivalence receipt before reusing an already signed candidate.
 
 All existing register features are retained in this candidate. Session favorites and durable
 Stream are additions; optional OpenAI voice retains the existing Paseo provider and requires
