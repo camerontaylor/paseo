@@ -2,6 +2,14 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  LATEST_PROTOCOL_VERSION,
+  SUPPORTED_PROTOCOL_VERSIONS,
+} from "@modelcontextprotocol/sdk/types.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import express from "express";
+import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { realpathSync } from "node:fs";
 import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -6318,4 +6326,85 @@ describe("agent snapshot MCP serialization", () => {
     expect(content).not.toContain("second answer");
     expect(content).not.toContain("first answer");
   });
+});
+
+it("MCP negotiates unsupported initialization dates and rejects unsupported request headers promptly", async () => {
+  const app = express();
+  app.use(express.json());
+  async function handleMcpRequest(request: express.Request, response: express.Response) {
+    const server = new Server(
+      { name: "protocol-test", version: "1" },
+      { capabilities: { tools: {} } },
+    );
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+    response.on("close", () => {
+      void server.close();
+    });
+    await server.connect(transport);
+    await transport.handleRequest(request, response, request.body);
+  }
+  app.post("/mcp", (request, response) => {
+    void handleMcpRequest(request, response).catch((error: unknown) => {
+      response.status(500).json({ error: String(error) });
+    });
+  });
+  const httpServer = createServer(app);
+  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = httpServer.address();
+    if (!address || typeof address === "string") throw new Error("Missing test server address");
+    const url = `http://127.0.0.1:${address.port}/mcp`;
+    const headers = {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    };
+    const initialized = await fetch(url, {
+      method: "POST",
+      headers,
+      signal: AbortSignal.timeout(5000),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2026-07-2X",
+          capabilities: {},
+          clientInfo: { name: "future", version: "1" },
+        },
+      }),
+    });
+    expect(initialized.status).toBe(200);
+    expect(await initialized.json()).toMatchObject({
+      id: 1,
+      result: { protocolVersion: LATEST_PROTOCOL_VERSION },
+    });
+    const rejected = await fetch(url, {
+      method: "POST",
+      headers: { ...headers, "MCP-Protocol-Version": "2026-07-2X" },
+      signal: AbortSignal.timeout(5000),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toEqual({
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: -32000,
+        message: `Bad Request: Unsupported protocol version: 2026-07-2X (supported versions: ${SUPPORTED_PROTOCOL_VERSIONS.join(", ")})`,
+      },
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      httpServer.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      }),
+    );
+  }
 });
