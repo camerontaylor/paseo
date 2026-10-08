@@ -18,6 +18,7 @@ import {
   type ManagedAgent,
 } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
+import type { AgentStreamCoalescer } from "./agent-stream-coalescer.js";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
 import { toAgentPayload } from "./agent-projections.js";
 import { projectTimelineRows } from "./timeline-projection.js";
@@ -5897,6 +5898,40 @@ test("getAgent does not expose committed history internals once manager owns the
     limit: 0,
   });
   expect(fetched.rows.map((row) => row.seq)).toEqual([1, 2]);
+});
+
+test("drops a deferred coalesced flush after timeline teardown", () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-flush-teardown-"));
+  vi.useFakeTimers();
+  try {
+    const manager = new AgentManager({
+      clients: {},
+      registry: new AgentStorage(join(workdir, "agents"), logger),
+      logger,
+    });
+    const internals = asInternals<{
+      timelineStore: InMemoryAgentTimelineStore;
+      agentStreamCoalescer: AgentStreamCoalescer;
+    }>(manager);
+    const agentId = "torn-down-agent";
+    internals.timelineStore.initialize(agentId);
+    const event: AgentStreamEvent = {
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text: "first" },
+    };
+    internals.agentStreamCoalescer.handle(agentId, event);
+    internals.agentStreamCoalescer.handle(agentId, {
+      ...event,
+      item: { type: "assistant_message", text: "trailing" },
+    });
+    internals.timelineStore.delete(agentId);
+    expect(() => vi.advanceTimersByTime(61)).not.toThrow();
+    expect(internals.timelineStore.has(agentId)).toBe(false);
+  } finally {
+    vi.useRealTimers();
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test("streams coalesced assistant chunks and retains the projected message", async () => {
