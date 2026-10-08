@@ -38,3 +38,5 @@ Physical iOS/Android captures, Korean UI review, voice-device capture/playback, 
 ## Candidate validation
 
 Server/app dependencies build, typecheck, lint, and formatting passed. All 30 focused suites passed serially; the adapted native audio and prompt suites also passed (3 and 17 tests). The two-client queue E2E passed both tests. The synthetic-home startup/recovery probe recovered `pending-copy-1` at revision 1 with identical queue bytes before/read/stop and zero fake-provider turns. It first creates an isolated fake agent so the queue fixture references a real persisted record.
+
+Clean-checkout CI caught the missing native-audio declaration build; app `pretypecheck` now owns it. The carried script-health fixture now implements terminal activity. Pluto's Speak expectations retain upstream's deliberately independent voice-tool policy. The Hub leak check tracks newly acquired subscriptions: closed setup clients can expire after the 90-second reconnect grace, making an exact total subscriber count nondeterministic. These are build/test adaptations; they do not change deployed runtime behavior.

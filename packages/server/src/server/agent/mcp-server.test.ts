@@ -5713,7 +5713,7 @@ describe("speak MCP tool", () => {
   });
 
   it.each([{ enabled: false }, { disabledTools: ["speak"] }])(
-    "honors speak disablement in native and MCP catalogs: %j",
+    "keeps speak available independently of the Paseo tool policy: %j",
     async (paseoToolPolicy) => {
       const { agentManager, agentStorage } = createTestDeps();
       const options = {
@@ -5725,18 +5725,15 @@ describe("speak MCP tool", () => {
         logger,
       };
       const catalog = createPaseoToolCatalog(options);
-      expect(catalog.getTool("speak")).toBeUndefined();
+      expect(catalog.getTool("speak")).toBeDefined();
       const server = await createAgentMcpServer(options);
       const client = await connectInMemoryMcpClient(server);
       try {
-        if ("enabled" in paseoToolPolicy && paseoToolPolicy.enabled === false) {
-          await expect(client.listTools()).rejects.toThrow("Method not found");
-        } else {
-          expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain("speak");
-          expect(
-            (await client.callTool({ name: "speak", arguments: { text: "Private" } })).isError,
-          ).toBe(true);
-        }
+        expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("speak");
+        expect(
+          (await client.callTool({ name: "speak", arguments: { text: "Hello" } }))
+            .structuredContent,
+        ).toMatchObject({ ok: false });
       } finally {
         await client.close();
         await server.close();
