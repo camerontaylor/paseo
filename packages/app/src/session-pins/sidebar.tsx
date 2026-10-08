@@ -78,7 +78,7 @@ const styles = StyleSheet.create((theme) => ({
   section: { paddingHorizontal: theme.spacing[2], paddingBottom: theme.spacing[2] },
   heading: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     padding: theme.spacing[2],
   },

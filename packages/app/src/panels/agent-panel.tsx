@@ -1359,6 +1359,10 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     [t],
   );
   const showViewSwitcher = companionStreamSupported || artifactFeedSupported;
+  const viewSwitcherStyle = useMemo(
+    () => [styles.viewSwitcher, !isChatVisible && styles.streamViewSwitcher],
+    [isChatVisible],
+  );
 
   return (
     <RewindComposerRestoreProvider
@@ -1370,15 +1374,17 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
         {/* Floats over the chat instead of sitting in its vertical stack: the host
             capability can arrive after the first prompt has painted, and a band that
             appears then would shift every row (upstream's hydration specs pin that). */}
-        <View style={styles.viewSwitcher} pointerEvents="box-none">
-          {showViewSwitcher ? <SegmentedControl
+        <View style={viewSwitcherStyle} pointerEvents="box-none">
+          {showViewSwitcher ? (
+            <SegmentedControl
               options={viewOptions}
               value={selectedView}
               onValueChange={handleSetSelectedView}
               size={isCompact ? "sm" : "xs"}
               testID="agent-view-switcher"
               segmentStyle={isCompact ? styles.compactSegment : undefined}
-            /> : null}
+            />
+          ) : null}
           <SessionPinButton serverId={serverId} agentId={agentId} />
         </View>
         {dock}
@@ -1846,6 +1852,14 @@ const styles = StyleSheet.create((theme) => ({
     zIndex: 20,
     flexDirection: "row",
     alignItems: "flex-start",
+  },
+  streamViewSwitcher: {
+    position: "relative",
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
   },
   timelineSyncCalloutRail: {
     width: "100%",

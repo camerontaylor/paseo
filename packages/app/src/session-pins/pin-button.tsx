@@ -4,14 +4,14 @@ import { useTranslation } from "react-i18next";
 import { Pin, PinOff } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { useToast } from "@/contexts/toast-context";
+import { Alert } from "@/components/ui/alert";
+import { View, StyleSheet } from "react-native";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
 import { sessionPinnedAt, setSessionPinned } from "./model";
 
 export function SessionPinButton({ serverId, agentId }: { serverId: string; agentId: string }) {
   const { t } = useTranslation();
-  const toast = useToast();
   const compact = useIsCompactFormFactor();
   const pending = useRef(false);
   const agent = useSessionStore(
@@ -26,7 +26,6 @@ export function SessionPinButton({ serverId, agentId }: { serverId: string; agen
       if (!client || !agent) throw new Error(t("sidebar.workspace.toasts.hostDisconnected"));
       await setSessionPinned(agent, !pinned, (id, updates) => client.updateAgent(id, updates));
     },
-    onError: (error) => toast.error(error.message),
     onSettled: () => {
       pending.current = false;
     },
@@ -43,17 +42,33 @@ export function SessionPinButton({ serverId, agentId }: { serverId: string; agen
     ? t("sessionPins.unpin", "Unpin session")
     : t("sessionPins.pin", "Pin session");
   return (
-    <Button
-      variant="ghost"
-      size={compact ? "md" : "sm"}
-      leftIcon={pinned ? PinOff : Pin}
-      accessibilityLabel={label}
-      accessibilityState={accessibilityState}
-      testID="session-pin-toggle"
-      loading={mutation.isPending}
-      onPress={handlePress}
-    >
-      {label}
-    </Button>
+    <View style={styles.container}>
+      <Button
+        variant="ghost"
+        style={compact ? styles.compactButton : undefined}
+        size={compact ? "md" : "sm"}
+        leftIcon={pinned ? PinOff : Pin}
+        accessibilityLabel={label}
+        accessibilityState={accessibilityState}
+        testID="session-pin-toggle"
+        loading={mutation.isPending}
+        onPress={handlePress}
+      >
+        {label}
+      </Button>
+      {mutation.error ? (
+        <Alert
+          variant="error"
+          size="sm"
+          description={mutation.error.message}
+          testID="session-pin-error"
+        />
+      ) : null}
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { maxWidth: "100%" },
+  compactButton: { minHeight: 44 },
+});

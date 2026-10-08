@@ -627,7 +627,12 @@ function MobileSidebar({
             onImportSession={handleImportSession}
             parentGestureRef={closeGestureRef}
             dragGestureHostActive={active}
-            listHeaderComponent={<><PinnedSessions onNavigate={closeSidebar} />{workspacesSectionHeaderElement}</>}
+            listHeaderComponent={
+              <>
+                <PinnedSessions onNavigate={closeSidebar} />
+                {workspacesSectionHeaderElement}
+              </>
+            }
           />
         )}
 
@@ -805,7 +810,12 @@ function DesktopSidebar({
             onRefresh={handleRefresh}
             onAddProject={handleOpenProject}
             onImportSession={handleImportSession}
-            listHeaderComponent={<><PinnedSessions />{workspacesSectionHeaderElement}</>}
+            listHeaderComponent={
+              <>
+                <PinnedSessions />
+                {workspacesSectionHeaderElement}
+              </>
+            }
           />
         )}
 
