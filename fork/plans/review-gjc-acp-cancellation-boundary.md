@@ -1,3 +1,12 @@
+> **Historical status (verified 2026-10-08):** This document records an earlier implementation snapshot.
+> Its reported gaps have since been addressed in source: observed-death settlement (`816d7dcc0`),
+> issue-and-return behavior (`7353f6181`), terminal-kind precedence (`300eec342`), permission-denial
+> routing and `deny_cancel_suppressed` (`28b167ed3`), manager-test terminator repair (`5b2e21d83`),
+> and lifecycle/provider documentation (`f8c5b791b`). These commits are present in current `custom`,
+> P0, and `mine`. Use [the 2026-10-08 readiness audit](tmad-port/evidence/pluto-readiness-2026-10-08.md)
+> for current fork-build inclusion and CI status. This notice does not supersede the historical evidence
+> below or claim the current custom CI is fully green.
+
 # Review — GJC ACP cancellation boundary vs the finalized plan
 
 - Reviewed branch: `ultragoal-prep/acp-cancellation-boundary` at `acc60db36` (rebased onto `custom` at `54c7d08b4`).
