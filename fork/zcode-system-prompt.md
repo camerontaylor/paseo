@@ -1,78 +1,73 @@
-# Native ZCode additional system instructions
+# Native ZCode instructions
 
-The native plugin cannot deliver Paseo's appended system policy through the verified
-native API. Keep `daemon.appendSystemPrompt` configured; select a provider that supports
-it until ZCode exposes an additive system instruction API. Do not clear the policy to
-make ZCode creation succeed.
+Use native ZCode with an explicit provider exclusion only after materializing the
+owner's daemon policy in `~/.zcode/AGENTS.md`. ZCode injects this file and workspace
+`AGENTS.md` as `meta_user` context. This changes instruction priority and also
+applies the global file to ZCode sessions opened outside Paseo.
 
-## Verified source
+Keep `daemon.appendSystemPrompt` for other providers. Set
+`daemon.appendSystemPromptExcludedProviders: ["zcode"]` to omit that daemon policy
+from native ZCode launches. The exclusion is runtime-safe through `paseo reload`
+and applies to create, cold resume and session refresh. Explicit per-agent
+`systemPrompt` is still passed through and rejected by native ZCode. The fork's
+`supportsSystemPrompt: false` refusal remains available to other unsupported providers.
 
-- Plugin: `supermomonga/paseo-plugin-zcode-provider`, commit
-  `fc66078de555a75745a8bf161812addbb2c3a073`.
-- Native source: `zai-org/ZCode`, commit
-  `872ad960de7ec172591f7e1952f7849229f94521`; Server 3.14.0 / Agent 0.16.9.
-- Sources and secret-free reproduction results:
-  Makemake `/home/ctaylor/.local/state/zcode-provider-test/{plugin,source,results.json}`.
+## Prepare the cutover
 
-## Policy trace
+Run `fork/scripts/migrate-zcode-native.mjs` with `--source` pointing to the live
+config and `--output` pointing to a fresh candidate config. Supply `--agents`
+for both `~/.zcode/AGENTS.md` and the repository `AGENTS.md`, `--backup` for a fresh
+private backup directory, and absolute `--plugin`, `--runtime`, `--node` paths.
+The script preserves the root `AGENTS.md` symlink by editing its resolved target.
+It merges the exact current policy, checks the native 100KiB file limit and
+re-reads every destination before writing the exclusion into the candidate.
+Existing instructions, provider models and environment are preserved. Backups
+and candidate config contain credentials and are private; do not print them.
 
-`packages/server/src/server/config.ts:resolveAppendSystemPrompt` reads
-`daemon.appendSystemPrompt`. Bootstrap passes that value into `AgentManager`.
-`AgentManager.applyDaemonAppendSystemPrompt` attaches it to the ephemeral provider
-launch config as `daemonAppendSystemPrompt`, without persisting a stale policy on the
-agent. `packages/server/src/server/agent/plugin-provider.ts:mapSessionConfig`
-combines the per-agent prompt and daemon policy with a blank line into
-`ProviderSessionConfig.systemPrompt`. Native plugin `server/provider.ts:openSession`
-rejects a nonempty value with `INVALID_CONFIGURATION` and
-"Custom system prompts are unsupported by the verified ZCode host".
+Before installing on Intel macOS, run `fork/scripts/prepare-zcode-native-entry.mjs`
+with the same plugin/runtime/node paths. It verifies the pinned entry and runtime
+bundle hashes, relocates the upstream entry inside `server/`, and creates a thin
+entry that supplies runtime defaults before calling upstream contributions.
+This covers Diagnostics and Account RPCs as well as provider status; per-agent
+environment overrides alone do not reach those paths. Existing operator runtime
+variables win. Re-run this preparation after an upstream source update.
 
-## Native boundary
+The candidate removes ZCode's `extends: "acp"` and ACP `command`, since those
+shadow the native provider. It installs `zcode-provider` as the runtime plugin
+ID; the selectable provider remains `zcode`. It retains the disabled old plugin
+entry as a rollback reference. Keep the `zcode-network-policy` environment hook:
+native `createHost` merges the session environment into the Server and Agent.
 
-The pinned plugin's `packages/shared/src/zcode-protocol/index.ts` —
-`zcodeSessionCreateParamsSchema` (line 1558 at plugin commit `fc66078`) — is
-strict and has no system prompt or additional instruction field. That path is
-in the plugin checkout, not this repo. The resume schema follows it and
-likewise has no additive instruction field.
-The plugin opens sessions through native `createSession` / `resumeSession` and then
-reapplies mode, planning, model, and reasoning settings; keep that cold-resume
-workaround intact.
+Root plugin source edits are lifecycle-owned; copying the candidate and running
+`paseo reload` does not install its new plugin entry. Use the plugin install
+operation on the target daemon, then verify `running` and native provider
+availability. Do not restart the production daemon to perform this cutover.
 
-ZCode's internal runtime has `RuntimeConfig.systemPrompt`
-(`apps/zcode-cli/packages/core/src/runtime/types.ts:216`), but the verified external
-session API does not carry it. `core/src/context/builder.ts:87-130` treats it as a
-replacement for the built-in stable system body and skips the default prompt and
-system context. Exposing that field alone would therefore not implement Paseo's
-append semantics.
+## Pinned runtime
 
-Native workspace/default `AGENTS.md` loading is a separate instruction mechanism.
-`core/src/context/sections/request-user-context.ts:buildRequestUserContextSection`
-sets `injectionTarget: "meta_user"`. It is not a system-level policy path. Writing
-Paseo policy to project files or a global ZCode home would change scope and priority
-and could affect unrelated sessions.
+Plugin `paseo-plugin-zcode-provider@0.2.0` is commit
+`ca87c2b023338420f9e50f0a3a62dad2e28ed16f` in
+`supermomonga/paseo-plugin-zcode-provider`. Runtime is Server 3.14.3 / Agent 0.16.9,
+with ordinary Node 24.21.0. Its platform-independent runtime archive SHA-256 is
+`a2af414592362d226f92c105d91211e5c4f138cf985b0c86da0eb9163cb9aee7`.
 
-## Reviewable plugin declaration
+The managed installer excludes Intel macOS. On Neptune use explicit
+`PASEO_ZCODE_RUNTIME` and `PASEO_ZCODE_NODE` environment overrides for the verified
+archive and local Node executable. No ACP bridge or launcher patch is involved.
+The native API still has no additive system instruction field; do not claim that
+AGENTS loading preserves system-level priority.
 
-`patches/zcode-provider-system-prompt-capability.patch` adds only
-`supportsSystemPrompt: false` to the pinned native plugin registration. Apply it
-when using this fork's SDK. Core preserves existing plugins' contract when the
-optional declaration is omitted. The unmodified plugin keeps its own explicit `INVALID_CONFIGURATION` rejection.
-A provider declaring `false` gets an actionable
-failure before native session creation; the policy remains intact.
+## Evidence
 
-A supported implementation requires an upstream additive native system instruction
-field, applied on both create and resume, while retaining ZCode's default prompt.
-No user/assistant message substitute is included in this patch.
+On Neptune (Intel macOS), the pinned native stdio runner passed catalog, draft,
+Bash, ACK/completion, cold resume with saved mode/Plan, history, question,
+permission, targeted stop/restart, slash completion, session listing, EOF cleanup
+and Agent cleanup after Server SIGKILL. It used an isolated home and deterministic
+local model; no real credentials or shared user data were accessed.
+A copied runner also asserted that global and workspace AGENTS sentinels occur
+in native model request messages throughout these scenarios.
 
-## Validation
-
-On Pluto with Node 24.21.0, from `packages/server`:
-
-```sh
-npx vitest run src/server/agent/plugin-provider.test.ts --bail=1
-```
-
-40 tests passed. The regressions cover rejection of agent and daemon instructions,
-cold resume rejection with `INVALID_CONFIGURATION`, no native `session.open` on
-rejection, and preservation of the combined instructions for existing providers.
-The separate patch passed `git apply --check` against the pinned native plugin on
-Makemake without changing that checkout.
+Sources and secret-free logs live in
+`~/.local/state/zcode-native-upgrade/` and `/tmp/zcode-native-{stdio,policy}.log`.
+These prove native transport and instruction loading; they do not substitute for
+the final daemon/plugin cutover canary.

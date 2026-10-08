@@ -12,8 +12,8 @@ No push, merge, release, live configuration change, or live daemon restart.
   registration, and client loading without an author-installed runtime SDK.
 - `fork/scripts/release-fork.mjs` regenerates existing Brotli/gzip variants when it rewrites browser assets.
 - Provider registration, subprocess metadata, and the core adapter carry
-  `supportsSystemPrompt`. The [native limitation and separate plugin patch](zcode-system-prompt.md)
-  preserve the owner policy without substituting a conversation message.
+  `supportsSystemPrompt`. The current [native instruction migration](zcode-system-prompt.md)
+  preserves other providers’ system policy while moving ZCode policy to AGENTS loading.
 
 ## Automated evidence
 

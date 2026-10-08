@@ -26,6 +26,7 @@ interface SupportedMutableConfigPatch {
   autoArchiveAfterMerge?: boolean;
   enableTerminalAgentHooks?: boolean;
   appendSystemPrompt?: string;
+  appendSystemPromptExcludedProviders?: string[];
   terminalProfiles?: MutableDaemonConfig["terminalProfiles"];
   agentProfiles?: MutableDaemonConfig["agentProfiles"];
   skills?: MutableDaemonConfig["skills"];
@@ -181,6 +182,7 @@ const RELOADABLE_PATHS = [
   "daemon.autoArchiveAfterMerge",
   "daemon.enableTerminalAgentHooks",
   "daemon.appendSystemPrompt",
+  "daemon.appendSystemPromptExcludedProviders",
   "daemon.terminalProfiles",
   "daemon.agentProfiles",
   "app.baseUrl",
@@ -204,6 +206,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.autoArchiveAfterMerge", "autoArchiveAfterMerge"],
   ["daemon.enableTerminalAgentHooks", "enableTerminalAgentHooks"],
   ["daemon.appendSystemPrompt", "appendSystemPrompt"],
+  ["daemon.appendSystemPromptExcludedProviders", "appendSystemPromptExcludedProviders"],
   ["daemon.terminalProfiles", "terminalProfiles"],
   ["daemon.agentProfiles", "agentProfiles"],
   ["app.baseUrl", "app.baseUrl"],
@@ -268,6 +271,9 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
       : {}),
     ...(patch.enableTerminalAgentHooks !== undefined
       ? { enableTerminalAgentHooks: patch.enableTerminalAgentHooks }
+      : {}),
+    ...(patch.appendSystemPromptExcludedProviders !== undefined
+      ? { appendSystemPromptExcludedProviders: patch.appendSystemPromptExcludedProviders }
       : {}),
     ...(patch.appendSystemPrompt !== undefined
       ? { appendSystemPrompt: patch.appendSystemPrompt }
@@ -659,6 +665,8 @@ function mergeMutableDaemonPatch(
     next.enableTerminalAgentHooks = patch.enableTerminalAgentHooks;
   }
   if (patch.appendSystemPrompt !== undefined) next.appendSystemPrompt = patch.appendSystemPrompt;
+  if (patch.appendSystemPromptExcludedProviders !== undefined)
+    next.appendSystemPromptExcludedProviders = patch.appendSystemPromptExcludedProviders;
   if (patch.terminalProfiles !== undefined) next.terminalProfiles = patch.terminalProfiles;
   if (patch.agentProfiles !== undefined) next.agentProfiles = patch.agentProfiles;
   return Object.keys(next).length > 0 ? next : undefined;
