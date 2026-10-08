@@ -23,7 +23,7 @@ The adapted branch carries the complete reviewed integration, including the menu
 
 ## Adaptations to the current base
 
-Upstream #5976 moved audio to `src/audio` and introduced shared plugin/voice playback. Keep that implementation; port cancellation during preparation into its shared queue, and retain browser microphone-track loss reporting. Port the existing Pluto regression tests to that module. Keep upstream #6255 archive rollback while adding queue preparation failure classification.
+Upstream #5976 moved audio to `src/audio` and introduced shared plugin/voice playback. Keep that implementation; port cancellation during preparation into its shared queue, and retain browser microphone-track loss reporting. Port the existing Pluto regression tests to that module. Keep upstream #6255 archive rollback while adding queue preparation failure classification. App typecheck builds the native audio workspace first: the static import needs its generated declarations on a clean checkout, including CI and Desvio.
 
 ## Verification and deployment
 
