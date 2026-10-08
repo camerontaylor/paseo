@@ -210,11 +210,11 @@ describe("keyboard-shortcuts", () => {
       payload: { delta: -1 },
     },
     {
-      name: "matches workspace relative navigation on desktop via Mod+]",
+      name: "matches history forward on desktop via Mod+]",
       event: { key: "]", code: "BracketRight", ctrlKey: true },
       context: { isDesktop: true },
-      action: "workspace.navigate.relative",
-      payload: { delta: 1 },
+      action: "history.forward",
+      payload: null,
     },
     {
       name: "matches tab relative navigation via Alt+Shift+]",

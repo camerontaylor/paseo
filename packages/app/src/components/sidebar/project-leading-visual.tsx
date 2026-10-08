@@ -2,6 +2,8 @@ import { ActivityIndicator, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight, CircleAlert } from "lucide-react-native";
+import Animated from "react-native-reanimated";
+import { useStatusPulse } from "@/hooks/use-status-pulse";
 import { ProjectIconView } from "@/components/project-icon-view";
 import { getStatusBucketLabel } from "@/hooks/sidebar-status-view-model";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
@@ -58,6 +60,7 @@ export function ProjectLeadingVisual({
   displayName,
   iconDataUri,
   statusBucket,
+  statusEnteredAt,
   projectViewKey,
   backdrop,
   chevron = null,
@@ -68,6 +71,7 @@ export function ProjectLeadingVisual({
   iconDataUri: string | null;
   /** Aggregate status of the project's workspaces; null when it shouldn't be surfaced. */
   statusBucket: SidebarStateBucket | null;
+  statusEnteredAt?: number | null;
   projectViewKey: string;
   /** The row's current background, so the status badge can knock out of it. */
   backdrop: SidebarSurfaceBackdrop;
@@ -97,6 +101,7 @@ export function ProjectLeadingVisual({
       displayName={displayName}
       projectViewKey={projectViewKey}
       statusBucket={statusBucket}
+      statusEnteredAt={statusEnteredAt}
       backdrop={backdrop}
     />
   );
@@ -112,6 +117,7 @@ export function ProjectStatusIndicator({
   displayName,
   projectViewKey,
   statusBucket,
+  statusEnteredAt,
   backdrop,
   loading = false,
   testID,
@@ -120,6 +126,7 @@ export function ProjectStatusIndicator({
   displayName: string;
   projectViewKey: string;
   statusBucket: SidebarStateBucket | null;
+  statusEnteredAt?: number | null;
   /** The row's current background, so the status badge can knock out of it. */
   backdrop: SidebarSurfaceBackdrop;
   loading?: boolean;
@@ -154,6 +161,7 @@ export function ProjectStatusIndicator({
           <ProjectStatusBadge
             content={badgeContent}
             statusBucket={badgeBucket}
+            statusEnteredAt={statusEnteredAt}
             backdrop={backdrop}
           />
         )}
@@ -165,13 +173,16 @@ export function ProjectStatusIndicator({
 function ProjectStatusBadge({
   content,
   statusBucket,
+  statusEnteredAt,
   backdrop,
 }: {
   content: ProjectStatusBadgeContent;
   statusBucket: SidebarStateBucket;
+  statusEnteredAt?: number | null;
   backdrop: SidebarSurfaceBackdrop;
 }) {
   const { t } = useTranslation();
+  const pulseStyle = useStatusPulse(statusBucket, statusEnteredAt);
   // Running skips the shell. The ring is wider than the 12pt shell and carries its own knockout,
   // so nesting it inside would clip it against the very thing that was meant to separate it from
   // the icon. It anchors to the same corner instead, growing around the centre the dot had.
@@ -194,11 +205,13 @@ function ProjectStatusBadge({
       style={[styles.statusBadge, getStatusBadgeBackdropStyle(backdrop)]}
       testID="project-status-badge"
     >
-      {content.kind === "alert" ? (
-        <ThemedCircleAlert size={STATUS_INDICATOR_ALERT_SIZE} uniProps={needsInputColorMapping} />
-      ) : (
-        <ProjectStatusDot bucket={content.bucket} />
-      )}
+      <Animated.View style={pulseStyle}>
+        {content.kind === "alert" ? (
+          <ThemedCircleAlert size={STATUS_INDICATOR_ALERT_SIZE} uniProps={needsInputColorMapping} />
+        ) : (
+          <ProjectStatusDot bucket={content.bucket} />
+        )}
+      </Animated.View>
     </View>
   );
 }
