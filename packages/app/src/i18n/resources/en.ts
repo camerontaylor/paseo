@@ -686,6 +686,7 @@ export const en = {
       actions: {
         newTab: "New tab",
         newAgent: "New agent",
+        recentlyClosed: "Recently closed",
         newTerminal: "New terminal",
         preparingTerminal: "Preparing terminal tab",
         preparingTerminalTooltip: "Preparing terminal...",
@@ -701,6 +702,12 @@ export const en = {
         pullRequest: "Pull request",
         terminalProfilesMenu: "Terminal profiles",
         editTerminalProfiles: "Edit profiles",
+      },
+      recentAgents: {
+        title: "Recently closed",
+        loading: "Loading…",
+        empty: "No closed agents in this workspace",
+        showAll: "Show all in History",
       },
       explorerSidebar: {
         open: "Open Explorer sidebar",
@@ -2494,6 +2501,8 @@ export const en = {
         jumpToWorkspace: "Jump to workspace",
         jumpToTab: "Jump to tab",
         previousWorkspace: "Previous workspace",
+        historyBack: "Back",
+        historyForward: "Forward",
         nextWorkspace: "Next workspace",
         previousTab: "Previous tab",
         nextTab: "Next tab",

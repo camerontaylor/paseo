@@ -694,6 +694,7 @@ export const ptBR: TranslationResources = {
       actions: {
         newTab: "Nova aba",
         newAgent: "Novo agente",
+        recentlyClosed: "Fechados recentemente",
         newTerminal: "Novo terminal",
         preparingTerminal: "Preparando aba de terminal",
         preparingTerminalTooltip: "Preparando terminal...",
@@ -709,6 +710,12 @@ export const ptBR: TranslationResources = {
         pullRequest: "Pull request",
         terminalProfilesMenu: "Perfis de terminal",
         editTerminalProfiles: "Editar perfis",
+      },
+      recentAgents: {
+        title: "Fechados recentemente",
+        loading: "Carregando…",
+        empty: "Não há agentes fechados neste espaço de trabalho",
+        showAll: "Mostrar tudo no Histórico",
       },
       explorerSidebar: {
         open: "Abrir painel lateral",
@@ -2406,6 +2413,8 @@ export const ptBR: TranslationResources = {
         jumpToWorkspace: "Ir para workspace",
         jumpToTab: "Ir para aba",
         previousWorkspace: "Workspace anterior",
+        historyBack: "Voltar",
+        historyForward: "Avançar",
         nextWorkspace: "Próximo workspace",
         previousTab: "Aba anterior",
         nextTab: "Próxima aba",
