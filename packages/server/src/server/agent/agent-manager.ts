@@ -792,8 +792,23 @@ export class AgentManager {
       windowMs: options.agentStreamCoalesceWindowMs ?? AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS,
       timers: { setTimeout, clearTimeout },
       onFlush: ({ agentId, item, provider, turnId }) => {
-        const event = this.recordAndDispatchTimelineItem(agentId, item, provider, turnId);
-        this.notifyForegroundTurnWaiters(agentId, event);
+        // This runs off a deferred timer (see AgentStreamCoalescer.scheduleFlush),
+        // so the agent's in-memory state can already be torn down by the time it
+        // fires — archived, closed, or otherwise removed between the event being
+        // buffered and the coalescing window elapsing. recordAndDispatchTimelineItem
+        // throws in that case ("Unknown agent"), and an uncaught throw out of a
+        // setTimeout callback takes the whole daemon down with it. The flush is
+        // best-effort against a live agent; drop it and move on if the agent is
+        // already gone rather than crashing every other agent's session with it.
+        try {
+          const event = this.recordAndDispatchTimelineItem(agentId, item, provider, turnId);
+          this.notifyForegroundTurnWaiters(agentId, event);
+        } catch (error) {
+          this.logger.warn(
+            { err: error, agentId },
+            "Dropped a coalesced timeline flush for an agent that is no longer tracked",
+          );
+        }
       },
     });
     this.updateProviderRegistry({
@@ -841,6 +856,25 @@ export class AgentManager {
             "Failed to close agent after provider retirement",
           );
         });
+      }
+    }
+  }
+
+  /**
+   * Repoints live agents at a renamed provider id. Must run after the registry rebuild so the
+   * new id already has a client, and before storage migration so the next persistence flush
+   * doesn't write the old id back over the migrated record.
+   */
+  renameProviderOnLiveAgents(fromProviderId: string, toProviderId: string): void {
+    for (const agent of this.agents.values()) {
+      if (agent.provider === fromProviderId) {
+        agent.provider = toProviderId;
+      }
+      if (agent.runtimeInfo?.provider === fromProviderId) {
+        agent.runtimeInfo = { ...agent.runtimeInfo, provider: toProviderId };
+      }
+      if (agent.persistence?.provider === fromProviderId) {
+        agent.persistence = { ...agent.persistence, provider: toProviderId };
       }
     }
   }
