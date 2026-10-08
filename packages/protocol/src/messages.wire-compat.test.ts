@@ -502,3 +502,30 @@ test("usage login errors are additive and older reports still parse", () => {
   expect(SessionOutboundMessageSchema.parse(newMessage)).toEqual(newMessage);
   expect(legacy.parse(newMessage)).toEqual(oldMessage);
 });
+
+test("usage terminal responses accept beta.3 reports and beta.4 streaming completion", () => {
+  const legacy = z.object({
+    type: z.literal("usage.list_reports.response"),
+    payload: z.object({ requestId: z.string(), reports: z.array(z.unknown()) }),
+  });
+  const reports = [
+    {
+      id: "fixture:one",
+      sourceId: "fixture",
+      sourceLabel: "Fixture",
+      account: {},
+      fetchedAt: "2026-10-08T00:00:00.000Z",
+      report: { status: "available", windows: [] },
+    },
+  ];
+  const beta3 = { type: "usage.list_reports.response", payload: { requestId: "usage", reports } };
+  const current = { ...beta3, payload: { ...beta3.payload, error: null } };
+  expect(SessionOutboundMessageSchema.parse(beta3)).toEqual(beta3);
+  expect(SessionOutboundMessageSchema.parse(current)).toEqual(current);
+  expect(legacy.parse(current)).toEqual(beta3);
+  const streaming = {
+    type: "usage.list_reports.response",
+    payload: { requestId: "usage", error: null },
+  };
+  expect(SessionOutboundMessageSchema.parse(streaming)).toEqual(streaming);
+});

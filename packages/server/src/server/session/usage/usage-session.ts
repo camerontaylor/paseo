@@ -20,26 +20,45 @@ export class UsageSession {
   ): Promise<void> {
     try {
       if (!this.options.runtime) throw new Error("Plugin runtime is unavailable");
-      await this.options.runtime.listUsageReports({
+      const reports = await this.options.runtime.listUsageReports({
         forceRefresh: msg.forceRefresh,
         reportIds: msg.reportIds,
         agentId: msg.agentId,
-        onReport: (report) =>
-          this.options.emit({
-            type: "usage.list_reports.update",
-            payload: { requestId: msg.requestId, report },
-          }),
+        // COMPAT(usageReportsStreaming): added in v0.11.1, remove after 2027-04-08 once all clients request streaming.
+        // Older clients cannot validate update messages and expect a reports array.
+        onReport: msg.streaming
+          ? (report) =>
+              this.options.emit({
+                type: "usage.list_reports.update",
+                payload: { requestId: msg.requestId, report },
+              })
+          : undefined,
       });
       this.options.emit({
         type: "usage.list_reports.response",
-        payload: { requestId: msg.requestId, error: null },
+        payload: { requestId: msg.requestId, reports, error: null },
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // COMPAT(usageReportsStreaming): added in v0.11.1, remove after 2027-04-08 once all clients request streaming.
+      if (!msg.streaming) {
+        this.options.emit({
+          type: "rpc_error",
+          payload: {
+            requestId: msg.requestId,
+            requestType: msg.type,
+            error: message,
+            code: "usage_list_reports_failed",
+          },
+        });
+        return;
+      }
       this.options.emit({
         type: "usage.list_reports.response",
         payload: {
           requestId: msg.requestId,
-          error: error instanceof Error ? error.message : String(error),
+          reports: [],
+          error: message,
         },
       });
     }

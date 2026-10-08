@@ -1,9 +1,10 @@
 import pino from "pino";
+import { z } from "zod";
 import { expect, test } from "vitest";
 import type { SessionOutboundMessage } from "../../messages.js";
 import { UsageSession } from "./usage-session.js";
 
-test("lists reports from usage sources", async () => {
+test.each([false, true])("lists reports with streaming %s", async (streaming) => {
   const emitted: SessionOutboundMessage[] = [];
   const requested: Array<{ forceRefresh?: boolean; reportIds?: string[] }> = [];
   const entry = {
@@ -29,11 +30,29 @@ test("lists reports from usage sources", async () => {
     logger: pino({ level: "silent" }),
   });
 
-  await usage.handleListReports({ type: "usage.list_reports.request", requestId: "list" });
+  await usage.handleListReports({
+    type: "usage.list_reports.request",
+    requestId: "list",
+    streaming,
+  });
   expect(requested).toEqual([{ forceRefresh: undefined, reportIds: undefined }]);
+  if (!streaming) {
+    const legacyResponse = z.object({
+      type: z.literal("usage.list_reports.response"),
+      payload: z.object({ requestId: z.string(), reports: z.array(z.unknown()) }),
+    });
+    expect(emitted.map((message) => legacyResponse.parse(message))).toEqual([
+      { type: "usage.list_reports.response", payload: { requestId: "list", reports: [entry] } },
+    ]);
+  }
   expect(emitted).toEqual([
-    { type: "usage.list_reports.update", payload: { requestId: "list", report: entry } },
-    { type: "usage.list_reports.response", payload: { requestId: "list", error: null } },
+    ...(streaming
+      ? [{ type: "usage.list_reports.update", payload: { requestId: "list", report: entry } }]
+      : []),
+    {
+      type: "usage.list_reports.response",
+      payload: { requestId: "list", reports: [entry], error: null },
+    },
   ]);
 });
 
@@ -58,17 +77,41 @@ test("surfaces a legacy usage-list failure as an rpc_error envelope", async () =
   });
 });
 
-test("request failures terminate with an error response and no updates", async () => {
+test("streaming request failures terminate with an error response and no updates", async () => {
   const emitted: SessionOutboundMessage[] = [];
   const usage = new UsageSession({
     emit: (message) => emitted.push(message),
     logger: pino({ level: "silent" }),
   });
-  await usage.handleListReports({ type: "usage.list_reports.request", requestId: "failed" });
+  await usage.handleListReports({
+    type: "usage.list_reports.request",
+    requestId: "failed",
+    streaming: true,
+  });
   expect(emitted).toEqual([
     {
       type: "usage.list_reports.response",
-      payload: { requestId: "failed", error: "Plugin runtime is unavailable" },
+      payload: { requestId: "failed", reports: [], error: "Plugin runtime is unavailable" },
+    },
+  ]);
+});
+
+test("older clients receive an existing rpc_error on failure", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const usage = new UsageSession({
+    emit: (message) => emitted.push(message),
+    logger: pino({ level: "silent" }),
+  });
+  await usage.handleListReports({ type: "usage.list_reports.request", requestId: "old" });
+  expect(emitted).toEqual([
+    {
+      type: "rpc_error",
+      payload: {
+        requestId: "old",
+        requestType: "usage.list_reports.request",
+        error: "Plugin runtime is unavailable",
+        code: "usage_list_reports_failed",
+      },
     },
   ]);
 });

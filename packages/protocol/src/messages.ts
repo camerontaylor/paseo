@@ -1788,6 +1788,7 @@ export const ProviderUsageListRequestMessageSchema = z.object({
 
 export const UsageListReportsRequestMessageSchema = z.object({
   type: z.literal("usage.list_reports.request"),
+  streaming: z.boolean().optional(),
   agentId: z.string().optional(),
   requestId: z.string(),
   reportIds: z.array(z.string()).optional(),
@@ -3603,6 +3604,7 @@ export const ServerInfoStatusPayloadSchema = z
         hubAgentRpc: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
         usageSources: z.boolean().optional(),
+        usageReportsStreaming: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: z.boolean().optional(),
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -6457,7 +6459,11 @@ export const UsageListReportsUpdateMessageSchema = z.object({
 });
 export const UsageListReportsResponseMessageSchema = z.object({
   type: z.literal("usage.list_reports.response"),
-  payload: z.object({ requestId: z.string(), error: z.string().nullable() }),
+  payload: z.object({
+    requestId: z.string(),
+    reports: z.array(UsageReportEntrySchema).optional(),
+    error: z.string().nullable().optional(),
+  }),
 });
 
 const AgentSlashCommandSchema = z.object({
