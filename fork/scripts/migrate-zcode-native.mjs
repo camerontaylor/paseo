@@ -55,9 +55,27 @@ function configureNativeProvider(config, pluginPath, runtime, node) {
   ];
 }
 
+export function normalizeNativeProfileFeatures(profile) {
+  const values = { ...profile.featureValues };
+  if (values.auto_accept !== undefined) {
+    if (typeof values.auto_accept !== "boolean")
+      throw new Error("Unsupported ZCode auto_accept value");
+    const expectedMode = values.auto_accept ? "yolo" : "build";
+    if (profile.modeId && profile.modeId !== expectedMode)
+      throw new Error("ZCode auto_accept conflicts with saved mode; reconcile the profile");
+    profile.modeId = expectedMode;
+    delete values.auto_accept;
+  }
+  for (const key of Object.keys(values))
+    if (key !== "plan_mode" || typeof values[key] !== "boolean")
+      throw new Error("Unsupported ZCode profile feature; reconcile it before migration");
+  if (profile.featureValues) profile.featureValues = values;
+}
+
 function migrateNativeProfiles(config, modelProvider) {
   for (const profile of config.daemon?.agentProfiles ?? []) {
     if (profile.provider !== "zcode") continue;
+    normalizeNativeProfileFeatures(profile);
     if (profile.model && !profile.model.startsWith("[")) {
       if (!modelProvider)
         throw new Error("Use --model-provider from the verified native catalog for ZCode profiles");
