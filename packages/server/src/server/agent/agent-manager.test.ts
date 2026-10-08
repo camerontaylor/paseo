@@ -2306,6 +2306,41 @@ test("createAgent injects daemon append system prompt at runtime only", async ()
   expect(record?.config).not.toHaveProperty("daemonAppendSystemPrompt");
 });
 
+test("provider policy exclusions preserve explicit prompts across create, reload and cold resume", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-policy-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new TestAgentClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    appendSystemPrompt: "Daemon policy",
+    appendSystemPromptExcludedProviders: ["codex"],
+  });
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: workdir, systemPrompt: "Explicit policy" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    expect(client.createdConfigs[0]?.daemonAppendSystemPrompt).toBeUndefined();
+    expect(client.createdConfigs[0]?.systemPrompt).toBe("Explicit policy");
+    await manager.reloadAgentSession(agent.id);
+    expect(client.resumeOverrides.at(-1)?.daemonAppendSystemPrompt).toBeUndefined();
+    expect(client.resumeOverrides.at(-1)?.systemPrompt).toBe("Explicit policy");
+    manager.setAppendSystemPromptExcludedProviders([]);
+    await manager.reloadAgentSession(agent.id, undefined, { rehydrateFromDisk: true });
+    expect(client.resumeOverrides.at(-1)?.daemonAppendSystemPrompt).toBe("Daemon policy");
+    manager.setAppendSystemPromptExcludedProviders(["zcode"]);
+    await manager.reloadAgentSession(agent.id);
+    expect(client.resumeOverrides.at(-1)?.daemonAppendSystemPrompt).toBe("Daemon policy");
+    await manager.closeAgent(agent.id);
+  } finally {
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("daemon append system prompt is injected into Pi configs", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
   const storagePath = join(workdir, "agents");
