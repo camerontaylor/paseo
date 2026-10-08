@@ -28,7 +28,12 @@ export function useGlobalStream(
   const availability = selected.map((host) => {
     if (!isHostRuntimeConnected(runtime.getSnapshot(host.serverId))) return "offline";
     // COMPAT(globalStream): fork beta.11; remove after 2027-04-06.
-    if (!sessions[host.serverId]?.serverInfo?.features?.globalStream) return "upgrade";
+    if (
+      !(options.agentId
+        ? sessions[host.serverId]?.serverInfo?.features?.durableStream
+        : sessions[host.serverId]?.serverInfo?.features?.globalStream)
+    )
+      return "upgrade";
     return "online";
   });
   const results = useFetchQueries<HostPage>(
@@ -36,6 +41,8 @@ export function useGlobalStream(
       queryKey: [
         "global-stream",
         host.serverId,
+        options.agentId,
+        options.asksOnly,
         options.filter,
         options.search,
         options.includeArchived,
@@ -52,6 +59,8 @@ export function useGlobalStream(
         let cursor: string | undefined;
         for (let page = 0; page < depth; page++) {
           const result = await client.listGlobalStream({
+            agentId: options.agentId,
+            asksOnly: options.asksOnly,
             filter: options.filter,
             search: options.search,
             includeArchived: options.includeArchived,
@@ -75,6 +84,8 @@ export function useGlobalStream(
         data = queryClient.getQueryData<HostPage>([
           "global-stream",
           host.serverId,
+          options.agentId,
+          options.asksOnly,
           options.filter,
           options.search,
           options.includeArchived,
@@ -98,6 +109,8 @@ export function useGlobalStream(
     selected,
     depth,
     queryClient,
+    options.agentId,
+    options.asksOnly,
     options.filter,
     options.search,
     options.includeArchived,

@@ -1,3 +1,4 @@
+import { TrackedAskInputSchema } from "@getpaseo/protocol/companion-stream";
 import { stat } from "node:fs/promises";
 import { z } from "zod";
 import { ensureValidJson } from "../../json-utils.js";
@@ -2284,6 +2285,92 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       return {
         content: [],
         structuredContent: ensureValidJson({ success: true }),
+      };
+    },
+  );
+
+  registerTool(
+    "set_stream_ask",
+    {
+      title: "Track a durable ask",
+      description:
+        "Create or revise an explicit ask/task in the conversation checklist. Use one stable askId per request, expectedRevision=0 to create, and list_stream_asks to read revisions before updates. Repeat identical writes safely after a lost acknowledgement. Full replacement: preserve source/delegation/subtasks when editing. Done requires evidence, no remaining work, and finished subtasks; a turn ending or child going idle is not completion. Reopen with state=open. Never infer success. This does not prompt or run any agent.",
+      inputSchema: {
+        agentId: z
+          .string()
+          .optional()
+          .describe(
+            "Owning conversation; defaults to caller. Orchestrators keep asks on their own conversation.",
+          ),
+        askId: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe(
+            "Stable caller-assigned ID without the ask: prefix; list_stream_asks returns askId.",
+          ),
+        expectedRevision: z.number().int().min(0),
+        text: z.string().min(1).max(4000),
+        ask: TrackedAskInputSchema,
+      },
+    },
+    async ({ agentId, askId, expectedRevision, text, ask }) => {
+      const targetAgentId = agentId ?? callerAgentId;
+      if (!targetAgentId) throw new Error("An agentId is required");
+      await agentManager.updateCompanionEntry({
+        agentId: targetAgentId,
+        entryId: askId,
+        action: "set_ask",
+        expectedRevision,
+        text,
+        ask,
+      });
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          agentId: targetAgentId,
+          askId,
+          entryId: `ask:${askId}`,
+          accepted: true,
+        }),
+      };
+    },
+  );
+
+  registerTool(
+    "list_stream_asks",
+    {
+      title: "Read the durable ask checklist",
+      description:
+        "Read explicit tracked asks and their revisions without starting a provider. Pages include completed asks unless unresolvedOnly=true. Follow nextCursor to read all asks. Read unresolved asks when starting/resuming orchestration, and update each after evidence or blockers change.",
+      inputSchema: {
+        agentId: z.string().optional(),
+        cursor: z.string().optional(),
+        unresolvedOnly: z.boolean().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ agentId, cursor, unresolvedOnly, limit }) => {
+      const targetAgentId = agentId ?? callerAgentId;
+      if (!targetAgentId) throw new Error("An agentId is required");
+      const page = await agentManager.listGlobalStream({
+        agentId: targetAgentId,
+        asksOnly: true,
+        includeArchived: true,
+        cursor,
+        limit,
+        filter: unresolvedOnly ? "pending" : "all",
+      });
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          ...page,
+          rows: page.rows.map((row) =>
+            Object.assign({}, row, {
+              askId: row.item.kind === "entry" ? row.item.entry.id.slice(4) : null,
+            }),
+          ),
+        }),
       };
     },
   );

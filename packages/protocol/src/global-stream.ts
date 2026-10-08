@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AgentArtifactSchema } from "./agent-artifact.js";
-import { CompanionEntrySchema } from "./companion-stream.js";
+import { CompanionEntrySchema, TrackedAskInputSchema } from "./companion-stream.js";
 
 export const StreamFilterSchema = z.enum(["all", "pending", "pinned"]);
 export const StreamRowSchema = z.object({
@@ -20,6 +20,8 @@ export const StreamListRequestSchema = z.object({
   type: z.literal("stream.list.request"),
   requestId: z.string(),
   filter: StreamFilterSchema.optional(),
+  agentId: z.string().optional(),
+  asksOnly: z.boolean().optional(),
   search: z.string().max(1000).optional(),
   includeArchived: z.boolean().optional(),
   cursor: z.string().max(10000).optional(),
@@ -39,9 +41,18 @@ export const StreamUpdateRequestSchema = z.object({
   requestId: z.string(),
   agentId: z.string(),
   entryId: z.string().optional(),
-  action: z.enum(["update_status", "add_pin", "remove_pin", "add_q_and_a", "add_question"]),
+  action: z.enum([
+    "update_status",
+    "add_pin",
+    "remove_pin",
+    "add_q_and_a",
+    "add_question",
+    "set_ask",
+  ]),
   status: z.enum(["open", "reviewed", "done"]).optional(),
   text: z.string().max(4000).optional(),
+  ask: TrackedAskInputSchema.optional(),
+  expectedRevision: z.number().int().min(0).optional(),
   answerText: z.string().max(4000).optional(),
   sourceId: z.string().optional(),
 });

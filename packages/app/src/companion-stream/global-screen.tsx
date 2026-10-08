@@ -179,6 +179,7 @@ export function GlobalStreamCard({ row, onSaved }: { row: GlobalStreamRow; onSav
           agentId: row.agentId,
           entryId,
           action: status ? "update_status" : "remove_pin",
+          expectedRevision: row.item.kind === "entry" ? row.item.entry.ask?.revision : undefined,
           status,
         });
         onSaved();
@@ -188,7 +189,7 @@ export function GlobalStreamCard({ row, onSaved }: { row: GlobalStreamRow; onSav
         setBusy(false);
       }
     },
-    [client, connection, supportsWrites, busy, row.agentId, onSaved, t],
+    [client, connection, supportsWrites, busy, row.agentId, row.item, onSaved, t],
   );
   const updateStatus = useCallback(
     (id: string, status: "open" | "reviewed" | "done") => {
@@ -214,6 +215,7 @@ export function GlobalStreamCard({ row, onSaved }: { row: GlobalStreamRow; onSav
       {row.item.kind === "entry" ? (
         <EntryCard
           entry={row.item.entry}
+          serverId={row.serverId}
           onReturnToChat={openChat}
           onReplyInChat={openChat}
           onUpdateStatus={updateStatus}
