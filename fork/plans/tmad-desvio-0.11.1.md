@@ -29,8 +29,8 @@ Upstream #5976 moved audio to `src/audio` and introduced shared plugin/voice pla
 
 1. Build server and app dependency stacks; format, typecheck, lint. Run focused changed-file protocol, queue, receipts, side-conversation, voice, audio, and Find tests serially. Run a synthetic-home daemon startup/recovery probe.
 2. Push the durable carry branch. Append it to Neptune's manifest without reordering existing entries. Run `desvio build`; assert its result matches the tested tree. Run remote CI on the candidate; do not run full suites on a workstation.
-3. Publish `mine` through the existing fork workflow, verify all seven exact npm packages, and package both desktop architectures plus Android from the same SHA.
-4. Deploy the Saturn canary using its detached launchd job. Verify app/daemon version, code signature, health, and WebSocket upgrade. Deploy Linux hosts serially and verify each before continuing. Deploy Neptune through its detached launchd job and verify from Saturn.
+3. Publish `mine` through the existing fork workflow, verify all seven exact npm packages, and package both desktop architectures plus Android from the verified runtime source. Record each artifact’s exact assembly SHA.
+4. Deploy staged Intel bundles on Eris and Neptune first. Use detached launchd jobs and verify app/daemon version, code signature, health, and WebSocket upgrade. Deploy Saturn through launchd with a one-time continuation for the deploying agent. Deploy Linux hosts serially and verify each before continuing.
 5. Record the exact source SHA, versions, check results, deployment results, and any remaining evidence gaps here.
 
 Physical iOS/Android captures, Korean UI review, voice-device capture/playback, credentialed provider E2E, and live-home migration behavior remain unverified. The copied-home probe and fake-provider E2E do not establish those results. Back up each live home before changing its daemon version.
@@ -40,3 +40,29 @@ Physical iOS/Android captures, Korean UI review, voice-device capture/playback, 
 Server/app dependencies build, typecheck, lint, and formatting passed. All 30 focused suites passed serially; the adapted native audio and prompt suites also passed (3 and 17 tests). The two-client queue E2E passed both tests. The synthetic-home startup/recovery probe recovered `pending-copy-1` at revision 1 with identical queue bytes before/read/stop and zero fake-provider turns. It first creates an isolated fake agent so the queue fixture references a real persisted record.
 
 Clean-checkout CI caught the missing native-audio declaration build; app `pretypecheck` now owns it. The carried script-health fixture now implements terminal activity. Pluto's Speak expectations retain upstream's deliberately independent voice-tool policy. The Hub leak check tracks newly acquired subscriptions: closed setup clients can expire after the 90-second reconnect grace, making an exact total subscriber count nondeterministic. These are build/test adaptations; they do not change deployed runtime behavior.
+
+## Built and deployed
+
+The final source is `mine@db4a750601fcd110ebec663536a66d643bc26acc`, assembled from carry `b0b92121ba4410b1392e65a9afb0e6d44bb56326`. Desvio assembly, full typecheck and lint passed. Neptune’s active manifest contains `fork/tmad-0.11.1` after the four existing entries. It retains the `v0.11.1` base.
+
+Both signed desktop bundles are `0.11.1-mine.261008-1523`, built from assembly `2c554ab82356116d0430baa29f28c0f0713c5235`. Its runtime source matches the final assembly exactly; the final delta contains tests and delivery evidence. The ARM bundle also passed isolated health and WebSocket startup checks. Intel bundles were staged before the build tree was reassembled.
+
+All seven exact `@camerontaylor/paseo-*` packages are published as `0.11.1-fork.2`. [Publication run 37728821931](https://github.com/camerontaylor/paseo/actions/runs/37728821931) succeeded; the release tag points to the final assembly. `latest` advances with publication; the optional `fork` dist-tag update was denied by npm’s trusted-publisher permissions.
+
+| Host | Installed version | Verified |
+| --- | --- | --- |
+| Saturn, Neptune, Eris | `0.11.1-mine.261008-1523` | Signed app, daemon version, IPv4/IPv6/localhost/Tailscale health 200, WebSocket 101; external daemon ownership retained |
+| Ceres, Makemake, Pluto | `0.11.1-fork.2` | Exact systemd pin, active service, daemon version, IPv4/IPv6/localhost/Tailscale health 200, WebSocket 101 |
+| Quaoar | Previous version | Host offline; not deployed |
+
+Each reachable host’s durable home was backed up before replacement. Mac deployment logs are `~/.paseo-fork/deploy-<host>-0.11.1-mine.261008-1523.log`; Linux logs are `~/.paseo-fork/deploy-tmad-fork.2.log`. Completed Mac deployment jobs were retired. Saturn’s one-time continuation resumed this conversation after its daemon restart.
+
+Pluto’s tracked NixOS pin and authoritative manifest were committed and pushed to infra `main` (`8ea923d`, integrated as `7b38f27`). The new system closure is `b8csffip3bmvxscxrab0xz1zvfzxybhz`; the closure change was limited to Paseo, and no failed system units remained. Package-age exceptions on Pluto and Makemake were temporary and scoped to the verified package.
+
+Android’s release build succeeded from the final assembly. Signature verification passed for `sh.paseo.debug`, version `0.11.1`, code `11001`, ARM64. Artifact: Neptune `~/.paseo-fork/Paseo-debug-0.11.1-tmad-db4a75060-arm64.apk`; SHA-256 `30815b3d4e907c38f90c3bb38018f01a001d1f3364ccc0206f9441ccc636ae44`. Taildrop delivery to `camerons-s24` succeeded, recorded in `/tmp/paseo-tmad-android-delivery.log`. Phone installation and device QA remain unverified.
+
+## CI limits
+
+[Final CI 37728476105](https://github.com/camerontaylor/paseo/actions/runs/37728476105) passed typecheck, lint, formatting, Linux server tests, macOS watcher tests, app tests, SDK, relay, all CLI shards, and both desktop suites. Windows passed 6,359 tests and failed one unchanged worktree-bootstrap assertion comparing the equivalent `RUNNER~1` and `runneradmin` temporary paths.
+
+Browser shard 3 passed 160 tests, failed pinned-prompt transition and archived side-conversation removal, and recovered two flaky tests on retry. The side-conversation failure also occurs in pre-port [baseline CI 37718194103](https://github.com/camerontaylor/paseo/actions/runs/37718194103); the carried broadcast unit test passing does not establish the browser archive flow. Browser shard 2 passed 196 tests and failed an unchanged chat-find setup locator that matches both the user row and pinned prompt; one creation-idempotency test passed on retry. Browser shard 1 also failed; shard 4 is still running. CI is not fully green. Two CodeRabbit attempts failed to connect to its review service; neither produced a review verdict.
