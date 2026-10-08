@@ -4,19 +4,28 @@
 > recorded in [pluto-readiness-2026-10-08.md](evidence/pluto-readiness-2026-10-08.md). Current
 > `custom` (`24f134618`) is not an ancestor of `mine` or P0; older commits listed in that audit
 > are. ACP cancellation fixes are already implemented and present in `custom`, P0, and `mine`; the
-> historical fix-pass plan/review are stale as implementation status. The failed custom CI is the
-> side-conversation manager-event test at `session.test.ts:259`; its repair is assigned. Typecheck,
+> historical fix-pass plan/review are stale as implementation status. The historical custom CI failure was the
+> side-conversation manager-event test at `session.test.ts:259`; repair commit `fddb4fa85` is independently APPROVED and is an integration candidate outside
+> `custom`/`mine`; integration and CI remain outstanding. Typecheck,
 > lint, and format jobs are green; Playwright shards 3/4 and 4/4 fail without diagnostic annotations.
 > Do the frozen-P0 basket rehearsal before deciding whether to re-anchor on current `custom`. The
 > stale npm `fork` dist-tag is an expected trusted-publishing limitation; consumers use `latest` or
 > the default install path, and any tag repair is a credentialed operator action.
 >
-> Active workers reported 2026-10-08 (16 old sessions archived): Sol low / TM-04 voice / workspace
-> `9307e007`; Luna high / P0 assembly / `build/tmad-readiness-2026-10-08` / workspace `feb33ae6`;
-> Sol low / side-conversation CI repair / `fix/pluto-side-conversation-events` / workspace
-> `wks_0a7dc387a32f7959`. The CLI declaration-resolution investigation (Sol low, workspace `fc3f12c9`)
-> is complete and archived; see [CLI typecheck evidence](evidence/pluto-cli-typecheck-2026-10-08.md).
-> Do not duplicate active workers’ checks.
+> Current worker and archive ownership is tracked in the table below. On 2026-10-08, 19 old or
+> finished agents were archived, including the completed CLI, side-repair, and review agents.
+
+## Worker ownership — 2026-10-08
+
+| Work | Agent | Workspace | Branch | State |
+|---|---|---|---|---|
+| TM-04 voice | `agent9307e007` (Sol, low) | `wks_9d17ba714b1dcd50` | `intake/tmad-voice-flow` (`voice-flow-r2`) | In progress; worker owns implementation and checks. |
+| P0 assembly | `agentfeb33ae6` (Luna, high) | `wks_6bd86ab884dc41ee` | `build/tmad-readiness-2026-10-08` | In progress; based on P0 `2bfcd2e…`. |
+| CLI declaration-resolution investigation | `agentfc3f12c9` (Sol, low) | `wks_95f92a2c629a806f` | `fix/pluto-cli-typecheck` | Complete and archived; no source fix indicated. |
+| Side-conversation repair | `agentb1df5254` (Sol, low) | `wks_0a7dc387a32f7959` | `fix/pluto-side-conversation-events` | Complete, archived; `fddb4fa8587ae377286ffbea3137df4c53bdc7a9` approved, candidate outside `custom`/`mine`; awaiting integration and CI. See [repair evidence](evidence/pluto-side-conversation-events-2026-10-08.md). |
+| Side-conversation independent review | `agentc28ebf9` (Luna, high) | `wks_0a7dc387a32f7959` | `fix/pluto-side-conversation-events` | Complete, archived; APPROVE at `fddb4fa8587ae377286ffbea3137df4c53bdc7a9`. CodeRabbit did not start (`environment_unsupported`); manual review is the approval. See [review](evidence/pluto-side-conversation-review-2026-10-08.md). |
+
+19 old or finished agents are archived. Agent and workspace IDs are separate in this table.
 
 Plan: [../tmad-maintained-port-plan.md](../tmad-maintained-port-plan.md). Briefs in `briefs/` were
 written for neptune workers: read `/tmp/tmad-port/...` as the pluto scratch dir (populated from this
@@ -58,9 +67,9 @@ are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
   non-Latin locales).
 - TM-01: matched source/port UI captures (desktop + compact web), native captures, locale parity
   incl. ko; two informational decisions ("Queue" tab label; pin/artifact ceilings 100/200).
-- TM-02: the custom CI side-conversation manager-event failure at `session.test.ts:259` is confirmed
-  by public annotations and assigned for repair; daemon e2e still needs provider credentials (or a
-  fake-provider harness).
+- TM-02: the pre-fix custom CI side-conversation failure at `session.test.ts:259` is reproduced and
+  repaired at `fddb4fa85`; Luna independently approved it. Integration and post-fix CI remain
+  outstanding. Daemon e2e still needs provider credentials (or a fake-provider harness).
 - TM-04 (when run): its report will list the physical-device and per-provider checks.
 
 ## Proposed manifest append block (DRAFT — nothing live edited; each line valid only after its Muse Spark review)
@@ -160,15 +169,10 @@ Nothing was pushed to `mine` or `custom`; no live manifest was edited; no daemon
 desvio run against a live config. Intake branches get pushed to origin only after a reviewed
 milestone. This coordination branch carries all evidence and is pushed.
 
-CLI TS7006 report correction (2026-10-08): the original failing checkout was not available for
-reproduction, so the earlier claim that the error persisted after `build:client` + `build:server`
-and was a mainline source defect is withdrawn. At `24f134618`, the completed investigation rebuilt
-those owning stacks and then passed full workspace typecheck, lint, and targeted
-`packages/cli/src/commands/agent/delete.test.ts` (1/1). A controlled removal of local
+CLI TS7006 findings (2026-10-08): the exact original failing checkout was unavailable, so no
+mainline source defect is established. At `24f134618`, the CLI worker rebuilt the owning stacks and
+passed full workspace typecheck/lint plus targeted `delete.test.ts` (1/1). Removing local
 `packages/protocol/dist` reproduced the six-file TS7006 pattern; restoring declarations cleared it
-without a source fix. This demonstrates a declaration-resolution failure pattern, not the exact state
-of the original checkout. See [CLI typecheck evidence](evidence/pluto-cli-typecheck-2026-10-08.md).
-The coordination docs commit hook then failed on the same 14 CLI TS7006 diagnostics in this checkout;
-format and lint hook jobs skipped the `fork/**` docs. A repo-wide format check and root lint passed.
-The docs commit bypassed the hook because the failure was outside the docs change and
-the worker evidence shows the owning-stack rebuild resolves the CLI report without source edits.
+without a source fix. The coordination checkout initially had stale package-level links; after the
+worktree initializer and client/server rebuild, full typecheck and lint passed. Both outcomes support
+checking declaration resolution before considering a source change. See [CLI typecheck evidence](evidence/pluto-cli-typecheck-2026-10-08.md).

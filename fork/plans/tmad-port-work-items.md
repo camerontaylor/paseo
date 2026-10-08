@@ -22,28 +22,11 @@ See the [corrected Pluto readiness audit](tmad-port/evidence/pluto-readiness-202
 ancestry, exact build/artifact provenance, current fork CI annotations, and next-step order. The
 current `custom` head is not an ancestor of `mine` or P0; some earlier custom commits are. ACP
 cancellation implementation is already present in current `custom`, P0, and `mine`; its old plan and
-review are historical snapshots. The custom CI manager-event test failure at
-`packages/server/src/server/session.test.ts:259` is assigned to Sol (low), workspace
-`wks_0a7dc387a32f7959`, branch `fix/pluto-side-conversation-events`. Do not rerun its owned suites.
-
-Active workers (reported 2026-10-08; 16 old sessions archived): TM-04 voice — Sol low, workspace
-`9307e007`; P0 assembly — Luna high, branch `build/tmad-readiness-2026-10-08`, workspace
-`feb33ae6`; CLI declaration-resolution investigation — complete (Sol, workspace `fc3f12c9`;
-see evidence); side-conversation CI repair — Sol low, branch `fix/pluto-side-conversation-events`, workspace
-`wks_0a7dc387a32f7959`. The CLI declaration-resolution investigation by Sol (workspace `fc3f12c9`)
-is complete and archived; no source change was needed. See [CLI evidence](tmad-port/evidence/pluto-cli-typecheck-2026-10-08.md).
-Do not enter or duplicate checks in active worker-owned worktrees.
-
-The CLI TS7006 report is resolved as an environment/declaration-resolution investigation, not a
-source defect. At `24f134618`, rebuilt `build:client` + `build:server` followed by full typecheck and
-lint passed; targeted `delete.test.ts` passed 1/1. Controlled removal of local protocol `dist`
-reproduced the TS7006 pattern; restoration cleared it. The original failing checkout was not available,
-so the exact original state remains unverified. No source fix is indicated. See
-[CLI evidence](tmad-port/evidence/pluto-cli-typecheck-2026-10-08.md).
-
-The coordination pre-commit typecheck failed on 14 CLI TS7006 diagnostics; no source or generated
-file diff resulted. The docs-only commit bypassed that hook failure. See the STATUS note
-and the worker evidence above for the rebuilt-stack result.
+review are historical snapshots. Current agent, workspace, branch, and state assignments are maintained in the [STATUS worker
+ownership table](tmad-port/STATUS.md#worker-ownership--2026-10-08). The corrected readiness audit
+contains the historical custom CI failure and corrected CLI declaration-resolution result. Side-repair
+commit `fddb4fa8587ae377286ffbea3137df4c53bdc7a9` is independently approved and is an integration
+candidate outside `custom`/`mine`; it awaits integration and CI, and has not been promoted.
 
 The next port gate is the isolated frozen-P0 basket rehearsal using the already approved SHAs. Updating
 the queue root to current `custom` belongs to a later, separately reviewed update-loop batch; it is
@@ -121,8 +104,9 @@ TM-03 (and TM-04 when it lands) have only the TM-02 head; `intake/tmad-queue-ui`
 - Tests: queue store/service/send-or-queue suites (49), protocol sub tests (9), auth (7),
   ACP 130 / GJC 43 / agent-manager 210 on the custom floor.
 - Known gaps carried: daemon e2e was re-anchored on the fake-provider harness in TM-03; the
-  confirmed custom CI failure at `session.test.ts:259` is assigned to the side-conversation repair
-  worker listed above. Historical TM-02 evidence still records the original floor reproduction.
+  pre-fix custom CI failure at `session.test.ts:259` is reproduced and repaired at
+  `fddb4fa8587ae377286ffbea3137df4c53bdc7a9`; Luna independently approved it. Integration and CI
+  remain outstanding. Historical TM-02 evidence records the original floor reproduction.
 - Removal note: removal group Queue+Voice — TM-03/TM-04 depend on this branch even if their own
   lines are commented.
 
@@ -140,10 +124,11 @@ TM-03 (and TM-04 when it lands) have only the TM-02 head; `intake/tmad-queue-ui`
   server (56), protocol (9), two-client mirroring + revision-conflict daemon e2e on the
   fake-provider harness (2, run twice).
 - Human gate: browser/native screenshot pass on the new queue UI (badges, row menu, failed overlay).
-- CI follow-up: public custom run 37187135673 confirms the side-conversation manager-event test at
-  `packages/server/src/server/session.test.ts:259` fails with no update/removed events received;
-  repair is assigned to the worker listed in the coordination correction above. Playwright shards 3/4
-  and 4/4 fail with generic exit-code annotations and no established cause.
+- CI history: public custom run 37187135673 shows the pre-fix manager-event test at
+  `packages/server/src/server/session.test.ts:259` failed with no update/removed events received.
+  Local repair is `fddb4fa8587ae377286ffbea3137df4c53bdc7a9`, independently approved; integration
+  and CI remain outstanding. Playwright shards 3/4 and 4/4 failed
+  with generic exit-code annotations and no established cause.
 - Update-loop candidates from PR #36 (`929f1add3`): waiting-to-sync gating, per-agent blocking
   flush, await-outbox-persistence before clearing the draft, exhaustion-UX product call. Classified,
   not ported.
@@ -208,8 +193,8 @@ still owes its own removal exercise with pending items present (plan P2 step 5) 
 
 - TM-01: matched source/port UI captures (desktop + compact web), native captures, locale parity
   incl. ko; two informational decisions ("Queue" tab label; pin/artifact ceilings 100/200).
-- TM-02: assigned repair and CI verification of the confirmed custom side-conversation failure at
-  `session.test.ts:259`; do not duplicate the worker-owned suite.
+- TM-02: integrate independently approved side-conversation repair `fddb4fa85` through the intended
+  path and verify it in CI. The current repair branch remains outside `custom`/`mine`.
 - TM-03: browser/native screenshot pass on the new queue UI.
 - TM-04 (when done): its report will list the physical-device and per-provider checks (mic,
   playback, echo, lock/background, reconnect, owner contention; Claude, Codex, ACP/GJC) plus a
