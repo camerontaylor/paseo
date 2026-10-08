@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { compilePlugin } from "../../../server/src/server/plugins/compiler";
 import { runPluginClientBundle, type PluginClientRuntime } from "./evaluate";
 
 const runtime = {
@@ -29,6 +34,70 @@ function bundle(body: string): string {
 }
 
 describe("evaluatePluginClientBundle", () => {
+  it("uses the same host SDK and Settings components for canonical and fork imports", () => {
+    expect(() =>
+      evaluatePluginClientBundle(
+        "sdk-aliases",
+        `(function(require) {
+      for (const entry of ["", "/client", "/client/ui", "/client/react-native"]) {
+        if (require("@getpaseo/plugin" + entry) !== require("@camerontaylor/paseo-plugin" + entry)) {
+          throw new Error("SDK identity mismatch: " + entry);
+        }
+      }
+      const canonicalClient = require("@getpaseo/plugin/client");
+      const forkClient = require("@camerontaylor/paseo-plugin/client");
+      if (canonicalClient.useRpc !== forkClient.useRpc) throw new Error("Client hook identity mismatch");
+      const ui = require("@camerontaylor/paseo-plugin/client/ui");
+      for (const component of ["SettingsAction", "SettingsCard", "SettingsRow", "SettingsSection"]) {
+        if (typeof ui[component] !== "function") throw new Error(component);
+      }
+      return { default() { return () => {}; } };
+    })`,
+      ),
+    ).not.toThrow();
+  });
+  it.each(["@getpaseo/plugin", "@camerontaylor/paseo-plugin"])(
+    "compiles and loads upstream-shaped Settings UI with %s host imports",
+    async (sdkName) => {
+      const directory = await mkdtemp(path.join(tmpdir(), "paseo-sdk-client-"));
+      try {
+        const fixture = fileURLToPath(
+          new URL("../../../../plugin-examples/sdk-identity/", import.meta.url),
+        );
+        await cp(fixture, directory, { recursive: true });
+        for (const relative of ["index.client.tsx", "client/settings.tsx", "shared/status.ts"]) {
+          const file = path.join(directory, relative);
+          await writeFile(
+            file,
+            (await readFile(file, "utf8")).replaceAll("@getpaseo/plugin", sdkName),
+          );
+        }
+        // A stale author-installed SDK must never supply UI stubs or another Zod instance.
+        for (const dependency of [sdkName, "zod"]) {
+          const dependencyDirectory = path.join(directory, "node_modules", dependency);
+          await mkdir(dependencyDirectory, { recursive: true });
+          await writeFile(
+            path.join(dependencyDirectory, "package.json"),
+            JSON.stringify({ name: dependency, main: "index.js" }),
+          );
+          await writeFile(
+            path.join(dependencyDirectory, "index.js"),
+            'throw new Error("Author dependency was bundled");',
+          );
+        }
+        const { clientBundle } = await compilePlugin({
+          client: path.join(directory, "index.client.tsx"),
+          server: null,
+        });
+        const plugin = evaluatePluginClientBundle("sdk-identity", clientBundle!);
+        expect(plugin.settingsScreens.map((screen) => screen.id)).toEqual(["provider"]);
+        await plugin.cleanup();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("releases button registrations when client setup throws", () => {
     let active = 0;
     function addButton() {
@@ -649,6 +718,10 @@ describe("evaluatePluginClientBundle", () => {
     "@getpaseo/plugin/react-native",
     "@getpaseo/plugin/ui",
     "@getpaseo/plugin/host",
+    "@camerontaylor/paseo-plugin/server",
+    "@camerontaylor/paseo-plugin/server/provider",
+    "@camerontaylor/paseo-plugin/client/host",
+    "@camerontaylor/paseo-plugin/ui",
     "@paseo/plugin",
   ])("rejects %s in the client loader", (specifier) => {
     expect(() =>

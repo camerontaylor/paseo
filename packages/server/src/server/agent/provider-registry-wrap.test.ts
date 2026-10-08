@@ -21,6 +21,7 @@ type OptionalAgentSessionMethodName = {
 }[keyof AgentSession];
 
 const OPTIONAL_AGENT_SESSION_METHOD_NAMES = [
+  "askSideQuestion",
   "steerActiveTurn",
   "listCommands",
   "setModel",
@@ -185,6 +186,20 @@ async function* emptyHistory(): AsyncGenerator<AgentStreamEvent> {
 }
 
 describe("wrapSessionProvider", () => {
+  test("forwards side questions with the provider session as receiver", async () => {
+    const session: AgentSession = new FakeSession();
+    session.askSideQuestion = async function (question, history) {
+      expect(this).toBe(session);
+      expect(question).toBe("Explain the change");
+      expect(history).toEqual([]);
+      return { status: "unavailable", reason: "session_closed" };
+    };
+    const wrapped = wrapSessionProvider("custom-claude", session);
+    await expect(wrapped.askSideQuestion!("Explain the change", [])).resolves.toEqual({
+      status: "unavailable",
+      reason: "session_closed",
+    });
+  });
   test("forwards every optional AgentSession method", async () => {
     const session = new FakeSession();
     const wrapped = wrapSessionProvider("custom-claude", session);
