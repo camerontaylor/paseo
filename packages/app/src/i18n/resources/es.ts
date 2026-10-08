@@ -265,6 +265,7 @@ export const es: TranslationResources = {
     scrollToBottom: "Desplazarse hacia abajo",
     historyLoadFailed: "No se pudo cargar el historial del agente",
     messageCapped: "Este mensaje fue truncado ({{bytes}} bytes).",
+    pinnedPrompt: { jump: "Desplazarse a este mensaje" },
     permission: {
       rejectedPlan: "Plan rechazado",
       approvedPlan: "Plan aprobado",
@@ -277,6 +278,15 @@ export const es: TranslationResources = {
       implement: "Implementar",
       question: "¿Cómo le gustaría proceder?",
       proposedPlan: "Plan propuesto",
+      handOff: "Transferir",
+      handedOff: "Transferido",
+      handoffPrompt: "Implementa el siguiente plan propuesto.",
+      handoffFailed: "No se pudo transferir el plan.",
+      copyContent: "Copiar contenido",
+      copyLink: "Copiar enlace",
+      contentCopied: "Plan copiado",
+      linkCopied: "Enlace de sesión copiado",
+      copyFailed: "No se pudo copiar el plan.",
     },
   },
   agentPanel: {
@@ -558,6 +568,10 @@ export const es: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "No se pudo listar el directorio",
+        pathUnavailable:
+          "No se puede resolver esta ruta desde el directorio de trabajo de la conversación.",
+        outsideWorkspaceDirectory:
+          "Esta carpeta está fuera del espacio de trabajo actual. Ábrela desde su espacio de trabajo de origen.",
         createFailed: "No se pudo crear la entrada",
         renameFailed: "No se pudo renombrar la entrada",
         duplicateFailed: "No se pudo duplicar la entrada",
@@ -688,6 +702,7 @@ export const es: TranslationResources = {
       actions: {
         newTab: "Nueva pestaña",
         newAgent: "Nuevo agente",
+        recentlyClosed: "Cerrados recientemente",
         newTerminal: "Nueva terminal",
         preparingTerminal: "Preparando la pestaña del terminal",
         preparingTerminalTooltip: "Preparando terminal...",
@@ -703,6 +718,12 @@ export const es: TranslationResources = {
         pullRequest: "Solicitud de extracción",
         terminalProfilesMenu: "Terminal profiles",
         editTerminalProfiles: "Edit profiles",
+      },
+      recentAgents: {
+        title: "Cerrados recientemente",
+        loading: "Cargando…",
+        empty: "No hay agentes cerrados en este espacio de trabajo",
+        showAll: "Mostrar todo en Historial",
       },
       explorerSidebar: {
         open: "Abrir panel lateral",
@@ -777,8 +798,23 @@ export const es: TranslationResources = {
         workspacePathCopiedLabel: "RutaWorkspace",
         branchNameCopiedLabel: "Nombre de la sucursal",
       },
+      branches: {
+        current: "Rama actual: {{branchName}}. Pulsa para ver acciones de la rama.",
+        base: "Comparado con {{branchName}}. Pulsa para cambiar la rama base.",
+        setBase: "Definir rama base",
+        baseTitle: "Comparar con",
+        baseUnavailable: "Actualiza el host para cambiar la rama base",
+        baseFailed: "No se pudo cambiar la rama base",
+        rename: "Renombrar rama…",
+        renameTitle: "Renombrar rama",
+        renameSubmit: "Renombrar",
+        renameFailed: "Nombre de rama no válido",
+        switch: "Cambiar de rama…",
+      },
     },
     scripts: {
+      rootPackage: "Raíz",
+      searchPlaceholder: "Buscar scripts o paquetes…",
       title: "Scripts",
       actions: {
         chooseUrl: "Elegir URL",
@@ -806,6 +842,8 @@ export const es: TranslationResources = {
         direct: "Directa",
       },
       states: {
+        empty: "No se encontraron scripts",
+        noMatches: "No hay scripts coincidentes",
         exitCode: "salir de{{code}}",
         startFailed: "No se pudo iniciar{{scriptName}}",
         stopFailed: "No se pudo detener{{scriptName}}",
@@ -1328,6 +1366,7 @@ export const es: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "Script {{name}} en ejecución",
         serviceRunning: "Servicio {{name}} en ejecución",
         serviceUnhealthy: "Servicio {{name}} con fallos",
         creating: "Creando...",
@@ -1378,6 +1417,28 @@ export const es: TranslationResources = {
         archiveFailed: "No se pudo archivar el espacio de trabajo",
       },
     },
+  },
+  projectPullRequests: {
+    checks: {
+      passed: "Todas las comprobaciones pasaron",
+      pending: "Comprobaciones en curso",
+      skipped: "Comprobaciones omitidas",
+      updateRequired: "Actualiza este host para ver el estado de CI.",
+    },
+    title: "Pull requests",
+    shortcut: "Ver pull requests de {{project}}",
+    search: "Buscar pull requests",
+    clearSearch: "Borrar búsqueda",
+    open: "Abiertas",
+    closed: "Cerradas",
+    results: "{{count}} resultados",
+    authRequired: "Inicia sesión en tu forja Git en este host para ver las pull requests.",
+    loading: "Cargando pull requests…",
+    empty: "No hay pull requests coincidentes.",
+    limit: "Se muestran hasta {{count}} resultados. Refina la búsqueda.",
+    start: "Crear worktree desde #{{number}}: {{title}}",
+    updated: "Actualizado {{date}}",
+    external: "Abrir #{{number}} en el navegador",
   },
   newWorkspace: {
     title: "Nuevo espacio de trabajo",
@@ -2417,6 +2478,8 @@ export const es: TranslationResources = {
         jumpToWorkspace: "Saltar al espacio de trabajo",
         jumpToTab: "Saltar a la pestaña",
         previousWorkspace: "Espacio de trabajo anterior",
+        historyBack: "Atrás",
+        historyForward: "Adelante",
         nextWorkspace: "Siguiente espacio de trabajo",
         previousTab: "Pestaña anterior",
         nextTab: "Pestaña siguiente",

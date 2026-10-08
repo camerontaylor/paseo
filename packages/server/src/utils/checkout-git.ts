@@ -36,8 +36,10 @@ import {
   branchNameFromRef,
   getPaseoWorktreeChangeRequestHintForBranch,
   type PaseoWorktreeMetadata,
+  normalizeBaseRefName,
   readPaseoWorktreeMetadata,
   rebindPaseoWorktreeChangeRequestHint,
+  writePaseoWorktreeBaseRef,
 } from "./worktree-metadata.js";
 const READ_ONLY_GIT_ENV = {
   GIT_OPTIONAL_LOCKS: "0",
@@ -61,6 +63,7 @@ export type GitMutationRefreshReason =
   | "create-pr"
   | "switch-branch"
   | "rename-branch"
+  | "set-base-ref"
   | "create-branch"
   | "stash-push"
   | "stash-pop"
@@ -245,6 +248,8 @@ export interface BranchSuggestion {
   committerDate: number;
   hasLocal: boolean;
   hasRemote: boolean;
+  localRefs?: string[];
+  remoteRefs?: string[];
   localAhead?: number;
   localBehind?: number;
 }
@@ -275,6 +280,8 @@ interface BranchSuggestionMeta {
   committerDate: number;
   hasLocal: boolean;
   hasRemote: boolean;
+  localRefs: string[];
+  remoteRefs: string[];
   localOid?: string;
   remoteOid?: string;
 }
@@ -307,6 +314,92 @@ function sortBranchSuggestions(
   });
 }
 
+async function buildBranchSuggestion(
+  cwd: string,
+  name: string,
+  meta: BranchSuggestionMeta | undefined,
+): Promise<BranchSuggestion> {
+  const suggestion: BranchSuggestion = {
+    name,
+    committerDate: meta?.committerDate ?? 0,
+    hasLocal: meta?.hasLocal ?? false,
+    hasRemote: meta?.hasRemote ?? false,
+    localRefs: meta?.localRefs ?? [],
+    remoteRefs: meta?.remoteRefs ?? [],
+  };
+  if (meta?.localRefs.length !== 1 || meta.remoteRefs.length !== 1) {
+    return suggestion;
+  }
+  if (meta.localOid && meta.localOid === meta.remoteOid) {
+    suggestion.localAhead = 0;
+    suggestion.localBehind = 0;
+    return suggestion;
+  }
+
+  try {
+    const { stdout } = await runGitCommand(
+      ["rev-list", "--left-right", "--count", `${meta.localRefs[0]}...${meta.remoteRefs[0]}`],
+      { cwd, envOverlay: READ_ONLY_GIT_ENV },
+    );
+    const [localAhead, localBehind] = stdout.trim().split(/\s+/).map(Number);
+    if (Number.isFinite(localAhead) && Number.isFinite(localBehind)) {
+      suggestion.localAhead = localAhead;
+      suggestion.localBehind = localBehind;
+    }
+  } catch {
+    // A ref may disappear between listing and comparison. Keep the branch
+    // available without divergence metadata and let creation re-resolve it.
+  }
+  return suggestion;
+}
+
+function collectBranchSuggestionMeta(
+  localRefs: GitRef[],
+  remoteRefs: GitRef[],
+): Map<string, BranchSuggestionMeta> {
+  const branchMeta = new Map<string, BranchSuggestionMeta>();
+
+  for (const ref of localRefs) {
+    const normalized = normalizeBranchSuggestionName(ref.name);
+    if (!normalized) continue;
+    const existing = branchMeta.get(normalized);
+    branchMeta.set(normalized, {
+      hasLocal: true,
+      hasRemote: existing?.hasRemote ?? false,
+      localRefs: [...(existing?.localRefs ?? []), ref.name],
+      remoteRefs: existing?.remoteRefs ?? [],
+      localOid: ref.oid,
+      ...(existing?.remoteOid ? { remoteOid: existing.remoteOid } : {}),
+      committerDate: Math.max(ref.committerDate, existing?.committerDate ?? 0),
+    });
+  }
+
+  for (const ref of remoteRefs) {
+    const normalized = normalizeBranchSuggestionName(ref.name);
+    if (!normalized) continue;
+    const existing = branchMeta.get(normalized);
+    if (!existing) {
+      branchMeta.set(normalized, {
+        hasLocal: false,
+        hasRemote: true,
+        localRefs: [],
+        remoteRefs: [ref.name],
+        remoteOid: ref.oid,
+        committerDate: ref.committerDate,
+      });
+    } else {
+      branchMeta.set(normalized, {
+        ...existing,
+        hasRemote: true,
+        remoteRefs: [...existing.remoteRefs, ref.name],
+        remoteOid: ref.oid,
+        committerDate: Math.max(ref.committerDate, existing.committerDate),
+      });
+    }
+  }
+  return branchMeta;
+}
+
 export async function listBranchSuggestions(
   cwd: string,
   options?: { query?: string; limit?: number },
@@ -323,41 +416,7 @@ export async function listBranchSuggestions(
     listGitRefs(cwd, "refs/remotes/origin"),
   ]);
 
-  const branchMeta = new Map<string, BranchSuggestionMeta>();
-
-  for (const ref of localRefs) {
-    const normalized = normalizeBranchSuggestionName(ref.name);
-    if (!normalized) continue;
-    const existing = branchMeta.get(normalized);
-    branchMeta.set(normalized, {
-      hasLocal: true,
-      hasRemote: existing?.hasRemote ?? false,
-      localOid: ref.oid,
-      ...(existing?.remoteOid ? { remoteOid: existing.remoteOid } : {}),
-      committerDate: Math.max(ref.committerDate, existing?.committerDate ?? 0),
-    });
-  }
-
-  for (const ref of remoteRefs) {
-    const normalized = normalizeBranchSuggestionName(ref.name);
-    if (!normalized) continue;
-    const existing = branchMeta.get(normalized);
-    if (!existing) {
-      branchMeta.set(normalized, {
-        hasLocal: false,
-        hasRemote: true,
-        remoteOid: ref.oid,
-        committerDate: ref.committerDate,
-      });
-    } else {
-      branchMeta.set(normalized, {
-        ...existing,
-        hasRemote: true,
-        remoteOid: ref.oid,
-        committerDate: Math.max(ref.committerDate, existing.committerDate),
-      });
-    }
-  }
+  const branchMeta = collectBranchSuggestionMeta(localRefs, remoteRefs);
 
   const filteredNames = Array.from(branchMeta.keys()).filter((name) =>
     query ? name.toLowerCase().includes(query) : true,
@@ -368,44 +427,7 @@ export async function listBranchSuggestions(
 
   const ordered = sortBranchSuggestions(filteredNames, branchMeta, query);
   return Promise.all(
-    ordered.slice(0, limit).map(async (name): Promise<BranchSuggestion> => {
-      const meta = branchMeta.get(name);
-      const suggestion: BranchSuggestion = {
-        name,
-        committerDate: meta?.committerDate ?? 0,
-        hasLocal: meta?.hasLocal ?? false,
-        hasRemote: meta?.hasRemote ?? false,
-      };
-      if (!suggestion.hasLocal || !suggestion.hasRemote) {
-        return suggestion;
-      }
-      if (meta?.localOid && meta.localOid === meta.remoteOid) {
-        suggestion.localAhead = 0;
-        suggestion.localBehind = 0;
-        return suggestion;
-      }
-
-      try {
-        const { stdout } = await runGitCommand(
-          [
-            "rev-list",
-            "--left-right",
-            "--count",
-            `refs/heads/${name}...refs/remotes/origin/${name}`,
-          ],
-          { cwd, envOverlay: READ_ONLY_GIT_ENV },
-        );
-        const [localAhead, localBehind] = stdout.trim().split(/\s+/).map(Number);
-        if (Number.isFinite(localAhead) && Number.isFinite(localBehind)) {
-          suggestion.localAhead = localAhead;
-          suggestion.localBehind = localBehind;
-        }
-      } catch {
-        // A ref may disappear between listing and comparison. Keep the branch
-        // available without divergence metadata and let creation re-resolve it.
-      }
-      return suggestion;
-    }),
+    ordered.slice(0, limit).map((name) => buildBranchSuggestion(cwd, name, branchMeta.get(name))),
   );
 }
 
@@ -1198,6 +1220,63 @@ export async function renameCurrentBranch(
   return { previousBranch, currentBranch };
 }
 
+/**
+ * Change what a checkout is compared with. A Paseo-owned worktree keeps its base in worktree.json,
+ * so the write goes there; any other checkout writes the repository's git config, which
+ * `resolveRepositoryDefaultBranch` reads first. Returns the display name now in effect.
+ */
+export async function setCheckoutBaseRef(
+  cwd: string,
+  requestedBaseRef: string,
+  context?: CheckoutContext,
+): Promise<{ baseRef: string; isPaseoOwnedWorktree: boolean }> {
+  const facts = await getCheckoutSnapshotFacts(cwd, context);
+  if (!facts.isGit) {
+    throw new NotGitRepoError(cwd);
+  }
+  const requested = requestedBaseRef.trim();
+  const baseRefName = normalizeBaseRefName(requested);
+  if (baseRefName === "HEAD") {
+    throw new Error("Base branch cannot be HEAD");
+  }
+  let exactRef: string;
+  if (isQualifiedBranchRef(requested)) {
+    exactRef = requested;
+    if (!(await doesGitRefExist(cwd, exactRef, context))) {
+      throw new Error(`Base ref not found: ${exactRef}`);
+    }
+  } else if (requested.startsWith("origin/")) {
+    exactRef = `refs/remotes/${requested}`;
+    if (!(await doesGitRefExist(cwd, exactRef, context))) {
+      throw new Error(`Base ref not found: ${exactRef}`);
+    }
+  } else {
+    const [hasLocal, hasOrigin] = await Promise.all([
+      doesGitRefExist(cwd, `refs/heads/${requested}`, context),
+      doesGitRefExist(cwd, `refs/remotes/origin/${requested}`, context),
+    ]);
+    if (!hasLocal && !hasOrigin) {
+      throw new Error(`Base branch not found locally or on origin: ${requested}`);
+    }
+    exactRef = hasOrigin ? `refs/remotes/origin/${requested}` : `refs/heads/${requested}`;
+  }
+  const selectedBaseName = branchNameFromRef(exactRef);
+  if (facts.currentBranch && exactRef === `refs/heads/${facts.currentBranch}`) {
+    throw new Error(`Base branch cannot be the current branch: ${selectedBaseName}`);
+  }
+
+  if (facts.paseoWorktree.isPaseoOwnedWorktree) {
+    writePaseoWorktreeBaseRef(facts.paseoWorktree.worktreeRoot, { baseRef: exactRef });
+    return { baseRef: selectedBaseName, isPaseoOwnedWorktree: true };
+  }
+
+  await getRunGitCommand(context)(["config", PASEO_BASE_BRANCH_CONFIG_KEY, exactRef], {
+    cwd,
+    logger: context?.logger,
+  });
+  return { baseRef: selectedBaseName, isPaseoOwnedWorktree: false };
+}
+
 type PaseoWorktreeForCwd =
   | { isPaseoOwnedWorktree: false }
   | { isPaseoOwnedWorktree: true; worktreeRoot: string };
@@ -1530,10 +1609,26 @@ async function abortGitPullConflictState(cwd: string): Promise<void> {
   }
 }
 
+/**
+ * Repository-local git config key naming the branch Paseo treats as the base for plain
+ * checkouts: comparisons, merge-from-base, and the default base for new worktrees. Set from the
+ * workspace header; absent means origin/HEAD decides. It lives in git config rather than the
+ * workspace registry so every workspace on the same repository agrees.
+ */
+export const PASEO_BASE_BRANCH_CONFIG_KEY = "paseo.baseBranch";
+
 export async function resolveRepositoryDefaultBranch(
   repoRoot: string,
   context?: CheckoutContext,
 ): Promise<string | null> {
+  const configuredBaseBranch = await getGitConfigValue(
+    repoRoot,
+    PASEO_BASE_BRANCH_CONFIG_KEY,
+    context,
+  );
+  if (configuredBaseBranch) {
+    return configuredBaseBranch;
+  }
   try {
     const { stdout } = await getRunGitCommand(context)(
       ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],

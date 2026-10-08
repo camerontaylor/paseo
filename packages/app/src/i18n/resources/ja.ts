@@ -265,6 +265,7 @@ export const ja: TranslationResources = {
     scrollToBottom: "下にスクロール",
     historyLoadFailed: "エージェントの履歴を読み込めませんでした",
     messageCapped: "このメッセージは上限で切り詰められました（{{bytes}}バイト）。",
+    pinnedPrompt: { jump: "このメッセージまでスクロール" },
     permission: {
       rejectedPlan: "却下されたプラン",
       approvedPlan: "承認されたプラン",
@@ -277,6 +278,15 @@ export const ja: TranslationResources = {
       implement: "実装",
       question: "どのように続けますか？",
       proposedPlan: "提案されたプラン",
+      handOff: "引き継ぐ",
+      handedOff: "引き継ぎ済み",
+      handoffPrompt: "次の提案されたプランを実装してください。",
+      handoffFailed: "プランを引き継げませんでした。",
+      copyContent: "内容をコピー",
+      copyLink: "リンクをコピー",
+      contentCopied: "プランをコピーしました",
+      linkCopied: "セッションリンクをコピーしました",
+      copyFailed: "プランをコピーできませんでした。",
     },
   },
   agentPanel: {
@@ -558,6 +568,9 @@ export const ja: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "ディレクトリの一覧取得に失敗しました",
+        pathUnavailable: "このパスは会話の作業ディレクトリから解決できません。",
+        outsideWorkspaceDirectory:
+          "このフォルダーは現在のワークスペースの外にあります。元のワークスペースから開いてください。",
         createFailed: "エントリの作成に失敗しました",
         renameFailed: "エントリの名前変更に失敗しました",
         duplicateFailed: "エントリの複製に失敗しました",
@@ -688,6 +701,7 @@ export const ja: TranslationResources = {
       actions: {
         newTab: "新しいタブ",
         newAgent: "新しいエージェント",
+        recentlyClosed: "最近閉じた項目",
         newTerminal: "新しいターミナル",
         preparingTerminal: "ターミナルタブを準備中",
         preparingTerminalTooltip: "ターミナルを準備中...",
@@ -703,6 +717,12 @@ export const ja: TranslationResources = {
         pullRequest: "プルリクエスト",
         terminalProfilesMenu: "ターミナルプロファイル",
         editTerminalProfiles: "プロファイルを編集",
+      },
+      recentAgents: {
+        title: "最近閉じた項目",
+        loading: "読み込み中…",
+        empty: "このワークスペースに閉じたエージェントはありません",
+        showAll: "履歴ですべて表示",
       },
       explorerSidebar: {
         open: "サイドパネルを開く",
@@ -773,8 +793,23 @@ export const ja: TranslationResources = {
         workspacePathCopiedLabel: "ワークスペースパス",
         branchNameCopiedLabel: "ブランチ名",
       },
+      branches: {
+        current: "現在のブランチ: {{branchName}}。押すとブランチ操作を表示します。",
+        base: "{{branchName}} と比較中。押すとベースブランチを変更します。",
+        setBase: "ベースブランチを設定",
+        baseTitle: "比較対象",
+        baseUnavailable: "ベースブランチを変更するにはホストを更新してください",
+        baseFailed: "ベースブランチを変更できませんでした",
+        rename: "ブランチ名を変更…",
+        renameTitle: "ブランチ名を変更",
+        renameSubmit: "変更",
+        renameFailed: "無効なブランチ名です",
+        switch: "ブランチを切り替え…",
+      },
     },
     scripts: {
+      rootPackage: "ルート",
+      searchPlaceholder: "スクリプトまたはパッケージを検索…",
       title: "スクリプト",
       actions: {
         chooseUrl: "URLを選択",
@@ -802,6 +837,8 @@ export const ja: TranslationResources = {
         direct: "直接接続",
       },
       states: {
+        empty: "スクリプトが見つかりません",
+        noMatches: "一致するスクリプトがありません",
         exitCode: "終了コード: {{code}}",
         startFailed: "{{scriptName}}の起動に失敗しました",
         stopFailed: "{{scriptName}}の停止に失敗しました",
@@ -1306,6 +1343,7 @@ export const ja: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "スクリプト {{name}} を実行中",
         serviceRunning: "サービス {{name}} 実行中",
         serviceUnhealthy: "サービス {{name}} 異常",
         creating: "作成中...",
@@ -1356,6 +1394,29 @@ export const ja: TranslationResources = {
         archiveFailed: "ワークスペースのアーカイブに失敗しました",
       },
     },
+  },
+  projectPullRequests: {
+    checks: {
+      passed: "すべてのチェックに成功",
+      pending: "チェック実行中",
+      skipped: "チェックをスキップ",
+      updateRequired: "CI ステータスを表示するには、このホストを更新してください。",
+    },
+    title: "プルリクエスト",
+    shortcut: "{{project}} のプルリクエストを表示",
+    search: "プルリクエストを検索",
+    clearSearch: "検索をクリア",
+    open: "オープン",
+    closed: "クローズ",
+    results: "{{count}} 件",
+    authRequired:
+      "プルリクエストを表示するには、このホストの Git サービスにサインインしてください。",
+    loading: "プルリクエストを読み込み中…",
+    empty: "一致するプルリクエストはありません。",
+    limit: "最大 {{count}} 件を表示しています。検索条件を絞り込んでください。",
+    start: "#{{number}} から worktree を作成: {{title}}",
+    updated: "更新日 {{date}}",
+    external: "#{{number}} をブラウザーで開く",
   },
   newWorkspace: {
     title: "新しいワークスペース",
@@ -2383,6 +2444,8 @@ export const ja: TranslationResources = {
         jumpToWorkspace: "ワークスペースにジャンプ",
         jumpToTab: "タブにジャンプ",
         previousWorkspace: "前のワークスペース",
+        historyBack: "戻る",
+        historyForward: "進む",
         nextWorkspace: "次のワークスペース",
         previousTab: "前のタブ",
         nextTab: "次のタブ",

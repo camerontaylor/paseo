@@ -262,6 +262,7 @@ export const ko: TranslationResources = {
     scrollToBottom: "맨 아래로 스크롤",
     historyLoadFailed: "에이전트 기록을 로드할 수 없습니다.",
     messageCapped: "이 메시지는 길이 제한으로 잘렸습니다({{bytes}}바이트).",
+    pinnedPrompt: { jump: "이 메시지로 스크롤" },
     permission: {
       rejectedPlan: "거부된 계획",
       approvedPlan: "승인된 계획",
@@ -274,6 +275,15 @@ export const ko: TranslationResources = {
       implement: "구현",
       question: "어떻게 진행할까요?",
       proposedPlan: "제안된 계획",
+      handOff: "전달",
+      handedOff: "전달됨",
+      handoffPrompt: "다음 제안된 계획을 구현하세요.",
+      handoffFailed: "계획을 전달할 수 없습니다.",
+      copyContent: "내용 복사",
+      copyLink: "링크 복사",
+      contentCopied: "계획을 복사했습니다",
+      linkCopied: "세션 링크를 복사했습니다",
+      copyFailed: "계획을 복사할 수 없습니다.",
     },
   },
   agentPanel: {
@@ -552,6 +562,9 @@ export const ko: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "디렉터리 목록을 불러오지 못했습니다",
+        pathUnavailable: "대화의 작업 디렉터리에서 이 경로를 확인할 수 없습니다.",
+        outsideWorkspaceDirectory:
+          "이 폴더는 현재 작업 공간 밖에 있습니다. 원본 작업 공간에서 여세요.",
         createFailed: "항목을 만들지 못했습니다",
         renameFailed: "항목 이름을 바꾸지 못했습니다",
         duplicateFailed: "항목을 복제하지 못했습니다",
@@ -682,6 +695,7 @@ export const ko: TranslationResources = {
       actions: {
         newTab: "새 탭",
         newAgent: "새 에이전트",
+        recentlyClosed: "최근 닫은 항목",
         newTerminal: "새 터미널",
         preparingTerminal: "터미널 탭 준비 중",
         preparingTerminalTooltip: "터미널 준비 중...",
@@ -697,6 +711,12 @@ export const ko: TranslationResources = {
         pullRequest: "풀 리퀘스트",
         terminalProfilesMenu: "터미널 프로필",
         editTerminalProfiles: "프로필 편집",
+      },
+      recentAgents: {
+        title: "최근 닫은 항목",
+        loading: "불러오는 중…",
+        empty: "이 작업 공간에 닫힌 에이전트가 없습니다",
+        showAll: "기록에서 모두 보기",
       },
       explorerSidebar: {
         open: "사이드 패널 열기",
@@ -768,8 +788,23 @@ export const ko: TranslationResources = {
         workspacePathCopiedLabel: "워크스페이스 경로",
         branchNameCopiedLabel: "브랜치 이름",
       },
+      branches: {
+        current: "현재 브랜치: {{branchName}}. 눌러서 브랜치 작업을 표시합니다.",
+        base: "{{branchName}}와 비교 중. 눌러서 베이스 브랜치를 변경합니다.",
+        setBase: "베이스 브랜치 설정",
+        baseTitle: "비교 대상",
+        baseUnavailable: "베이스 브랜치를 변경하려면 호스트를 업데이트하세요",
+        baseFailed: "베이스 브랜치를 변경하지 못했습니다",
+        rename: "브랜치 이름 변경…",
+        renameTitle: "브랜치 이름 변경",
+        renameSubmit: "변경",
+        renameFailed: "유효하지 않은 브랜치 이름입니다",
+        switch: "브랜치 전환…",
+      },
     },
     scripts: {
+      rootPackage: "루트",
+      searchPlaceholder: "스크립트 또는 패키지 검색…",
       title: "스크립트",
       actions: {
         chooseUrl: "URL를 선택하세요",
@@ -797,6 +832,8 @@ export const ko: TranslationResources = {
         direct: "직접",
       },
       states: {
+        empty: "스크립트가 없습니다",
+        noMatches: "일치하는 스크립트가 없습니다",
         exitCode: "종료 {{code}}",
         startFailed: "{{scriptName}}을(를) 시작하지 못했습니다",
         stopFailed: "{{scriptName}}를 중지하지 못했습니다.",
@@ -1298,6 +1335,7 @@ export const ko: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "스크립트 {{name}} 실행 중",
         serviceRunning: "서비스 {{name}} 실행 중",
         serviceUnhealthy: "서비스 {{name}} 비정상",
         creating: "생성하는 중...",
@@ -1348,6 +1386,28 @@ export const ko: TranslationResources = {
         archiveFailed: "워크스페이스를 보관하지 못했습니다.",
       },
     },
+  },
+  projectPullRequests: {
+    checks: {
+      passed: "모든 검사 통과",
+      pending: "검사 실행 중",
+      skipped: "검사 건너뜀",
+      updateRequired: "CI 상태를 보려면 이 호스트를 업데이트하세요.",
+    },
+    title: "풀 리퀘스트",
+    shortcut: "{{project}}의 풀 리퀘스트 보기",
+    search: "풀 리퀘스트 검색",
+    clearSearch: "검색 지우기",
+    open: "열림",
+    closed: "닫힘",
+    results: "결과 {{count}}개",
+    authRequired: "풀 리퀘스트를 보려면 이 호스트에서 Git 서비스에 로그인하세요.",
+    loading: "풀 리퀘스트 로딩 중…",
+    empty: "일치하는 풀 리퀘스트가 없습니다.",
+    limit: "최대 {{count}}개의 결과를 표시합니다. 검색 범위를 좁히세요.",
+    start: "#{{number}}에서 worktree 만들기: {{title}}",
+    updated: "업데이트 {{date}}",
+    external: "브라우저에서 #{{number}} 열기",
   },
   newWorkspace: {
     title: "새 워크스페이스",
@@ -2372,6 +2432,8 @@ export const ko: TranslationResources = {
         jumpToWorkspace: "워크스페이스로 이동",
         jumpToTab: "탭으로 이동",
         previousWorkspace: "이전 워크스페이스",
+        historyBack: "뒤로",
+        historyForward: "앞으로",
         nextWorkspace: "다음 워크스페이스",
         previousTab: "이전 탭",
         nextTab: "다음 탭",

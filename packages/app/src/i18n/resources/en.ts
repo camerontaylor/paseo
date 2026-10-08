@@ -258,6 +258,9 @@ export const en = {
     scrollToBottom: "Scroll to bottom",
     historyLoadFailed: "Couldn't load agent history",
     messageCapped: "This message was capped ({{bytes}} bytes).",
+    pinnedPrompt: {
+      jump: "Scroll to this message",
+    },
     permission: {
       rejectedPlan: "Rejected plan",
       approvedPlan: "Approved plan",
@@ -270,6 +273,15 @@ export const en = {
       implement: "Implement",
       question: "How would you like to proceed?",
       proposedPlan: "Proposed plan",
+      handOff: "Hand off",
+      handedOff: "Handed off",
+      handoffPrompt: "Implement the following proposed plan.",
+      handoffFailed: "Could not hand off the plan.",
+      copyContent: "Copy content",
+      copyLink: "Copy link",
+      contentCopied: "Plan copied",
+      linkCopied: "Session link copied",
+      copyFailed: "Could not copy the plan.",
     },
   },
   agentPanel: {
@@ -548,6 +560,9 @@ export const en = {
       },
       errors: {
         failedToListDirectory: "Failed to list directory",
+        pathUnavailable: "This path cannot be resolved from the conversation's working directory.",
+        outsideWorkspaceDirectory:
+          "This folder is outside the current workspace. Open it from its source workspace.",
         createFailed: "Failed to create entry",
         renameFailed: "Failed to rename entry",
         duplicateFailed: "Failed to duplicate entry",
@@ -677,6 +692,7 @@ export const en = {
       actions: {
         newTab: "New tab",
         newAgent: "New agent",
+        recentlyClosed: "Recently closed",
         newTerminal: "New terminal",
         preparingTerminal: "Preparing terminal tab",
         preparingTerminalTooltip: "Preparing terminal...",
@@ -692,6 +708,12 @@ export const en = {
         pullRequest: "Pull request",
         terminalProfilesMenu: "Terminal profiles",
         editTerminalProfiles: "Edit profiles",
+      },
+      recentAgents: {
+        title: "Recently closed",
+        loading: "Loading…",
+        empty: "No closed agents in this workspace",
+        showAll: "Show all in History",
       },
       explorerSidebar: {
         open: "Open Explorer sidebar",
@@ -763,8 +785,23 @@ export const en = {
         workspacePathCopiedLabel: "Workspace path",
         branchNameCopiedLabel: "Branch name",
       },
+      branches: {
+        current: "Current branch: {{branchName}}. Press for branch actions.",
+        base: "Compared with {{branchName}}. Press to change the base branch.",
+        setBase: "Set base branch",
+        baseTitle: "Compare with",
+        baseUnavailable: "Update the host to change the base branch",
+        baseFailed: "Failed to change base branch",
+        rename: "Rename branch…",
+        renameTitle: "Rename branch",
+        renameSubmit: "Rename",
+        renameFailed: "Invalid branch name",
+        switch: "Switch branch…",
+      },
     },
     scripts: {
+      rootPackage: "Root",
+      searchPlaceholder: "Search scripts or packages…",
       title: "Scripts",
       actions: {
         chooseUrl: "Choose URL",
@@ -792,6 +829,8 @@ export const en = {
         direct: "Direct",
       },
       states: {
+        empty: "No scripts found",
+        noMatches: "No matching scripts",
         exitCode: "exit {{code}}",
         startFailed: "Failed to start {{scriptName}}",
         stopFailed: "Failed to stop {{scriptName}}",
@@ -1299,6 +1338,7 @@ export const en = {
     },
     workspace: {
       status: {
+        scriptRunning: "Script {{name}} running",
         serviceRunning: "Service {{name}} running",
         serviceUnhealthy: "Service {{name}} unhealthy",
         creating: "Creating...",
@@ -1349,6 +1389,28 @@ export const en = {
         archiveFailed: "Failed to archive workspace",
       },
     },
+  },
+  projectPullRequests: {
+    checks: {
+      passed: "All checks passed",
+      pending: "Checks running",
+      skipped: "Checks skipped",
+      updateRequired: "Update this host to see CI status.",
+    },
+    title: "Pull requests",
+    shortcut: "Browse pull requests for {{project}}",
+    search: "Search pull requests",
+    clearSearch: "Clear search",
+    open: "Open",
+    closed: "Closed",
+    results: "Results: {{count}}",
+    authRequired: "Sign in to your git forge on this host to browse pull requests.",
+    loading: "Loading pull requests…",
+    empty: "No matching pull requests.",
+    limit: "Showing up to {{count}} results. Refine your search to find more.",
+    start: "Create worktree from #{{number}}: {{title}}",
+    updated: "Updated {{date}}",
+    external: "Open #{{number}} in browser",
   },
   newWorkspace: {
     title: "New workspace",
@@ -2485,6 +2547,8 @@ export const en = {
         jumpToWorkspace: "Jump to workspace",
         jumpToTab: "Jump to tab",
         previousWorkspace: "Previous workspace",
+        historyBack: "Back",
+        historyForward: "Forward",
         nextWorkspace: "Next workspace",
         previousTab: "Previous tab",
         nextTab: "Next tab",

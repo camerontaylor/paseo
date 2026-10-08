@@ -262,6 +262,7 @@ export const ar: TranslationResources = {
     scrollToBottom: "قم بالتمرير إلى الأسفل",
     historyLoadFailed: "تعذر تحميل سجل الوكيل",
     messageCapped: "تم اقتطاع هذه الرسالة ({{bytes}} بايت).",
+    pinnedPrompt: { jump: "انتقل إلى هذه الرسالة" },
     permission: {
       rejectedPlan: "خطة مرفوضة",
       approvedPlan: "خطة معتمدة",
@@ -274,6 +275,15 @@ export const ar: TranslationResources = {
       implement: "ينفذ",
       question: "كيف تريد المتابعة؟",
       proposedPlan: "الخطة المقترحة",
+      handOff: "تسليم",
+      handedOff: "تم التسليم",
+      handoffPrompt: "نفّذ الخطة المقترحة التالية.",
+      handoffFailed: "تعذّر تسليم الخطة.",
+      copyContent: "نسخ المحتوى",
+      copyLink: "نسخ الرابط",
+      contentCopied: "تم نسخ الخطة",
+      linkCopied: "تم نسخ رابط الجلسة",
+      copyFailed: "تعذر نسخ الخطة.",
     },
   },
   agentPanel: {
@@ -551,6 +561,9 @@ export const ar: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "فشل في سرد ​​الدليل",
+        pathUnavailable: "لا يمكن تحديد هذا المسار من دليل عمل المحادثة.",
+        outsideWorkspaceDirectory:
+          "هذا المجلد خارج مساحة العمل الحالية. افتحه من مساحة العمل المصدر.",
         createFailed: "فشل إنشاء العنصر",
         renameFailed: "فشل إعادة تسمية العنصر",
         duplicateFailed: "فشل تكرار العنصر",
@@ -680,6 +693,7 @@ export const ar: TranslationResources = {
       actions: {
         newTab: "علامة تبويب جديدة",
         newAgent: "وكيل جديد",
+        recentlyClosed: "المغلقة مؤخرًا",
         newTerminal: "محطة جديدة",
         preparingTerminal: "إعداد علامة التبويب المحطة الطرفية",
         preparingTerminalTooltip: "جارٍ تحضير المحطة...",
@@ -695,6 +709,12 @@ export const ar: TranslationResources = {
         pullRequest: "طلب السحب",
         terminalProfilesMenu: "Terminal profiles",
         editTerminalProfiles: "Edit profiles",
+      },
+      recentAgents: {
+        title: "المغلقة مؤخرًا",
+        loading: "جارٍ التحميل…",
+        empty: "لا توجد وكلاء مغلقة في مساحة العمل هذه",
+        showAll: "عرض الكل في السجل",
       },
       explorerSidebar: {
         open: "افتح اللوحة الجانبية",
@@ -768,8 +788,23 @@ export const ar: TranslationResources = {
         workspacePathCopiedLabel: "مسار Workspace",
         branchNameCopiedLabel: "اسم الفرع",
       },
+      branches: {
+        current: "الفرع الحالي: {{branchName}}. اضغط لعرض إجراءات الفرع.",
+        base: "مقارنة مع {{branchName}}. اضغط لتغيير الفرع الأساسي.",
+        setBase: "تعيين الفرع الأساسي",
+        baseTitle: "مقارنة مع",
+        baseUnavailable: "حدّث المضيف لتغيير الفرع الأساسي",
+        baseFailed: "فشل تغيير الفرع الأساسي",
+        rename: "إعادة تسمية الفرع…",
+        renameTitle: "إعادة تسمية الفرع",
+        renameSubmit: "إعادة التسمية",
+        renameFailed: "اسم فرع غير صالح",
+        switch: "تبديل الفرع…",
+      },
     },
     scripts: {
+      rootPackage: "الجذر",
+      searchPlaceholder: "البحث عن السكربتات أو الحزم…",
       title: "البرامج النصية",
       actions: {
         chooseUrl: "اختيار الرابط",
@@ -797,6 +832,8 @@ export const ar: TranslationResources = {
         direct: "مباشر",
       },
       states: {
+        empty: "لم يتم العثور على نصوص برمجية",
+        noMatches: "لا توجد سكربتات مطابقة",
         exitCode: "الخروج من{{code}}",
         startFailed: "فشل بدء تشغيل{{scriptName}}",
         stopFailed: "فشل إيقاف{{scriptName}}",
@@ -1291,6 +1328,7 @@ export const ar: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "النص البرمجي {{name}} قيد التشغيل",
         serviceRunning: "الخدمة {{name}} قيد التشغيل",
         serviceUnhealthy: "الخدمة {{name}} غير سليمة",
         creating: "جارٍ الإنشاء...",
@@ -1341,6 +1379,28 @@ export const ar: TranslationResources = {
         archiveFailed: "فشل في أرشفة مساحة العمل",
       },
     },
+  },
+  projectPullRequests: {
+    checks: {
+      passed: "نجحت جميع الفحوصات",
+      pending: "الفحوصات قيد التشغيل",
+      skipped: "تم تخطي الفحوصات",
+      updateRequired: "حدّث هذا المضيف لعرض حالة CI.",
+    },
+    title: "طلبات السحب",
+    shortcut: "تصفح طلبات السحب لـ {{project}}",
+    search: "البحث في طلبات السحب",
+    clearSearch: "مسح البحث",
+    open: "مفتوحة",
+    closed: "مغلقة",
+    results: "{{count}} نتيجة",
+    authRequired: "سجّل الدخول إلى خدمة Git على هذا المضيف لتصفح طلبات السحب.",
+    loading: "جارٍ تحميل طلبات السحب…",
+    empty: "لا توجد طلبات سحب مطابقة.",
+    limit: "يتم عرض حتى {{count}} نتيجة. حدّد البحث أكثر.",
+    start: "إنشاء شجرة عمل من #{{number}}: {{title}}",
+    updated: "تم التحديث {{date}}",
+    external: "فتح #{{number}} في المتصفح",
   },
   newWorkspace: {
     title: "مساحة عمل جديدة",
@@ -2362,6 +2422,8 @@ export const ar: TranslationResources = {
         jumpToWorkspace: "انتقل إلى مساحة العمل",
         jumpToTab: "انتقل إلى علامة التبويب",
         previousWorkspace: "مساحة العمل السابقة",
+        historyBack: "رجوع",
+        historyForward: "تقدم",
         nextWorkspace: "مساحة العمل التالية",
         previousTab: "علامة التبويب السابقة",
         nextTab: "علامة التبويب التالية",
