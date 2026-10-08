@@ -150,7 +150,6 @@ import { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import { ScheduleService } from "./schedule/service.js";
 import { AgentQueueService } from "./agent-queue/service.js";
 import { AgentQueueStore } from "./agent-queue/store.js";
-import { MessageReceipts } from "./message-receipts/index.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
 import { createOrchestrationSkills } from "./orchestration-skills/index.js";
 import { resolveConfigFromPersisted, type CliConfigOverrides } from "./config.js";
@@ -1372,7 +1371,6 @@ export async function createPaseoDaemon(
     agentManager,
     agentStorage,
     logger,
-    receipts: new MessageReceipts(path.join(config.paseoHome, "agent-requests")),
   });
   logger.info({ elapsed: elapsed() }, "Agent message queue initialized");
   logger.info({ elapsed: elapsed() }, "Loading persisted agent registry");
