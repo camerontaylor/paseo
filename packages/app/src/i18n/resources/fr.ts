@@ -695,6 +695,7 @@ export const fr: TranslationResources = {
       actions: {
         newTab: "Nouvel onglet",
         newAgent: "Nouvel agent",
+        recentlyClosed: "Fermés récemment",
         newTerminal: "Nouveau terminal",
         preparingTerminal: "Préparation de l’onglet de terminal…",
         preparingTerminalTooltip: "Préparation du terminal…",
@@ -710,6 +711,12 @@ export const fr: TranslationResources = {
         pullRequest: "Pull request",
         terminalProfilesMenu: "Profils de terminal",
         editTerminalProfiles: "Modifier les profils",
+      },
+      recentAgents: {
+        title: "Fermés récemment",
+        loading: "Chargement…",
+        empty: "Aucun agent fermé dans cet espace de travail",
+        showAll: "Tout afficher dans l’historique",
       },
       explorerSidebar: {
         open: "Ouvrir la barre latérale de l’explorateur",
