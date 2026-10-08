@@ -42,6 +42,8 @@ import {
   Scissors,
   MicVocal,
   FileSymlink,
+  Pin,
+  HelpCircle,
 } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
@@ -124,6 +126,8 @@ interface UserMessageProps {
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
   timestamp: number;
+  onPin?: (text: string) => void;
+  onQAndA?: (text: string, messageId?: string) => void;
   capabilities?: AgentCapabilityFlags;
   client?: DaemonClient | null;
   isFirstInGroup?: boolean;
@@ -432,6 +436,8 @@ export const UserMessage = memo(function UserMessage({
   images = [],
   attachments = [],
   timestamp,
+  onPin,
+  onQAndA,
   capabilities,
   client,
   isFirstInGroup = true,
@@ -462,6 +468,11 @@ export const UserMessage = memo(function UserMessage({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const getMessageContent = useCallback(() => message, [message]);
+  const handlePin = useCallback(() => onPin?.(message), [onPin, message]);
+  const handleQAndA = useCallback(
+    () => onQAndA?.(message, messageId),
+    [onQAndA, message, messageId],
+  );
   const handleRewind = useCallback(
     (input: { mode: RewindMode; rewoundText: string }) => {
       return rewindMutation.rewindAgent(input);
@@ -565,6 +576,15 @@ export const UserMessage = memo(function UserMessage({
                 onRewind={handleRewind}
               />
             ) : null}
+            {onPin ? (
+              <TurnPinButton onPin={handlePin} containerStyle={userMessageStylesheet.copyButton} />
+            ) : null}
+            {onQAndA ? (
+              <TurnQAndAButton
+                onQAndA={handleQAndA}
+                containerStyle={userMessageStylesheet.copyButton}
+              />
+            ) : null}
             <TurnCopyButton
               getContent={getMessageContent}
               containerStyle={userMessageStylesheet.copyButton}
@@ -583,6 +603,7 @@ interface AssistantTurnFooterProps {
   completedAt?: Date;
   durationMs?: number | null;
   onFork?: (target: AssistantForkTarget) => Promise<void> | void;
+  onPin?: (text: string) => void;
 }
 
 const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
@@ -627,6 +648,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   completedAt,
   durationMs,
   onFork,
+  onPin,
 }: AssistantTurnFooterProps) {
   const [hovered, setHovered] = useState(false);
   const [pressedReveal, setPressedReveal] = useState(false);
@@ -676,10 +698,21 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
     },
     [onFork],
   );
+  const handlePin = useCallback(() => {
+    if (onPin) {
+      onPin(getContent());
+    }
+  }, [onPin, getContent]);
   const canFork = Boolean(onFork);
 
   return (
     <View style={assistantTurnFooterStylesheet.container}>
+      {onPin ? (
+        <TurnPinButton
+          onPin={handlePin}
+          containerStyle={assistantTurnFooterStylesheet.copyButton}
+        />
+      ) : null}
       <TurnCopyButton
         getContent={getContent}
         containerStyle={assistantTurnFooterStylesheet.copyButton}
@@ -1026,6 +1059,68 @@ const turnCopyButtonStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
   },
 }));
+
+interface TurnPinButtonProps {
+  onPin: () => void;
+  containerStyle?: StyleProp<ViewStyle>;
+}
+
+export const TurnPinButton = memo(function TurnPinButton({
+  onPin,
+  containerStyle,
+}: TurnPinButtonProps) {
+  const pressableStyle = useMemo(
+    () => [turnCopyButtonStylesheet.container, containerStyle],
+    [containerStyle],
+  );
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      style={pressableStyle}
+      onPress={onPin}
+      accessibilityLabel="Pin to stream"
+    >
+      {({ hovered }) => {
+        const iconColor = hovered
+          ? turnCopyButtonStylesheet.iconHoveredColor.color
+          : turnCopyButtonStylesheet.iconColor.color;
+        return <Pin size={ICON_SIZE.sm} color={iconColor} />;
+      }}
+    </Pressable>
+  );
+});
+
+interface TurnQAndAButtonProps {
+  onQAndA: () => void;
+  containerStyle?: StyleProp<ViewStyle>;
+}
+
+export const TurnQAndAButton = memo(function TurnQAndAButton({
+  onQAndA,
+  containerStyle,
+}: TurnQAndAButtonProps) {
+  const pressableStyle = useMemo(
+    () => [turnCopyButtonStylesheet.container, containerStyle],
+    [containerStyle],
+  );
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      style={pressableStyle}
+      onPress={onQAndA}
+      accessibilityLabel="Track Q&A"
+    >
+      {({ hovered }) => {
+        const iconColor = hovered
+          ? turnCopyButtonStylesheet.iconHoveredColor.color
+          : turnCopyButtonStylesheet.iconColor.color;
+        return <HelpCircle size={ICON_SIZE.sm} color={iconColor} />;
+      }}
+    </Pressable>
+  );
+});
 
 interface TurnCopyButtonProps {
   getContent: () => string;

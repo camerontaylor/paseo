@@ -1118,6 +1118,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       reloadAgentTooltip: t("workspace.tabs.menu.reloadAgentTooltip"),
       newSideConversation: t("sideConversations.actions.new"),
       close: t("workspace.tabs.menu.close"),
+      viewArtifacts: t("workspace.tabs.menu.viewArtifacts", { defaultValue: "View artifacts" }),
     }),
     [t],
   );

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { TFunction } from "i18next";
-import { SquarePen } from "lucide-react-native";
+import { ListFilter, MessageSquare, SquarePen } from "lucide-react-native";
 import React, {
   memo,
   type ReactNode,
@@ -22,10 +22,17 @@ import { shallow, useShallow } from "zustand/shallow";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { AgentStreamView, type AgentStreamViewHandle } from "@/agent-stream/view";
 import { ArchivedAgentCallout } from "@/components/archived-agent-callout";
+import { CompanionFeed } from "@/companion-stream/feed";
+import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
-import { useRetainedPanelActive } from "@/components/retained-panel";
+import {
+  RetainedPanel,
+  RetainedPanelActivity,
+  useRetainedPanelActive,
+} from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Composer } from "@/composer";
 import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
 import {
@@ -59,6 +66,7 @@ import { definePanel, type PanelDescriptor } from "@/panels/panel-registry";
 import { RenderProfile } from "@/utils/render-profiler";
 import { useHasPluginComposerPills } from "@/plugins";
 import { buildDraftPanelDescriptor } from "@/panels/draft-panel-descriptor";
+import { useHostFeature } from "@/runtime/host-features";
 import {
   type HostRuntimeConnectionStatus,
   useHostRuntimeClient,
@@ -73,6 +81,7 @@ import {
 } from "@/screens/agent/agent-ready-screen-bottom-anchor";
 import { WorkspaceDraftAgentTab } from "@/composer/draft/workspace-tab";
 import { AgentTracks, hasAgentTracks } from "@/panels/agent-tracks";
+import { useAgentViewStore } from "@/stores/agent-view-store";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import {
@@ -111,6 +120,8 @@ interface ChatAgentStateShape {
   runtimeInfo?: Agent["runtimeInfo"];
   features?: Agent["features"];
   lastError?: Agent["lastError"] | null;
+  artifacts?: Agent["artifacts"];
+  companionEntries?: Agent["companionEntries"];
 }
 
 interface ChatAgentSelectedState extends ChatAgentStateShape {
@@ -170,6 +181,8 @@ function selectChatAgentState(
     runtimeInfo: agent.runtimeInfo,
     features: agent.features,
     lastError: agent.lastError ?? null,
+    artifacts: agent.artifacts,
+    companionEntries: agent.companionEntries,
     archivedAt: agent.archivedAt ?? null,
     requiresAttention: agent.requiresAttention ?? false,
     attentionReason: agent.attentionReason ?? null,
@@ -1099,6 +1112,8 @@ function ChatAgentContent({
   );
 }
 
+const EMPTY_COMPANION_ENTRIES: readonly CompanionEntry[] = [];
+
 const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   serverId,
   workspaceId,
@@ -1153,6 +1168,29 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
+  const selectedView = useAgentViewStore(
+    (state) => state.selectedViews[`${serverId}:${agentId}`] || "chat",
+  );
+  const setSelectedView = useAgentViewStore((state) => state.setSelectedView);
+  const isChatVisible = selectedView !== "artifacts";
+  const handleSetSelectedView = useCallback(
+    (view: "chat" | "artifacts") => {
+      setSelectedView(serverId, agentId, view);
+    },
+    [serverId, agentId, setSelectedView],
+  );
+  const handleReturnToChat = useCallback(() => {
+    handleSetSelectedView("chat");
+  }, [handleSetSelectedView]);
+  const handleReplyInChat = useCallback(() => {
+    handleReturnToChat();
+    streamViewRef.current?.scrollToBottom("jump-to-bottom");
+  }, [handleReturnToChat, streamViewRef]);
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  // One gate covers the entry feed and the artifact list: both ship through this
+  // port's snapshot fields and its renamed companion RPC.
+  const companionStreamSupported = useHostFeature(serverId, "companionStreamPortV1");
+  const isCompact = useIsCompactFormFactor();
   const subagentRows = useSubagentsForParent({ serverId, parentAgentId: agentId });
   const tasks = useSessionStore((state): TodoEntry[] | undefined =>
     state.sessions[serverId]?.agentTasks.get(agentId),
@@ -1221,7 +1259,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       <AgentComposerSection
         agentId={agentId}
         serverId={serverId}
-        isPaneFocused={isPaneFocused}
+        isPaneFocused={isPaneFocused && isChatVisible}
         isArchivingCurrentAgent={isArchivingCurrentAgent}
         archivedAt={agentState.archivedAt}
         cwd={cwd}
@@ -1235,43 +1273,92 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     </RenderProfile>
   );
   const streamContent = (
-    <View style={animatedStaticStyles.content}>
-      <RenderProfile id={`AgentStreamSection:${agentId}`}>
-        <AgentStreamSection
-          streamViewRef={streamViewRef}
-          serverId={serverId}
-          workspaceId={workspaceId}
-          agentId={agentId}
-          agent={effectiveAgent}
-          routeBottomAnchorRequest={routeBottomAnchorRequest}
-          hasAppliedAuthoritativeHistory={hasAppliedAuthoritativeHistory}
-          hasActiveComposer={hasActiveComposer}
-          hasVisibleAgentTracks={hasVisibleAgentTracks}
-          toast={toastApi}
-          onOpenWorkspaceFile={onOpenWorkspaceFile}
-        />
-      </RenderProfile>
-      {hasActiveComposer ? (
-        <AgentTracks
-          serverId={serverId}
-          workspaceId={workspaceId}
-          agentId={agentId}
-          cwd={cwd}
-          subagentRows={subagentRows}
-          tasks={tasks}
-          archiveFinishedStatus={archiveFinishedSubagents.status}
-          onArchiveFinished={archiveFinishedSubagents.archiveFinished}
-          hasPluginComposerPills={hasPluginComposerPills}
-        />
-      ) : null}
-    </View>
+    <RetainedPanel active={isChatVisible}>
+      <View style={animatedStaticStyles.content}>
+        <RenderProfile id={`AgentStreamSection:${agentId}`}>
+          <AgentStreamSection
+            streamViewRef={streamViewRef}
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={agentId}
+            agent={effectiveAgent}
+            routeBottomAnchorRequest={routeBottomAnchorRequest}
+            hasAppliedAuthoritativeHistory={hasAppliedAuthoritativeHistory}
+            hasActiveComposer={hasActiveComposer}
+            hasVisibleAgentTracks={hasVisibleAgentTracks}
+            toast={toastApi}
+            onOpenWorkspaceFile={onOpenWorkspaceFile}
+          />
+        </RenderProfile>
+        {hasActiveComposer ? (
+          <AgentTracks
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={agentId}
+            cwd={cwd}
+            subagentRows={subagentRows}
+            tasks={tasks}
+            archiveFinishedStatus={archiveFinishedSubagents.status}
+            onArchiveFinished={archiveFinishedSubagents.archiveFinished}
+            hasPluginComposerPills={hasPluginComposerPills}
+          />
+        ) : null}
+      </View>
+    </RetainedPanel>
+  );
+
+  const viewOptions = useMemo(
+    () => [
+      {
+        value: "chat" as const,
+        label: t("agentPanel.artifacts.chatTab"),
+        icon: ({ color, size }: { color: string; size: number }) => (
+          <MessageSquare color={color} size={size} />
+        ),
+        testID: "agent-view-chat",
+      },
+      {
+        value: "artifacts" as const,
+        label: t("agentPanel.stream.tab"),
+        icon: ({ color, size }: { color: string; size: number }) => (
+          <ListFilter color={color} size={size} />
+        ),
+        testID: "agent-view-artifacts",
+      },
+    ],
+    [t],
   );
 
   const dockContent = (
     <View style={styles.contentContainer}>
+      <SegmentedControl
+        options={viewOptions}
+        value={selectedView}
+        onValueChange={handleSetSelectedView}
+        size={isCompact ? "md" : "xs"}
+        textWrap={isCompact}
+        testID="agent-view-switcher"
+        style={[styles.viewSwitcher, isCompact && styles.mobileSegmentedControl]}
+        segmentStyle={isCompact ? styles.compactSegment : undefined}
+      />
       {streamContent}
+      {!isChatVisible ? (
+        <CompanionFeed
+          serverId={serverId}
+          agentId={agentId}
+          cwd={cwd}
+          entries={agentState.companionEntries ?? EMPTY_COMPANION_ENTRIES}
+          artifacts={agentState.artifacts ?? []}
+          isSupported={companionStreamSupported}
+          artifactsSupported={companionStreamSupported}
+          onOpenWorkspaceFile={onOpenWorkspaceFile}
+          onReturnToChat={handleReturnToChat}
+          onReplyInChat={handleReplyInChat}
+          toast={toastApi}
+        />
+      ) : null}
 
-      {showHistorySyncError ? (
+      {showHistorySyncError && isChatVisible ? (
         <TimelineSyncErrorCallout isRetrying={isRetryingHistorySync} onRetry={retryTimelineSync} />
       ) : null}
     </View>
@@ -1279,7 +1366,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
 
   const dockOverlay = (
     <>
-      {showHistorySyncOverlay ? (
+      {showHistorySyncOverlay && isChatVisible ? (
         <View style={styles.historySyncOverlay} testID="agent-history-overlay">
           <ThemedLoadingSpinner size="large" uniProps={foregroundMutedColorMapping} />
         </View>
@@ -1289,10 +1376,18 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     </>
   );
 
+  const composerSlot = (
+    <RetainedPanelActivity active={isChatVisible}>
+      <View collapsable={false} style={!isChatVisible ? styles.hiddenPane : undefined}>
+        {composerSection}
+      </View>
+    </RetainedPanelActivity>
+  );
+
   const dock = (
     <ChatSurface disabled={isArchivingCurrentAgent}>
       {dockContent}
-      {composerSection}
+      {composerSlot}
       {dockOverlay}
     </ChatSurface>
   );
@@ -1305,18 +1400,25 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     >
       <View style={styles.root}>
         {dock}
-
-        {isArchivingCurrentAgent ? (
-          <View style={styles.archivingOverlay} testID="agent-archiving-overlay">
-            <ThemedLoadingSpinner size="large" uniProps={foregroundColorMapping} />
-            <Text style={styles.archivingTitle}>{t("agentPanel.states.archivingTitle")}</Text>
-            <Text style={styles.archivingSubtitle}>{t("agentPanel.states.archivingSubtitle")}</Text>
-          </View>
-        ) : null}
+        <ArchivingOverlay isArchivingCurrentAgent={isArchivingCurrentAgent} />
       </View>
     </RewindComposerRestoreProvider>
   );
 });
+
+function ArchivingOverlay({ isArchivingCurrentAgent }: { isArchivingCurrentAgent: boolean }) {
+  const { t } = useTranslation();
+  if (!isArchivingCurrentAgent) {
+    return null;
+  }
+  return (
+    <View style={styles.archivingOverlay} testID="agent-archiving-overlay">
+      <ThemedLoadingSpinner size="large" uniProps={foregroundColorMapping} />
+      <Text style={styles.archivingTitle}>{t("agentPanel.states.archivingTitle")}</Text>
+      <Text style={styles.archivingSubtitle}>{t("agentPanel.states.archivingSubtitle")}</Text>
+    </View>
+  );
+}
 
 function ChatSurface({
   children,
@@ -1738,6 +1840,21 @@ const styles = StyleSheet.create((theme) => ({
     overflow: "hidden",
     ...(isWeb ? { userSelect: "none" as const } : {}),
   },
+  viewSwitcher: {
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  mobileSegmentedControl: {
+    flex: 1,
+  },
+  compactSegment: { minHeight: 44 },
+  hiddenPane: { display: "none" },
   timelineSyncCalloutRail: {
     width: "100%",
     alignItems: "center",
