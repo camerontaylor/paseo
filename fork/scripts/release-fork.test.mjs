@@ -498,7 +498,7 @@ test("native migration preserves symlinks, credentials and other provider policy
             model: "GLM-5.3-Flash",
             modeId: "yolo",
             thinkingOptionId: "high",
-            featureValues: { plan_mode: false },
+            featureValues: { plan_mode: false, auto_accept: true },
           },
           { id: "auto", provider: "zcode", thinkingOptionId: "auto" },
         ],
@@ -587,4 +587,24 @@ test("native catalog setup refuses an unpinned bridge", async () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("native profiles translate ACP permissions and refuse conflicting settings", async () => {
+  const { normalizeNativeProfileFeatures } = await import("./migrate-zcode-native.mjs");
+  const profile = { featureValues: { auto_accept: false, plan_mode: true } };
+  normalizeNativeProfileFeatures(profile);
+  assert.equal(profile.modeId, "build");
+  assert.deepEqual(profile.featureValues, { plan_mode: true });
+  assert.throws(
+    () => normalizeNativeProfileFeatures({ modeId: "edit", featureValues: { auto_accept: true } }),
+    /conflicts/,
+  );
+  assert.throws(
+    () => normalizeNativeProfileFeatures({ featureValues: { unknown: true } }),
+    /Unsupported ZCode profile feature/,
+  );
+  assert.throws(
+    () => normalizeNativeProfileFeatures({ featureValues: { auto_accept: "true" } }),
+    /Unsupported ZCode auto_accept value/,
+  );
 });
