@@ -691,6 +691,7 @@ export const ko: TranslationResources = {
       actions: {
         newTab: "새 탭",
         newAgent: "새 에이전트",
+        recentlyClosed: "최근 닫은 항목",
         newTerminal: "새 터미널",
         preparingTerminal: "터미널 탭 준비 중",
         preparingTerminalTooltip: "터미널 준비 중...",
@@ -706,6 +707,12 @@ export const ko: TranslationResources = {
         pullRequest: "풀 리퀘스트",
         terminalProfilesMenu: "터미널 프로필",
         editTerminalProfiles: "프로필 편집",
+      },
+      recentAgents: {
+        title: "최근 닫은 항목",
+        loading: "불러오는 중…",
+        empty: "이 작업 공간에 닫힌 에이전트가 없습니다",
+        showAll: "기록에서 모두 보기",
       },
       explorerSidebar: {
         open: "사이드 패널 열기",
@@ -2381,6 +2388,8 @@ export const ko: TranslationResources = {
         jumpToWorkspace: "워크스페이스로 이동",
         jumpToTab: "탭으로 이동",
         previousWorkspace: "이전 워크스페이스",
+        historyBack: "뒤로",
+        historyForward: "앞으로",
         nextWorkspace: "다음 워크스페이스",
         previousTab: "이전 탭",
         nextTab: "다음 탭",
