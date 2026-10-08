@@ -301,4 +301,40 @@ describe("GPT Realtime attachment", () => {
     expect(Object.values(f.store.read().deliveries)).toEqual(["accepted"]);
     expect(f.host.submit).toHaveBeenCalledTimes(1);
   });
+  it("commits a short final audio tail before sending a long-listening draft", async () => {
+    const f = await fixture();
+    f.voice.listen();
+    await f.transcript("one", "first");
+    f.voice.append(Buffer.alloc(640).toString("base64"), "audio/pcm;rate=16000;bits=16");
+    void f.voice.endListening();
+    await f.settle();
+    expect(f.socket.sent.at(-1)?.type).toBe("input_audio_buffer.commit");
+    expect(f.host.submit).not.toHaveBeenCalled();
+    await f.transcript("tail", "last syllable");
+    expect(f.host.submit).toHaveBeenCalledExactlyOnceWith(
+      "first\nlast syllable",
+      expect.any(String),
+    );
+    f.voice.stop();
+  });
+  it("mute before final transcription leaves the unsent draft unsent", async () => {
+    const f = await fixture();
+    f.voice.listen();
+    await f.transcript("one", "keep this draft");
+    f.socket.event({ type: "input_audio_buffer.committed", item_id: "pending" });
+    await f.settle();
+    const ending = f.voice.endListening();
+    f.voice.mute(true);
+    await ending;
+    f.socket.event({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "pending",
+      transcript: "not finalized before mute",
+    });
+    await f.settle();
+    expect(f.host.submit).not.toHaveBeenCalled();
+    expect(f.store.read().draft.map((entry) => entry.text)).toEqual(["keep this draft"]);
+    expect(f.voice.status()).toMatchObject({ mode: "listen", muted: true });
+    f.voice.stop();
+  });
 });

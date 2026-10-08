@@ -335,6 +335,15 @@ export class OpenAiRealtime {
     if (!muted && this.connection !== "connected")
       throw new Error("Reconnect before enabling the microphone.");
     this.context.muted = muted;
+    if (muted) {
+      // Mute revokes finalization that has not yet reached durable queue admission.
+      this.ending = false;
+      this.commitPending = false;
+      if (this.finalTimer) clearTimeout(this.finalTimer);
+      this.finalTimer = null;
+      this.resolveEnd?.();
+      this.resolveEnd = null;
+    }
     this.send({ type: "input_audio_buffer.clear" });
     this.inputBytes = 0;
     this.sampleTail = [];
@@ -360,7 +369,14 @@ export class OpenAiRealtime {
     });
     this.ending = true;
     // Explicit commit is a barrier: never send a partial draft while transcription is pending.
-    if (this.inputBytes >= 4800) {
+    if (this.inputBytes > 0) {
+      // The API requires 100 ms per explicit commit. Preserve a short final syllable
+      // by padding with silence instead of silently omitting the remaining audio.
+      if (this.inputBytes < 4800)
+        this.send({
+          type: "input_audio_buffer.append",
+          audio: Buffer.alloc(4800 - this.inputBytes).toString("base64"),
+        });
       this.commitPending = true;
       this.send({ type: "input_audio_buffer.commit" });
     }
