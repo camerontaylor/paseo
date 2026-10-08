@@ -1338,7 +1338,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
         size={isCompact ? "md" : "xs"}
         textWrap={isCompact}
         testID="agent-view-switcher"
-        style={[styles.viewSwitcher, isCompact && styles.mobileSegmentedControl]}
+        style={styles.viewSwitcher}
         segmentStyle={isCompact ? styles.compactSegment : undefined}
       />
       {streamContent}
@@ -1842,6 +1842,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   viewSwitcher: {
     minHeight: 40,
+    flexShrink: 0,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1849,9 +1850,6 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: theme.spacing[2],
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
-  },
-  mobileSegmentedControl: {
-    flex: 1,
   },
   compactSegment: { minHeight: 44 },
   hiddenPane: { display: "none" },
