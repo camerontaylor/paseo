@@ -182,7 +182,8 @@ export const fr: TranslationResources = {
       unmuteVoice: "Réactiver la voix",
       muteVoice: "Voix muette",
       dictation: "Dictée",
-      interruptBeforeVoice: "Interrompre l'agent avant de démarrer le mode vocal",
+      interruptBeforeVoice:
+        "Mettez à jour l’hôte pour utiliser la voix pendant que l’agent travaille",
     },
     attachments: {
       addImage: "Ajouter une image",
@@ -2006,10 +2007,27 @@ export const fr: TranslationResources = {
     },
   },
   realtimeVoice: {
+    listening: "Micro activé",
+    notListening: "N’écoute pas",
+    failure: {
+      "nothing-recognized": "Je n’ai pas compris. Répétez.",
+      "recognition-stalled":
+        "La reconnaissance vocale ne répond plus. Arrêtez et relancez la voix.",
+      "recognition-failed": "La reconnaissance vocale a échoué. Arrêtez et relancez la voix.",
+      "recognition-unavailable": "La reconnaissance vocale n’est pas disponible sur l’hôte.",
+      "host-disconnected":
+        "Hôte déconnecté. L’entrée du micro est suspendue jusqu’à la reconnexion.",
+      "microphone-lost": "Micro perdu. La session vocale s’est arrêtée.",
+    },
+    inputQueued: "Parole en attente pour l’agent",
+    inputSent: "Parole envoyée à l’agent",
+    inputRemoved: "Parole retirée de la file",
+    inputUnknown: "Envoi de la parole incertain",
     actions: {
+      interruptAgent: "Interrompre l’agent",
       mute: "Couper la voix en temps réel",
       unmute: "Réactiver la voix en temps réel",
-      stop: "Arrêtez la voix en temps réel et interrompez le tour",
+      stop: "Arrêter la voix en temps réel",
     },
   },
   rewind: {

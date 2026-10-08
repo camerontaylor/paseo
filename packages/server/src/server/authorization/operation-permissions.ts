@@ -206,6 +206,7 @@ const INBOUND_PERMISSION = {
   // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
   "agent.companion.update_entry.request": "workspace.write",
   validate_branch_request: "workspace.read",
+  "voice.input.receipts.read.request": "workspace.read",
   voice_audio_chunk: "workspace.write",
   wait_for_finish_request: "workspace.read",
   "workspace.clear_attention.request": "workspace.write",
@@ -432,6 +433,7 @@ const OUTBOUND_PERMISSION = {
   set_agent_thinking_response: "workspace.write",
   set_daemon_config_response: "daemon.manage",
   set_voice_mode_response: "workspace.write",
+  "voice.input.receipts.read.response": "workspace.read",
   start_workspace_script_response: "workspace.write",
   stash_list_response: "workspace.read",
   stash_pop_response: "workspace.read",

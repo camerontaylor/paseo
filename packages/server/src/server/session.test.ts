@@ -2,6 +2,7 @@ import {
   createMessageReceiptsStub,
   createTestCreationService,
 } from "./test-utils/session-stubs.js";
+import { EventEmitter } from "node:events";
 import { execSync } from "child_process";
 import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -191,6 +192,150 @@ test("side conversation ask reports archived agents unavailable without loading 
       },
     },
   ]);
+});
+
+test("voice attach, abort, transport loss and detach never touch the agent", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const mutating = {
+    cancelAgentRun: vi.fn(),
+    streamAgent: vi.fn(),
+    steerOrReplaceActiveTurn: vi.fn(),
+    replaceAgentRun: vi.fn(),
+    respondToPermission: vi.fn(),
+    askSideQuestion: vi.fn(),
+  };
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      getAgent: vi.fn(() => ({ id: agentId, provider: "codex", lifecycle: "running" })),
+      ...mutating,
+    },
+  });
+
+  // Attach fails cleanly here (the test session has no speech providers), which
+  // is itself part of the contract: a failed attach must not disturb the run.
+  await session.handleMessage({ type: "set_voice_mode", enabled: true, agentId, requestId: "v1" });
+  await session.handleMessage({
+    type: "voice_audio_chunk",
+    audio: "AA==",
+    format: "audio/pcm;rate=16000;bits=16",
+    isLast: false,
+  });
+  await session.handleMessage({ type: "abort_request" });
+  await session.handleMessage({ type: "set_voice_mode", enabled: false, requestId: "v2" });
+
+  for (const [name, fn] of Object.entries(mutating)) {
+    expect(fn, name).not.toHaveBeenCalled();
+  }
+  // The stop still acknowledges so the client's detach completes.
+  expect(messages).toContainEqual(
+    expect.objectContaining({
+      type: "set_voice_mode_response",
+      payload: expect.objectContaining({ requestId: "v2", enabled: false, accepted: true }),
+    }),
+  );
+});
+
+test("successful voice attach, STT failure and transport loss preserve work and scope receipts", async () => {
+  class SpeechStream extends EventEmitter {
+    requiredSampleRate = 16000;
+    async connect() {}
+    appendPcm16() {}
+    commit() {}
+    clear() {}
+    close() {
+      this.removeAllListeners();
+    }
+    flush() {}
+    reset() {}
+  }
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const permission = { id: "pending-permission" };
+  const child = { id: "child", lifecycle: "running" };
+  const sideConversation = { threadId: "side-thread", messages: ["independent question"] };
+  const agent = {
+    id: agentId,
+    provider: "codex",
+    lifecycle: "running",
+    activeForegroundTurnId: "running-turn",
+    config: {},
+    pendingPermissions: new Map([[permission.id, permission]]),
+  };
+  const mutations = {
+    cancelAgentRun: vi.fn(),
+    reloadAgentSession: vi.fn(),
+    replaceAgentRun: vi.fn(),
+    respondToPermission: vi.fn(),
+    askSideQuestion: vi.fn(),
+    archiveAgent: vi.fn(),
+    clearAgentHistory: vi.fn(),
+    streamAgent: vi.fn(),
+  };
+  const recognizer = new SpeechStream();
+  const detector = new SpeechStream();
+  const messages: SessionOutboundMessage[] = [];
+  const listForAttachment = vi.fn(async () => []);
+  const session = createSessionForTest({
+    messages,
+    voiceOwner: "principal/client",
+    messageReceipts: { send: (input) => input.send(), listForAttachment },
+    agentManager: {
+      getAgent: vi.fn((id: string) => (id === child.id ? child : agent)),
+      listAgents: vi.fn(() => [agent, child]),
+      waitForAgentClose: vi.fn(async () => {}),
+      ...mutations,
+    },
+    stt: { id: "local", createSession: () => recognizer },
+    voice: { turnDetection: { id: "local", createSession: () => detector } },
+    voiceBridge: { registerVoiceSpeakHandler: () => "generation" },
+  });
+  const source = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, source);
+  const attach = {
+    type: "set_voice_mode" as const,
+    enabled: true,
+    agentId,
+    attachmentId: "attachment",
+    requestId: "attach",
+  };
+  await session.handleMessage(attach, source);
+  expect(messages).toContainEqual(
+    expect.objectContaining({
+      type: "set_voice_mode_response",
+      payload: expect.objectContaining({ accepted: true, generation: "generation" }),
+    }),
+  );
+  await session.handleMessage(
+    {
+      type: "voice.input.receipts.read.request",
+      agentId,
+      attachmentId: "attachment",
+      generation: "generation",
+      requestId: "receipts",
+    },
+    source,
+  );
+  expect(listForAttachment).toHaveBeenCalledWith({
+    agentId,
+    attachmentId: "attachment",
+    voiceOwner: "principal/client",
+  });
+  recognizer.emit("error", new Error("recognizer failed"));
+  await session.handleMessage(
+    { type: "abort_request", attachmentId: "attachment", generation: "generation" },
+    source,
+  );
+  await session.handleMessage({ ...attach, enabled: false, generation: "generation" }, source);
+  await session.handleMessage(attach, source);
+  session.clearAgentTimelineSubscription(source);
+  await vi.waitFor(() => expect(recognizer.listenerCount("transcript")).toBe(0));
+  expect(agent.activeForegroundTurnId).toBe("running-turn");
+  expect([...agent.pendingPermissions.values()]).toEqual([permission]);
+  expect(child).toEqual({ id: "child", lifecycle: "running" });
+  expect(sideConversation.messages).toEqual(["independent question"]);
+  for (const method of Object.values(mutations)) expect(method).not.toHaveBeenCalled();
+  await session.cleanup();
 });
 
 function captureAgentManagerEvents(): {
@@ -524,6 +669,9 @@ vi.mock("./worktree-bootstrap.js", async (importOriginal) => {
 
 interface SessionForTestOptions {
   clientId?: string;
+  voiceOwner?: SessionOptions["voiceOwner"];
+  voiceBridge?: SessionOptions["voiceBridge"];
+  messageReceipts?: SessionOptions["messageReceipts"];
   clientCapabilities?: Record<string, unknown>;
   permissions?: readonly DaemonPermission[];
   agentQueueService?: SessionOptions["agentQueueService"];
@@ -604,9 +752,11 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
   const messages = options.messages ?? [];
 
   const sessionOptions: SessionOptions = {
-    messageReceipts: createMessageReceiptsStub(),
+    messageReceipts: options.messageReceipts ?? createMessageReceiptsStub(),
     creationService: createTestCreationService(),
     clientId: options.clientId ?? "test-client",
+    voiceOwner: options.voiceOwner,
+    voiceBridge: options.voiceBridge,
     clientCapabilities: options.clientCapabilities,
     agentQueueService: options.agentQueueService,
     onMessage: (message) => messages.push(message),

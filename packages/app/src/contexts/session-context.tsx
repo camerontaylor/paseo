@@ -324,29 +324,33 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   useEffect(() => {
     const unregister = voiceRuntime?.registerSession({
       serverId,
-      setVoiceMode: async (enabled, agentId) => {
+      setVoiceMode: async (enabled, agentId, input) => {
         if (!client) {
           throw new Error(t("common.errors.daemonUnavailable"));
         }
-        await client.setVoiceMode(enabled, agentId);
+        return client.setVoiceMode(enabled, agentId, input);
       },
-      sendVoiceAudioChunk: async (audioData, mimeType) => {
+      sendVoiceAudioChunk: async (audioData, mimeType, transport) => {
         if (!client) {
           throw new Error(t("common.errors.daemonUnavailable"));
         }
-        await client.sendVoiceAudioChunk(audioData, mimeType);
+        await client.sendVoiceAudioChunk(audioData, mimeType, false, transport);
       },
-      audioPlayed: async (chunkId) => {
+      audioPlayed: async (chunkId, error, transport) => {
         if (!client) {
           throw new Error(t("common.errors.daemonUnavailable"));
         }
-        await client.audioPlayed(chunkId);
+        await client.audioPlayed(chunkId, error, transport);
       },
-      abortRequest: async () => {
+      readVoiceInputReceipts: async (input) => {
+        if (!client) throw new Error(t("common.errors.daemonUnavailable"));
+        return client.readVoiceInputReceipts(input);
+      },
+      abortRequest: async (transport) => {
         if (!client) {
           throw new Error(t("common.errors.daemonUnavailable"));
         }
-        await client.abortRequest();
+        await client.abortRequest(transport);
       },
       setAssistantAudioPlaying: (isPlaying) => {
         setIsPlayingAudio(serverId, isPlaying);
@@ -358,6 +362,44 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   useEffect(() => {
     voiceRuntime?.updateSessionConnection(serverId, isConnected);
   }, [isConnected, serverId, voiceRuntime]);
+
+  useEffect(() => {
+    if (!voiceRuntime) return;
+    const runtime = voiceRuntime;
+    let release = () => {};
+    let observing = false;
+    function synchronizeVoiceQueueObservation() {
+      const snapshot = runtime.getSnapshot();
+      const active =
+        snapshot.isVoiceMode &&
+        snapshot.activeServerId === serverId &&
+        useSessionStore.getState().sessions[serverId]?.serverInfo?.features?.durableVoiceInputV1 ===
+          true;
+      if (active === observing) return;
+      observing = active;
+      release();
+      if (!active) return;
+      const observation = client.observeEvents(["agent.queue.update"]);
+      const unsubscribe = observation.subscribe({
+        snapshot: () => {},
+        update: (message) => {
+          if (message.type === "agent.queue.update") {
+            runtime.onQueueChanged(serverId, message.payload.agentId);
+          }
+        },
+      });
+      release = () => {
+        unsubscribe();
+        void observation.release();
+      };
+    }
+    synchronizeVoiceQueueObservation();
+    const unsubscribe = voiceRuntime.subscribe(synchronizeVoiceQueueObservation);
+    return () => {
+      unsubscribe();
+      release();
+    };
+  }, [client, serverId, voiceRuntime]);
 
   // If the client drops mid-initialization, clear pending flags
   useEffect(() => {
@@ -704,11 +746,18 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       if (message.type !== "transcription_result") return;
 
       const transcriptText = message.payload.text.trim();
-      voiceRuntime?.onTranscriptionResult(serverId, transcriptText);
+      voiceRuntime?.onTranscriptionResult(serverId, transcriptText, message.payload);
     });
 
     const unsubVoiceInputState = client.on("voice_input_state", (message) => {
       if (message.type !== "voice_input_state") return;
+      if (voiceRuntime && !voiceRuntime.acceptsVoiceTransport(serverId, message.payload)) return;
+      if (message.payload.error) {
+        voiceRuntime?.onInputError(serverId, message.payload.error);
+      }
+      if (message.payload.recognitionIssue) {
+        voiceRuntime?.onRecognitionIssue(serverId, message.payload.recognitionIssue);
+      }
       voiceRuntime?.onServerSpeechStateChanged(serverId, message.payload.isSpeaking);
     });
 

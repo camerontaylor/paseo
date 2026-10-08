@@ -179,7 +179,7 @@ export const zhCN: TranslationResources = {
       unmuteVoice: "取消静音",
       muteVoice: "静音",
       dictation: "听写",
-      interruptBeforeVoice: "启动语音模式前请先中断 Agent",
+      interruptBeforeVoice: "更新主机以在 Agent 工作时使用语音",
     },
     attachments: {
       addImage: "添加图片",
@@ -1926,10 +1926,25 @@ export const zhCN: TranslationResources = {
     },
   },
   realtimeVoice: {
+    listening: "麦克风已开启",
+    notListening: "未在收听",
+    failure: {
+      "nothing-recognized": "没听清，请再说一遍。",
+      "recognition-stalled": "语音识别无响应。请停止并重新开始语音。",
+      "recognition-failed": "语音识别失败。请停止并重新开始语音。",
+      "recognition-unavailable": "主机上的语音识别不可用。",
+      "host-disconnected": "主机已断开连接。重新连接前麦克风输入已暂停。",
+      "microphone-lost": "麦克风已丢失。语音已停止。",
+    },
+    inputQueued: "语音已加入智能体队列",
+    inputSent: "语音已发送给智能体",
+    inputRemoved: "语音已从队列移除",
+    inputUnknown: "语音送达状态未知",
     actions: {
+      interruptAgent: "中断智能体",
       mute: "静音 realtime voice",
       unmute: "取消静音 realtime voice",
-      stop: "停止 realtime voice 并中断 turn",
+      stop: "停止 realtime voice",
     },
   },
   rewind: {

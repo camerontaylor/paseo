@@ -101,7 +101,7 @@ export function createAudioEngine(
     queue: QueuedAudio[];
     processingQueue: boolean;
     activePlayback: {
-      source: AudioBufferSourceNode;
+      source: AudioBufferSourceNode | null;
       resolve: (duration: number) => void;
       reject: (error: Error) => void;
       settled: boolean;
@@ -163,44 +163,44 @@ export function createAudioEngine(
   }
 
   async function playAudio(audio: AudioPlaybackSource): Promise<number> {
-    const context = await ensurePlaybackContext();
-    const arrayBuffer = await audio.arrayBuffer();
-    const type = (audio.type || "").toLowerCase();
-    const audioBuffer = type.startsWith("audio/pcm")
-      ? pcm16LeToAudioBuffer(
-          context,
-          new Uint8Array(arrayBuffer),
-          parsePcmSampleRate(type) ?? 24000,
-        )
-      : await decodeAudioData(context, arrayBuffer);
-
-    const durationSec = audioBuffer.duration;
-    const source = context.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(context.destination);
-
     return await new Promise<number>((resolve, reject) => {
-      refs.activePlayback = { source, resolve, reject, settled: false };
-
+      const active: NonNullable<typeof refs.activePlayback> = {
+        source: null,
+        resolve,
+        reject,
+        settled: false,
+      };
+      // Stop must also cancel preparation, before a browser source exists.
+      refs.activePlayback = active;
       const settle = (fn: () => void) => {
-        const active = refs.activePlayback;
-        if (!active || active.source !== source || active.settled) {
-          return;
-        }
+        if (active.settled) return;
         active.settled = true;
-        refs.activePlayback = null;
+        if (refs.activePlayback === active) refs.activePlayback = null;
         fn();
       };
-
-      source.addEventListener("ended", () => {
-        settle(() => resolve(durationSec));
-      });
-
-      try {
+      void (async () => {
+        const context = await ensurePlaybackContext();
+        if (active.settled) return;
+        const arrayBuffer = await audio.arrayBuffer();
+        if (active.settled) return;
+        const type = (audio.type || "").toLowerCase();
+        const audioBuffer = type.startsWith("audio/pcm")
+          ? pcm16LeToAudioBuffer(
+              context,
+              new Uint8Array(arrayBuffer),
+              parsePcmSampleRate(type) ?? 24000,
+            )
+          : await decodeAudioData(context, arrayBuffer);
+        if (active.settled) return;
+        const source = context.createBufferSource();
+        active.source = source;
+        source.buffer = audioBuffer;
+        source.connect(context.destination);
+        source.addEventListener("ended", () => settle(() => resolve(audioBuffer.duration)));
         source.start();
-      } catch (error) {
+      })().catch((error) => {
         settle(() => reject(error instanceof Error ? error : new Error(String(error))));
-      }
+      });
     });
   }
 
@@ -341,6 +341,12 @@ export function createAudioEngine(
         processor.connect(gain);
         gain.connect(context.destination);
 
+        for (const track of stream.getAudioTracks()) {
+          track.addEventListener("ended", () => {
+            if (refs.stream === stream) callbacks.onInterruption?.();
+          });
+        }
+
         refs.started = true;
         refs.stream = stream;
         refs.source = source;
@@ -384,7 +390,7 @@ export function createAudioEngine(
         const active = refs.activePlayback;
         refs.activePlayback = null;
         try {
-          active.source.stop();
+          active.source?.stop();
         } catch {
           // Ignore best-effort stop errors.
         }
@@ -399,7 +405,6 @@ export function createAudioEngine(
       while (refs.queue.length > 0) {
         refs.queue.shift()!.reject(new Error("Playback stopped"));
       }
-      refs.processingQueue = false;
     },
 
     isPlaying() {
