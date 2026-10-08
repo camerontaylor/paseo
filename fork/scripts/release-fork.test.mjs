@@ -472,3 +472,71 @@ test("rewrites workspace references in the staged root manifest scripts", () => 
   );
   assert.equal(out.name, "paseo");
 });
+
+test("native migration preserves symlinks, credentials and other provider policy", async () => {
+  const { prepareMigration } = await import("./migrate-zcode-native.mjs");
+  const directory = mkdtempSync(path.join(tmpdir(), "zcode-migration-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = directory;
+  try {
+    mkdirSync(path.join(directory, "plugin"));
+    writeFileSync(
+      path.join(directory, "plugin/paseo-plugin.json"),
+      JSON.stringify({ id: "zcode-provider" }),
+    );
+    writeFileSync(path.join(directory, "CLAUDE.md"), "Existing instructions\n");
+    symlinkSync("CLAUDE.md", path.join(directory, "AGENTS.md"));
+    const source = path.join(directory, "config.json");
+    const input = {
+      daemon: { appendSystemPrompt: "Exact policy." },
+      agents: {
+        providers: {
+          zcode: {
+            extends: "acp",
+            command: ["old"],
+            env: { KEEP: "secret-value" },
+            models: ["glm"],
+          },
+          codex: { enabled: true },
+        },
+      },
+    };
+    writeFileSync(source, JSON.stringify(input));
+    const options = {
+      source,
+      output: path.join(directory, "candidate.json"),
+      backup: path.join(directory, "backup"),
+      agents: [path.join(directory, ".zcode/AGENTS.md"), path.join(directory, "AGENTS.md")],
+      plugin: path.join(directory, "plugin"),
+      runtime: directory,
+      node: process.execPath,
+    };
+    prepareMigration(options);
+    assert.equal(readlinkSync(path.join(directory, "AGENTS.md")), "CLAUDE.md");
+    assert.match(readFileSync(path.join(directory, "CLAUDE.md"), "utf8"), /^Existing instructions/);
+    assert.match(readFileSync(path.join(directory, ".zcode/AGENTS.md"), "utf8"), /Exact policy\./);
+    const candidate = JSON.parse(readFileSync(options.output, "utf8"));
+    assert.equal(candidate.daemon.appendSystemPrompt, "Exact policy.");
+    assert.deepEqual(candidate.daemon.appendSystemPromptExcludedProviders, ["zcode"]);
+    assert.equal(candidate.agents.providers.zcode.extends, undefined);
+    assert.equal(candidate.agents.providers.zcode.command, undefined);
+    assert.equal(candidate.agents.providers.zcode.env.KEEP, "secret-value");
+    assert.deepEqual(candidate.agents.providers.codex, input.agents.providers.codex);
+    assert.deepEqual(JSON.parse(readFileSync(source, "utf8")), input);
+    assert.throws(() => prepareMigration({ ...options, output: source }), /separately/);
+    assert.throws(() => prepareMigration(options), /fresh/);
+    writeFileSync(path.join(directory, ".zcode/AGENTS.md"), "x".repeat(100 * 1024));
+    assert.throws(
+      () =>
+        prepareMigration({
+          ...options,
+          output: path.join(directory, "oversized.json"),
+          backup: path.join(directory, "oversized-backup"),
+        }),
+      /100KiB/,
+    );
+  } finally {
+    process.env.HOME = previousHome;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
