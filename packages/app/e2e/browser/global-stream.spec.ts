@@ -161,6 +161,19 @@ test("durable checklist pages, evidence and reopen survive reconnect", async ({
     await feed.getByRole("button", { name: "Load more" }).click();
     await expect(feed.getByRole("button", { name: "Load more" })).toHaveCount(0);
     const completed = feed.getByTestId("companion-entry-ask:ask-1");
+    // FlatList unmounts distant rows. Scroll its viewport to mount the target
+    // before asking Playwright to scroll the card itself into view.
+    await feed.evaluate((element) => element.scrollTo({ top: 0 }));
+    await expect
+      .poll(
+        async () => {
+          if (await completed.count()) return true;
+          await feed.evaluate((element) => element.scrollBy({ top: element.clientHeight * 0.75 }));
+          return false;
+        },
+        { timeout: 30_000, intervals: [100] },
+      )
+      .toBe(true);
     await completed.scrollIntoViewIfNeeded();
     await expect(
       completed.getByText("Completion evidence: Acceptance recorded", { exact: true }),
