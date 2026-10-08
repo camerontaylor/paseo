@@ -22,6 +22,10 @@ export interface SendOrQueuePromptParams {
    * prompt is ever queued because a surface forgot to decide.
    */
   intent?: QueuedAgentDeliveryIntent;
+  /** Set when the prompt is spoken input; speech always queues, idle or busy. */
+  origin?: "voice";
+  /** The principal/client pair that spoke the prompt. Required with origin. */
+  voiceOwner?: string;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: AgentAttachment[];
   messageId?: string;
@@ -56,19 +60,24 @@ export interface SendOrQueueResult {
  * it keeps its own receipt-backed path so old clients see exactly the released
  * behavior.
  */
+// Busy policy, spoken admission, and the out-of-band escape are one decision.
+// oxlint-disable-next-line complexity
 export async function sendOrQueuePromptToAgent(
   params: SendOrQueuePromptParams,
 ): Promise<SendOrQueueResult> {
   const { queueService } = params;
-  if (
-    !params.interrupt &&
-    params.intent &&
-    queueService &&
-    params.agentManager.hasInFlightRun(params.agentId)
-  ) {
-    const prompt = buildAgentPrompt(params.text, params.images, params.attachments);
-    if (params.agentManager.tryRunOutOfBand(params.agentId, prompt, params.runOptions)) {
-      return { queued: false, outOfBand: true };
+  // Spoken input always takes the durable queue, idle or busy: one admission
+  // boundary, one identity, one truthful queued/sent story. It never rides an
+  // out-of-band run, because speech follows the turn it follows up on. Typed
+  // prompts keep the TM-02 busy precondition and its out-of-band escape.
+  const spoken = params.origin === "voice";
+  const busy = params.agentManager.hasInFlightRun(params.agentId);
+  if (!params.interrupt && params.intent && queueService && (spoken || busy)) {
+    if (!spoken && busy) {
+      const prompt = buildAgentPrompt(params.text, params.images, params.attachments);
+      if (params.agentManager.tryRunOutOfBand(params.agentId, prompt, params.runOptions)) {
+        return { queued: false, outOfBand: true };
+      }
     }
     if (params.sessionMode) {
       // Mode changes apply to the next turn anyway, so setting it now keeps
@@ -80,6 +89,7 @@ export async function sendOrQueuePromptToAgent(
       itemId: params.messageId ?? randomUUID(),
       text: params.text,
       intent: params.intent,
+      ...(spoken ? { origin: params.origin, voiceOwner: params.voiceOwner } : {}),
       ...(params.images?.length ? { images: params.images } : {}),
       ...(params.attachments?.length ? { attachments: params.attachments } : {}),
     });

@@ -468,6 +468,7 @@ type SessionConnection = ReconnectableSessionConnection | PluginSessionConnectio
 
 interface SocketSessionOptions {
   clientId: string;
+  principalId: string;
   appVersion: string | null;
   clientCapabilities: Record<string, unknown> | null;
   permissions: readonly DaemonPermission[];
@@ -575,7 +576,18 @@ export class VoiceAssistantWebSocketServer {
   private dictation!: {
     finalTimeoutMs?: number;
   } | null;
-  private readonly voiceSpeakHandlers = new Map<string, VoiceSpeakHandler>();
+  private readonly voiceSpeakHandlers = new Map<
+    string,
+    {
+      principalId: string;
+      clientId: string;
+      attachmentId: string;
+      generation: string;
+      handler: VoiceSpeakHandler;
+      revoke: () => void;
+    }
+  >();
+  private readonly spokenTurns = new Map<string, string>();
   private readonly voiceCallerContexts = new Map<string, VoiceCallerContext>();
   private readonly workspaceSetupSnapshots = new Map<string, WorkspaceSetupSnapshot>();
   private readonly workspaceSetupRuntime: WorkspaceSetupRuntime;
@@ -623,6 +635,8 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
+  // Wiring every subsystem is one long decision list by nature.
+  // oxlint-disable-next-line complexity
   constructor(
     server: HTTPServer,
     logger: pino.Logger,
@@ -691,6 +705,9 @@ export class VoiceAssistantWebSocketServer {
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.messageReceipts = new MessageReceipts(join(paseoHome, "agent-requests"));
+    // The queue's drains and the legacy send path share one receipt owner, so a
+    // spoken item's acceptance is readable through the same records.
+    this.agentQueueService?.setMessageReceipts(this.messageReceipts);
     this.creationService = new CreationService(
       join(paseoHome, "creations"),
       this.logger.child({ module: "creation" }),
@@ -1152,15 +1169,16 @@ export class VoiceAssistantWebSocketServer {
     this.wss.close();
   }
 
-  private sendToClient(ws: WebSocketLike, message: WSOutboundMessage): void {
-    this.sendMessageToSockets([ws], message, true);
+  private sendToClient(ws: WebSocketLike, message: WSOutboundMessage): boolean {
+    return this.sendMessageToSockets([ws], message, true) > 0;
   }
 
+  /** Returns the number of sockets the frame was handed to. */
   private sendMessageToSockets(
     sockets: Iterable<WebSocketLike>,
     message: WSOutboundMessage,
     reportRejection = false,
-  ): void {
+  ): number {
     const writableSockets = [...sockets].filter((ws) => {
       if (
         message.type === "session" &&
@@ -1182,7 +1200,7 @@ export class VoiceAssistantWebSocketServer {
       return this.ensureOutboundCapacity(ws, 0);
     });
     if (writableSockets.length === 0) {
-      return;
+      return 0;
     }
 
     let payload: string;
@@ -1190,7 +1208,7 @@ export class VoiceAssistantWebSocketServer {
       payload = JSON.stringify(message);
     } catch (err) {
       this.logger.warn({ err }, "ws_serialize_failed");
-      return;
+      return 0;
     }
 
     const payloadBytes = outboundFrameByteLength(payload);
@@ -1199,6 +1217,7 @@ export class VoiceAssistantWebSocketServer {
         this.runtimeMetrics.recordOutboundMessage(message, ws.bufferedAmount);
       });
     }
+    return writableSockets.length;
   }
 
   private sendBinaryToClient(ws: WebSocketLike, frame: Uint8Array, reportRejection = true): void {
@@ -1303,8 +1322,8 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
-  private sendToConnection(connection: SessionConnection, message: WSOutboundMessage): void {
-    this.sendMessageToSockets(connection.sockets, message);
+  private sendToConnection(connection: SessionConnection, message: WSOutboundMessage): boolean {
+    return this.sendMessageToSockets(connection.sockets, message) > 0;
   }
 
   private sendBinaryToConnection(connection: SessionConnection, frame: Uint8Array): void {
@@ -1393,6 +1412,7 @@ export class VoiceAssistantWebSocketServer {
 
     const session = this.createSocketSession({
       clientId,
+      principalId: admission.principalId,
       appVersion,
       clientCapabilities,
       permissions: admission.permissions,
@@ -1401,7 +1421,10 @@ export class VoiceAssistantWebSocketServer {
         if (!connection) {
           return;
         }
-        this.sendToConnection(connection, wrapSessionMessage(msg));
+        const sent = this.sendToConnection(connection, wrapSessionMessage(msg));
+        if (msg.type === "audio_output" && !sent) {
+          throw new Error("Voice output has no connected client");
+        }
       },
       onMessageToSource: (source, msg) => {
         if (!connection || !connection.sockets.has(source as WebSocketLike)) {
@@ -1467,6 +1490,8 @@ export class VoiceAssistantWebSocketServer {
     return new Session({
       browserToolsBroker: this.browserToolsBroker,
       clientId: options.clientId,
+      /** Voice receipt reads are scoped to the principal/client pair that spoke. */
+      voiceOwner: JSON.stringify([options.principalId, options.clientId]),
       appVersion: options.appVersion,
       clientCapabilities: options.clientCapabilities,
       permissions: options.permissions,
@@ -1526,20 +1551,48 @@ export class VoiceAssistantWebSocketServer {
         turnDetection: () => this.speech?.resolveTurnDetection() ?? null,
       },
       voiceBridge: {
-        registerVoiceSpeakHandler: (agentId, handler) => {
-          if (this.voiceSpeakHandlers.has(agentId))
-            throw new Error("Voice mode is already active for this agent");
-          this.voiceSpeakHandlers.set(agentId, handler);
+        registerVoiceSpeakHandler: (agentId, attachmentId, handler, revoke) => {
+          const previous = this.voiceSpeakHandlers.get(agentId);
+          if (
+            previous &&
+            (previous.principalId !== options.principalId ||
+              previous.clientId !== options.clientId ||
+              previous.attachmentId !== attachmentId)
+          )
+            throw new Error("Voice mode is already active for this agent on another device");
+          const generation = randomUUID();
+          this.voiceSpeakHandlers.set(agentId, {
+            principalId: options.principalId,
+            clientId: options.clientId,
+            attachmentId,
+            generation,
+            handler,
+            revoke,
+          });
+          previous?.revoke();
+          return generation;
         },
-        unregisterVoiceSpeakHandler: (agentId) => {
-          this.voiceSpeakHandlers.delete(agentId);
+        unregisterVoiceSpeakHandler: (agentId, generation) => {
+          if (this.voiceSpeakHandlers.get(agentId)?.generation === generation) {
+            this.voiceSpeakHandlers.delete(agentId);
+          }
         },
-        registerVoiceCallerContext: (agentId, context) => {
-          this.voiceCallerContexts.set(agentId, context);
+        registerVoiceCallerContext: (agentId, generation, context) => {
+          if (this.voiceSpeakHandlers.get(agentId)?.generation === generation) {
+            this.voiceCallerContexts.set(agentId, context);
+          }
         },
-        unregisterVoiceCallerContext: (agentId) => {
-          this.voiceCallerContexts.delete(agentId);
+        unregisterVoiceCallerContext: (agentId, generation) => {
+          if (
+            !this.voiceSpeakHandlers.has(agentId) ||
+            this.voiceSpeakHandlers.get(agentId)?.generation === generation
+          ) {
+            this.voiceCallerContexts.delete(agentId);
+          }
         },
+        hasSpokenInTurn: (agentId, turnId) => this.spokenTurns.get(agentId) === turnId,
+        isCurrent: (agentId, generation) =>
+          this.voiceSpeakHandlers.get(agentId)?.generation === generation,
       },
       dictation:
         this.dictation || this.speech
@@ -1878,6 +1931,10 @@ export class VoiceAssistantWebSocketServer {
         // stock peers never gain it, so the gate lasts as long as stock peers
         // are supported. Gates the agent.queue.* surface end to end.
         durableAgentQueueV1: true,
+        // COMPAT(durableVoiceInputV1): added in TM-04 on 2026-10-08. Keep
+        // the gate while stock peers are supported. This contract adapts source
+        // voiceConcurrentInput to TM-02 admission and receipt reconciliation.
+        durableVoiceInputV1: this.agentQueueService !== null,
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: true,
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
@@ -2067,7 +2124,10 @@ export class VoiceAssistantWebSocketServer {
   }
 
   public resolveVoiceSpeakHandler(callerAgentId: string): VoiceSpeakHandler | null {
-    return this.voiceSpeakHandlers.get(callerAgentId) ?? null;
+    // Record actual tool invocation even while detached, so reconnect cannot read it twice.
+    const turnId = this.agentManager.getAgent(callerAgentId)?.activeForegroundTurnId;
+    if (turnId) this.spokenTurns.set(callerAgentId, turnId);
+    return this.voiceSpeakHandlers.get(callerAgentId)?.handler ?? null;
   }
 
   public resolveVoiceCallerContext(callerAgentId: string): VoiceCallerContext | null {

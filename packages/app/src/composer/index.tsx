@@ -1341,6 +1341,7 @@ interface ComposerRightControlsSlotProps extends ComposerVoiceModeButtonProps {
   isVoiceModeForAgent: boolean;
   hasAgent: boolean;
   isAgentRunning: boolean;
+  supportsVoiceConcurrentInput: boolean;
   hasSendableContent: boolean;
   isCompact: boolean;
   showVoice: boolean;
@@ -1350,6 +1351,7 @@ function ComposerRightControlsSlot({
   isVoiceModeForAgent,
   hasAgent,
   isAgentRunning,
+  supportsVoiceConcurrentInput,
   hasSendableContent,
   isCompact,
   showVoice,
@@ -1357,7 +1359,11 @@ function ComposerRightControlsSlot({
 }: ComposerRightControlsSlotProps) {
   const hideVoiceForCompactInput = isCompact && hasSendableContent;
   const showVoiceModeButton =
-    showVoice && !isVoiceModeForAgent && hasAgent && !isAgentRunning && !hideVoiceForCompactInput;
+    showVoice &&
+    !isVoiceModeForAgent &&
+    hasAgent &&
+    (!isAgentRunning || supportsVoiceConcurrentInput) &&
+    !hideVoiceForCompactInput;
   if (!showVoiceModeButton) return null;
   return (
     <View style={styles.rightControls}>
@@ -1536,6 +1542,10 @@ function ComposerContentImpl({
     useShallow((state) =>
       state.entriesForAgent(serverId, agentId).filter((entry) => entry.failedAt !== undefined),
     ),
+  );
+  // COMPAT(durableVoiceInputV1): fork feature (TM-04), added on 2026-10-08; keep while stock peers are supported.
+  const supportsVoiceConcurrentInput = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.durableVoiceInputV1 === true,
   );
   const forgeAutoAttachRef = useRef<ReturnType<typeof useComposerForgeAutoAttach>>(null);
   const [isForgeResolving, setIsForgeResolving] = useState(false);
@@ -2549,6 +2559,7 @@ function ComposerContentImpl({
         isVoiceModeForAgent={isVoiceModeForAgent}
         hasAgent={hasAgent}
         isAgentRunning={isAgentRunning}
+        supportsVoiceConcurrentInput={supportsVoiceConcurrentInput}
         hasSendableContent={hasSendableContent}
         isCompact={isCompactLayout}
         showVoice={mode.showVoice}
@@ -2573,6 +2584,7 @@ function ComposerContentImpl({
       isVoiceSwitching,
       mode.showVoice,
       realtimeVoiceButtonStyle,
+      supportsVoiceConcurrentInput,
       t,
       voiceToggleKeys,
     ],
@@ -3028,6 +3040,9 @@ function ComposerContentImpl({
                   voiceServerId={serverId}
                   voiceAgentId={agentId}
                   isAgentRunning={isAgentRunning}
+                  supportsVoiceConcurrentInput={supportsVoiceConcurrentInput}
+                  isCancellingAgent={isCancellingAgent}
+                  onCancelAgent={handleCancelAgent}
                   defaultSendBehavior={activeSendBehavior}
                   onQueue={handleQueue}
                   onSubmitLoadingPress={submitLoadingPressHandler}

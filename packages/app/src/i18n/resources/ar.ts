@@ -179,7 +179,7 @@ export const ar: TranslationResources = {
       unmuteVoice: "إلغاء كتم الصوت",
       muteVoice: "كتم الصوت",
       dictation: "الإملاء",
-      interruptBeforeVoice: "قم بمقاطعة الوكيل قبل بدء الوضع الصوتي",
+      interruptBeforeVoice: "حدّث المضيف لاستخدام الصوت أثناء عمل الوكيل",
     },
     attachments: {
       addImage: "أضف صورة",
@@ -1950,10 +1950,25 @@ export const ar: TranslationResources = {
     },
   },
   realtimeVoice: {
+    listening: "الميكروفون يعمل",
+    notListening: "لا يستمع",
+    failure: {
+      "nothing-recognized": "لم أفهم ذلك. قلها مرة أخرى.",
+      "recognition-stalled": "توقف التعرف على الكلام عن الاستجابة. أوقف الصوت وابدأه من جديد.",
+      "recognition-failed": "فشل التعرف على الكلام. أوقف الصوت وابدأه من جديد.",
+      "recognition-unavailable": "التعرف على الكلام غير متاح على المضيف.",
+      "host-disconnected": "انقطع الاتصال بالمضيف. إدخال الميكروفون متوقف مؤقتًا حتى يعود الاتصال.",
+      "microphone-lost": "فُقد الميكروفون. توقف الصوت.",
+    },
+    inputQueued: "تمت إضافة الكلام إلى قائمة انتظار الوكيل",
+    inputSent: "أُرسل الكلام إلى الوكيل",
+    inputRemoved: "أُزيل الكلام من قائمة الانتظار",
+    inputUnknown: "حالة تسليم الكلام غير مؤكدة",
     actions: {
+      interruptAgent: "مقاطعة الوكيل",
       mute: "كتم صوت الوقت الحقيقي",
       unmute: "إلغاء كتم صوت الوقت الحقيقي",
-      stop: "إيقاف الصوت في الوقت الحقيقي ومقاطعة الدوران",
+      stop: "إيقاف الصوت في الوقت الحقيقي",
     },
   },
   rewind: {

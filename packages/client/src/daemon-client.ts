@@ -8,7 +8,7 @@ import {
   type TimelineSubscription,
 } from "./connection/index.js";
 import { CreationClient } from "./creation/index.js";
-import type { CreationSnapshot } from "@getpaseo/protocol/messages";
+import type { AgentQueueSnapshot, CreationSnapshot } from "@getpaseo/protocol/messages";
 import type { z } from "zod";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 // Split value/type imports: the desvio basket drops the value import once no
@@ -32,7 +32,6 @@ import {
   SessionInboundMessageSchema,
   type ActiveTurnBehavior,
   type AgentAttachmentWire,
-  type AgentQueueSnapshot,
   type QueuedAgentDeliveryIntent,
   type QueuedComposerAttachment,
   type ServerInfoStatusPayload,
@@ -1217,6 +1216,12 @@ interface PingProbe {
 // COMPAT(providerUsageList): added in v0.1.98, remove after 2027-03-26.
 export function supportsUsageReports(features: ServerInfoStatusPayload["features"]): boolean {
   return features?.usageSources === true || features?.providerUsageList === true;
+}
+
+/** Identifies the voice attachment a voice message belongs to. */
+export interface VoiceTransport {
+  attachmentId: string;
+  generation: string;
 }
 
 export class DaemonClient {
@@ -4091,12 +4096,23 @@ export class DaemonClient {
   // Audio / Voice
   // ============================================================================
 
-  async setVoiceMode(enabled: boolean, agentId?: string): Promise<SetVoiceModePayload> {
+  async setVoiceMode(
+    enabled: boolean,
+    agentId?: string,
+    input?: {
+      /** Voice attachment identity; the host binds its transport generation to it. */
+      attachmentId?: string;
+      /** Supplied when an existing attachment reclaims itself after a reconnect. */
+      generation?: string;
+    },
+  ): Promise<SetVoiceModePayload> {
     const requestId = this.createRequestId();
     const message = SessionInboundMessageSchema.parse({
       type: "set_voice_mode",
       enabled,
       ...(agentId ? { agentId } : {}),
+      ...(input?.attachmentId ? { attachmentId: input.attachmentId } : {}),
+      ...(input?.generation ? { generation: input.generation } : {}),
       requestId,
     });
     const response = await this.sendRequest({
@@ -4122,8 +4138,42 @@ export class DaemonClient {
     return response;
   }
 
-  async sendVoiceAudioChunk(audio: string, format: string, isLast = false): Promise<void> {
-    this.sendSessionMessage({ type: "voice_audio_chunk", audio, format, isLast });
+  /** Reads this attachment's delivery receipts so the panel can show truthful state. */
+  async readVoiceInputReceipts(input: {
+    agentId: string;
+    attachmentId: string;
+    generation: string;
+    after?: string;
+    limit?: number;
+  }): Promise<
+    Extract<SessionOutboundMessage, { type: "voice.input.receipts.read.response" }>["payload"]
+  > {
+    const requestId = this.createRequestId();
+    const response = await this.sendRequest({
+      requestId,
+      message: { type: "voice.input.receipts.read.request", requestId, ...input },
+      select: (msg) =>
+        msg.type === "voice.input.receipts.read.response" && msg.payload.requestId === requestId
+          ? msg.payload
+          : null,
+    });
+    if (response.error) throw new Error(response.error);
+    return response;
+  }
+
+  async sendVoiceAudioChunk(
+    audio: string,
+    format: string,
+    isLast = false,
+    transport?: VoiceTransport,
+  ): Promise<void> {
+    this.sendSessionMessage({
+      type: "voice_audio_chunk",
+      audio,
+      format,
+      isLast,
+      ...transport,
+    });
   }
 
   async startDictationStream(dictationId: string, format: string): Promise<void> {
@@ -4335,12 +4385,17 @@ export class DaemonClient {
     this.sendSessionMessageStrict({ type: "dictation_stream_cancel", dictationId });
   }
 
-  async abortRequest(): Promise<void> {
-    this.sendSessionMessage({ type: "abort_request" });
+  async abortRequest(transport?: VoiceTransport): Promise<void> {
+    this.sendSessionMessage({ type: "abort_request", ...transport });
   }
 
-  async audioPlayed(id: string): Promise<void> {
-    this.sendSessionMessage({ type: "audio_played", id });
+  async audioPlayed(id: string, error?: string, transport?: VoiceTransport): Promise<void> {
+    this.sendSessionMessageStrict({
+      type: "audio_played",
+      id,
+      ...(error !== undefined ? { error } : {}),
+      ...transport,
+    });
   }
 
   // ============================================================================

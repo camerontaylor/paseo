@@ -181,7 +181,7 @@ export const es: TranslationResources = {
       unmuteVoice: "Activar voz",
       muteVoice: "voz muda",
       dictation: "Dictado",
-      interruptBeforeVoice: "Interrumpir al agente antes de iniciar el modo de voz.",
+      interruptBeforeVoice: "Actualiza el host para usar la voz mientras el agente trabaja",
     },
     attachments: {
       addImage: "Agregar imagen",
@@ -2003,10 +2003,26 @@ export const es: TranslationResources = {
     },
   },
   realtimeVoice: {
+    listening: "Micrófono activado",
+    notListening: "No escucha",
+    failure: {
+      "nothing-recognized": "No lo entendí. Dilo otra vez.",
+      "recognition-stalled": "El reconocimiento de voz dejó de responder. Detén y reinicia la voz.",
+      "recognition-failed": "Falló el reconocimiento de voz. Detén y reinicia la voz.",
+      "recognition-unavailable": "El reconocimiento de voz no está disponible en el host.",
+      "host-disconnected":
+        "Host desconectado. La entrada del micrófono está en pausa hasta que se reconecte.",
+      "microphone-lost": "Se perdió el micrófono. La voz se detuvo.",
+    },
+    inputQueued: "Voz en cola para el agente",
+    inputSent: "Voz enviada al agente",
+    inputRemoved: "Voz eliminada de la cola",
+    inputUnknown: "Entrega de voz incierta",
     actions: {
+      interruptAgent: "Interrumpir al agente",
       mute: "Silenciar voz en tiempo real",
       unmute: "Activar voz en tiempo real",
-      stop: "Detener la voz en tiempo real e interrumpir el turno.",
+      stop: "Detener la voz en tiempo real",
     },
   },
   rewind: {
