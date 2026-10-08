@@ -5445,6 +5445,7 @@ export class DaemonClient {
         requestId,
         message: {
           type: "usage.list_reports.request",
+          streaming: features?.usageReportsStreaming === true ? true : undefined,
           requestId,
           forceRefresh: options?.forceRefresh,
           reportIds: options?.reportIds,
@@ -5455,7 +5456,13 @@ export class DaemonClient {
             ? message.payload
             : null,
       });
-      if (response.error !== null) throw new Error(response.error);
+      if (response.error != null) throw new Error(response.error);
+      // COMPAT(usageReportsStreaming): added in v0.11.1, remove after 2027-04-08 once all hosts advertise usageReportsStreaming.
+      // beta.3 sends reports only; beta.4 through 0.11.1 send updates only.
+      if (response.reports !== undefined) {
+        if (reports.length === 0) response.reports.forEach((report) => onReport?.(report));
+        return { requestId, reports: response.reports };
+      }
       return { requestId, reports };
     } finally {
       active = false;

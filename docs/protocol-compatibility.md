@@ -74,6 +74,19 @@ The adapter keys legacy slots by physical socket, so an old connection cannot re
 sibling's observation even when both use the same logical client ID. Optional wire IDs stay accepted
 for parsing compatibility; modern requests cannot select their subscription ID.
 
+## Usage report delivery
+
+Usage streaming requires `server_info.features.usageReportsStreaming` and an explicit
+`streaming: true` request. Unmarked requests receive terminal `reports` and existing
+`rpc_error` failures. Older validators reject unknown update messages, so preserving the
+terminal array alone is insufficient.
+
+The client accepts beta.3 terminal reports and beta.4–0.11.1 update-only responses at its
+request boundary. Stock beta.4–0.11.1 clients did not advertise streaming support and ignore
+terminal reports; they need an app update to show Usage against a repaired daemon. Their
+responses remain parseable. Do not infer support from `usageSources`, which all these hosts
+advertise.
+
 ## Every shim is tagged and dated
 
 A shim that exists for old-app or old-daemon support carries a comment naming it, the version it arrived in, and when it can go:
