@@ -4,6 +4,26 @@ import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 
+// Pinned 0.2.0 assumes every native catalog provider has a display name.
+// Existing custom providers may omit it; use their stable provider identity.
+export function prepareNativeCatalog(plugin) {
+  const bridge = resolve(plugin, "server/host/bridge.ts");
+  const source = readFileSync(bridge, "utf8");
+  const hash = createHash("sha256").update(source).digest("hex");
+  if (hash === "f98087d9cd025abb341cd43b8e687979978805de00addef7e9df2f1c4b4765ae") return;
+  if (hash !== "82a915ca252b53ca051792dfb406e86edcf86e7434609c5bc78184ae5d359585")
+    throw new Error("Native catalog bridge differs from pinned commit");
+  writeFileSync(
+    bridge,
+    source
+      .replace("providerName: z.string(),", "providerName: z.string().optional(),")
+      .replace(
+        "providerLabel: provider.providerName,",
+        "providerLabel: provider.providerName ?? provider.providerId,",
+      ),
+  );
+}
+
 // Intel macOS has no managed installer. Settings RPCs and provider status use
 // the plugin subprocess environment, rather than the per-agent launch env.
 export function prepareNativeEntry({ plugin, runtime, node }) {
@@ -29,6 +49,7 @@ export function prepareNativeEntry({ plugin, runtime, node }) {
   if (metadata.name !== "paseo-plugin-zcode-provider" || metadata.version !== "0.2.0") {
     throw new Error("Expected pinned native ZCode plugin 0.2.0");
   }
+  prepareNativeCatalog(root);
   const entry = resolve(root, "index.server.ts");
   const moved = resolve(root, "server/paseo-upstream-entry.ts");
   const wrapper = `import type { PluginServerContext } from "@getpaseo/plugin/server";\nimport contribute from "./server/paseo-upstream-entry";\n\nexport default function nativeHost(server: PluginServerContext) {\n  process.env.PASEO_ZCODE_RUNTIME ??= ${JSON.stringify(runtimePath)};\n  process.env.PASEO_ZCODE_NODE ??= ${JSON.stringify(nodePath)};\n  return contribute(server);\n}\n`;
