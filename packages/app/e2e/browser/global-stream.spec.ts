@@ -106,3 +106,84 @@ for (const width of [390, 1440]) {
     }
   });
 }
+
+test("durable checklist pages, evidence and reopen survive reconnect", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const repo = await createTempGitRepo("durable-stream-");
+  const client = await connectSeedClient();
+  const created = await client.createWorkspace({ source: { kind: "directory", path: repo.path } });
+  if (!created.workspace) throw new Error(created.error ?? "Workspace missing");
+  const workspace = created.workspace;
+  try {
+    const agent = await createIdleAgent(client, {
+      cwd: repo.path,
+      workspaceId: workspace.id,
+      title: "Durable checklist",
+    });
+    for (let i = 0; i < 53; i++)
+      await client.updateStreamEntry({
+        agentId: agent.id,
+        action: "set_ask",
+        entryId: `ask-${i}`,
+        expectedRevision: 0,
+        text: `Deliver request ${i}`,
+        ask: {
+          state: i === 0 ? "blocked" : "done",
+          remaining: i === 0 ? "Waiting for acceptance" : "",
+          evidence: i === 0 ? "Implementation tested" : "Acceptance recorded",
+        },
+      });
+    await resetSeededPageState(page);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await gotoAppShell(page);
+    await page.goto("/stream");
+    await page
+      .getByTestId(`global-stream-row-${agent.id}`)
+      .first()
+      .getByRole("button", { name: /Durable checklist/ })
+      .click();
+    await page.getByTestId("agent-view-artifacts").click();
+    const feed = page.getByTestId("companion-stream");
+    await expect(feed.getByText("Deliver request 0", { exact: true })).toBeVisible();
+    await expect(feed.getByText("Blocked", { exact: true })).toBeVisible();
+    await expect(
+      feed.getByText("Remaining: Waiting for acceptance", { exact: true }),
+    ).toBeVisible();
+    await expect(feed.getByRole("button", { name: "Done", exact: true })).toBeDisabled();
+    await page.screenshot({
+      path: testInfo.outputPath("durable-checklist-phone.png"),
+      fullPage: true,
+    });
+    await feed.getByRole("button", { name: "Show completed too" }).click();
+    await expect(feed.getByRole("button", { name: "Load more" })).toBeVisible();
+    await feed.getByRole("button", { name: "Load more" }).click();
+    await expect(feed.getByRole("button", { name: "Load more" })).toHaveCount(0);
+    const completed = feed.getByTestId("companion-entry-ask:ask-1");
+    await completed.scrollIntoViewIfNeeded();
+    await expect(
+      completed.getByText("Completion evidence: Acceptance recorded", { exact: true }),
+    ).toBeVisible();
+    await completed.getByRole("button", { name: "Open", exact: true }).click();
+    await expect(completed.getByText("Open", { exact: true }).first()).toBeVisible();
+    await page.reload();
+    await page.getByTestId("agent-view-artifacts").click();
+    await expect(page.getByTestId("companion-entry-ask:ask-1")).toBeVisible();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.screenshot({
+      path: testInfo.outputPath("durable-checklist-desktop.png"),
+      fullPage: true,
+    });
+    const pending = await client.listGlobalStream({
+      agentId: agent.id,
+      asksOnly: true,
+      filter: "pending",
+    });
+    expect(pending.rows).toHaveLength(2);
+  } finally {
+    await client.removeProject(workspace.projectId);
+    await client.close();
+    await repo.cleanup();
+  }
+});
