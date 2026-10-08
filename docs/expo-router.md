@@ -102,6 +102,21 @@ store-ready protected group so a cold host deep link can survive daemon startup.
 Do not collapse this topology with a catch-all, `getId`, or
 `dangerouslySingular` workaround.
 
+## Navigation History
+
+Desktop history records resting routes and the focused workspace tab after the layout store
+hydrates. Browser back and forward remain owned by the browser; the desktop bracket shortcuts
+step the app history. A history step selects its index before navigating so the recorder does
+not append the landing location again.
+Record the `/new` route's query inputs with its path so Back restores the selected host, project,
+source directory, and draft. A reopened tab may select an existing duplicate with the same target;
+replay uses the tab that actually gained focus when reconciling the history entry.
+
+An absent workspace still navigates to its workspace route. That screen asks the daemon for
+recovery state and offers Restore or Unarchive when appropriate. History does not change the
+workspace or agent archive state. Reload starts a new history from the restored workspace and
+the focused tab in the persisted layout.
+
 ## Agent Targets
 
 Notifications and agent URLs enter the router with different authoritative
