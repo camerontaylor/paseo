@@ -12,25 +12,27 @@
 > `e423a8666a30075a584f4a8e6f646a28054e6af0`; build/server, root typecheck/lint, and scoped tests
 > passed. Queue-free build/runtime rollback and a full P0 + current-custom + reviewed-side-fix
 > rehearsal remain active integrator follow-up. That rehearsal must preserve P0 external/infi carries.
-> Keep TMAD out of the live manifest pending those checks plus the remaining review and human
+> TM-04 review now APPROVES its exact final HEAD; physical/live-provider evidence remains open.
+> Keep TMAD out of the live manifest pending those checks and the remaining human
 > evidence gates. The stale npm `fork` dist-tag is an expected trusted-publishing limitation;
 > consumers use `latest` or the default install path, and any tag repair is a credentialed operator
 > action.
 >
-> Current worker and archive ownership is tracked in the table below. On 2026-10-08, 19 old or
-> finished agents were archived, including the completed CLI, side-repair, and review agents.
+> Current worker and archive ownership is tracked in the table below. On 2026-10-08, 21 workers
+> were closed/archived, including the TM-04 implementer and reviewer.
 
 ## Worker ownership — 2026-10-08
 
 | Work | Agent | Workspace | Branch | State |
 |---|---|---|---|---|
-| TM-04 voice | `agent9307e007` (Sol, low) | `wks_9d17ba714b1dcd50` | `intake/tmad-voice-flow` (`voice-flow-r2`) | In progress; worker owns implementation and checks. |
-| P0 assembly | `agentfeb33ae6` (Luna, high) | `wks_6bd86ab884dc41ee` | `build/tmad-readiness-2026-10-08` | P6 frozen four-feature report complete at `e423a8666`; coordinator's follow-up remains active for queue-free build/runtime rollback and full carry-preserving rehearsal. |
+| TM-04 voice implementation | `agent9307e007` (Sol, low) | `wks_9d17ba714b1dcd50` | `intake/tmad-voice-flow` (`voice-flow-r2`) | Complete at `84f11381ceabec13d5deaff6c1e2c05dc67a6c62` (includes attributed import `5ecb8324625de55dc80345f181518da26f2d42db`); implementer archived. Review APPROVED by Pi/OpenCode Go Muse reviewer `6ff8658e-654d-4637-beeb-c24d238f9375` (archived). Physical/live-provider gates remain open. See [implementation evidence](evidence/TM-04-2026-10-08.md) and [review](evidence/review-TM-04-2026-10-08.md). |
+| TM-04 independent review | `6ff8658e-654d-4637-beeb-c24d238f9375` (Pi/OpenCode Go Muse) | `wks_9d17ba714b1dcd50` | `intake/tmad-voice-flow` | Complete, archived; APPROVE exact HEAD `84f11381ceabec13d5deaff6c1e2c05dc67a6c62`. See [review](evidence/review-TM-04-2026-10-08.md). |
+| P0 assembly / basket integration | `agentfeb33ae6` (Luna, high) | `wks_6bd86ab884dc41ee` | `build/tmad-readiness-2026-10-08` | P6 frozen four-feature report complete at `e423a8666`; integration of review-approved TM-04 is underway. Queue-free build/runtime rollback and full carry-preserving rehearsal remain open. |
 | CLI declaration-resolution investigation | `agentfc3f12c9` (Sol, low) | `wks_95f92a2c629a806f` | `fix/pluto-cli-typecheck` | Complete and archived; no source fix indicated. |
 | Side-conversation repair | `agentb1df5254` (Sol, low) | `wks_0a7dc387a32f7959` | `fix/pluto-side-conversation-events` | Complete, archived; `fddb4fa8587ae377286ffbea3137df4c53bdc7a9` approved, candidate outside `custom`/`mine`; awaiting integration and CI. See [repair evidence](evidence/pluto-side-conversation-events-2026-10-08.md). |
 | Side-conversation independent review | `agentc28ebf9` (Luna, high) | `wks_0a7dc387a32f7959` | `fix/pluto-side-conversation-events` | Complete, archived; APPROVE at `fddb4fa8587ae377286ffbea3137df4c53bdc7a9`. CodeRabbit did not start (`environment_unsupported`); manual review is the approval. See [review](evidence/pluto-side-conversation-review-2026-10-08.md). |
 
-19 old or finished agents are archived. Agent and workspace IDs are separate in this table.
+21 agents are closed/archived. Agent and workspace IDs are separate in this table.
 
 Plan: [../tmad-maintained-port-plan.md](../tmad-maintained-port-plan.md). Briefs in `briefs/` were
 written for neptune workers: read `/tmp/tmad-port/...` as the pluto scratch dir (populated from this
@@ -54,7 +56,7 @@ are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
 | TM-07 Native Find | `intake/tmad-native-find` (on origin) | `v0.11.0-beta.3` (6166a7aca) | `5f3634ad4` | DONE + **APPROVED** (evidence/review-TM-07.md, Muse Spark 1.3 Contributor via pi/OpenCode Go, 2026-10-03): no blocking findings, none non-blocking; provenance, blob parity, ancestry, diff correctness all verified by the reviewer. Promotion still wants the 10-point native device list in evidence/TM-07.md (human) and the known adapted merge with TM-01 on `agent-view-store.ts`/`workspace-tab-menu.ts` (integrator, P2). |
 | TM-01B bridge | — | — | — | NOT NEEDED (TM-01 compiles and tests green on beta.3 alone). |
 | TM-03 queue UI | `intake/tmad-queue-ui` (on origin) | TM-02 `91392d6be` (approved) | `9ab91bb75` | DONE + **APPROVED** (evidence/review-TM-03.md): no blocking findings; 3 non-blocking notes (trailer convention on the docs commit; the inherited source optimistic-row race — small, self-healing, documented as gap #4, hardening optional; screenshot evidence for the new badges/menus deferred to a human dev-app pass). Canonical submission ownership, no-protocol-change, no typed-send flip, queue-removal coherence all verified by the reviewer. Remaining human check: browser/native screenshot pass on the new queue UI. |
-| TM-04 voice flow | `intake/tmad-voice-flow` | TM-02 `91392d6be` (approved) | `6ab56eba1` (raw WIP) | RESUMED (2026-10-04): first worker died with ~72 uncommitted files and no report. WIP recovered verbatim as wip commit `6ab56eba1` on the branch (worktree verified byte-identical to the origin backup `fa9dac92b` before commit; also tarred). Fresh implementer dispatched (claude-zai/glm-5.3-flash) to audit every WIP file against the brief, rebuild proper history, and run the gates. Coordinator triage of the WIP: protocol changes follow the wire rules (optional fields, dotted `voice.input.receipts.read.*` pair, COMPAT-tagged `voiceConcurrentInput` capability), native audio deltas look like #22/#23 playback plumbing — both to be re-verified by the worker and reviewer. |
+| TM-04 voice flow | `intake/tmad-voice-flow` | TM-02 `91392d6be` (approved) | `84f11381ceabec13d5deaff6c1e2c05dc67a6c62` | Implementation complete; includes attributed import `5ecb8324625de55dc80345f181518da26f2d42db`. Pi/OpenCode Go Muse review APPROVES this exact HEAD; reviewer `6ff8658e-654d-4637-beeb-c24d238f9375` is archived. Basket integration is underway with `agentfeb33ae6`; physical-device and live-provider evidence remain open. `6ab56eba1` is retained only as recovery history. See [implementation evidence](evidence/TM-04-2026-10-08.md) and [review](evidence/review-TM-04-2026-10-08.md). |
 | P2 removal proof | `tmad-with-stream` (clone-local) | baseline `2bfcd2e19` | `0ff83cbc5` | **DONE + APPROVED** (evidence/review-P2.md): with-stream delta = exactly the 53 TM-01 paths; Stream-free baseline; steer-fence defect fixed in the TM-01 branch (redundancy proven, trees byte-identical); rollback demonstrated on copied data; TM-01B not needed; final manifest block in P2.md Addendum 2. |
 | P6 frozen basket | `build/tmad-readiness-2026-10-08` (local assembly) | P0 `2bfcd2e19` + approved TM-01/02/03/07 SHAs | `e423a8666a30075a584f4a8e6f646a28054e6af0` | Four-feature assembly report complete; server build, root typecheck/lint, and scoped tests passed. Queue-free tree is unbuilt and has source/copy proof only; current-custom scratch is unbuilt and omits P0 external/infi carries. Active integrator follow-up must close those limits and add the reviewed side fix before any final inclusion decision. See [P6 evidence](evidence/P6-assembly-2026-10-08.md) and [conflict log](evidence/P6-conflict-resolution-log-2026-10-08.md). |
 | TM-05, TM-06, TM-08+ | — | — | — | Product decisions for the user; do not start. Typed-send default is also the user's call. |
@@ -76,7 +78,7 @@ are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
 - TM-02: the pre-fix custom CI side-conversation failure at `session.test.ts:259` is reproduced and
   repaired at `fddb4fa85`; Luna independently approved it. Integration and post-fix CI remain
   outstanding. Daemon e2e still needs provider credentials (or a fake-provider harness).
-- TM-04 (when run): its report will list the physical-device and per-provider checks.
+- TM-04: review is approved; physical-device and live-provider evidence remain open. Basket integration is underway; see [TM-04 evidence](evidence/TM-04-2026-10-08.md) and [review](evidence/review-TM-04-2026-10-08.md).
 
 ## Proposed manifest append block (DRAFT — nothing live edited; each line valid only after its Muse Spark review)
 

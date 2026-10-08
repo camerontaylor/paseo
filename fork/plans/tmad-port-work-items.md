@@ -61,13 +61,13 @@ needed.
 | TM-01B bridge | not created | — | — | NOT NEEDED (TM-01 green on beta.3 alone) | Stream |
 | TM-02 queue daemon | `intake/tmad-message-queue` (on origin) | custom floor `cbd1210c7` | `91392d6be` (6 commits) | APPROVED ([review](tmad-port/evidence/review-TM-02.md); no blocking) | Queue+Voice |
 | TM-03 queue UI | `intake/tmad-queue-ui` (on origin) | TM-02 `91392d6be` | `9ab91bb75` (7 commits) | APPROVED ([review](tmad-port/evidence/review-TM-03.md); 3 non-blocking) | Queue+Voice |
-| TM-04 voice flow | `intake/tmad-voice-flow` | TM-02 `91392d6be` | in flight | NOT DONE — see row below | Queue+Voice |
+| TM-04 voice flow | `intake/tmad-voice-flow` | TM-02 `91392d6be` | `84f11381ceabec13d5deaff6c1e2c05dc67a6c62` | Implementation complete; Pi/OpenCode Go Muse review APPROVED this exact HEAD (reviewer `6ff8658e-654d-4637-beeb-c24d238f9375`, workspace `wks_9d17ba714b1dcd50`). Basket integration is underway with worker `agentfeb33ae6`; physical/live-provider gates remain open. See [implementation evidence](tmad-port/evidence/TM-04-2026-10-08.md) and [review](tmad-port/evidence/review-TM-04-2026-10-08.md). | Queue+Voice |
 | TM-07 native find | `intake/tmad-native-find` (on origin) | `6166a7aca` (release) | `5f3634ad4` (1 commit) | APPROVED ([review](tmad-port/evidence/review-TM-07.md); no findings) | Native Find |
 | TM-05, TM-06, TM-08+ | not started | — | — | Product decisions for the user; do not start | — |
 
 Allowed ancestors, verified per report and re-checked by each reviewer: TM-01/TM-07 have only the
 pinned release (custom, mine, and `51fb7693d` are NOT ancestors). TM-02 has only the custom floor.
-TM-03 (and TM-04 when it lands) have only the TM-02 head; `intake/tmad-queue-ui` and
+TM-03 and TM-04 have only the TM-02 head; `intake/tmad-queue-ui` and
 `intake/tmad-voice-flow` are siblings — neither may carry the other.
 
 ## Feature rows
@@ -151,14 +151,17 @@ TM-03 (and TM-04 when it lands) have only the TM-02 head; `intake/tmad-queue-ui`
 - Human gate: the 10-point native device list in the report (reachability, historical-match reveal,
   wrap-around, cleanup, older-host, keyboard, rotation, non-Latin locales).
 
-### TM-04 — voice flow (`intake/tmad-voice-flow`) — IN FLIGHT
+### TM-04 — voice flow (`intake/tmad-voice-flow`) — IMPLEMENTATION AND REVIEW APPROVED
 
 - Source: PRs #13, #15, #22, #23 (NOT #14 iOS background = TM-06, NOT #17 mute = TM-05).
-- State: first worker died leaving uncommitted WIP; recovered verbatim as wip commit `6ab56eba1`
-  on the branch (content byte-verified against `origin/backup/tmad-voice-flow-wip-2026-10-04` =
-  `fa9dac92b` and a tar). A fresh implementer is auditing the WIP against the brief and rebuilding
-  proper history. **This row, its review link, and its manifest line are completed only after its
-  gates pass.** Base: TM-02 `91392d6be`; only allowed extra ancestry.
+- Final implementation HEAD: `84f11381ceabec13d5deaff6c1e2c05dc67a6c62`, including attributed
+  import `5ecb8324625de55dc80345f181518da26f2d42db`. Pi/OpenCode Go Muse reviewer
+  `6ff8658e-654d-4637-beeb-c24d238f9375` in `wks_9d17ba714b1dcd50` APPROVED this exact HEAD;
+  implementer and reviewer are archived. Preserve `6ab56eba1` only as recovery history. Base:
+  TM-02 `91392d6be`; only allowed extra ancestry. Basket integration is underway with
+  `agentfeb33ae6`. Physical-device and live-provider checks remain open. See
+  [implementation evidence](tmad-port/evidence/TM-04-2026-10-08.md) and
+  [review](tmad-port/evidence/review-TM-04-2026-10-08.md).
 
 ## Source-change classifications
 
@@ -201,9 +204,9 @@ still owes its own removal exercise with pending items present (plan P2 step 5) 
 - TM-02: integrate independently approved side-conversation repair `fddb4fa85` through the intended
   path and verify it in CI. The current repair branch remains outside `custom`/`mine`.
 - TM-03: browser/native screenshot pass on the new queue UI.
-- TM-04 (when done): its report will list the physical-device and per-provider checks (mic,
-  playback, echo, lock/background, reconnect, owner contention; Claude, Codex, ACP/GJC) plus a
-  rebuilt native dev client for the `expo-two-way-audio` changes.
+- TM-04: review is approved; physical-device and per-provider checks remain open (mic, playback,
+  echo, lock/background, reconnect, owner contention; Claude, Codex, ACP/GJC) plus a rebuilt native
+  dev client for the `expo-two-way-audio` changes. Basket integration is underway.
 - Promotion (P6): land this ledger + evidence on `custom`; queue/voice removal-group exercise with
   pending items; P2-style assembly validation of the final manifest block; the human evidence gates
   above. No push to `mine`, no live manifest edit, no production restart is authorized by the port.
