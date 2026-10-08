@@ -13,6 +13,7 @@ import {
 import { z } from "zod";
 
 export interface PluginProviderMetadata {
+  supportsSystemPrompt?: boolean;
   hasCatalogCacheKey?: boolean;
   hasStatus?: boolean;
   command?: readonly [string, ...string[]];
@@ -113,6 +114,7 @@ const providerMetadataSchema = z
     iconPath: z.string().optional(),
     hasCatalogCacheKey: z.boolean().optional(),
     hasStatus: z.boolean().optional(),
+    supportsSystemPrompt: z.boolean().optional(),
     command: z.tuple([z.string().min(1)], z.string()).optional(),
   })
   .strict();

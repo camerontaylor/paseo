@@ -1,13 +1,30 @@
 # Syncing onto a newer upstream
 
-What breaks when `custom` moves to a newer upstream tag, and what to check before
-trusting a green merge. Add to this as syncs teach you more.
+What breaks when the pinned upstream base moves or a carried branch changes,
+and what to check before trusting a green merge. The [feature ledger](feature-ledger.md)
+tracks work owned by `custom`; the external Desvio manifest tracks active PR
+branches. Add to this record as syncs teach you more.
+
+## Sync the source that owns the change
+
+| Change | Update | Check |
+| --- | --- | --- |
+| New upstream release | Move `custom` onto the chosen release tag and update `DESVIO_BASE` in `~/.paseo-fork/desvio.conf`. Record the reason in [CHANGELOG.md](CHANGELOG.md). | Run the checkout checks below, then rebuild the full Desvio basket. A green `custom` alone does not validate the external carries. |
+| Author updates an external PR branch | Fetch its configured remote. Keep the same manifest line and its position; Desvio rebuilds from the new branch head. | Read the author's changes since the last build and run targeted tests for the changed behavior. |
+| Upstream merges or replaces a carried PR | Remove or replace its manifest line after confirming the pinned base contains the replacement. | Check the behavior and any downstream carries that depended on it. Desvio re-resolves entries below the changed line. |
+| Our code changes | Edit `custom`, then rebuild `mine`. | Update [feature-ledger.md](feature-ledger.md) when a feature's entry point or shared wiring changes. |
+
+Do not treat a fix made only in `mine` as durable: the next Desvio build
+recreates it. A recurring conflict resolution belongs in Desvio's recorded
+resolution or in the owning branch; a behavior change belongs in `custom` or a
+separate manifest branch. Keep the manifest's comments as the current carry
+rationale, rather than copying its changing list into this document.
 
 ## A clean merge proves nothing
 
-Every sync so far has merged with zero conflicts and then failed to build. The fork
-adds to files upstream also grows, and git is happy as long as the two sides touch
-different lines — or different files entirely.
+The `custom` syncs recorded below merged with zero conflicts and then failed
+to build. The fork adds to files upstream also grows, and git is happy as long
+as the two sides touch different lines — or different files entirely.
 
 Run, in this order, before believing a sync:
 
@@ -16,12 +33,19 @@ npm install                     # the tag may have moved dependencies
 git checkout -- package-lock.json   # npm rewrites hundreds of "peer": true markers
 npm run build:server            # generated declarations, or you chase phantom type errors
 npm run typecheck
+npm run lint
 ```
 
 `npm install` is not optional when the tag changed `package.json` anywhere.
 Reverting the lockfile after it is: the rewrite is pure churn and pure future
 conflict. Confirm that is all it was — `git diff package-lock.json`, strip the
 `"peer": true` lines, and nothing should remain.
+
+After the Desvio rebuild, run focused tests for changed code and a client/daemon
+smoke test before deploying. Desvio's own gate runs typecheck and lint but does
+not execute tests. Base decisions are in [CHANGELOG.md](CHANGELOG.md);
+the live base and carries are in `~/.paseo-fork/desvio.conf` and
+`~/.paseo-fork/manifest.txt`.
 
 ## The joints that rot without conflicting
 

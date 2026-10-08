@@ -4,7 +4,7 @@ This file is the repo-local Desvio plus enhancements tracker for the features ab
 
 ## Integration contract
 
-- Pin every port to the current Desvio base (`v0.10.1`) and `custom` (`2e2868796` at intake). Start an isolated topic branch from `custom`; copy behavior and relevant tests from the named source commits. A dependent branch may start from its prerequisite. The source commits are stacked, so their commit ancestry is not a usable manifest entry.
+- Pin every new port to the live Desvio base in `~/.paseo-fork/desvio.conf` and the matching `custom` head. At intake, these were `v0.10.1` and `2e2868796`; later base advances do not change that historical assessment. Start an isolated topic branch from `custom`; copy behavior and relevant tests from the named source commits. A dependent branch may start from its prerequisite. The source commits are stacked, so their commit ancestry is not a usable manifest entry.
 - Append a finished branch **after** `custom` in `~/.paseo-fork/manifest.txt`. Preserve every existing line's order. Treat a branch as ready only after focused tests, typecheck, lint, and an integrated `desvio build`; typecheck and lint alone do not verify behavior.
 - Keep a separate branch per row unless a dependency is inseparable at the protocol boundary. A branch's manifest comment should carry its `IP-` ID, source commits, last verified base, and its likely silent regression joints.
 - For an upstream sync, recheck whether each behavior landed, then rerun its focused tests on the rebased basket. New wire fields are optional, new RPCs follow dotted names, and each new daemon feature is gated once by `server_info.features.*` ([protocol rules](../../docs/protocol-compatibility.md)).

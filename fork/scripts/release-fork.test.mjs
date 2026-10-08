@@ -10,7 +10,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from "node:zlib";
 import { test } from "vitest";
+import { transpileModule, ModuleKind, ScriptTarget } from "typescript";
 import {
   assertPublishAccess,
   assertWebUiAssetsInPackList,
@@ -27,6 +29,7 @@ import {
   rewritePackageJsonDoc,
   rewriteRootPackageJsonDoc,
   rewriteShippedFileSpecifiers,
+  rewriteSpecifiersInText,
   scanPackListFiles,
   tarballPackArgs,
 } from "./release-fork.mjs";
@@ -37,6 +40,37 @@ const CTX = {
   baseVersion: "0.7.0-beta.2",
   forkVersion: "0.7.0-beta.2.fork.1",
 };
+
+test("fork packaging preserves upstream and fork plugin SDK runtime identities", async () => {
+  const source = readFileSync(
+    new URL("../../packages/plugin/src/sdk-specifiers.ts", import.meta.url),
+    "utf8",
+  );
+  const compiled = transpileModule(source, {
+    compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 },
+  }).outputText;
+  const rewritten = rewriteSpecifiersInText(compiled, { forkScope: "@camerontaylor" });
+  const sdk = await import(
+    `data:text/javascript;base64,${Buffer.from(rewritten).toString("base64")}`
+  );
+
+  for (const name of ["@getpaseo/plugin", "@camerontaylor/paseo-plugin"]) {
+    assert.equal(sdk.pluginSdkEntry(name), "");
+    assert.equal(sdk.pluginSdkEntry(`${name}/client`), "/client");
+    assert.equal(sdk.pluginSdkEntry(`${name}/client/react-native`), "/client/react-native");
+    assert.equal(sdk.pluginSdkEntry(`${name}/server/provider`), "/server/provider");
+    assert.equal(sdk.pluginSdkEntry(`${name}-other/client`), null);
+  }
+  assert.equal(sdk.pluginSdkEntry("react"), null);
+  assert.ok(!rewritten.includes('"@getpaseo/'));
+
+  const otherFork = rewriteSpecifiersInText(compiled, CTX);
+  const otherSdk = await import(
+    `data:text/javascript;base64,${Buffer.from(otherFork).toString("base64")}`
+  );
+  assert.equal(otherSdk.pluginSdkEntry("@paseo-fork/paseo-plugin/client"), "/client");
+  assert.equal(otherSdk.pluginSdkEntry("@getpaseo/plugin/client"), "/client");
+});
 
 test("rewrites package names and stamps the fork version across dependency pins", () => {
   const doc = {
@@ -168,6 +202,30 @@ test("dist rewrite leaves files without quoted specifiers untouched and reports 
     );
   } finally {
     rmSync(dist, { force: true, recursive: true });
+  }
+});
+
+test("fork browser assets serve the rewritten SDK identity in every compressed variant", () => {
+  const dist = mkdtempSync(path.join(tmpdir(), "paseo-release-fork-compressed-"));
+  try {
+    const asset = path.join(dist, "index.js");
+    const source = 'const sdk = "@getpaseo/plugin";\n';
+    writeFileSync(asset, source);
+    writeFileSync(`${asset}.br`, brotliCompressSync(source));
+    writeFileSync(`${asset}.gz`, gzipSync(source));
+
+    assert.deepEqual(rewriteDistSpecifiers(dist, CTX), {
+      filesScanned: 3,
+      filesRewritten: 1,
+      occurrences: 1,
+    });
+
+    const expected = 'const sdk = "@paseo-fork/paseo-plugin";\n';
+    assert.equal(readFileSync(asset, "utf8"), expected);
+    assert.equal(brotliDecompressSync(readFileSync(`${asset}.br`)).toString(), expected);
+    assert.equal(gunzipSync(readFileSync(`${asset}.gz`)).toString(), expected);
+  } finally {
+    rmSync(dist, { recursive: true, force: true });
   }
 });
 
