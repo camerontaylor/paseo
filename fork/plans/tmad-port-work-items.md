@@ -26,18 +26,9 @@ review are historical snapshots. Current agent, workspace, branch, and state ass
 ownership table](tmad-port/STATUS.md#worker-ownership--2026-10-08). The corrected readiness audit
 contains the historical custom CI failure and corrected CLI declaration-resolution result. Side-repair
 commit `fddb4fa8587ae377286ffbea3137df4c53bdc7a9` is independently approved and is an integration
-candidate outside `custom`/`mine`; it awaits integration and CI, and has not been promoted.
+candidate outside `custom`/`mine`; it passed local full-rehearsal integration but awaits intended-path inclusion and CI, and has not been promoted.
 
-The approved four-feature frozen-P0 assembly is P6 HEAD
-`e423a8666a30075a584f4a8e6f646a28054e6af0`. Active integrator follow-up covers isolated runtime
-rollback, a queue-free build, and a full P0 + current-custom + independently approved side-fix
-rehearsal that preserves P0 external/infi carries. The current-custom scratch is unbuilt and omits
-those carries; neither removal nor current-custom inclusion gates are closed. Keep TMAD out of the
-live manifest pending those checks and the remaining review/human gates. Updating the queue root to
-current `custom` remains a separate update-loop decision. The live manifest is unavailable in this
-environment and remains untouched. The npm `fork` tag is a documented trusted-publishing limitation:
-consumers use `latest`/the default install path; a credentialed operator can repair the stale tag if
-needed.
+The selected full readiness candidate `rehearsal/p0-custom-voice-complete` at `9584b2a669ce90a5df8c9eac66073e85124e90bb` and the frozen-only Voice checkpoint are recorded in the [P6 report](tmad-port/evidence/P6-assembly-2026-10-08.md), which owns exact refs, integration deltas, and reproducible runtime evidence. Full checks are green; final integration review is APPROVED. Frozen-only retains the known side-conversation failure and is not release ready. Dormant copied-state preservation passed; provider dispatch was not exercised. Remote CI/full-suite, device/live-provider/live-migration gates remain open. Intake approvals do not cover every assembly adaptation. Keep TMAD out of live configuration; queue-root updates and promotion remain separate decisions.
 
 ## Source cursors
 
@@ -56,12 +47,12 @@ needed.
 | --- | --- | --- | --- | --- | --- |
 | P0 | `tmad-port/baseline-assembly` (on origin) | frozen manifest SHAs (`tmad-port/evidence/P0-inputs.txt`) | `2bfcd2e19` | APPROVED ([review](tmad-port/evidence/review-P0.md); 3 non-blocking dispositioned) | — (baseline, not a feature) |
 | P2 | `tmad-with-stream` (clone-local, `/tmp/tmad-port/baseline-clone`) | P0 `2bfcd2e19` | `0ff83cbc5` | APPROVED ([review](tmad-port/evidence/review-P2.md)) | — (with/without proof) |
-| P6 frozen basket | `build/tmad-readiness-2026-10-08` (local assembly) | P0 + approved TM-01/02/03/07 | `e423a8666a30075a584f4a8e6f646a28054e6af0` | Four-feature frozen assembly approved; build/server, root typecheck/lint, and scoped tests passed. Queue-free build/runtime rollback and full carry-preserving current-custom rehearsal remain active follow-up ([report](tmad-port/evidence/P6-assembly-2026-10-08.md)). | Queue+Voice / Native Find / Stream |
+| P6 final rehearsals | `rehearsal/p0-custom-voice-complete` / `rehearsal/p6-approved-voice` (local) | Exact sequence in P6 | full `9584b2a669ce90a5df8c9eac66073e85124e90bb`; frozen `0169f9a839fcdc01d4df04da02872ef3167c6dc9` | Full green; final review APPROVED. Frozen-only retains known failure. [Evidence](tmad-port/evidence/P6-assembly-2026-10-08.md). | Queue+Voice / Native Find / Stream |
 | TM-01 Stream | `intake/tmad-stream-flow` (on origin) | `6166a7aca` (release) | `a8241e535` (10 commits) | APPROVED twice ([review](tmad-port/evidence/review-TM-01.md), [delta](tmad-port/evidence/review-TM-01-delta.md)) | Stream |
 | TM-01B bridge | not created | — | — | NOT NEEDED (TM-01 green on beta.3 alone) | Stream |
 | TM-02 queue daemon | `intake/tmad-message-queue` (on origin) | custom floor `cbd1210c7` | `91392d6be` (6 commits) | APPROVED ([review](tmad-port/evidence/review-TM-02.md); no blocking) | Queue+Voice |
 | TM-03 queue UI | `intake/tmad-queue-ui` (on origin) | TM-02 `91392d6be` | `9ab91bb75` (7 commits) | APPROVED ([review](tmad-port/evidence/review-TM-03.md); 3 non-blocking) | Queue+Voice |
-| TM-04 voice flow | `intake/tmad-voice-flow` | TM-02 `91392d6be` | `84f11381ceabec13d5deaff6c1e2c05dc67a6c62` | Implementation complete; Pi/OpenCode Go Muse review APPROVED this exact HEAD (reviewer `6ff8658e-654d-4637-beeb-c24d238f9375`, workspace `wks_9d17ba714b1dcd50`). Basket integration is underway with worker `agentfeb33ae6`; physical/live-provider gates remain open. See [implementation evidence](tmad-port/evidence/TM-04-2026-10-08.md) and [review](tmad-port/evidence/review-TM-04-2026-10-08.md). | Queue+Voice |
+| TM-04 voice flow | `intake/tmad-voice-flow` | TM-02 `91392d6be` | `84f11381ceabec13d5deaff6c1e2c05dc67a6c62` | Implementation complete; Pi/OpenCode Go Muse review APPROVED this exact HEAD (reviewer `6ff8658e-654d-4637-beeb-c24d238f9375`, workspace `wks_9d17ba714b1dcd50`). Local basket integration is complete; final integration review is APPROVED; physical/live-provider gates remain open. See [implementation evidence](tmad-port/evidence/TM-04-2026-10-08.md) and [review](tmad-port/evidence/review-TM-04-2026-10-08.md). | Queue+Voice |
 | TM-07 native find | `intake/tmad-native-find` (on origin) | `6166a7aca` (release) | `5f3634ad4` (1 commit) | APPROVED ([review](tmad-port/evidence/review-TM-07.md); no findings) | Native Find |
 | TM-05, TM-06, TM-08+ | not started | — | — | Product decisions for the user; do not start | — |
 
@@ -110,7 +101,7 @@ TM-03 and TM-04 have only the TM-02 head; `intake/tmad-queue-ui` and
   ACP 130 / GJC 43 / agent-manager 210 on the custom floor.
 - Known gaps carried: daemon e2e was re-anchored on the fake-provider harness in TM-03; the
   pre-fix custom CI failure at `session.test.ts:259` is reproduced and repaired at
-  `fddb4fa8587ae377286ffbea3137df4c53bdc7a9`; Luna independently approved it. Integration and CI
+  `fddb4fa8587ae377286ffbea3137df4c53bdc7a9`; Luna independently approved it. Local rehearsal integration passed; intended-path inclusion and CI
   remain outstanding. Historical TM-02 evidence records the original floor reproduction.
 - Removal note: removal group Queue+Voice — TM-03/TM-04 depend on this branch even if their own
   lines are commented.
@@ -131,7 +122,7 @@ TM-03 and TM-04 have only the TM-02 head; `intake/tmad-queue-ui` and
 - Human gate: browser/native screenshot pass on the new queue UI (badges, row menu, failed overlay).
 - CI history: public custom run 37187135673 shows the pre-fix manager-event test at
   `packages/server/src/server/session.test.ts:259` failed with no update/removed events received.
-  Local repair is `fddb4fa8587ae377286ffbea3137df4c53bdc7a9`, independently approved; integration
+  Local repair is `fddb4fa8587ae377286ffbea3137df4c53bdc7a9`, independently approved; local rehearsal integration passed, while intended-path inclusion
   and CI remain outstanding. Playwright shards 3/4 and 4/4 failed
   with generic exit-code annotations and no established cause.
 - Update-loop candidates from PR #36 (`929f1add3`): waiting-to-sync gating, per-agent blocking
@@ -145,9 +136,8 @@ TM-03 and TM-04 have only the TM-02 head; `intake/tmad-queue-ui` and
   artifact (full exclusion table in the [report](tmad-port/evidence/TM-07.md)). Uses the existing
   search model/RPC (`agentHistorySearch` upstream flag; no new wire surface, protocol untouched).
   No Stream dependency in either direction (grep-verified).
-- Known adapted merge on promotion: `agent-view-store.ts` (`findOpen` here vs TM-01's
-  `selectedViews`) and `workspace-tab-menu.ts` — expect a small adapted merge, planned in P2 follow-up
-  assembly work; documented by both branches.
+- Adapted merge: `agent-view-store.ts` (`findOpen` here vs TM-01's
+  `selectedViews`) and `workspace-tab-menu.ts` — completed in P6; see its conflict log.
 - Human gate: the 10-point native device list in the report (reachability, historical-match reveal,
   wrap-around, cleanup, older-host, keyboard, rotation, non-Latin locales).
 
@@ -158,8 +148,7 @@ TM-03 and TM-04 have only the TM-02 head; `intake/tmad-queue-ui` and
   import `5ecb8324625de55dc80345f181518da26f2d42db`. Pi/OpenCode Go Muse reviewer
   `6ff8658e-654d-4637-beeb-c24d238f9375` in `wks_9d17ba714b1dcd50` APPROVED this exact HEAD;
   implementer and reviewer are archived. Preserve `6ab56eba1` only as recovery history. Base:
-  TM-02 `91392d6be`; only allowed extra ancestry. Basket integration is underway with
-  `agentfeb33ae6`. Physical-device and live-provider checks remain open. See
+  TM-02 `91392d6be`; only allowed extra ancestry. Local basket integration is complete; final integration review is APPROVED. Physical-device and live-provider checks remain open. See
   [implementation evidence](tmad-port/evidence/TM-04-2026-10-08.md) and
   [review](tmad-port/evidence/review-TM-04-2026-10-08.md).
 
@@ -194,8 +183,7 @@ intake/tmad-native-find       # TM-07 5f3634ad4; source snapshot 51fb7693d; base
 ```
 
 Each line is valid only after its branch's Muse Spark review; assembly validation (P2-style with/
-without rebuild) is required per removal group before any live manifest edit. The queue/voice group
-still owes its own removal exercise with pending items present (plan P2 step 5) before promotion.
+without rebuild) is required per removal group before any live manifest edit. The copied pending-state removal/recovery exercise passed in P6; live-home migration is unproven.
 
 ## Remaining human checks (complete list)
 
@@ -206,7 +194,5 @@ still owes its own removal exercise with pending items present (plan P2 step 5) 
 - TM-03: browser/native screenshot pass on the new queue UI.
 - TM-04: review is approved; physical-device and per-provider checks remain open (mic, playback,
   echo, lock/background, reconnect, owner contention; Claude, Codex, ACP/GJC) plus a rebuilt native
-  dev client for the `expo-two-way-audio` changes. Basket integration is underway.
-- Promotion (P6): land this ledger + evidence on `custom`; queue/voice removal-group exercise with
-  pending items; P2-style assembly validation of the final manifest block; the human evidence gates
-  above. No push to `mine`, no live manifest edit, no production restart is authorized by the port.
+  dev client for the `expo-two-way-audio` changes. Local integration is complete; final integration review is APPROVED.
+- Promotion (P6): remote CI/full-suite and human/device/live-provider/live-migration gates remain open; see P6.

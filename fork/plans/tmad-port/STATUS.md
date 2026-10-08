@@ -1,25 +1,20 @@
 # tmad port — status (corrected 2026-10-08, orchestration on pluto)
 
-> **Current coordination correction (2026-10-08):** The audit and current worker ownership are
-> recorded in [pluto-readiness-2026-10-08.md](evidence/pluto-readiness-2026-10-08.md). Current
-> `custom` (`24f134618`) is not an ancestor of `mine` or P0; older commits listed in that audit
-> are. ACP cancellation fixes are already implemented and present in `custom`, P0, and `mine`; the
-> historical fix-pass plan/review are stale as implementation status. The historical custom CI failure was the
-> side-conversation manager-event test at `session.test.ts:259`; repair commit `fddb4fa85` is independently APPROVED and is an integration candidate outside
-> `custom`/`mine`; integration and CI remain outstanding. Typecheck,
-> lint, and format jobs are green; Playwright shards 3/4 and 4/4 fail without diagnostic annotations.
-> The approved four-feature frozen-P0 assembly is
-> `e423a8666a30075a584f4a8e6f646a28054e6af0`; build/server, root typecheck/lint, and scoped tests
-> passed. Queue-free build/runtime rollback and a full P0 + current-custom + reviewed-side-fix
-> rehearsal remain active integrator follow-up. That rehearsal must preserve P0 external/infi carries.
-> TM-04 review now APPROVES its exact final HEAD; physical/live-provider evidence remains open.
-> Keep TMAD out of the live manifest pending those checks and the remaining human
-> evidence gates. The stale npm `fork` dist-tag is an expected trusted-publishing limitation;
-> consumers use `latest` or the default install path, and any tag repair is a credentialed operator
-> action.
->
-> Current worker and archive ownership is tracked in the table below. On 2026-10-08, 21 workers
-> were closed/archived, including the TM-04 implementer and reviewer.
+> **Durable readiness snapshot (2026-10-08):** Selected full local readiness candidate
+> `rehearsal/p0-custom-voice-complete` at `9584b2a669ce90a5df8c9eac66073e85124e90bb`
+> preserves P0 external/infi carries, four features, current custom, the approved side repair,
+> and approved Voice last. Build/typecheck/lint and focused 373 client/server + 76 app tests passed.
+> Queue-free and final enabled fake-provider runtimes proved dormant copied-state preservation
+> with zero turns; provider dispatch was not exercised.
+> Pi/Muse final integration review is **APPROVED**; remote CI/full-suite, device, live-provider,
+> and live-migration gates remain open.
+> Frozen-only `rehearsal/p6-approved-voice` at `0169f9a839fcdc01d4df04da02872ef3167c6dc9`
+> omits the side repair and retains its known test failure; it is not release ready.
+> Exact inputs, integration deltas (including the `e423a8666` AsyncStorage stub and shared
+> receipt-owner startup fix), check results, and durable reproduction are owned by the
+> [P6 report](evidence/P6-assembly-2026-10-08.md). Intake branches alone do not contain all adaptations.
+> Historical ancestry, CI, ACP, and npm tag facts remain in the
+> [audit](evidence/pluto-readiness-2026-10-08.md). No live promotion is authorized.
 
 ## Worker ownership — 2026-10-08
 
@@ -27,12 +22,13 @@
 |---|---|---|---|---|
 | TM-04 voice implementation | `agent9307e007` (Sol, low) | `wks_9d17ba714b1dcd50` | `intake/tmad-voice-flow` (`voice-flow-r2`) | Complete at `84f11381ceabec13d5deaff6c1e2c05dc67a6c62` (includes attributed import `5ecb8324625de55dc80345f181518da26f2d42db`); implementer archived. Review APPROVED by Pi/OpenCode Go Muse reviewer `6ff8658e-654d-4637-beeb-c24d238f9375` (archived). Physical/live-provider gates remain open. See [implementation evidence](evidence/TM-04-2026-10-08.md) and [review](evidence/review-TM-04-2026-10-08.md). |
 | TM-04 independent review | `6ff8658e-654d-4637-beeb-c24d238f9375` (Pi/OpenCode Go Muse) | `wks_9d17ba714b1dcd50` | `intake/tmad-voice-flow` | Complete, archived; APPROVE exact HEAD `84f11381ceabec13d5deaff6c1e2c05dc67a6c62`. See [review](evidence/review-TM-04-2026-10-08.md). |
-| P0 assembly / basket integration | `agentfeb33ae6` (Luna, high) | `wks_6bd86ab884dc41ee` | `build/tmad-readiness-2026-10-08` | P6 frozen four-feature report complete at `e423a8666`; integration of review-approved TM-04 is underway. Queue-free build/runtime rollback and full carry-preserving rehearsal remain open. |
+| P0 assembly / basket integration | `agentfeb33ae6` (Luna, high) | `wks_6bd86ab884dc41ee` | `build/tmad-readiness-2026-10-08` | Complete, archived; final rehearsals and runtime evidence recorded in the [P6 report](evidence/P6-assembly-2026-10-08.md). Parent build worktree remains at `e423a8666`. |
 | CLI declaration-resolution investigation | `agentfc3f12c9` (Sol, low) | `wks_95f92a2c629a806f` | `fix/pluto-cli-typecheck` | Complete and archived; no source fix indicated. |
-| Side-conversation repair | `agentb1df5254` (Sol, low) | `wks_0a7dc387a32f7959` | `fix/pluto-side-conversation-events` | Complete, archived; `fddb4fa8587ae377286ffbea3137df4c53bdc7a9` approved, candidate outside `custom`/`mine`; awaiting integration and CI. See [repair evidence](evidence/pluto-side-conversation-events-2026-10-08.md). |
+| Side-conversation repair | `agentb1df5254` (Sol, low) | `wks_0a7dc387a32f7959` | `fix/pluto-side-conversation-events` | Complete, archived; `fddb4fa8587ae377286ffbea3137df4c53bdc7a9` approved, candidate outside `custom`/`mine`; integrated only in the local full rehearsal; intended-path inclusion and CI remain outstanding. See [repair evidence](evidence/pluto-side-conversation-events-2026-10-08.md). |
 | Side-conversation independent review | `agentc28ebf9` (Luna, high) | `wks_0a7dc387a32f7959` | `fix/pluto-side-conversation-events` | Complete, archived; APPROVE at `fddb4fa8587ae377286ffbea3137df4c53bdc7a9`. CodeRabbit did not start (`environment_unsupported`); manual review is the approval. See [review](evidence/pluto-side-conversation-review-2026-10-08.md). |
+| Final integration review | `agentf65ea3e2-16ee-4cb4-8c06-4e355a689a4e` (Pi/OpenCode Go Muse) | Not recorded in this snapshot | `rehearsal/p0-custom-voice-complete` | **APPROVED** exact full basket `9584b2a669ce90a5df8c9eac66073e85124e90bb`; reviewer archived. See [final review](evidence/review-P6-final-2026-10-08.md). |
 
-21 agents are closed/archived. Agent and workspace IDs are separate in this table.
+24 workers are closed/archived before this docs worker’s eventual close, including the inventory worker, integrator, and final reviewer. Only this docs worker remains active in this task at snapshot time. Agent and workspace IDs are separate in this table.
 
 Plan: [../tmad-maintained-port-plan.md](../tmad-maintained-port-plan.md). Briefs in `briefs/` were
 written for neptune workers: read `/tmp/tmad-port/...` as the pluto scratch dir (populated from this
@@ -53,12 +49,12 @@ are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
 | P0 | `tmad-port/baseline-assembly` (on origin) | frozen manifest SHAs (`evidence/P0-inputs.txt`) | `2bfcd2e19` | DONE + **APPROVED** (evidence/review-P0.md, 2026-10-03): all exit criteria reproduce read-only; 3 non-blocking findings dispositioned in the coordinator note at the bottom of evidence/P0.md (script verdict-string bug; "29"→"31" count fixed; rr-cache informational). Gates for P2: none left. |
 | TM-01 Stream | `intake/tmad-stream-flow` (on origin; history: `4dab8b364` WIP → `2197619bc` approved → `a8241e535` post-P2 fix, appended) | `v0.11.0-beta.3` (6166a7aca) | `a8241e535` | DONE + **APPROVED twice**: full review at `2197619bc` (evidence/review-TM-01.md) and delta re-review of the post-P2 seam fix at `a8241e535` (evidence/review-TM-01-delta.md — routing as a TM-01 local fix CONFIRMED, "TM-01B would be wrong, assembly-only would ship the regression"). The fix restores the source's fire-and-forget artifact collection that the P2 assembly showed breaking custom's steer-fallback fence. 3 non-blocking nits recorded (commit-message sentence, trailer spacing, log echo). UI capture remains P1 step 6 (human). |
 | TM-02 queue daemon | `intake/tmad-message-queue` (on origin) | custom floor `cbd1210c7` (recorded) | `91392d6be` | DONE + **APPROVED** (evidence/review-TM-02.md): legacy send contract, wire/auth, queue semantics, custom fences, provenance all verified; no blocking findings (2 non-blocking report-wording notes). Gaps carried: daemon e2e needs provider creds (defer to TM-03/P4). Gates for TM-03/TM-04: none left. |
-| TM-07 Native Find | `intake/tmad-native-find` (on origin) | `v0.11.0-beta.3` (6166a7aca) | `5f3634ad4` | DONE + **APPROVED** (evidence/review-TM-07.md, Muse Spark 1.3 Contributor via pi/OpenCode Go, 2026-10-03): no blocking findings, none non-blocking; provenance, blob parity, ancestry, diff correctness all verified by the reviewer. Promotion still wants the 10-point native device list in evidence/TM-07.md (human) and the known adapted merge with TM-01 on `agent-view-store.ts`/`workspace-tab-menu.ts` (integrator, P2). |
+| TM-07 Native Find | `intake/tmad-native-find` (on origin) | `v0.11.0-beta.3` (6166a7aca) | `5f3634ad4` | DONE + **APPROVED** (evidence/review-TM-07.md, Muse Spark 1.3 Contributor via pi/OpenCode Go, 2026-10-03): no blocking findings, none non-blocking; provenance, blob parity, ancestry, diff correctness all verified by the reviewer. Promotion still wants the 10-point native device list in evidence/TM-07.md (human) ; the adapted Stream/Find merge is demonstrated in P6. |
 | TM-01B bridge | — | — | — | NOT NEEDED (TM-01 compiles and tests green on beta.3 alone). |
 | TM-03 queue UI | `intake/tmad-queue-ui` (on origin) | TM-02 `91392d6be` (approved) | `9ab91bb75` | DONE + **APPROVED** (evidence/review-TM-03.md): no blocking findings; 3 non-blocking notes (trailer convention on the docs commit; the inherited source optimistic-row race — small, self-healing, documented as gap #4, hardening optional; screenshot evidence for the new badges/menus deferred to a human dev-app pass). Canonical submission ownership, no-protocol-change, no typed-send flip, queue-removal coherence all verified by the reviewer. Remaining human check: browser/native screenshot pass on the new queue UI. |
-| TM-04 voice flow | `intake/tmad-voice-flow` | TM-02 `91392d6be` (approved) | `84f11381ceabec13d5deaff6c1e2c05dc67a6c62` | Implementation complete; includes attributed import `5ecb8324625de55dc80345f181518da26f2d42db`. Pi/OpenCode Go Muse review APPROVES this exact HEAD; reviewer `6ff8658e-654d-4637-beeb-c24d238f9375` is archived. Basket integration is underway with `agentfeb33ae6`; physical-device and live-provider evidence remain open. `6ab56eba1` is retained only as recovery history. See [implementation evidence](evidence/TM-04-2026-10-08.md) and [review](evidence/review-TM-04-2026-10-08.md). |
+| TM-04 voice flow | `intake/tmad-voice-flow` | TM-02 `91392d6be` (approved) | `84f11381ceabec13d5deaff6c1e2c05dc67a6c62` | Implementation complete; includes attributed import `5ecb8324625de55dc80345f181518da26f2d42db`. Pi/OpenCode Go Muse review APPROVES this exact HEAD; reviewer `6ff8658e-654d-4637-beeb-c24d238f9375` is archived. Local basket integration is complete; final integration review is APPROVED; physical-device and live-provider evidence remain open. `6ab56eba1` is retained only as recovery history. See [implementation evidence](evidence/TM-04-2026-10-08.md) and [review](evidence/review-TM-04-2026-10-08.md). |
 | P2 removal proof | `tmad-with-stream` (clone-local) | baseline `2bfcd2e19` | `0ff83cbc5` | **DONE + APPROVED** (evidence/review-P2.md): with-stream delta = exactly the 53 TM-01 paths; Stream-free baseline; steer-fence defect fixed in the TM-01 branch (redundancy proven, trees byte-identical); rollback demonstrated on copied data; TM-01B not needed; final manifest block in P2.md Addendum 2. |
-| P6 frozen basket | `build/tmad-readiness-2026-10-08` (local assembly) | P0 `2bfcd2e19` + approved TM-01/02/03/07 SHAs | `e423a8666a30075a584f4a8e6f646a28054e6af0` | Four-feature assembly report complete; server build, root typecheck/lint, and scoped tests passed. Queue-free tree is unbuilt and has source/copy proof only; current-custom scratch is unbuilt and omits P0 external/infi carries. Active integrator follow-up must close those limits and add the reviewed side fix before any final inclusion decision. See [P6 evidence](evidence/P6-assembly-2026-10-08.md) and [conflict log](evidence/P6-conflict-resolution-log-2026-10-08.md). |
+| P6 final rehearsals | `rehearsal/p0-custom-voice-complete` / `rehearsal/p6-approved-voice` (local) | P0 + four features; see exact sequence in P6 | full `9584b2a669ce90a5df8c9eac66073e85124e90bb`; frozen `0169f9a839fcdc01d4df04da02872ef3167c6dc9` | Full checks green; final review APPROVED. Frozen-only retains known failure. [Evidence and integration deltas](evidence/P6-assembly-2026-10-08.md). |
 | TM-05, TM-06, TM-08+ | — | — | — | Product decisions for the user; do not start. Typed-send default is also the user's call. |
 
 ## Source cursors
@@ -76,9 +72,9 @@ are read-only: no edits, no commits, no pushes. See `briefs/ORCHESTRATOR.md`.
 - TM-01: matched source/port UI captures (desktop + compact web), native captures, locale parity
   incl. ko; two informational decisions ("Queue" tab label; pin/artifact ceilings 100/200).
 - TM-02: the pre-fix custom CI side-conversation failure at `session.test.ts:259` is reproduced and
-  repaired at `fddb4fa85`; Luna independently approved it. Integration and post-fix CI remain
-  outstanding. Daemon e2e still needs provider credentials (or a fake-provider harness).
-- TM-04: review is approved; physical-device and live-provider evidence remain open. Basket integration is underway; see [TM-04 evidence](evidence/TM-04-2026-10-08.md) and [review](evidence/review-TM-04-2026-10-08.md).
+  repaired at `fddb4fa85`; Luna independently approved it. Local full-rehearsal integration passed; intended-path inclusion and post-fix CI remain
+  outstanding. Live-provider e2e remains open; TM-03 fake-provider evidence is recorded in P6.
+- TM-04: review is approved; physical-device and live-provider evidence remain open. Local basket integration is complete; final review is APPROVED; see [TM-04 evidence](evidence/TM-04-2026-10-08.md) and [review](evidence/review-TM-04-2026-10-08.md).
 
 ## Proposed manifest append block (DRAFT — nothing live edited; each line valid only after its Muse Spark review)
 
