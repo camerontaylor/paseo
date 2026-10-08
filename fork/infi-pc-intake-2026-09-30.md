@@ -1,16 +1,16 @@
 # infi-pc/paseo intake — 2026-09-30
 
-Source: [`infi-pc/paseo` `paseo-customizations`](https://github.com/infi-pc/paseo/tree/paseo-customizations), especially its [feature ledger](https://github.com/infi-pc/paseo/blob/paseo-customizations/docs/fork.md). This is the source assessment; [work items and current basket status](plans/infi-pc-intake-work-items.md) live in the repo-local tracker.
+Source: [`infi-pc/paseo` `paseo-customizations`](https://github.com/infi-pc/paseo/tree/paseo-customizations), especially its [feature ledger](https://github.com/infi-pc/paseo/blob/paseo-customizations/docs/fork.md). This is the 2026-09-30 source assessment; [work items and port verification](plans/infi-pc-intake-work-items.md) live in the repo-local tracker. The manifest is the live list of carries.
 
 ## Basket fit
 
-Do not add `infi-pc/paseo-customizations` as one manifest line. Its base is upstream `e3c853df5` (2026-09-24); our `custom` and Desvio build are on `v0.10.1` (2026-09-29). Against the current build tree, a Git merge-tree dry run reports eight text conflicts. The fork branch changes 379 files, adding about 30,000 lines. Forty-five paths changed on both sides since its base. A clean textual merge would still need protocol, runtime, platform, and UI verification.
+Do not add `infi-pc/paseo-customizations` as one manifest line. At intake on 2026-09-30, its base was upstream `e3c853df5` (2026-09-24), while our `custom` and Desvio build were on `v0.10.1` (2026-09-29). Against that build tree, a Git merge-tree dry run reported eight text conflicts. The fork branch changed 379 files, adding about 30,000 lines. Forty-five paths had changed on both sides since its base. These are point-in-time measurements; check `~/.paseo-fork/desvio.conf` for the live build base. A clean textual merge would still need protocol, runtime, platform, and UI verification.
 
 The fork's feature commits are stacked on one branch. A manifest line pointing at a commit includes its ancestors and therefore earlier fork features. For a selected feature, create a new topic branch from the pinned Desvio base, port the behavior and relevant tests, then append that branch **after `custom`** in `~/.paseo-fork/manifest.txt`. Do not reorder existing entries. The current basket's `desvio_verify` runs typecheck and lint; targeted tests and platform QA remain separate gates before using a build.
 
 ## Intake order
 
-| Candidate | Source | Assessment on current base | Next step |
+| Candidate | Source | Assessment at intake | Next step |
 | --- | --- | --- | --- |
 | Source-accurate agent file links | `0f0ba1f1d` | **First pick.** A focused correctness fix in existing link parsing and the agent stream. The patch needs a port; its tests cover source checkout paths and workspace containment. | Port to one local branch. Test `assistant-file-links/parse.test.ts` and opening links from a different checkout. |
 | Fork's own PR lookup | `160430f94` | **First pick.** Current GitHub resolution jumps from a fork checkout to the parent; the fork checks its own PRs first, including batch polling. This is a forge correctness fix. The patch needs a port because current lookup code moved. | Port to one local branch, preserve current head-repository and terminal-PR SHA matching, and run `github-service.test.ts`. Consider sending the fix upstream. |

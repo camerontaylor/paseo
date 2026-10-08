@@ -144,6 +144,8 @@ describe("plugin runtime entries", () => {
     "react-native",
     "@getpaseo/plugin/client",
     "@getpaseo/plugin/client/ui",
+    "@camerontaylor/paseo-plugin/client",
+    "@camerontaylor/paseo-plugin/client/ui",
   ])("rejects %s from server code", async (specifier) => {
     const entries = await createSplitPlugin();
     await writeFile(
@@ -157,6 +159,8 @@ describe("plugin runtime entries", () => {
     "@getpaseo/plugin/server",
     "@getpaseo/plugin/server/provider",
     "@getpaseo/plugin/server/acp",
+    "@camerontaylor/paseo-plugin/server",
+    "@camerontaylor/paseo-plugin/server/provider",
   ])("rejects %s from client code", async (specifier) => {
     const entries = await createSplitPlugin();
     await writeFile(
@@ -173,6 +177,8 @@ describe("plugin runtime entries", () => {
     "@getpaseo/plugin/client",
     "@getpaseo/plugin/server",
     "../client/surface",
+    "@camerontaylor/paseo-plugin/client",
+    "@camerontaylor/paseo-plugin/server",
     "../server/handler",
   ])("rejects %s from shared code", async (specifier) => {
     const entries = await createSplitPlugin();
@@ -387,6 +393,8 @@ export type Value = string;`,
     { specifier: "@getpaseo/plugin/server", importKind: "import type" },
     { specifier: "@getpaseo/plugin/client", importKind: "import" },
     { specifier: "@getpaseo/plugin/server", importKind: "import" },
+    { specifier: "@camerontaylor/paseo-plugin/client", importKind: "import type" },
+    { specifier: "@camerontaylor/paseo-plugin/server", importKind: "import type" },
   ])(
     "rejects transitive declaration dependencies on $specifier through $importKind",
     async ({ specifier, importKind }) => {
