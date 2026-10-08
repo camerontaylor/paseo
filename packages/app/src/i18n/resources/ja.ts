@@ -2399,6 +2399,8 @@ export const ja: TranslationResources = {
         jumpToWorkspace: "ワークスペースにジャンプ",
         jumpToTab: "タブにジャンプ",
         previousWorkspace: "前のワークスペース",
+        historyBack: "戻る",
+        historyForward: "進む",
         nextWorkspace: "次のワークスペース",
         previousTab: "前のタブ",
         nextTab: "次のタブ",

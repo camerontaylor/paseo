@@ -2413,6 +2413,8 @@ export const ptBR: TranslationResources = {
         jumpToWorkspace: "Ir para workspace",
         jumpToTab: "Ir para aba",
         previousWorkspace: "Workspace anterior",
+        historyBack: "Voltar",
+        historyForward: "Avançar",
         nextWorkspace: "Próximo workspace",
         previousTab: "Aba anterior",
         nextTab: "Próxima aba",

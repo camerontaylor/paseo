@@ -2388,6 +2388,8 @@ export const ko: TranslationResources = {
         jumpToWorkspace: "워크스페이스로 이동",
         jumpToTab: "탭으로 이동",
         previousWorkspace: "이전 워크스페이스",
+        historyBack: "뒤로",
+        historyForward: "앞으로",
         nextWorkspace: "다음 워크스페이스",
         previousTab: "이전 탭",
         nextTab: "다음 탭",
