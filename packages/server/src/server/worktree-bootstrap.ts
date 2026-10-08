@@ -1,3 +1,8 @@
+import {
+  discoverPackageScripts,
+  packageScriptLabel,
+  packageScriptCommand,
+} from "./workspace-scripts/package-scripts.js";
 import { v4 as uuidv4 } from "uuid";
 import type { Logger } from "pino";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
@@ -884,6 +889,40 @@ async function acquireWorkspaceScriptTerminal(params: {
   return { terminal, reusableTerminal };
 }
 
+async function resolveWorkspaceScript({
+  repoRoot,
+  workspaceId,
+  scriptName,
+  runtimeStore,
+  logger,
+}: Pick<
+  SpawnWorkspaceScriptOptions,
+  "repoRoot" | "workspaceId" | "scriptName" | "runtimeStore" | "logger"
+>) {
+  const configResult = readPaseoConfig(repoRoot);
+  if (!configResult.ok) {
+    throw paseoConfigParseError(configResult);
+  }
+  const scriptConfigs = getScriptConfigs(configResult.config);
+  let config = scriptConfigs.get(scriptName);
+  let packageScript;
+  if (!config && scriptName.startsWith("package.json:")) {
+    const discovered = await discoverPackageScripts(repoRoot, logger);
+    runtimeStore.setPackageScripts(workspaceId, discovered);
+    packageScript = discovered.get(scriptName);
+    config = packageScript;
+  }
+  if (!config) {
+    throw new Error(`Script '${scriptName}' is not configured`);
+  }
+  const packageJson = packageScript?.packageJson;
+  const terminalName = packageScript ? packageScriptLabel(packageScript) : scriptName;
+  const scriptCwd = packageScript ? packageScript.cwd : repoRoot;
+
+  const command = packageScript ? packageScriptCommand(packageScript) : config.command;
+  return { configResult, scriptConfigs, config, packageJson, terminalName, scriptCwd, command };
+}
+
 export async function spawnWorkspaceScript(
   options: SpawnWorkspaceScriptOptions,
 ): Promise<WorktreeScriptResult> {
@@ -903,15 +942,8 @@ export async function spawnWorkspaceScript(
     logger,
     onLifecycleChanged,
   } = options;
-  const configResult = readPaseoConfig(repoRoot);
-  if (!configResult.ok) {
-    throw paseoConfigParseError(configResult);
-  }
-  const scriptConfigs = getScriptConfigs(configResult.config);
-  const config = scriptConfigs.get(scriptName);
-  if (!config) {
-    throw new Error(`Script '${scriptName}' is not configured in paseo.json`);
-  }
+  const { configResult, scriptConfigs, config, packageJson, terminalName, scriptCwd, command } =
+    await resolveWorkspaceScript({ repoRoot, workspaceId, scriptName, runtimeStore, logger });
 
   const serviceScript = isServiceScript(config);
   const scriptType = serviceScript ? "service" : "script";
@@ -954,9 +986,9 @@ export async function spawnWorkspaceScript(
       serviceScript,
       existingRuntimeEntry,
       terminalManager,
-      repoRoot,
+      repoRoot: scriptCwd,
       workspaceId,
-      scriptName,
+      scriptName: terminalName,
       env,
     });
 
@@ -964,16 +996,21 @@ export async function spawnWorkspaceScript(
       workspaceId,
       scriptName,
       type: scriptType,
+      packageJson,
       lifecycle: "running",
       terminalId: terminal.id,
       exitCode: null,
     });
     runtimeRegistered = true;
 
-    const stopRuntimeIfCurrent = (input: { exitCode: number | null; removeRoute: boolean }) => {
+    function isCurrentRuntimeRunning(): boolean {
       const current = runtimeStore.get({ workspaceId, scriptName });
-      if (current?.terminalId !== terminal.id || current.lifecycle !== "running") {
-        return;
+      return current?.terminalId === terminal.id && current.lifecycle === "running";
+    }
+
+    const stopRuntimeIfCurrent = (input: { exitCode: number | null; removeRoute: boolean }) => {
+      if (!isCurrentRuntimeRunning()) {
+        return false;
       }
 
       disposeLifecycleListeners?.();
@@ -986,6 +1023,7 @@ export async function spawnWorkspaceScript(
         workspaceId,
         scriptName,
         type: scriptType,
+        packageJson,
         lifecycle: "stopped",
         terminalId: terminal.id,
         exitCode: input.exitCode,
@@ -1000,6 +1038,7 @@ export async function spawnWorkspaceScript(
         },
         "Stopped worktree script",
       );
+      return true;
     };
 
     const unsubscribeExit = terminal.onExit((info) => {
@@ -1010,11 +1049,7 @@ export async function spawnWorkspaceScript(
     });
 
     let unsubscribeCommandFinished: (() => void) | null = null;
-    if (!serviceScript) {
-      unsubscribeCommandFinished = terminal.onCommandFinished((info) => {
-        stopRuntimeIfCurrent({ exitCode: info.exitCode, removeRoute: false });
-      });
-    }
+
     disposeLifecycleListeners = () => {
       unsubscribeExit();
       unsubscribeCommandFinished?.();
@@ -1023,7 +1058,19 @@ export async function spawnWorkspaceScript(
     if (!reusableTerminal) {
       await waitForTerminalBootstrapReadiness(terminal);
     }
-    terminal.send({ type: "input", data: `${config.command}\r` });
+    if (!isCurrentRuntimeRunning()) {
+      // Exit handling already recorded the stopped state; rollback must not erase it.
+      runtimeRegistered = false;
+      throw new Error(`Terminal stopped before script '${scriptName}' could start`);
+    }
+    if (!serviceScript) {
+      unsubscribeCommandFinished = terminal.onCommandFinished((info) => {
+        const completed = stopRuntimeIfCurrent({ exitCode: info.exitCode, removeRoute: false });
+        if (completed) terminal.setActivity("idle");
+      });
+      terminal.setActivity("working");
+    }
+    terminal.send({ type: "input", data: `${command}\r` });
 
     logger?.info(
       {

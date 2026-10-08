@@ -568,6 +568,9 @@ export const ja: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "ディレクトリの一覧取得に失敗しました",
+        pathUnavailable: "このパスは会話の作業ディレクトリから解決できません。",
+        outsideWorkspaceDirectory:
+          "このフォルダーは現在のワークスペースの外にあります。元のワークスペースから開いてください。",
         createFailed: "エントリの作成に失敗しました",
         renameFailed: "エントリの名前変更に失敗しました",
         duplicateFailed: "エントリの複製に失敗しました",
@@ -792,6 +795,8 @@ export const ja: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "ルート",
+      searchPlaceholder: "スクリプトまたはパッケージを検索…",
       title: "スクリプト",
       actions: {
         chooseUrl: "URLを選択",
@@ -819,6 +824,8 @@ export const ja: TranslationResources = {
         direct: "直接接続",
       },
       states: {
+        empty: "スクリプトが見つかりません",
+        noMatches: "一致するスクリプトがありません",
         exitCode: "終了コード: {{code}}",
         startFailed: "{{scriptName}}の起動に失敗しました",
         stopFailed: "{{scriptName}}の停止に失敗しました",
@@ -1323,6 +1330,7 @@ export const ja: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "スクリプト {{name}} を実行中",
         serviceRunning: "サービス {{name}} 実行中",
         serviceUnhealthy: "サービス {{name}} 異常",
         creating: "作成中...",

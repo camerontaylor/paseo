@@ -562,6 +562,9 @@ export const ko: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "디렉터리 목록을 불러오지 못했습니다",
+        pathUnavailable: "대화의 작업 디렉터리에서 이 경로를 확인할 수 없습니다.",
+        outsideWorkspaceDirectory:
+          "이 폴더는 현재 작업 공간 밖에 있습니다. 원본 작업 공간에서 여세요.",
         createFailed: "항목을 만들지 못했습니다",
         renameFailed: "항목 이름을 바꾸지 못했습니다",
         duplicateFailed: "항목을 복제하지 못했습니다",
@@ -787,6 +790,8 @@ export const ko: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "루트",
+      searchPlaceholder: "스크립트 또는 패키지 검색…",
       title: "스크립트",
       actions: {
         chooseUrl: "URL를 선택하세요",
@@ -814,6 +819,8 @@ export const ko: TranslationResources = {
         direct: "직접",
       },
       states: {
+        empty: "스크립트가 없습니다",
+        noMatches: "일치하는 스크립트가 없습니다",
         exitCode: "종료 {{code}}",
         startFailed: "{{scriptName}}을(를) 시작하지 못했습니다",
         stopFailed: "{{scriptName}}를 중지하지 못했습니다.",
@@ -1315,6 +1322,7 @@ export const ko: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "스크립트 {{name}} 실행 중",
         serviceRunning: "서비스 {{name}} 실행 중",
         serviceUnhealthy: "서비스 {{name}} 비정상",
         creating: "생성하는 중...",

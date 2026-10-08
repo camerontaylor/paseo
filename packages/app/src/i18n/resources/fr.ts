@@ -566,6 +566,10 @@ export const fr: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "Impossible de lister le répertoire",
+        pathUnavailable:
+          "Ce chemin ne peut pas être résolu depuis le répertoire de travail de la conversation.",
+        outsideWorkspaceDirectory:
+          "Ce dossier se trouve hors de l’espace de travail actuel. Ouvrez-le depuis son espace de travail d’origine.",
         createFailed: "Impossible de créer l’élément",
         renameFailed: "Impossible de renommer l’élément",
         duplicateFailed: "Impossible de dupliquer l’élément",
@@ -794,6 +798,8 @@ export const fr: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "Racine",
+      searchPlaceholder: "Rechercher des scripts ou des packages…",
       title: "Scripts",
       actions: {
         chooseUrl: "Choisir l’URL",
@@ -821,6 +827,8 @@ export const fr: TranslationResources = {
         direct: "Directe",
       },
       states: {
+        empty: "Aucun script trouvé",
+        noMatches: "Aucun script correspondant",
         exitCode: "sortie {{code}}",
         startFailed: "Impossible de démarrer {{scriptName}}",
         stopFailed: "Impossible d’arrêter {{scriptName}}",
@@ -1336,6 +1344,7 @@ export const fr: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "Script {{name}} en cours",
         serviceRunning: "Service {{name}} en cours d’exécution",
         serviceUnhealthy: "Service {{name}} en échec",
         creating: "Création…",

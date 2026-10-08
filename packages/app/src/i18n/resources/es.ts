@@ -568,6 +568,10 @@ export const es: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "No se pudo listar el directorio",
+        pathUnavailable:
+          "No se puede resolver esta ruta desde el directorio de trabajo de la conversación.",
+        outsideWorkspaceDirectory:
+          "Esta carpeta está fuera del espacio de trabajo actual. Ábrela desde su espacio de trabajo de origen.",
         createFailed: "No se pudo crear la entrada",
         renameFailed: "No se pudo renombrar la entrada",
         duplicateFailed: "No se pudo duplicar la entrada",
@@ -796,6 +800,8 @@ export const es: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "Raíz",
+      searchPlaceholder: "Buscar scripts o paquetes…",
       title: "Scripts",
       actions: {
         chooseUrl: "Elegir URL",
@@ -823,6 +829,8 @@ export const es: TranslationResources = {
         direct: "Directa",
       },
       states: {
+        empty: "No se encontraron scripts",
+        noMatches: "No hay scripts coincidentes",
         exitCode: "salir de{{code}}",
         startFailed: "No se pudo iniciar{{scriptName}}",
         stopFailed: "No se pudo detener{{scriptName}}",
@@ -1345,6 +1353,7 @@ export const es: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "Script {{name}} en ejecución",
         serviceRunning: "Servicio {{name}} en ejecución",
         serviceUnhealthy: "Servicio {{name}} con fallos",
         creating: "Creando...",
