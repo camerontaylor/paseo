@@ -17,11 +17,12 @@ and applies to create, cold resume and session refresh. Explicit per-agent
 Run `fork/scripts/migrate-zcode-native.mjs` with `--source` pointing to the live
 config and `--output` pointing to a fresh candidate config. Supply `--agents`
 for both `~/.zcode/AGENTS.md` and the repository `AGENTS.md`, `--backup` for a fresh
-private backup directory, and absolute `--plugin`, `--runtime`, `--node` paths.
+private backup directory, absolute `--plugin`, `--runtime`, `--node` paths,
+and `--model-provider zai-api` from the verified native catalog.
 The script preserves the root `AGENTS.md` symlink by editing its resolved target.
 It merges the exact current policy, checks the native 100KiB file limit and
 re-reads every destination before writing the exclusion into the candidate.
-Existing instructions, provider models and environment are preserved. Backups
+Existing instructions and provider environment are preserved. Backups
 and candidate config contain credentials and are private; do not print them.
 
 Before installing on Intel macOS, run `fork/scripts/prepare-zcode-native-entry.mjs`
@@ -42,6 +43,12 @@ Root plugin source edits are lifecycle-owned; copying the candidate and running
 `paseo reload` does not install its new plugin entry. Use the plugin install
 operation on the target daemon, then verify `running` and native provider
 availability. Do not restart the production daemon to perform this cutover.
+
+## Saved profiles
+
+Saved profiles live in `daemon.agentProfiles` in the daemon config. Pass the provider ID from the verified native catalog with `--model-provider zai-api`. The migration changes raw model names into native model IDs, for example `GLM-5.3-Flash` becomes `["zai-api","GLM-5.3-Flash",null]`. It preserves mode, explicit thinking, and feature values. It removes the ACP replacement model catalog so raw IDs and unsupported thinking options cannot replace the native catalog; the backup retains that catalog. `auto` thinking becomes an omitted selection so the native model chooses its advertised default. The original config backup retains the old profile.
+
+The pinned catalog overlay accepts unnamed custom providers and labels them with their provider ID. Other catalog fields retain their validation. `prepare-zcode-native-entry.mjs` verifies the original or reviewed bridge hash before applying this change.
 
 ## Pinned runtime
 
@@ -69,5 +76,13 @@ in native model request messages throughout these scenarios.
 
 Sources and secret-free logs live in
 `~/.local/state/zcode-native-upgrade/` and `/tmp/zcode-native-{stdio,policy}.log`.
-These prove native transport and instruction loading; they do not substitute for
-the final daemon/plugin cutover canary.
+An actual PluginRuntime canary also passed registration, provider availability,
+Diagnostics smoke, Account view, and client bundle compilation. It opened a
+session with GLM-5.3-Flash, `yolo` mode and `high` thinking, then completed one
+short real model turn with one prompt acknowledgment. The canary copied the
+existing custom-provider credentials privately into an isolated home. It did
+not change production configuration. See `/tmp/zcode-plugin-runtime-canary-final.log`.
+
+The official account is signed out; the existing custom provider supplies usable
+credentials, so this migration does not require OAuth. Deploy the upgraded host
+before applying the exclusion; the old host cannot interpret that configuration.
