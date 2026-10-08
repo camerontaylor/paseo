@@ -13,6 +13,7 @@ export const ko: TranslationResources = {
 
     title: "찾기",
     placeholder: "패널에서 찾기",
+    updateHost: "찾기를 사용하려면 호스트를 업데이트하세요",
     close: "찾기 닫기",
     matches: "검색 결과",
     previous: "이전 일치 항목",
@@ -744,6 +745,7 @@ export const ko: TranslationResources = {
         reloadAgentTooltip:
           "스킬, MCP 또는 로그인 상태를 업데이트하려면 에이전트를 다시 로드하세요.",
         close: "닫기",
+        findInChat: "채팅에서 찾기",
         renameTerminal: "터미널 이름 변경",
         viewArtifacts: "아티팩트 보기",
         renameAgent: "에이전트 이름 변경",

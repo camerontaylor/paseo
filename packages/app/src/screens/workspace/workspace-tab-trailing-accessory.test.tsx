@@ -40,6 +40,7 @@ vi.mock("lucide-react-native", () => {
     MessageCirclePlus: StubIcon,
     Pencil: StubIcon,
     RotateCw: StubIcon,
+    Search: StubIcon,
     X: StubIcon,
   };
 });

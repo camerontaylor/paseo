@@ -14,6 +14,7 @@ export const ja: TranslationResources = {
 
     title: "検索",
     placeholder: "ペイン内を検索",
+    updateHost: "検索を使うにはホストを更新してください",
     close: "検索を閉じる",
     matches: "検索結果",
     previous: "前の一致",
@@ -748,6 +749,7 @@ export const ja: TranslationResources = {
         reloadAgentTooltip:
           "スキル、MCP、ログイン状態を更新するためにエージェントを再読み込みします。",
         close: "閉じる",
+        findInChat: "チャット内を検索",
         renameTerminal: "ターミナルの名前を変更",
         viewArtifacts: "アーティファクトを表示",
         renameAgent: "エージェントの名前を変更",
