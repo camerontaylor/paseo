@@ -17,6 +17,7 @@ import {
   Copy,
   History,
   MessageCirclePlus,
+  Search,
   Pencil,
   RotateCw,
   Columns2,
@@ -121,6 +122,7 @@ const AGENT_TOOLTIP_TITLE_MAX_LENGTH = 80;
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedX = withUnistyles(X);
+const ThemedSearch = withUnistyles(Search);
 const ThemedCopy = withUnistyles(Copy);
 
 const ThemedRotateCw = withUnistyles(RotateCw);
@@ -456,6 +458,8 @@ function TabContextMenuItem({
         return <ThemedPencil size={16} uniProps={mutedColorMapping} />;
       case "x":
         return <ThemedX size={16} uniProps={mutedColorMapping} />;
+      case "search":
+        return <ThemedSearch size={16} uniProps={mutedColorMapping} />;
       default:
         return undefined;
     }
@@ -1146,6 +1150,8 @@ function ResolvedWorkspaceDesktopTabsRow({
       reloadAgentTooltip: t("workspace.tabs.menu.reloadAgentTooltip"),
       newSideConversation: t("sideConversations.actions.new"),
       close: t("workspace.tabs.menu.close"),
+      viewArtifacts: t("workspace.tabs.menu.viewArtifacts", { defaultValue: "View artifacts" }),
+      findInChat: t("workspace.tabs.menu.findInChat"),
     }),
     [t],
   );

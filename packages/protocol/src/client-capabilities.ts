@@ -47,7 +47,20 @@ export const CLIENT_CAPS = {
   pluginTimelineItems: "plugin_timeline_items",
   // COMPAT(workspaceSetupBlocked): added in v0.8.0, remove after 2027-03-07 once client floor >= v0.8.0.
   workspaceSetupBlocked: "workspace_setup_blocked",
+  // COMPAT(durableAgentQueue): fork addition (TM-02). The daemon only mirrors
+  // `agent.queue.update` to clients that advertise this, so a client with a
+  // strict outbound union never receives the event.
+  durableAgentQueue: "durable_agent_queue",
+  // COMPAT(durableVoiceInputV1): fork addition (TM-04). Gate for voice
+  // attachment admission into the durable queue and the receipt-read RPC.
+  // Keep the gate while stock peers are supported.
+  durableVoiceInputV1: "durable_voice_input_v1",
   browserHost: "browser_host",
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  // Clients declaring this get the optional `artifacts` / `companionEntries`
+  // agent-snapshot fields. Paired with the `agent.companion.update_entry.*`
+  // operations; not the source fork's `companionStream` capability name.
+  companionStreamPortV1: "companion_stream_port_v1",
 } as const;
 
 export type ClientCapability = (typeof CLIENT_CAPS)[keyof typeof CLIENT_CAPS];

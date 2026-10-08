@@ -101,6 +101,8 @@ something else.
 **Opening an upstream PR:** branch from `upstream/main`. Branching from
 `custom` would include our fork changes in the PR diff.
 
+The [Pluto TMAD delivery plan](plans/tmad-desvio-0.11.1.md) records the complete extra-port basket, its current-base adaptations, and build/deployment evidence.
+
 ## The Desvio grab basket
 
 [Desvio](https://github.com/cleiter/desvio) assembles our pinned upstream base,

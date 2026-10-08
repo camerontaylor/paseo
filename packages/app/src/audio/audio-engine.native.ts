@@ -1,3 +1,4 @@
+import * as native from "@getpaseo/expo-two-way-audio";
 import type { AudioEngine, AudioEngineCallbacks, AudioPlaybackSource } from "./audio-engine-types";
 
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
@@ -10,8 +11,6 @@ export function createAudioEngine(
   callbacks: AudioEngineCallbacks,
   _options?: { traceLabel?: string },
 ): AudioEngine {
-  const native = require("@getpaseo/expo-two-way-audio");
-
   const refs: {
     initialized: boolean;
     captureActive: boolean;
