@@ -253,7 +253,12 @@ export class OpenAiRealtime {
     this.ready = null;
     this.rejectReady = null;
     this.stopTransport();
-    this.save();
+    try {
+      this.options.store.write(this.context);
+    } catch {
+      this.error = "Voice storage failed. Microphone paused; latest text may not be saved.";
+    }
+    this.publish();
   }
   private stopTransport() {
     ++this.generation;

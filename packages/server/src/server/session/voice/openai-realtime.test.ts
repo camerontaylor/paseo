@@ -257,4 +257,22 @@ describe("GPT Realtime attachment", () => {
     expect(f.host.submit).toHaveBeenCalledTimes(1);
     f.voice.stop();
   });
+  it("storage failure still publishes microphone-off and prevents admission", async () => {
+    const f = await fixture();
+    f.voice.listen();
+    const write = vi.spyOn(f.store, "write").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    await f.transcript("one", "do not lose this");
+    expect(f.host.submit).not.toHaveBeenCalled();
+    expect(f.host.status).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        muted: true,
+        connection: "unavailable",
+        error: expect.stringContaining("storage failed"),
+      }),
+    );
+    write.mockRestore();
+    f.voice.stop();
+  });
 });
