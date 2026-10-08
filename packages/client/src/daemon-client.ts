@@ -31,6 +31,10 @@ import {
   DaemonUpdateResponseSchema,
   SessionInboundMessageSchema,
   type ActiveTurnBehavior,
+  type AgentAttachmentWire,
+  type AgentQueueSnapshot,
+  type QueuedAgentDeliveryIntent,
+  type QueuedComposerAttachment,
   type ServerInfoStatusPayload,
 } from "@getpaseo/protocol/messages";
 import { validateWSOutboundMessage } from "@getpaseo/protocol/validation/ws-outbound";
@@ -3634,6 +3638,159 @@ export class DaemonClient {
 
   async sendMessage(agentId: string, text: string, options?: SendMessageOptions): Promise<void> {
     await this.sendAgentMessage(agentId, text, options);
+  }
+
+  // ==========================================================================
+  // Durable agent message queue — see docs/queue-mirroring.md.
+  // Gated on server_info.features.durableAgentQueueV1; callers must check the
+  // flag before reaching any of these. Mutations are revision-checked: a stale
+  // expectedRevision is rejected with the `queue_revision_conflict` code
+  // instead of overwriting another device's edit.
+  // ==========================================================================
+
+  /**
+   * Admits a prompt into the durable queue with an explicit delivery intent.
+   * `itemId` comes from the caller so an optimistic local row and the stored
+   * item share an id, which makes a reconnect retry of the same enqueue a
+   * daemon-side no-op instead of a duplicate.
+   */
+  async enqueueAgentMessage(input: {
+    agentId: string;
+    itemId: string;
+    text: string;
+    intent: QueuedAgentDeliveryIntent;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: AgentAttachmentWire[];
+    composerAttachments?: QueuedComposerAttachment[];
+  }): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.enqueue.response">({
+        message: {
+          type: "agent.queue.enqueue.request",
+          agentId: input.agentId,
+          itemId: input.itemId,
+          text: input.text,
+          intent: input.intent,
+          ...(input.images?.length ? { images: input.images } : {}),
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          ...(input.composerAttachments?.length
+            ? { composerAttachments: input.composerAttachments }
+            : {}),
+        },
+      }),
+    );
+  }
+
+  async updateQueuedAgentMessage(input: {
+    agentId: string;
+    itemId: string;
+    text: string;
+    expectedRevision: number;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: AgentAttachmentWire[];
+    composerAttachments?: QueuedComposerAttachment[];
+  }): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.update.response">({
+        message: {
+          type: "agent.queue.update.request",
+          agentId: input.agentId,
+          itemId: input.itemId,
+          text: input.text,
+          expectedRevision: input.expectedRevision,
+          ...(input.images?.length ? { images: input.images } : {}),
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          ...(input.composerAttachments?.length
+            ? { composerAttachments: input.composerAttachments }
+            : {}),
+        },
+      }),
+    );
+  }
+
+  async reorderQueuedAgentMessages(
+    agentId: string,
+    itemIds: string[],
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.reorder.response">({
+        message: { type: "agent.queue.reorder.request", agentId, itemIds, expectedRevision },
+      }),
+    );
+  }
+
+  async deleteQueuedAgentMessage(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.delete.response">({
+        message: { type: "agent.queue.delete.request", agentId, itemId, expectedRevision },
+      }),
+    );
+  }
+
+  async retryQueuedAgentMessage(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.retry.response">({
+        message: { type: "agent.queue.retry.request", agentId, itemId, expectedRevision },
+      }),
+    );
+  }
+
+  async sendQueuedAgentMessageNow(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.send_now.response">({
+        message: { type: "agent.queue.send_now.request", agentId, itemId, expectedRevision },
+      }),
+    );
+  }
+
+  async listQueuedAgentMessages(agentId: string): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.list.response">({
+        message: { type: "agent.queue.list.request", agentId },
+      }),
+    );
+  }
+
+  /**
+   * Fetches the image bytes of one queued item. A device that did not queue the
+   * item has no local copy, so pulling it back into the composer would
+   * otherwise drop the images.
+   */
+  async getQueuedAgentMessageImages(
+    agentId: string,
+    itemId: string,
+  ): Promise<Array<{ id: string; mimeType: string; fileName?: string | null; data: string }>> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.get_item_images.response">({
+        message: { type: "agent.queue.get_item_images.request", agentId, itemId },
+      });
+    if (payload.error) {
+      throw new Error(payload.error);
+    }
+    return payload.images;
+  }
+
+  private requireAgentQueuePayload(payload: {
+    queue: AgentQueueSnapshot | null;
+    error: string | null;
+  }): AgentQueueSnapshot {
+    if (!payload.queue) {
+      throw new Error(payload.error ?? "Agent queue request rejected");
+    }
+    return payload.queue;
   }
 
   async rewindAgent(

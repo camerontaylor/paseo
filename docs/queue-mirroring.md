@@ -2,7 +2,7 @@
 
 The durable agent message queue holds prompts that a client admitted with an explicit delivery intent: `queue` (deliver when the agent is free) or `steer_strict` (deliver into the running turn without interrupting it). One daemon owns one queue per agent. Every connected device reads and mutates the same queue through the `agent.queue.*` RPCs, so a prompt queued from a phone is visible and editable everywhere, and it drains even when nothing is connected.
 
-The queue is daemon-only infrastructure (`packages/server/src/server/agent-queue/`). The composer UI that calls it is a separate feature.
+The queue is daemon-only infrastructure (`packages/server/src/server/agent-queue/`). The composer's queue track is its client face (`packages/app/src/composer/` + `packages/app/src/stores/queue-outbox-store/`).
 
 ## Gating
 
@@ -48,3 +48,15 @@ One JSON file per agent under `$PASEO_HOME/queues/`, written atomically at mode 
 - Never interrupts a turn to deliver a queue item.
 - Never resends an item whose provider acceptance is unknown without an explicit retry.
 - Never silently deletes an undelivered prompt; removal is a receipt or a user decision.
+
+## The composer side
+
+The queue track shows one row per queued prompt. Rows mirrored from the daemon carry the item's delivery state; rows the daemon has not acknowledged yet come from the outbox. Three contracts hold the two layers together:
+
+- **Snapshots replace, outbox survives.** A snapshot replaces an agent's rows wholesale behind a revision guard; entries in the outbox that the snapshot cannot know about are re-appended, so an un-acked enqueue never disappears because another device mutated the queue first.
+- **The outbox is the durable copy of the enqueue.** It is written before the request goes out and cleared on the daemon's acknowledgement. A send that never got an ack — relay stall, suspended app — is retried on the next reconnect whose server info advertises the flag, verbatim, including its intent.
+- **Exhausted retries stay visible.** After 8 failed flush attempts an entry is parked in a visible failed state with explicit retry and discard, not dropped. This deliberately diverges from the source, which deleted the entry and its row at the cap — that silently discards an undelivered prompt.
+
+Edit and send-now pull the item off the daemon queue (delete + image rehydration) before it re-enters the composer or the send path, so a taken message cannot also drain from the queue. Every mutation sends the revision the device last saw; a stale one is refused as a visible conflict and the queue refreshes — never a silent overwrite.
+
+Hosts without `durableAgentQueueV1` keep the pre-queue composer behavior: the queue track holds rows in memory for this session and this device only, and nothing presents them as durable. Outbox entries written against a capable host and never flushed (the host downgraded before the next connect) wait in storage; they are not shown as queued against a host that cannot honor them.
