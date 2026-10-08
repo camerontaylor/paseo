@@ -101,6 +101,7 @@ test("voice receipts remain readable after more than 100 later deliveries", asyn
   }
   const reopened = new MessageReceipts(directory);
   expect(await reopened.outcome("agent", "attachment:first#1")).toBe("completed");
+  expect(await reopened.outcome("agent", "attachment:first")).toBe("completed");
   const outcomes = await reopened.listForAttachment({
     agentId: "agent",
     attachmentId: "attachment",
@@ -220,4 +221,29 @@ test("a removed marker makes re-admitting the same speech id a no-op", async () 
   });
   expect(outcomes).toHaveLength(1);
   expect(outcomes[0]).toMatchObject({ messageId: "attachment:gone", state: "removed" });
+});
+
+test("completed logical speech wins over an older ambiguous attempt", async () => {
+  const { requests, directory } = await fixture();
+  const input = {
+    agentId: "agent",
+    messageId: "speech#1",
+    request: {},
+    attachment: { messageId: "speech", attachmentId: "attachment", voiceOwner: "owner" },
+    send: async () => {
+      throw new Error("unknown provider outcome");
+    },
+  };
+  await expect(requests.send(input)).rejects.toThrow("unknown provider outcome");
+  // Represents a user's explicit reconciliation and retry, not an automatic replay.
+  await requests.send({ ...input, messageId: "speech#2", send: async () => {} });
+  const reopened = new MessageReceipts(directory);
+  expect(await reopened.outcome("agent", "speech")).toBe("completed");
+  expect(
+    await reopened.listForAttachment({
+      agentId: "agent",
+      attachmentId: "attachment",
+      voiceOwner: "owner",
+    }),
+  ).toEqual([expect.objectContaining({ messageId: "speech", state: "completed" })]);
 });

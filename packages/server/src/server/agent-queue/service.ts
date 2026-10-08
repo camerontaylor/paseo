@@ -508,29 +508,27 @@ export class AgentQueueService {
     itemId: string,
     expectedRevision: number,
   ): Promise<AgentQueueSnapshot> {
-    // Deleted speech records its outcome before leaving the queue, so a client
-    // retry of the same utterance id cannot resurrect it after a reconnect.
-    const queued = await this.store.get(agentId);
-    const queuedItem = queued.items.find((candidate) => candidate.id === itemId);
-    if (queuedItem?.origin === "voice" && this.receipts) {
-      await this.receipts.recordRemoved({
-        agentId,
-        messageId: itemId,
-        attachmentId: itemId.split(":", 1)[0],
-        voiceOwner: queuedItem.voiceOwner,
-        createdAt: queuedItem.createdAt,
-      });
-    }
     const result = await this.store.mutateWithExpectedRevision(
       agentId,
       expectedRevision,
-      (current) => {
+      async (current) => {
         const item = current.items.find((candidate) => candidate.id === itemId);
         if (!item) {
           return current;
         }
         if (item.deliveryState === "dispatching") {
           throw new QueueItemDispatchingError(itemId);
+        }
+        // Validate under the queue lock before writing the durable tombstone.
+        // A refused stale edit or in-flight deletion cannot change its outcome.
+        if (item.origin === "voice" && this.receipts) {
+          await this.receipts.recordRemoved({
+            agentId,
+            messageId: itemId,
+            attachmentId: itemId.split(":", 1)[0],
+            voiceOwner: item.voiceOwner,
+            createdAt: item.createdAt,
+          });
         }
         return { ...current, items: current.items.filter((candidate) => candidate.id !== itemId) };
       },

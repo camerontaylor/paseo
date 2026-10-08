@@ -840,3 +840,19 @@ test("queue reservation preserves a pending permission without a foreground run"
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+test("queued dispatch cannot claim a turn when an agent became archived", async () => {
+  const streamAgent = vi.fn();
+  await expect(
+    sendPromptToAgent({
+      agentId: "archived",
+      prompt: "queued speech",
+      replaceRunning: false,
+      unarchive: false,
+      agentManager: { streamAgent } as unknown as AgentManager,
+      agentStorage: { get: async () => ({ archivedAt: "2026-10-08" }) } as unknown as AgentStorage,
+      logger: createTestLogger(),
+    }),
+  ).rejects.toMatchObject({ code: "AGENT_PROMPT_NOT_SUBMITTED" });
+  expect(streamAgent).not.toHaveBeenCalled();
+});

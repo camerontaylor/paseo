@@ -362,6 +362,44 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     voiceRuntime?.updateSessionConnection(serverId, isConnected);
   }, [isConnected, serverId, voiceRuntime]);
 
+  useEffect(() => {
+    if (!voiceRuntime) return;
+    const runtime = voiceRuntime;
+    let release = () => {};
+    let observing = false;
+    function synchronizeVoiceQueueObservation() {
+      const snapshot = runtime.getSnapshot();
+      const active =
+        snapshot.isVoiceMode &&
+        snapshot.activeServerId === serverId &&
+        useSessionStore.getState().sessions[serverId]?.serverInfo?.features?.durableVoiceInputV1 ===
+          true;
+      if (active === observing) return;
+      observing = active;
+      release();
+      if (!active) return;
+      const observation = client.observeEvents(["agent.queue.update"]);
+      const unsubscribe = observation.subscribe({
+        snapshot: () => {},
+        update: (message) => {
+          if (message.type === "agent.queue.update") {
+            runtime.onQueueChanged(serverId, message.payload.agentId);
+          }
+        },
+      });
+      release = () => {
+        unsubscribe();
+        void observation.release();
+      };
+    }
+    synchronizeVoiceQueueObservation();
+    const unsubscribe = voiceRuntime.subscribe(synchronizeVoiceQueueObservation);
+    return () => {
+      unsubscribe();
+      release();
+    };
+  }, [client, serverId, voiceRuntime]);
+
   // If the client drops mid-initialization, clear pending flags
   useEffect(() => {
     if (!isConnected) {

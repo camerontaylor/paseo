@@ -560,6 +560,44 @@ describe("VoiceSession streaming transcription", () => {
     await voiceSession.cleanup();
   });
 
+  test("admission completing during detach never acknowledges on the released attachment", async () => {
+    const { voiceSession, detector, sttSession, host } = createVoiceSession();
+    let finish!: () => void;
+    const admission = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    host.sendSpokenInput = admission;
+    await voiceSession.handleSetVoiceMode(true, VOICE_AGENT_ID, "first", { attachmentId: "first" });
+    detector.emit("speech_started");
+    await settle();
+    detector.emit("speech_stopped");
+    await settle();
+    sttSession.emitCommitted({ segmentId: "segment-1", previousSegmentId: null });
+    sttSession.emitTranscript({
+      segmentId: "segment-1",
+      transcript: "original speech",
+      isFinal: true,
+    });
+    await vi.waitFor(() => expect(admission).toHaveBeenCalledOnce());
+    const detached = voiceSession.handleSetVoiceMode(false, VOICE_AGENT_ID, "stop", {
+      attachmentId: "first",
+      generation: "test-generation",
+    });
+    await settle();
+    host.emitted.length = 0;
+    finish();
+    await detached;
+    await voiceSession.handleSetVoiceMode(true, VOICE_AGENT_ID, "replacement", {
+      attachmentId: "second",
+    });
+    await settle();
+    expect(host.emitted.some((message) => message.type === "transcription_result")).toBe(false);
+    await voiceSession.cleanup();
+  });
+
   test("a queued-speech failure is reported instead of acknowledged as heard", async () => {
     const { voiceSession, detector, sttSession, host } = createVoiceSession();
     const failingHost = host as FakeVoiceHost & {

@@ -1916,9 +1916,9 @@ export class VoiceAssistantWebSocketServer {
         // stock peers never gain it, so the gate lasts as long as stock peers
         // are supported. Gates the agent.queue.* surface end to end.
         durableAgentQueueV1: true,
-        // COMPAT(durableVoiceInputV1): fork feature (TM-04), added in fork
-        // v0.10.0-beta.1, remove gate after 2027-03-29. Voice attachment
-        // admission rides the durable queue, so it needs that service present.
+        // COMPAT(durableVoiceInputV1): added in TM-04 on 2026-10-08. Keep
+        // the gate while stock peers are supported. This contract adapts source
+        // voiceConcurrentInput to TM-02 admission and receipt reconciliation.
         durableVoiceInputV1: this.agentQueueService !== null,
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: true,

@@ -104,7 +104,7 @@ export class VoiceSessions {
     const owner = this.delivery.operation(isVoiceOutput, async () => {
       active.closing = true;
       this.demandChanged();
-      // Cancel input immediately; restore agent configuration after bootstrap has settled.
+      // Cancel input immediately; release audio resources after bootstrap has settled.
       try {
         active.voice.cancel();
       } finally {

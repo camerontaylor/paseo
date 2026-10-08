@@ -1203,16 +1203,30 @@ export class VoiceSession {
     if (!this.currentAttachment()) return;
     // The transcript is acknowledged only after its queue write succeeds, and
     // it carries the item id the receipts will answer under.
-    const messageId = `${this.voiceModeAttachmentId}:${result.requestId}`;
+    const generation = this.voiceModeGeneration;
+    const attachmentId = this.voiceModeAttachmentId;
+    const messageId = `${attachmentId}:${result.requestId}`;
     try {
       await this.host.sendSpokenInput(agentId, result.text, messageId);
     } catch (error) {
+      if (
+        !this.currentAttachment() ||
+        generation !== this.voiceModeGeneration ||
+        attachmentId !== this.voiceModeAttachmentId
+      )
+        return;
       this.emit({
         type: "voice_input_state",
         payload: { isSpeaking: false, error: `Could not queue speech: ${getErrorMessage(error)}` },
       });
       return;
     }
+    if (
+      !this.currentAttachment() ||
+      generation !== this.voiceModeGeneration ||
+      attachmentId !== this.voiceModeAttachmentId
+    )
+      return;
     emitTranscript(messageId);
     this.emit({
       type: "activity_log",

@@ -338,6 +338,7 @@ export async function sendPromptToAgent(
     const record = await params.agentStorage.get(params.agentId);
     if (record?.archivedAt) {
       if (!unarchive) {
+        if (params.replaceRunning === false) throw new Error("Queued agent is archived");
         return { disposition: "turn_started" };
       }
       await unarchiveAgentState(params.agentStorage, params.agentManager, params.agentId);

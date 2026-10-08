@@ -912,6 +912,7 @@ export class Session {
     } = options;
     this.browserToolsBroker = options.browserToolsBroker;
     this.clientId = clientId;
+    this.voiceOwner = options.voiceOwner;
     this.authorization = new SessionAuthorization(permissions);
     this.appVersion = appVersion ?? null;
     this.clientCapabilities = parseClientCapabilities(clientCapabilities);
@@ -8374,7 +8375,11 @@ export class Session {
         }
       >();
       for (const item of queue ?? []) {
-        byId.set(item.id, { messageId: item.id, state: "queued", createdAt: item.createdAt });
+        const state =
+          item.deliveryState === "failed" || item.deliveryState === "uncertain"
+            ? "unknown"
+            : "queued";
+        byId.set(item.id, { messageId: item.id, state, createdAt: item.createdAt });
       }
       for (const receipt of receipts) {
         let state: "queued" | "submitted" | "removed" | "unknown" = "unknown";

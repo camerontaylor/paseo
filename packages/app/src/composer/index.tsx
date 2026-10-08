@@ -1342,7 +1342,7 @@ function ComposerContentImpl({
   const supportsForgeSearch = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.forgeSearch === true,
   );
-  // COMPAT(durableVoiceInputV1): fork feature (TM-04), added in fork v0.10.0-beta.1, remove gate after 2027-03-29.
+  // COMPAT(durableVoiceInputV1): fork feature (TM-04), added on 2026-10-08; keep while stock peers are supported.
   const supportsVoiceConcurrentInput = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.durableVoiceInputV1 === true,
   );

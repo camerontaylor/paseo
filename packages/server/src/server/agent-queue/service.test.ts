@@ -359,6 +359,38 @@ describe("AgentQueueService", () => {
     expect(harness.sent).toEqual([]);
   });
 
+  test("refused speech deletions never write a removed receipt", async () => {
+    const receipts = new MessageReceipts(join(dir, "agent-requests"));
+    harness.service.setMessageReceipts(receipts);
+    harness.agents.lifecycle = "running";
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "attachment:protected",
+      text: "keep this",
+      intent: "queue",
+      origin: "voice",
+      voiceOwner: "owner-1",
+    });
+    const snapshot = await harness.service.list(AGENT_ID);
+    await expect(
+      harness.service.remove(AGENT_ID, "attachment:protected", snapshot.revision - 1),
+    ).rejects.toMatchObject({ code: "queue_revision_conflict" });
+    expect(await receipts.outcome(AGENT_ID, "attachment:protected")).toBeNull();
+    const [item] = (await harness.store.get(AGENT_ID)).items;
+    if (!item) throw new Error("Expected queued speech");
+    const dispatchingItems = [{ ...item, deliveryState: "dispatching" as const }];
+    await harness.store.mutate(AGENT_ID, (current) => ({
+      ...current,
+      items: dispatchingItems,
+    }));
+    const claimed = await harness.service.list(AGENT_ID);
+    await expect(
+      harness.service.remove(AGENT_ID, "attachment:protected", claimed.revision),
+    ).rejects.toBeInstanceOf(QueueItemDispatchingError);
+    expect(await receipts.outcome(AGENT_ID, "attachment:protected")).toBeNull();
+    expect((await harness.service.list(AGENT_ID)).items).toHaveLength(1);
+  });
+
   test("a dispatch observer reports an unknown outcome without retrying it", async () => {
     harness.service.setMessageReceipts(new MessageReceipts(join(dir, "agent-requests")));
     harness.failSends(new Error("provider accepted, connection lost"));

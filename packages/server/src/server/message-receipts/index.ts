@@ -14,6 +14,12 @@ const ReceiptSchema = z.object({
   voiceOwner: z.string().optional(),
   createdAt: z.string().optional(),
 });
+interface VoiceInputReceipt {
+  messageId: string;
+  state: "pending" | "sending" | "completed" | "removed";
+  createdAt: string;
+}
+
 interface SendMessageInput {
   agentId: string;
   messageId: string;
@@ -86,13 +92,7 @@ export class MessageReceipts {
     agentId: string;
     attachmentId: string;
     voiceOwner?: string;
-  }): Promise<
-    Array<{
-      messageId: string;
-      state: "pending" | "sending" | "completed" | "removed";
-      createdAt: string;
-    }>
-  > {
+  }): Promise<VoiceInputReceipt[]> {
     const files = await readdir(this.directory).catch((error: unknown) => {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
       throw error;
@@ -102,24 +102,30 @@ export class MessageReceipts {
         .filter((name) => name.endsWith(".json"))
         .map((name) => readReceipt(path.join(this.directory, name))),
     );
-    return records
-      .filter((record): record is NonNullable<typeof record> => record !== null)
-      .filter(
-        (record) =>
-          record.agentId === input.agentId &&
-          record.attachmentId === input.attachmentId &&
-          record.voiceOwner === input.voiceOwner &&
-          !!record.messageId,
+    const byId = new Map<string, VoiceInputReceipt>();
+    const priority = { pending: 0, sending: 1, completed: 2, removed: 3 };
+    for (const record of records) {
+      if (
+        !record ||
+        record.agentId !== input.agentId ||
+        record.attachmentId !== input.attachmentId ||
+        record.voiceOwner !== input.voiceOwner ||
+        !record.messageId
       )
-      .map((record) => ({
-        messageId: record.messageId!,
-        state:
-          record.state === "pending" &&
-          this.sending.has(`${record.agentId}\u0000${record.messageId}`)
-            ? ("sending" as const)
-            : record.state,
+        continue;
+      const state =
+        record.state === "pending" && this.sending.has(`${record.agentId}\u0000${record.messageId}`)
+          ? "sending"
+          : record.state;
+      const previous = byId.get(record.messageId);
+      if (previous && priority[previous.state] >= priority[state]) continue;
+      byId.set(record.messageId, {
+        messageId: record.messageId,
+        state,
         createdAt: record.createdAt ?? "",
-      }));
+      });
+    }
+    return [...byId.values()];
   }
 
   /**
@@ -204,6 +210,16 @@ export class MessageReceipts {
         await rm(file, { force: true });
       }
       throw error;
+    }
+    if (input.attachment && input.attachment.messageId !== input.messageId) {
+      // Keep the logical speech identity after the queue's bounded drained-id
+      // window expires. Write this before completing the attempt so a crash
+      // cannot drain the queue without retaining the logical identity.
+      const logicalKey = digest(["send", input.agentId, input.attachment.messageId]);
+      await writeJsonFileAtomic(path.join(this.directory, `${logicalKey}.json`), {
+        ...receipt,
+        state: "completed",
+      });
     }
     await writeJsonFileAtomic(file, { ...receipt, state: "completed" });
   }
