@@ -745,6 +745,7 @@ export class Session {
   private unsubscribeAgentQueue: (() => void) | null = null;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
+  private sideConversationDemandWithoutSource = false;
   private readonly sessionId: string;
   private readonly onMessage: (msg: SessionOutboundMessage) => void;
   private readonly onMessageToSource:
@@ -1268,6 +1269,11 @@ export class Session {
     appVersion = this.appVersion,
   ): void {
     this.clientCapabilities = parseClientCapabilities(capabilities);
+    if (!source) {
+      this.sideConversationDemandWithoutSource = this.clientCapabilities.has(
+        CLIENT_CAPS.sideConversations,
+      );
+    }
     if (source) {
       this.delivery.attach(source, capabilities?.[CLIENT_CAPS.ownedSubscriptions] === true);
       this.clientSources.set(source, {
@@ -1276,7 +1282,6 @@ export class Session {
         activity: this.clientSources.get(source)?.activity ?? null,
         pushToken: this.clientSources.get(source)?.pushToken ?? null,
       });
-      this.refreshObservationProducers();
       // COMPAT(ownedSubscriptions): added in v0.8.0, remove capability-driven legacy host registration after 2027-03-09.
       if (
         !this.delivery.isModern(source) &&
@@ -1298,6 +1303,7 @@ export class Session {
         }
       }
     }
+    this.refreshObservationProducers();
   }
 
   clearAgentTimelineSubscription(source: object): void {
@@ -1680,7 +1686,8 @@ export class Session {
       this.wantsEvent("agent_attention_required") ||
       this.wantsEvent("agent_permission_request") ||
       this.wantsEvent("agent_permission_resolved") ||
-      this.wantsEvent("agent.provider_subagents.update");
+      this.wantsEvent("agent.provider_subagents.update") ||
+      this.hasSideConversationDemand();
     if (agents && !this.unsubscribeAgentEvents) this.subscribeToAgentEvents();
     if (!agents) {
       this.unsubscribeAgentEvents?.();
@@ -1688,6 +1695,32 @@ export class Session {
     }
     this.refreshWorkspaceProducers(workspaces);
     this.refreshCatalogProducers(legacy);
+  }
+
+  private hasSideConversationDemand(): boolean {
+    return this.clientSources.size > 0
+      ? [...this.clientSources.values()].some(({ capabilities }) =>
+          capabilities.has(CLIENT_CAPS.sideConversations),
+        )
+      : this.sideConversationDemandWithoutSource;
+  }
+
+  private forwardSideConversationUpdate(
+    message: Extract<
+      SessionOutboundMessage,
+      { type: "agent.side_conversation.update" | "agent.side_conversation.removed" }
+    >,
+  ): void {
+    if (!this.authorization.allowsOutbound(message)) return;
+    if (this.clientSources.size === 0 || !this.onMessageToSource) {
+      if (this.hasSideConversationDemand()) this.emit(message);
+      return;
+    }
+    for (const [source, { capabilities }] of this.clientSources) {
+      if (capabilities.has(CLIENT_CAPS.sideConversations)) {
+        this.onMessageToSource(source, message);
+      }
+    }
   }
 
   private refreshWorkspaceProducers(observing: boolean): void {
@@ -1978,17 +2011,14 @@ export class Session {
         }
 
         if (event.type === "side_conversation") {
-          if (!this.supports(CLIENT_CAPS.sideConversations)) {
-            return;
-          }
           const update = event.event;
           if (update.type === "update") {
-            this.emit({
+            this.forwardSideConversationUpdate({
               type: "agent.side_conversation.update",
               payload: sideConversationSnapshot(update.record),
             });
           } else {
-            this.emit({
+            this.forwardSideConversationUpdate({
               type: "agent.side_conversation.removed",
               payload: { parentAgentId: update.parentAgentId, threadId: update.threadId },
             });
