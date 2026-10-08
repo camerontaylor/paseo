@@ -551,6 +551,9 @@ export const ar: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "فشل في سرد ​​الدليل",
+        pathUnavailable: "لا يمكن تحديد هذا المسار من دليل عمل المحادثة.",
+        outsideWorkspaceDirectory:
+          "هذا المجلد خارج مساحة العمل الحالية. افتحه من مساحة العمل المصدر.",
         createFailed: "فشل إنشاء العنصر",
         renameFailed: "فشل إعادة تسمية العنصر",
         duplicateFailed: "فشل تكرار العنصر",
@@ -770,6 +773,8 @@ export const ar: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "الجذر",
+      searchPlaceholder: "البحث عن السكربتات أو الحزم…",
       title: "البرامج النصية",
       actions: {
         chooseUrl: "اختيار الرابط",
@@ -797,6 +802,8 @@ export const ar: TranslationResources = {
         direct: "مباشر",
       },
       states: {
+        empty: "لم يتم العثور على نصوص برمجية",
+        noMatches: "لا توجد سكربتات مطابقة",
         exitCode: "الخروج من{{code}}",
         startFailed: "فشل بدء تشغيل{{scriptName}}",
         stopFailed: "فشل إيقاف{{scriptName}}",
@@ -1291,6 +1298,7 @@ export const ar: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "النص البرمجي {{name}} قيد التشغيل",
         serviceRunning: "الخدمة {{name}} قيد التشغيل",
         serviceUnhealthy: "الخدمة {{name}} غير سليمة",
         creating: "جارٍ الإنشاء...",
