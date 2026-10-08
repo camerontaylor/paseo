@@ -89,7 +89,8 @@ import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import { stripInternalPaseoMcpServer, withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
 import { resolveCreateAgentTitles } from "./create-agent-title.js";
 import type { PaseoToolCatalogFactory } from "./tools/types.js";
-import { isPaseoToolPolicyEnabled } from "./paseo-tool-policy.js";
+import { isPaseoToolPolicyEnabled, isPaseoToolEnabled } from "./paseo-tool-policy.js";
+import { stripVoiceModeSystemPrompt, VOICE_AVAILABLE_INSTRUCTION } from "../voice-config.js";
 import {
   ProviderSubagentStore,
   type ProviderSubagentDescriptor,
@@ -129,6 +130,16 @@ export class AgentManagerShuttingDownError extends Error {
   constructor() {
     super("Agent manager is shutting down");
     this.name = "AgentManagerShuttingDownError";
+  }
+}
+
+/** The run reservation rejected a competing prompt before the provider saw it. */
+export class AgentRunBusyError extends Error {
+  readonly code = "AGENT_RUN_BUSY";
+
+  constructor(agentId: string) {
+    super(`Agent ${agentId} already has an active run`);
+    this.name = "AgentRunBusyError";
   }
 }
 
@@ -2621,7 +2632,11 @@ export class AgentManager {
       },
       "agent.manager.stream.request",
     );
-    if (existingAgent.activeForegroundTurnId || this.runs.hasRun(agentId)) {
+    if (
+      existingAgent.activeForegroundTurnId ||
+      this.runs.hasRun(agentId) ||
+      (options?.requireNoPendingPermissions && existingAgent.pendingPermissions.size > 0)
+    ) {
       this.logger.trace(
         {
           agentId,
@@ -2633,7 +2648,7 @@ export class AgentManager {
         },
         "agent.manager.stream.reject",
       );
-      throw new Error(`Agent ${agentId} already has an active run`);
+      throw new AgentRunBusyError(agentId);
     }
 
     const agent = existingAgent;
@@ -5322,6 +5337,11 @@ export class AgentManager {
       env: options.env,
       purpose: options.purpose,
     });
+    // Older voice toggles persisted a speech-only prompt block. Remove it only
+    // when a provider is naturally created or resumed.
+    const systemPrompt = stripVoiceModeSystemPrompt(storedConfig.systemPrompt);
+    if (systemPrompt) storedConfig.systemPrompt = systemPrompt;
+    else delete storedConfig.systemPrompt;
     const paseoToolPolicy = this.paseoToolsEnabled
       ? this.resolvePaseoToolPolicy(storedConfig.provider)
       : { enabled: false };
@@ -5336,6 +5356,22 @@ export class AgentManager {
         mcpAuthToken: this.mcpAuthToken,
       }),
     );
+    const capabilities = this.clients.get(storedConfig.provider)?.capabilities;
+    const hasSpeakTransport =
+      (capabilities?.supportsNativePaseoTools && !!this.paseoToolCatalogFactory) ||
+      (capabilities?.supportsMcpServers && !!this.mcpBaseUrl);
+    if (
+      hasSpeakTransport &&
+      this.paseoToolsEnabled &&
+      isPaseoToolEnabled(paseoToolPolicy, "speak")
+    ) {
+      launchConfig.daemonAppendSystemPrompt = [
+        launchConfig.daemonAppendSystemPrompt,
+        VOICE_AVAILABLE_INSTRUCTION,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+    }
     return { storedConfig, launchConfig, paseoToolPolicy };
   }
 

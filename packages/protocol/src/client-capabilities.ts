@@ -51,6 +51,9 @@ export const CLIENT_CAPS = {
   // `agent.queue.update` to clients that advertise this, so a client with a
   // strict outbound union never receives the event.
   durableAgentQueue: "durable_agent_queue",
+  // COMPAT(durableVoiceInputV1): fork addition (TM-04). Gate for voice
+  // attachment admission into the durable queue and the receipt-read RPC.
+  durableVoiceInputV1: "durable_voice_input_v1",
   browserHost: "browser_host",
 } as const;
 

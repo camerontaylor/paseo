@@ -886,6 +886,10 @@ export type RecentProviderSessionDescriptorPayload = z.infer<
 
 export const VoiceAudioChunkMessageSchema = z.object({
   type: z.literal("voice_audio_chunk"),
+  /** Voice attachment identity. Absent in legacy clients without attachments. */
+  attachmentId: z.string().optional(),
+  /** Transport generation handed out by the host for this attachment. */
+  generation: z.string().optional(),
   audio: z.string(), // base64 encoded
   format: z.string(),
   isLast: z.boolean(),
@@ -893,11 +897,45 @@ export const VoiceAudioChunkMessageSchema = z.object({
 
 export const AbortRequestMessageSchema = z.object({
   type: z.literal("abort_request"),
+  attachmentId: z.string().optional(),
+  generation: z.string().optional(),
 });
 
 export const AudioPlayedMessageSchema = z.object({
   type: z.literal("audio_played"),
+  attachmentId: z.string().optional(),
+  generation: z.string().optional(),
   id: z.string(),
+  /** Set when the client failed to play the clip; the speech caller sees the failure. */
+  error: z.string().optional(),
+});
+
+export const VoiceInputReceiptsReadRequestSchema = z.object({
+  type: z.literal("voice.input.receipts.read.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+  attachmentId: z.string(),
+  generation: z.string(),
+  after: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});
+
+export const VoiceInputReceiptsReadResponseSchema = z.object({
+  type: z.literal("voice.input.receipts.read.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    attachmentId: z.string(),
+    items: z.array(
+      z.object({
+        messageId: z.string(),
+        state: z.enum(["queued", "submitted", "removed", "unknown"]),
+        createdAt: z.string(),
+      }),
+    ),
+    nextCursor: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
 });
 
 const AgentDirectoryFilterSchema = z.object({
@@ -1039,6 +1077,10 @@ export const WorkspaceRecoveryRestoreRequestSchema = z.object({
 
 export const SetVoiceModeMessageSchema = z.object({
   type: z.literal("set_voice_mode"),
+  /** Voice attachment identity; the host binds its generation to it. */
+  attachmentId: z.string().optional(),
+  /** Supplied when an existing attachment reclaims itself after a reconnect. */
+  generation: z.string().optional(),
   enabled: z.boolean(),
   agentId: z.string().optional(),
   requestId: z.string().optional(),
@@ -2162,6 +2204,9 @@ export const SetVoiceModeResponseMessageSchema = z.object({
     reasonCode: z.string().optional(),
     retryable: z.boolean().optional(),
     missingModelIds: z.array(z.string()).optional(),
+    /** Echoed attachment identity plus the host's fresh transport generation. */
+    attachmentId: z.string().optional(),
+    generation: z.string().optional(),
   }),
 });
 
@@ -2549,6 +2594,8 @@ export const QueuedComposerAttachmentSchema = z.discriminatedUnion("kind", [
 export const QueuedAgentMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
+  /** Set when the item was admitted as spoken input rather than typed or tool-created. */
+  origin: z.literal("voice").optional(),
   intent: QueuedAgentDeliveryIntentSchema,
   deliveryState: QueuedAgentMessageDeliveryStateSchema,
   attempts: z.number().int().nonnegative(),
@@ -3476,6 +3523,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceRecoveryInspectRequestSchema,
   WorkspaceRecoveryRestoreRequestSchema,
   SetVoiceModeMessageSchema,
+  VoiceInputReceiptsReadRequestSchema,
   SendAgentMessageRequestSchema,
   WaitForFinishRequestSchema,
   DaemonGetStatusRequestSchema,
@@ -3695,6 +3743,8 @@ export const AudioOutputMessageSchema = z.object({
     audio: z.string(), // base64 encoded
     format: z.string(),
     id: z.string(),
+    attachmentId: z.string().optional(),
+    generation: z.string().optional(),
     isVoiceMode: z.boolean(), // Mode when audio was generated (for drift protection)
     groupId: z.string().optional(), // Logical utterance id
     chunkIndex: z.number().int().nonnegative().optional(),
@@ -3709,6 +3759,11 @@ export const TranscriptionResultMessageSchema = z.object({
     language: z.string().optional(),
     duration: z.number().optional(),
     requestId: z.string(), // Echoed back from request for tracking
+    attachmentId: z.string().optional(),
+    generation: z.string().optional(),
+    /** Queue item id of the admitted utterance; present only when it was queued. */
+    messageId: z.string().optional(),
+    queued: z.boolean().optional(),
     avgLogprob: z.number().optional(),
     isLowConfidence: z.boolean().optional(),
     byteLength: z.number().optional(),
@@ -3721,6 +3776,13 @@ export const VoiceInputStateMessageSchema = z.object({
   type: z.literal("voice_input_state"),
   payload: z.object({
     isSpeaking: z.boolean(),
+    /** Input problem text, e.g. a transcript that could not be queued. */
+    error: z.string().optional(),
+    attachmentId: z.string().optional(),
+    generation: z.string().optional(),
+    // "nothing_recognized" | "timed_out" | "failed". A string so later hosts can add
+    // values that older clients ignore instead of rejecting the message.
+    recognitionIssue: z.string().optional(),
   }),
 });
 
@@ -3914,6 +3976,10 @@ export const ServerInfoStatusPayloadSchema = z
         // released daemon understands. Remove the gate after 2027-10-01 once
         // the supported daemon floor is past every 0.11.x host.
         durableAgentQueueV1: z.boolean().optional(),
+        // COMPAT(durableVoiceInputV1): fork addition (TM-04). Gates voice
+        // attachment admission into the durable agent queue; an old daemon
+        // never answers voice.input.receipts.read requests.
+        durableVoiceInputV1: z.boolean().optional(),
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: z.boolean().optional(),
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
@@ -7274,6 +7340,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceMarkUnreadResponseSchema,
   SendAgentMessageResponseMessageSchema,
   SetVoiceModeResponseMessageSchema,
+  VoiceInputReceiptsReadResponseSchema,
   DaemonGetStatusResponseSchema,
   DaemonGetPairingOfferResponseSchema,
   DaemonConfigReloadResponseSchema,

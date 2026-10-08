@@ -174,7 +174,7 @@ export const en = {
       unmuteVoice: "Unmute voice",
       muteVoice: "Mute voice",
       dictation: "Dictation",
-      interruptBeforeVoice: "Interrupt the agent before starting voice mode",
+      interruptBeforeVoice: "Update the host to use voice while the agent works",
     },
     attachments: {
       addImage: "Add image",
@@ -1829,10 +1829,25 @@ export const en = {
     },
   },
   realtimeVoice: {
+    listening: "Microphone on",
+    notListening: "Not listening",
+    failure: {
+      "nothing-recognized": "Didn't catch that. Say it again.",
+      "recognition-stalled": "Speech recognition stopped responding. Stop and restart voice.",
+      "recognition-failed": "Speech recognition failed. Stop and restart voice.",
+      "recognition-unavailable": "Speech recognition is unavailable on the host.",
+      "host-disconnected": "Host disconnected. Microphone input is paused until it reconnects.",
+      "microphone-lost": "Microphone lost. Voice stopped.",
+    },
+    inputQueued: "Speech queued for agent",
+    inputSent: "Speech sent to agent",
+    inputRemoved: "Speech removed from queue",
+    inputUnknown: "Speech delivery uncertain",
     actions: {
+      interruptAgent: "Interrupt agent",
       mute: "Mute realtime voice",
       unmute: "Unmute realtime voice",
-      stop: "Stop realtime voice and interrupt turn",
+      stop: "Stop realtime voice",
     },
   },
   rewind: {

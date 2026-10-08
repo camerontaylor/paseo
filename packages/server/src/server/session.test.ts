@@ -193,6 +193,49 @@ test("side conversation ask reports archived agents unavailable without loading 
   ]);
 });
 
+test("voice attach, abort, transport loss and detach never touch the agent", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const mutating = {
+    cancelAgentRun: vi.fn(),
+    streamAgent: vi.fn(),
+    steerOrReplaceActiveTurn: vi.fn(),
+    replaceAgentRun: vi.fn(),
+    respondToPermission: vi.fn(),
+    askSideQuestion: vi.fn(),
+  };
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      getAgent: vi.fn(() => ({ id: agentId, provider: "codex", lifecycle: "running" })),
+      ...mutating,
+    },
+  });
+
+  // Attach fails cleanly here (the test session has no speech providers), which
+  // is itself part of the contract: a failed attach must not disturb the run.
+  await session.handleMessage({ type: "set_voice_mode", enabled: true, agentId, requestId: "v1" });
+  await session.handleMessage({
+    type: "voice_audio_chunk",
+    audio: "AA==",
+    format: "audio/pcm;rate=16000;bits=16",
+    isLast: false,
+  });
+  await session.handleMessage({ type: "abort_request" });
+  await session.handleMessage({ type: "set_voice_mode", enabled: false, requestId: "v2" });
+
+  for (const [name, fn] of Object.entries(mutating)) {
+    expect(fn, name).not.toHaveBeenCalled();
+  }
+  // The stop still acknowledges so the client's detach completes.
+  expect(messages).toContainEqual(
+    expect.objectContaining({
+      type: "set_voice_mode_response",
+      payload: expect.objectContaining({ requestId: "v2", enabled: false, accepted: true }),
+    }),
+  );
+});
+
 function captureAgentManagerEvents(): {
   subscribe: ReturnType<typeof vi.fn>;
   dispatch: (event: AgentManagerEvent) => void;

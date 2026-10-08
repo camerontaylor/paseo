@@ -216,4 +216,53 @@ describe("sendOrQueuePromptToAgent", () => {
     expect(result).toEqual({ queued: false, outOfBand: false });
     expect(harness.sends).toHaveLength(1);
   });
+
+  test("spoken input queues even when the agent is idle and never rides out-of-band", async () => {
+    // Out-of-band would accept here; speech must not take that path.
+    const state: FakeManagerState = { inFlight: false, outOfBandAccepts: true, modeChanges: [] };
+    const harness = createHarness(state);
+
+    const result = await sendOrQueuePromptToAgent({
+      agentManager: harness.manager,
+      agentStorage: {} as AgentStorage,
+      queueService: harness.service,
+      agentId: AGENT_ID,
+      text: "spoken follow-up",
+      intent: "queue",
+      origin: "voice",
+      voiceOwner: "owner-1",
+      messageId: "attachment:gen:utt",
+      logger: createTestLogger(),
+      send: harness.send,
+    });
+
+    expect(result).toEqual({ queued: true, outOfBand: false });
+    expect(harness.sends).toHaveLength(0);
+    const snapshot = await harness.service.list(AGENT_ID);
+    expect(snapshot.items.map((item) => item.id)).toEqual(["attachment:gen:utt"]);
+  });
+
+  test("spoken input queues on a busy agent even when out-of-band would accept", async () => {
+    const state: FakeManagerState = { inFlight: true, outOfBandAccepts: true, modeChanges: [] };
+    const harness = createHarness(state);
+
+    const result = await sendOrQueuePromptToAgent({
+      agentManager: harness.manager,
+      agentStorage: {} as AgentStorage,
+      queueService: harness.service,
+      agentId: AGENT_ID,
+      text: "spoken while busy",
+      intent: "queue",
+      origin: "voice",
+      voiceOwner: "owner-1",
+      logger: createTestLogger(),
+      send: harness.send,
+    });
+
+    expect(result).toEqual({ queued: true, outOfBand: false });
+    expect(harness.sends).toHaveLength(0);
+    expect((await harness.service.list(AGENT_ID)).items.map((item) => item.text)).toEqual([
+      "spoken while busy",
+    ]);
+  });
 });
