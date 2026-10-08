@@ -4,6 +4,7 @@ import { pluginSdkEntry } from "@getpaseo/plugin";
 import * as pluginProviderRuntime from "@getpaseo/plugin/server/provider";
 import * as pluginAcpRuntime from "@getpaseo/plugin/server/acp";
 import * as pluginUsageRuntime from "@getpaseo/plugin/server/usage";
+import * as pluginServerRuntime from "@getpaseo/plugin/server";
 import type { PluginServerContribution } from "@getpaseo/plugin/server";
 import * as zod from "zod";
 import { isPluginClientOnlySdkSpecifier } from "./plugin-sdk-specifiers.js";
@@ -16,7 +17,7 @@ function runtimeRequire(name: string): unknown {
     throw new Error(`${name} is available only in plugin client code`);
   }
   if (sdkEntry === "") return pluginSharedRuntime;
-  if (sdkEntry === "/server") return {};
+  if (sdkEntry === "/server") return pluginServerRuntime;
   if (sdkEntry === "/server/provider") return pluginProviderRuntime;
   if (sdkEntry === "/server/acp") return pluginAcpRuntime;
   if (sdkEntry === "/server/usage") return pluginUsageRuntime;
