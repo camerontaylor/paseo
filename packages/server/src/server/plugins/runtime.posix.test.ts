@@ -249,9 +249,30 @@ afterEach(async () => {
 });
 
 describe("PluginRuntime", () => {
+  it("loads an upstream SDK provider and Settings UI without author SDK dependencies", async () => {
+    const directory = fileURLToPath(
+      new URL("../../../../../plugin-examples/sdk-identity/", import.meta.url),
+    );
+    const runtime = createTestRuntime({}, undefined, "0.11.0-beta.3");
+    try {
+      await runtime.startPlugin("sdk-identity", directory);
+      expect(
+        runtime.getProviderRegistrations("sdk-identity").map((provider) => provider.id),
+      ).toEqual(["sdk-identity-provider"]);
+      expect(runtime.catalog()[0]?.clientBundle).toContain("SettingsAction");
+      await expect(runtime.invoke("sdk-identity", "status", {})).resolves.toEqual({
+        provider: "sdk-identity-provider",
+      });
+      await expect(runtime.invoke("sdk-identity", "status", null)).rejects.toThrow();
+    } finally {
+      await runtime.stopAll();
+    }
+  });
   it.each([
     { specifier: "@getpaseo/plugin", moduleDirectory: "shared" },
     { specifier: "@getpaseo/plugin", moduleDirectory: "server" },
+    { specifier: "@camerontaylor/paseo-plugin", moduleDirectory: "shared" },
+    { specifier: "@camerontaylor/paseo-plugin", moduleDirectory: "server" },
   ])(
     "loads $specifier contracts without React in the subprocess module graph",
     async ({ specifier, moduleDirectory }) => {
@@ -360,6 +381,7 @@ import type { ProviderEvent, ProviderRegistration } from "@getpaseo/plugin/serve
 const provider: ProviderRegistration = {
   id: "direct-example",
   label: "Direct example",
+  supportsSystemPrompt: false,
   icon: "icon.svg",
   async connect(request) {
     const listeners = new Set<(event: ProviderEvent) => void>();
@@ -465,6 +487,7 @@ export default function contribute(server: PluginServerContext) {
     expect(registration).toMatchObject({
       id: "direct-example",
       label: "Direct example",
+      supportsSystemPrompt: false,
       iconPath: "icon.svg",
     });
     const connection = await runtime.connectProvider("provider-round-trip", "direct-example", {

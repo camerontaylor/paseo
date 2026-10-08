@@ -201,6 +201,7 @@ export const MutableDaemonConfigSchema = z
     metadataGeneration: MutableMetadataGenerationConfigSchema.default({ providers: [] }),
     autoArchiveAfterMerge: z.boolean().default(false),
     enableTerminalAgentHooks: z.boolean().default(false),
+    appendSystemPromptExcludedProviders: z.array(z.string().min(1)).optional(),
     appendSystemPrompt: z.string().default(""),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
@@ -222,6 +223,7 @@ export const MutableDaemonConfigPatchSchema = z
     metadataGeneration: MutableMetadataGenerationConfigSchema.partial().optional(),
     autoArchiveAfterMerge: z.boolean().optional(),
     enableTerminalAgentHooks: z.boolean().optional(),
+    appendSystemPromptExcludedProviders: z.array(z.string().min(1)).optional(),
     appendSystemPrompt: z.string().optional(),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
@@ -1788,6 +1790,7 @@ export const ProviderUsageListRequestMessageSchema = z.object({
 
 export const UsageListReportsRequestMessageSchema = z.object({
   type: z.literal("usage.list_reports.request"),
+  streaming: z.boolean().optional(),
   agentId: z.string().optional(),
   requestId: z.string(),
   reportIds: z.array(z.string()).optional(),
@@ -1888,6 +1891,27 @@ export const ProviderSubagentTimelineRequestMessageSchema = z.object({
   direction: z.enum(["tail", "before", "after"]).optional(),
   cursor: AgentTimelineCursorSchema.optional(),
   limit: z.number().int().nonnegative().optional(),
+});
+
+export const SideConversationAskRequestMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.ask.request"),
+  parentAgentId: z.string(),
+  threadId: z.string(),
+  question: z.string().min(1),
+  requestId: z.string(),
+});
+
+export const SideConversationTimelineGetRequestMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.timeline.get.request"),
+  parentAgentId: z.string(),
+  threadId: z.string(),
+  requestId: z.string(),
+});
+
+export const SideConversationListRequestMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.list.request"),
+  parentAgentId: z.string(),
+  requestId: z.string(),
 });
 
 export const SetAgentTimelineSubscriptionRequestMessageSchema = z.object({
@@ -3265,6 +3289,9 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentTimelineListPromptsRequestMessageSchema,
   ProviderSubagentListRequestMessageSchema,
   ProviderSubagentTimelineRequestMessageSchema,
+  SideConversationAskRequestMessageSchema,
+  SideConversationTimelineGetRequestMessageSchema,
+  SideConversationListRequestMessageSchema,
   SetAgentTimelineSubscriptionRequestMessageSchema,
   AgentForkContextRequestMessageSchema,
   SetAgentModeRequestMessageSchema,
@@ -3556,6 +3583,7 @@ export const ServerInfoStatusPayloadSchema = z
         hubAgentRpc: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
         usageSources: z.boolean().optional(),
+        usageReportsStreaming: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: z.boolean().optional(),
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -3660,6 +3688,8 @@ export const ServerInfoStatusPayloadSchema = z
         projectedSubagentTimeline: z.boolean().optional(),
         // COMPAT(providerSubagentNesting): added in v0.7, remove gate after 2027-03-04.
         providerSubagentNesting: z.boolean().optional(),
+        // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
+        sideConversations: z.boolean().optional(),
         // COMPAT(workspacePinning): added in v0.1.107, remove gate after 2027-01-12.
         workspacePinning: z.boolean().optional(),
         // COMPAT(workspaceMarkUnread): added in v0.5.0, remove after 2027-08-20.
@@ -4762,6 +4792,86 @@ export const ProviderSubagentUpdateMessageSchema = z.object({
       subagentId: z.string(),
     }),
   ]),
+});
+
+export const SideConversationThreadingSchema = z.enum(["threaded", "single_shot"]);
+
+export const SideAnswerUnavailableReasonSchema = z.enum(["unsupported_provider", "session_closed"]);
+
+export const SideAnswerPayloadSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("answered"),
+    content: z.string(),
+    synthetic: z.boolean(),
+    threading: SideConversationThreadingSchema,
+  }),
+  // `reason` is optional because "unspecified" is a real answer (e.g. an ask that failed
+  // before the manager could classify it), not for version tolerance — pre-fork daemons
+  // never send side-conversation answers at all.
+  z.object({
+    status: z.literal("unavailable"),
+    reason: SideAnswerUnavailableReasonSchema.optional(),
+  }),
+  z.object({ status: z.literal("timed_out"), threading: SideConversationThreadingSchema }),
+  z.object({
+    status: z.literal("failed"),
+    error: z.string(),
+    threading: SideConversationThreadingSchema,
+  }),
+]);
+
+export type SideAnswerPayload = z.infer<typeof SideAnswerPayloadSchema>;
+
+export const SideConversationSnapshotPayloadSchema = z.object({
+  parentAgentId: z.string(),
+  threadId: z.string(),
+  items: z.array(AgentTimelineItemPayloadSchema),
+  pendingQuestion: z.string().nullable(),
+  lastAnswer: SideAnswerPayloadSchema.nullable(),
+});
+
+export type SideConversationSnapshotPayload = z.infer<typeof SideConversationSnapshotPayloadSchema>;
+
+export const SideConversationAskResponseMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.ask.response"),
+  payload: z.object({
+    requestId: z.string(),
+    parentAgentId: z.string(),
+    threadId: z.string(),
+    answer: SideAnswerPayloadSchema,
+    error: z.string().nullable(),
+  }),
+});
+
+export const SideConversationTimelineGetResponseMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.timeline.get.response"),
+  payload: SideConversationSnapshotPayloadSchema.extend({
+    requestId: z.string(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const SideConversationUpdateMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.update"),
+  payload: SideConversationSnapshotPayloadSchema,
+});
+
+export const SideConversationListResponseMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.list.response"),
+  payload: z.object({
+    requestId: z.string(),
+    parentAgentId: z.string(),
+    threads: z.array(SideConversationSnapshotPayloadSchema),
+    error: z.string().nullable(),
+  }),
+});
+
+export const SideConversationRemovedMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.removed"),
+  payload: z.object({
+    parentAgentId: z.string(),
+    threadId: z.string(),
+  }),
 });
 
 export const SetAgentTimelineSubscriptionResponseMessageSchema = z.object({
@@ -6307,7 +6417,11 @@ export const UsageListReportsUpdateMessageSchema = z.object({
 });
 export const UsageListReportsResponseMessageSchema = z.object({
   type: z.literal("usage.list_reports.response"),
-  payload: z.object({ requestId: z.string(), error: z.string().nullable() }),
+  payload: z.object({
+    requestId: z.string(),
+    reports: z.array(UsageReportEntrySchema).optional(),
+    error: z.string().nullable().optional(),
+  }),
 });
 
 const AgentSlashCommandSchema = z.object({
@@ -6894,6 +7008,11 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ProviderSubagentListResponseMessageSchema,
   ProviderSubagentTimelineResponseMessageSchema,
   ProviderSubagentUpdateMessageSchema,
+  SideConversationAskResponseMessageSchema,
+  SideConversationTimelineGetResponseMessageSchema,
+  SideConversationUpdateMessageSchema,
+  SideConversationListResponseMessageSchema,
+  SideConversationRemovedMessageSchema,
   SetAgentTimelineSubscriptionResponseMessageSchema,
   AgentAttentionRequiredMessageSchema,
   AgentForkContextResponseMessageSchema,
@@ -7522,6 +7641,7 @@ export const WSHelloMessageSchema = z.object({
       [CLIENT_CAPS.customModeIcons]: z.boolean().optional(),
       [CLIENT_CAPS.terminalReflowableSnapshot]: z.boolean().optional(),
       [CLIENT_CAPS.providerSubagents]: z.boolean().optional(),
+      [CLIENT_CAPS.sideConversations]: z.boolean().optional(),
       [CLIENT_CAPS.projectUpdates]: z.boolean().optional(),
       [CLIENT_CAPS.compactProviderSnapshots]: z.boolean().optional(),
       [CLIENT_CAPS.providerSnapshotReferences]: z.boolean().optional(),

@@ -73,6 +73,19 @@ The connection has three operations:
 Keep the native SDK, process, and stream inside the connection implementation. Convert its output
 to `ProviderEvent` objects before publishing it.
 
+## System instructions
+
+Set `ProviderRegistration.supportsSystemPrompt` to `false` when your native API cannot
+carry additional system instructions. Paseo rejects a nonempty agent `systemPrompt` or
+`daemon.appendSystemPrompt` before opening or resuming that provider session. It never
+drops those instructions or converts them into a conversation message. Omit the field
+for existing providers that already implement the system prompt contract.
+
+`ProviderSessionConfig.systemPrompt` contains the combined agent and daemon instructions.
+Apply them in addition to your provider's default system prompt. A native API that only
+replaces the default prompt, or inserts workspace rules as user context, does not satisfy
+this contract.
+
 ## Launch the provider CLI
 
 Use `spawnProcess` and `execCommand` from `@getpaseo/plugin/server` for process transports
