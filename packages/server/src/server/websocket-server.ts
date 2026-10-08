@@ -1800,6 +1800,8 @@ export class VoiceAssistantWebSocketServer {
         // COMPAT(workspaceSetupRun): added in v0.7.3, remove gate after 2027-09-02.
         workspaceSetupRun: true,
         // COMPAT(providersSnapshot): keep optional until all clients rely on snapshot flow.
+        // COMPAT(checkoutBaseRefSet): added in fork v0.10.1, remove after 2027-09-30 when the supported daemon floor advertises it.
+        checkoutBaseRefSet: true,
         providersSnapshot: true,
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: true,
@@ -1823,6 +1825,8 @@ export class VoiceAssistantWebSocketServer {
         // and legacy fallback after 2027-01-17 once the supported daemon floor
         // is >= v0.2.0.
         forgeSearch: true,
+        // COMPAT(forgeSearchChecks): added in v0.10.1-fork, remove after 2027-09-30.
+        forgeSearchChecks: true,
         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
         ...(this.advertiseDaemonStatusRpc ? { daemonStatusRpc: true } : {}),
         // COMPAT(daemonConfigReload): added in v0.4.0, remove gate after 2027-02-14.
@@ -1851,6 +1855,7 @@ export class VoiceAssistantWebSocketServer {
         // COMPAT(terminalSizeOwnership): added in v0.2.6, remove gate after 2027-02-02.
         "terminal-size-ownership": true,
         workspaceTerminals: true,
+        packageJsonScripts: true,
         // COMPAT(rewind): added in v0.1.X, drop the gate when floor >= v0.1.X.
         rewind: true,
         // COMPAT(agentTimelinePromptIndex): added in v0.2.X, drop the gate when floor >= v0.2.X.
@@ -2714,8 +2719,7 @@ export class VoiceAssistantWebSocketServer {
       nowMs,
     });
 
-    const title = terminalAttentionTitle(params.reason);
-    const body = params.terminalName;
+    const { title, body } = this.terminalAttentionCopy(params);
 
     if (plan.shouldPush) {
       void this.pushNotificationSender
@@ -2758,6 +2762,26 @@ export class VoiceAssistantWebSocketServer {
         this.sessions.get(ws)!.session.publishToSource(ws, message.message);
       else this.sendToClient(ws, message);
     }
+  }
+
+  private terminalAttentionCopy(params: {
+    terminalId: string;
+    workspaceId?: string;
+    terminalName: string;
+    reason: TerminalAttentionReason;
+  }): { title: string; body: string } {
+    const script = params.workspaceId
+      ? this.scriptRuntimeStore
+          ?.listForWorkspace(params.workspaceId)
+          .find((entry) => entry.terminalId === params.terminalId && entry.type === "script")
+      : null;
+    if (script?.lifecycle === "stopped" && params.reason === "finished") {
+      return {
+        title: script.exitCode === 0 ? "Script finished" : "Script failed",
+        body: `${params.terminalName} (exit ${script.exitCode ?? "unknown"})`,
+      };
+    }
+    return { title: terminalAttentionTitle(params.reason), body: params.terminalName };
   }
 }
 
