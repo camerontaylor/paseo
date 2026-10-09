@@ -632,6 +632,11 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
             client,
             applySnapshot: (snapshot) =>
               useSessionStore.getState().applyAgentQueueSnapshot(serverId, snapshot),
+          }).catch((error) => {
+            // Failures are surfaced through the outbox storage-error state and
+            // the queue track; this keeps the reconnect flush from becoming an
+            // unhandled rejection.
+            console.error("[queue-outbox] reconnect flush failed:", error);
           });
         }
         return;

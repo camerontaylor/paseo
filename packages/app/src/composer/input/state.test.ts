@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyDictationTranscript,
   computeCanStartDictation,
+  queueInputMessage,
   resolveActiveSendBehavior,
   resolveComposerSurfacePresentation,
   runAlternateSendAction,
@@ -185,6 +186,94 @@ describe("dictation transcript behavior", () => {
       "replace:typed context spoken prompt",
       "submit:typed context spoken prompt",
     ]);
+  });
+
+  it("queues through the durable path and clears only after it resolves", async () => {
+    const actions: string[] = [];
+    let release: () => void = () => {};
+    const queued: string[] = [];
+
+    applyDictationTranscript("spoken prompt", {
+      value: "",
+      defaultSendBehavior: "queue",
+      isAgentRunning: true,
+      onQueue: (payload) => {
+        queued.push(payload.text);
+        return new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      },
+      replaceText: (text) => actions.push(`replace:${text}`),
+      getLiveText: () => "spoken prompt",
+      onQueueError: () => {},
+      onSubmit: () => {},
+      attachments: [],
+      cwd: "/repo",
+      autoSend: true,
+    });
+
+    // The transcript is placed, but the clear waits for durable acceptance.
+    expect(actions).toEqual(["replace:spoken prompt"]);
+    expect(queued).toEqual(["spoken prompt"]);
+    release();
+    await vi.waitFor(() => expect(actions).toEqual(["replace:spoken prompt", "replace:"]));
+  });
+
+  it("retains the transcript and surfaces an actionable error when the queue rejects", async () => {
+    const errors: string[] = [];
+    const actions: string[] = [];
+
+    applyDictationTranscript("spoken prompt", {
+      value: "",
+      defaultSendBehavior: "queue",
+      isAgentRunning: true,
+      onQueue: async () => {
+        throw new Error("Couldn't save the queued message on this device.");
+      },
+      replaceText: (text) => actions.push(`replace:${text}`),
+      getLiveText: () => "spoken prompt",
+      onQueueError: (message) => errors.push(message),
+      onSubmit: () => {},
+      attachments: [],
+      cwd: "/repo",
+      autoSend: true,
+    });
+
+    await vi.waitFor(() =>
+      expect(errors).toEqual(["Couldn't save the queued message on this device."]),
+    );
+    // The transcript stays in the input: the clear only follows acceptance.
+    expect(actions).toEqual(["replace:spoken prompt"]);
+  });
+
+  it("clears a sync queue acceptance whose live text still matches", async () => {
+    const actions: string[] = [];
+
+    applyDictationTranscript("spoken prompt", {
+      value: "",
+      defaultSendBehavior: "queue",
+      isAgentRunning: true,
+      onQueue: () => {},
+      replaceText: (text) => actions.push(`replace:${text}`),
+      getLiveText: () => "spoken prompt",
+      onQueueError: () => {},
+      onSubmit: () => {},
+      attachments: [],
+      cwd: "/repo",
+      autoSend: true,
+    });
+
+    await vi.waitFor(() => expect(actions).toEqual(["replace:spoken prompt", "replace:"]));
+  });
+});
+
+describe("queueInputMessage", () => {
+  it("awaits the queue callback", async () => {
+    const queued: string[] = [];
+    await queueInputMessage({ text: "payload", attachments: [], cwd: "/repo" }, async (payload) => {
+      queued.push(payload.text);
+    });
+    expect(queued).toEqual(["payload"]);
   });
 });
 

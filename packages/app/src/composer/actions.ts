@@ -21,6 +21,7 @@ import {
   type ComposerAttachmentSubmitFormat,
 } from "@/composer/attachments/submit";
 import { toQueuedComposerAttachments } from "@/composer/queue-sync";
+import { serializeQueueOperation } from "@/stores/queue-outbox-store/model";
 import { createUserMessage, generateMessageId, type UserMessageItem } from "@/types/stream";
 import type { MessageSubmissionRejectionOutcome } from "@/composer/submission/model";
 import type { PickedImageAttachmentInput } from "@/hooks/image-attachment-picker";
@@ -504,8 +505,11 @@ export interface ComposerQueueClient {
 /**
  * Durable copy of an enqueue until the daemon acknowledges it. Backed by the
  * queue outbox store; actions only see this narrow writer so they stay pure.
+ * `add` resolves only once the entry is persisted; `flush` pushes un-acked
+ * entries to the daemon.
  */
 export interface QueueOutboxWriter {
+  serverId?: string;
   add: (entry: {
     agentId: string;
     itemId: string;
@@ -514,8 +518,9 @@ export interface QueueOutboxWriter {
     images: Array<{ data: string; mimeType: string }>;
     attachments: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
     composerAttachments: QueuedComposerAttachment[];
-  }) => void;
-  remove: (itemId: string) => void;
+  }) => void | Promise<void>;
+  remove: (itemId: string) => void | Promise<void>;
+  flush?: () => Promise<void>;
 }
 
 export interface QueueComposerMessageOnServerInput {
@@ -550,6 +555,57 @@ export interface QueueComposerMessageOnServerInput {
 export async function queueComposerMessageOnServer(
   input: QueueComposerMessageOnServerInput,
 ): Promise<QueueComposerMessageResult & { error?: string }> {
+  if (input.outbox?.flush && input.outbox.serverId) {
+    // Durable path: the full wire payload is persisted before this resolves,
+    // and no optimistic row is written — the row renders from the outbox
+    // overlay until a snapshot acks the item, so there is exactly one
+    // canonical row per admitted message.
+    const outbox = input.outbox;
+    const flush = input.outbox.flush;
+    const serverId = outbox.serverId;
+    if (!serverId || !flush) {
+      return { queued: null, error: i18n.t("composer.errors.queuedPersistFailed") };
+    }
+    return serializeQueueOperation(
+      JSON.stringify(["prepare", serverId, input.agentId]),
+      async () => {
+        const text = input.text.trim();
+        if (!text && input.attachments.length === 0) return { queued: null };
+        const queued = { id: generateMessageId(), text, attachments: input.attachments };
+        try {
+          const wirePayload = splitComposerAttachmentsForSubmit(input.attachments, {
+            format: input.attachmentSubmitFormat,
+          });
+          const images = await input.encodeImages(wirePayload.images);
+          if (wirePayload.images.length > 0 && images?.length !== wirePayload.images.length) {
+            throw new Error(i18n.t("composer.errors.queuedPersistFailed"));
+          }
+          await outbox.add({
+            agentId: input.agentId,
+            itemId: queued.id,
+            text,
+            intent: "queue",
+            images: images ?? [],
+            attachments: wirePayload.attachments,
+            composerAttachments: toQueuedComposerAttachments(input.attachments),
+          });
+        } catch (error) {
+          return {
+            queued: null,
+            error:
+              error instanceof Error
+                ? error.message
+                : i18n.t("composer.errors.queuedPersistFailed"),
+          };
+        }
+        void flush().catch((flushError) => {
+          console.error("[queue-outbox] flush failed:", flushError);
+        });
+        return { queued };
+      },
+    );
+  }
+
   const optimistic = queueComposerMessage({
     agentId: input.agentId,
     text: input.text,
@@ -592,10 +648,14 @@ export async function queueComposerMessageOnServer(
     attachments: wirePayload.attachments,
     composerAttachments: toQueuedComposerAttachments(input.attachments),
   };
-  input.outbox?.add(enqueueInput);
+  try {
+    await input.outbox?.add(enqueueInput);
+  } catch (error) {
+    return rollBack(error);
+  }
   try {
     const snapshot = await input.client.enqueueAgentMessage(enqueueInput);
-    input.outbox?.remove(enqueueInput.itemId);
+    await input.outbox?.remove(enqueueInput.itemId);
     input.applySnapshot(snapshot);
     return optimistic;
   } catch (error) {
@@ -606,6 +666,76 @@ export async function queueComposerMessageOnServer(
     }
     return rollBack(error);
   }
+}
+
+export interface QueueSubmitClearingDecision {
+  clearText: boolean;
+  clearAttachments: boolean;
+}
+
+/**
+ * The liveness decision for clearing after a queue admission: input the user
+ * has already replaced during the await survives; input that still matches
+ * what was submitted is cleared.
+ */
+export function resolveQueueSubmitClearing(input: {
+  liveText: string;
+  submittedText: string;
+  liveAttachments: readonly unknown[];
+  submittedAttachments: readonly unknown[];
+}): QueueSubmitClearingDecision {
+  return {
+    clearText: input.liveText === input.submittedText,
+    clearAttachments: input.liveAttachments === input.submittedAttachments,
+  };
+}
+
+/**
+ * The clearing owner for queue admissions. Runs the submit, then clears only
+ * after the queue resolved and only input the user has not replaced. Errors
+ * are normalized and rethrown — surfacing belongs to the entry point that
+ * invoked the queue path (submit, the queue button, or dictation), exactly
+ * once per path.
+ */
+export interface QueuedSubmissionOwner {
+  submittedText: string;
+  submittedAttachments: readonly ComposerAttachment[];
+  getLiveText: () => string;
+  getLiveAttachments: () => readonly ComposerAttachment[];
+  clearText: () => void;
+  clearAttachments: () => void;
+  resetSuppression?: () => void;
+  clearSentAttachments?: (attachments: readonly ComposerAttachment[]) => void;
+}
+
+export async function runQueuedSubmission(
+  owner: QueuedSubmissionOwner,
+  submit: () => Promise<QueueComposerMessageResult & { error?: string }>,
+): Promise<void> {
+  let result: QueueComposerMessageResult & { error?: string };
+  try {
+    result = await submit();
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(i18n.t("composer.errors.queuedPersistFailed"));
+  }
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  if (!result.queued) return;
+  const decision = resolveQueueSubmitClearing({
+    liveText: owner.getLiveText(),
+    submittedText: owner.submittedText,
+    liveAttachments: owner.getLiveAttachments(),
+    submittedAttachments: owner.submittedAttachments,
+  });
+  if (decision.clearText) {
+    owner.clearText();
+    owner.resetSuppression?.();
+  }
+  if (decision.clearAttachments) {
+    owner.clearAttachments();
+  }
+  owner.clearSentAttachments?.(owner.submittedAttachments);
 }
 
 export function removeQueuedComposerMessageLocally(input: {

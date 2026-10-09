@@ -191,6 +191,7 @@ export const ru: TranslationResources = {
       dropImagesHere: "Скиньте изображения сюда",
       dropFilesHere: "Переместите файлы сюда",
       editQueuedMessage: "Изменить сообщение из очереди",
+      queueWaitingToSync: "Ожидание синхронизации с хостом",
       sendQueuedMessageNow: "Отправить сообщение из очереди сейчас",
       openImage: "Открыть прикрепленное изображение",
       removeImage: "Удалить прикрепленное изображение",
@@ -205,6 +206,8 @@ export const ru: TranslationResources = {
     },
     errors: {
       failedToSend: "Не удалось отправить сообщение",
+      queuedPersistFailed: "Не удалось сохранить сообщение в очереди на этом устройстве.",
+      queueSubmissionInFlight: "Это сообщение из очереди всё ещё сохраняется.",
       failedToCreateAgent: "Не удалось создать агента.",
       noHostSelected: "Хост не выбран",
       initialPromptRequired: "Необходим инициализирующий промпт",

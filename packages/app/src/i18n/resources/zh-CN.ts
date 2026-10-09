@@ -190,6 +190,7 @@ export const zhCN: TranslationResources = {
       dropImagesHere: "将图片拖放到这里",
       dropFilesHere: "Drop files here",
       editQueuedMessage: "编辑排队消息",
+      queueWaitingToSync: "正在等待与主机同步",
       sendQueuedMessageNow: "立即发送排队消息",
       openImage: "打开图片附件",
       removeImage: "移除图片附件",
@@ -204,6 +205,8 @@ export const zhCN: TranslationResources = {
     },
     errors: {
       failedToSend: "发送消息失败",
+      queuedPersistFailed: "无法在此设备上保存排队消息。",
+      queueSubmissionInFlight: "这条排队消息仍在保存中。",
       failedToCreateAgent: "创建 Agent 失败",
       noHostSelected: "未选择 Host",
       initialPromptRequired: "初始 prompt 必填",

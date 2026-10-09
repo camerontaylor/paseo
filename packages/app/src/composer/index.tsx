@@ -81,10 +81,12 @@ import {
   pickAndPersistImages,
   queueComposerMessage,
   queueComposerMessageOnServer,
+  resolveQueueSubmitClearing,
   removeComposerAttachmentAtIndex,
   removeQueuedComposerMessageLocally,
   reorderQueuedComposerMessages,
   retryQueuedComposerMessage,
+  runQueuedSubmission,
   sendQueuedComposerMessageNow,
   takeQueuedComposerMessage,
   toggleForgeAttachmentFromPicker,
@@ -95,8 +97,16 @@ import {
   type QueuedComposerMessage,
   type QueuedMutationResult,
 } from "@/composer/actions";
-import { toComposerAttachments } from "@/composer/queue-sync";
-import { retryFailedOutboxEntry, useQueueOutboxStore } from "@/stores/queue-outbox-store";
+import {
+  annotateQueueRows,
+  getPendingQueueMessageIds,
+  resolveQueueStorageErrorRow,
+} from "@/composer/queue-sync";
+import {
+  flushQueueOutboxForServer,
+  retryFailedOutboxEntry,
+  useQueueOutboxStore,
+} from "@/stores/queue-outbox-store";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
   DropdownMenu,
@@ -398,6 +408,16 @@ interface RenderQueueTrackArgs {
   handleSendQueuedNow: (id: string) => Promise<void>;
   editLabel: string;
   sendNowLabel: string;
+  pendingMessageIds: ReadonlySet<string>;
+  pendingLabel: string;
+  storageError: {
+    message: string;
+    entryText: string | null;
+    retryLabel: string;
+    dismissLabel: string;
+  } | null;
+  onRetryStorageError: () => void;
+  onDismissStorageError: () => void;
   /** Durable-queue controls; absent on old hosts, whose rows stay exactly as before. */
   durable?: {
     onDelete: (id: string) => void;
@@ -418,11 +438,45 @@ function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
     handleSendQueuedNow,
     editLabel,
     sendNowLabel,
+    pendingMessageIds,
+    pendingLabel,
+    storageError,
+    onRetryStorageError,
+    onDismissStorageError,
     durable,
   } = args;
-  if (queuedMessages.length === 0) return null;
+  if (queuedMessages.length === 0 && !storageError) return null;
   return (
     <View style={styles.queueTrack}>
+      {storageError ? (
+        <View style={styles.queueItem} testID="queue-storage-error">
+          <View style={styles.queueItemContent}>
+            <Text style={styles.queueErrorText} numberOfLines={2} ellipsizeMode="tail">
+              {storageError.entryText
+                ? `${storageError.message}: ${storageError.entryText}`
+                : storageError.message}
+            </Text>
+          </View>
+          <View style={styles.queueActions}>
+            <Pressable
+              onPress={onRetryStorageError}
+              style={styles.queueActionButton}
+              accessibilityRole="button"
+              accessibilityLabel={storageError.retryLabel}
+            >
+              <ThemedRotateCcw size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
+            </Pressable>
+            <Pressable
+              onPress={onDismissStorageError}
+              style={styles.queueActionButton}
+              accessibilityRole="button"
+              accessibilityLabel={storageError.dismissLabel}
+            >
+              <ThemedX size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
       {queuedMessages.map((item, index) => (
         <QueuedMessageRow
           key={item.id}
@@ -433,6 +487,8 @@ function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
           sendNowLabel={sendNowLabel}
           isFirst={index === 0}
           isLast={index === queuedMessages.length - 1}
+          isPending={pendingMessageIds.has(item.id)}
+          pendingLabel={pendingLabel}
           durable={durable}
         />
       ))}
@@ -708,6 +764,8 @@ interface QueuedMessageRowProps {
   sendNowLabel: string;
   isFirst: boolean;
   isLast: boolean;
+  isPending: boolean;
+  pendingLabel: string;
   durable?: RenderQueueTrackArgs["durable"];
 }
 
@@ -738,6 +796,8 @@ function QueuedMessageRow({
   sendNowLabel,
   isFirst,
   isLast,
+  isPending,
+  pendingLabel,
   durable,
 }: QueuedMessageRowProps) {
   const handleEdit = useCallback(() => {
@@ -784,6 +844,9 @@ function QueuedMessageRow({
         <Text style={styles.queueText} numberOfLines={2} ellipsizeMode="tail">
           {item.text}
         </Text>
+        {isPending && !needsAttention ? (
+          <Text style={styles.queuePendingText}>{pendingLabel}</Text>
+        ) : null}
         {stateBadge !== null || item.lastError ? (
           <View style={styles.queueItemState}>
             {stateBadge}
@@ -817,7 +880,7 @@ function QueuedMessageRow({
           </>
         ) : (
           <>
-            {!item.deliveryState || item.deliveryState === "pending" ? (
+            {!isPending && (!item.deliveryState || item.deliveryState === "pending") ? (
               <>
                 <Pressable
                   onPress={handleEdit}
@@ -837,7 +900,7 @@ function QueuedMessageRow({
                 </Pressable>
               </>
             ) : null}
-            {durable ? (
+            {!isPending && durable ? (
               <DropdownMenu>
                 <DropdownMenuTrigger
                   accessibilityLabel={durable.labels.menu}
@@ -1157,6 +1220,7 @@ interface ComposerProps {
 }
 
 const EMPTY_ARRAY: readonly QueuedMessage[] = [];
+const EMPTY_SET: ReadonlySet<string> = new Set();
 const StableMessageInput = memo(MessageInput);
 
 interface ComposerAutocompleteHandle {
@@ -1454,6 +1518,24 @@ function ComposerContentImpl({
   const queuedMessagesRaw = useSessionStore((state) =>
     state.sessions[serverId]?.queuedMessages?.get(agentId),
   );
+  // Stored rows are daemon snapshot rows only; the outbox overlay is computed
+  // here, so acknowledging an outbox entry drops its row without another
+  // snapshot. See docs/queue-mirroring.md.
+  const outboxEntries = useQueueOutboxStore((state) => state.entries);
+  const outboxEntriesForAgent = useMemo(
+    () =>
+      Object.values(outboxEntries)
+        .filter((entry) => entry.serverId === serverId && entry.agentId === agentId)
+        .sort((left, right) => left.createdAt - right.createdAt),
+    [outboxEntries, serverId, agentId],
+  );
+  const acceptedQueueMessageIds = useSessionStore((state) =>
+    state.sessions[serverId]?.acceptedQueueMessageIds.get(agentId),
+  );
+  const pendingMessageIds = useMemo(
+    () => getPendingQueueMessageIds(outboxEntriesForAgent, acceptedQueueMessageIds),
+    [outboxEntriesForAgent, acceptedQueueMessageIds],
+  );
   const queuedMessages = queuedMessagesRaw ?? EMPTY_ARRAY;
 
   const setQueuedMessages = useSessionStore((state) => state.setQueuedMessages);
@@ -1503,6 +1585,8 @@ function ComposerContentImpl({
       state.entriesForAgent(serverId, agentId).filter((entry) => entry.failedAt !== undefined),
     ),
   );
+  const outboxStorageError = useQueueOutboxStore((state) => state.storageError);
+  const clearStorageError = useQueueOutboxStore((state) => state.clearStorageError);
   // COMPAT(durableVoiceInputV1): fork feature (TM-04), added on 2026-10-08; keep while stock peers are supported.
   const supportsVoiceConcurrentInput = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.durableVoiceInputV1 === true,
@@ -1794,10 +1878,21 @@ function ComposerContentImpl({
 
   const queueOutbox = useMemo<QueueOutboxWriter>(
     () => ({
+      serverId,
       add: (entry) => useQueueOutboxStore.getState().add({ ...entry, serverId }),
-      remove: (itemId) => useQueueOutboxStore.getState().remove(itemId),
+      remove: (itemId) => useQueueOutboxStore.getState().removeDurably(itemId),
+      ...(client
+        ? {
+            flush: () =>
+              flushQueueOutboxForServer({
+                serverId,
+                client,
+                applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+              }),
+          }
+        : {}),
     }),
-    [serverId],
+    [serverId, client, applyAgentQueueSnapshot],
   );
 
   const refreshQueuedMessages = useCallback(async () => {
@@ -1841,47 +1936,85 @@ function ComposerContentImpl({
     [refreshQueuedMessages, t],
   );
 
+  const latestAttachmentsRef = useRef(attachments);
+  latestAttachmentsRef.current = attachments;
+  const queueSubmissionInFlight = useRef(new Set<string>());
   const queueMessage = useCallback(
-    (queuedMessage: string, queuedAttachments: ComposerAttachment[]) => {
-      const clearComposer = () => {
-        setUserInput("");
-        setSelectedAttachments([]);
-        resetSuppression();
-        clearSentAttachments(queuedAttachments);
-      };
-
-      if (supportsDurableQueue && client) {
-        void (async () => {
-          const result = await queueComposerMessageOnServer({
-            client,
-            agentId,
-            text: queuedMessage,
-            attachments: queuedAttachments,
-            attachmentSubmitFormat: resolveComposerAttachmentSubmitFormat({
-              supportsForgeAttachments: supportsForgeSearch,
-            }),
-            encodeImages,
-            queue: queueWriter,
-            applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
-            outbox: queueOutbox,
-          });
-          if (result.error) {
-            setSendError(result.error);
-          }
-        })();
-        clearComposer();
-        return;
+    async (queuedMessage: string, queuedAttachments: ComposerAttachment[]) => {
+      const submissionKey = JSON.stringify([queuedMessage.trim(), queuedAttachments]);
+      if (queueSubmissionInFlight.current.has(submissionKey)) {
+        // The entry point surfaces this; queueMessage stays a pure submit.
+        throw new Error(t("composer.errors.queueSubmissionInFlight"));
       }
+      queueSubmissionInFlight.current.add(submissionKey);
+      const submittedText = queuedMessage;
+      const submittedAttachments = queuedAttachments;
+      try {
+        if (supportsDurableQueue && client) {
+          // Clearing follows durable acceptance; input the user replaced
+          // during the await survives. Errors propagate to the entry point —
+          // submit or the direct queue press — which surfaces them once.
+          await runQueuedSubmission(
+            {
+              submittedText,
+              submittedAttachments,
+              getLiveText: () => messageInputRef.current?.getText() ?? submittedText,
+              getLiveAttachments: () => latestAttachmentsRef.current,
+              clearText: () => {
+                messageInputRef.current?.replaceText("");
+                setUserInput("");
+              },
+              clearAttachments: () => {
+                setSelectedAttachments([]);
+                resetSuppression();
+              },
+              resetSuppression,
+              clearSentAttachments,
+            },
+            () =>
+              queueComposerMessageOnServer({
+                client,
+                agentId,
+                text: submittedText,
+                attachments: queuedAttachments,
+                attachmentSubmitFormat: resolveComposerAttachmentSubmitFormat({
+                  supportsForgeAttachments: supportsForgeSearch,
+                }),
+                encodeImages,
+                queue: queueWriter,
+                applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+                outbox: queueOutbox,
+              }),
+          );
+          return;
+        }
 
-      const result = queueComposerMessage({
-        agentId,
-        text: queuedMessage,
-        attachments: queuedAttachments,
-        queue: queueWriter,
-      });
-      if (!result.queued) return;
+        const result = queueComposerMessage({
+          agentId,
+          text: queuedMessage,
+          attachments: queuedAttachments,
+          queue: queueWriter,
+        });
+        if (!result.queued) return;
 
-      clearComposer();
+        const decision = resolveQueueSubmitClearing({
+          liveText: messageInputRef.current?.getText() ?? submittedText,
+          submittedText,
+          liveAttachments: latestAttachmentsRef.current,
+          submittedAttachments,
+        });
+        if (decision.clearText) {
+          messageInputRef.current?.replaceText("");
+          setUserInput("");
+          resetSuppression();
+        }
+        if (decision.clearAttachments) {
+          setSelectedAttachments([]);
+        }
+        clearSentAttachments(queuedAttachments);
+      } finally {
+        queueSubmissionInFlight.current.delete(submissionKey);
+      }
     },
     [
       agentId,
@@ -1896,6 +2029,7 @@ function ComposerContentImpl({
       setUserInput,
       supportsDurableQueue,
       supportsForgeSearch,
+      t,
     ],
   );
 
@@ -1916,9 +2050,8 @@ function ComposerContentImpl({
         // Parent-managed submits are still valid submit paths even when the
         // transport is disconnected, because the parent decides the failure mode.
         canSubmit: Boolean(sendAgentMessageRef.current || onSubmitMessageRef.current),
-        queueMessage: ({ message: queuedText, attachments: queuedAttachments }) => {
-          queueMessage(queuedText, queuedAttachments);
-        },
+        queueMessage: ({ message: queuedText, attachments: queuedAttachments }) =>
+          queueMessage(queuedText, queuedAttachments),
         submitMessage: async ({ message: submitText, attachments: submitAttachments }) => {
           if (submitBehavior !== "preserve-and-lock") {
             beginSubmit(submitAttachments);
@@ -2442,7 +2575,7 @@ function ComposerContentImpl({
   );
 
   const handleQueue = useCallback(
-    (payload: MessagePayload) => {
+    async (payload: MessagePayload) => {
       const outgoingAttachments = buildOutgoingAttachments(attachments);
       const clientSlashCommand = resolveClientSlashCommand({
         text: payload.text,
@@ -2457,7 +2590,9 @@ function ComposerContentImpl({
         commands: pluginClientSlashCommands,
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
-      queueMessage(payload.text, outgoingAttachments);
+      // Errors propagate to the invoking path (queue button or dictation),
+      // which surfaces them once.
+      await queueMessage(payload.text, outgoingAttachments);
     },
     [
       attachments,
@@ -2803,31 +2938,53 @@ function ComposerContentImpl({
     ],
   );
 
-  // Failed outbox entries annotate their optimistic rows (and append rows this
-  // device lost, e.g. after a restart) so an enqueue that exhausted its retries
-  // stays visible with explicit retry/discard instead of dropping.
+  // The single reconciliation point for the queue track: failed outbox entries
+  // annotate their rows (and append rows this device lost, e.g. after a
+  // restart), and un-acked entries are overlaid so an enqueue the daemon has
+  // not acknowledged stays visible without living in session state.
   const queueRows = useMemo(() => {
-    if (!supportsDurableQueue || failedOutboxEntries.length === 0) {
+    if (!supportsDurableQueue) {
       return queuedMessages;
     }
-    const failedIds = new Set(failedOutboxEntries.map((entry) => entry.itemId));
-    const annotated = queuedMessages.map(
-      (row): QueuedMessage =>
-        failedIds.has(row.id) && row.syncState !== "failed" ? { ...row, syncState: "failed" } : row,
-    );
-    const present = new Set(annotated.map((row) => row.id));
-    const missing = failedOutboxEntries
-      .filter((entry) => !present.has(entry.itemId))
-      .map(
-        (entry): QueuedMessage => ({
-          id: entry.itemId,
-          text: entry.text,
-          attachments: toComposerAttachments(entry.composerAttachments),
-          syncState: "failed",
-        }),
-      );
-    return missing.length === 0 ? annotated : [...annotated, ...missing];
-  }, [failedOutboxEntries, queuedMessages, supportsDurableQueue]);
+    return annotateQueueRows({ rows: queuedMessages, entries: outboxEntriesForAgent });
+  }, [outboxEntriesForAgent, queuedMessages, supportsDurableQueue]);
+
+  const storageErrorRow = useMemo(
+    () =>
+      supportsDurableQueue
+        ? resolveQueueStorageErrorRow(outboxStorageError, outboxEntriesForAgent)
+        : null,
+    [outboxEntriesForAgent, outboxStorageError, supportsDurableQueue],
+  );
+
+  // Retry re-verifies storage (the flush probes before sending anything) and
+  // re-lists the queue so a failed snapshot acknowledgement is re-attempted.
+  const handleRetryStorageError = useCallback(() => {
+    clearStorageError();
+    if (!(supportsDurableQueue && client)) return;
+    void flushQueueOutboxForServer({
+      serverId,
+      client,
+      applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+    })
+      .catch(() => {
+        // surfaced through the storage-error state; the refresh below re-lists
+      })
+      .finally(() => {
+        void refreshQueuedMessages();
+      });
+  }, [
+    applyAgentQueueSnapshot,
+    clearStorageError,
+    client,
+    refreshQueuedMessages,
+    serverId,
+    supportsDurableQueue,
+  ]);
+
+  const handleDismissStorageError = useCallback(() => {
+    clearStorageError();
+  }, [clearStorageError]);
 
   const queueList = useMemo(() => {
     const durable = supportsDurableQueue
@@ -2855,6 +3012,18 @@ function ComposerContentImpl({
       handleSendQueuedNow,
       editLabel: t("composer.attachments.editQueuedMessage"),
       sendNowLabel: t("composer.attachments.sendQueuedMessageNow"),
+      pendingMessageIds: supportsDurableQueue ? pendingMessageIds : EMPTY_SET,
+      pendingLabel: t("composer.attachments.queueWaitingToSync"),
+      storageError: storageErrorRow
+        ? {
+            message: t(storageErrorRow.messageKey),
+            entryText: storageErrorRow.entryText,
+            retryLabel: t("common.actions.retry"),
+            dismissLabel: t("common.actions.dismiss"),
+          }
+        : null,
+      onRetryStorageError: handleRetryStorageError,
+      onDismissStorageError: handleDismissStorageError,
       durable,
     });
   }, [
@@ -2863,8 +3032,12 @@ function ComposerContentImpl({
     handleEditQueuedMessage,
     handleMoveQueuedMessage,
     handleRetryQueuedMessage,
+    handleRetryStorageError,
+    handleDismissStorageError,
     handleSendQueuedNow,
+    pendingMessageIds,
     queueRows,
+    storageErrorRow,
     supportsDurableQueue,
     t,
   ]);
@@ -3172,6 +3345,10 @@ const styles = StyleSheet.create((theme: Theme) => ({
   queueErrorText: {
     flexShrink: 1,
     color: theme.colors.palette.red[300],
+    fontSize: theme.fontSize.sm,
+  },
+  queuePendingText: {
+    color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
   },
   queueActions: {

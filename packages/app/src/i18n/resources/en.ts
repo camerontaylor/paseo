@@ -186,6 +186,7 @@ export const en = {
       dropImagesHere: "Drop images here",
       dropFilesHere: "Drop files here",
       editQueuedMessage: "Edit queued message",
+      queueWaitingToSync: "Waiting to sync with host",
       sendQueuedMessageNow: "Send queued message now",
       openImage: "Open image attachment",
       removeImage: "Remove image attachment",
@@ -200,6 +201,8 @@ export const en = {
     },
     errors: {
       failedToSend: "Failed to send message",
+      queuedPersistFailed: "Couldn't save the queued message on this device.",
+      queueSubmissionInFlight: "This queued message is still being saved.",
       failedToCreateAgent: "Failed to create agent",
       noHostSelected: "No host selected",
       initialPromptRequired: "Initial prompt is required",

@@ -190,6 +190,7 @@ export const ar: TranslationResources = {
       dropImagesHere: "إسقاط الصور هنا",
       dropFilesHere: "Drop files here",
       editQueuedMessage: "تحرير الرسالة في قائمة الانتظار",
+      queueWaitingToSync: "في انتظار المزامنة مع المضيف",
       sendQueuedMessageNow: "إرسال رسالة في قائمة الانتظار الآن",
       openImage: "فتح مرفق الصورة",
       removeImage: "إزالة مرفق الصورة",
@@ -204,6 +205,8 @@ export const ar: TranslationResources = {
     },
     errors: {
       failedToSend: "فشل في إرسال الرسالة",
+      queuedPersistFailed: "تعذّر حفظ الرسالة في قائمة الانتظار على هذا الجهاز.",
+      queueSubmissionInFlight: "لا يزال حفظ هذه الرسالة في قائمة الانتظار جاريًا.",
       failedToCreateAgent: "فشل في إنشاء الوكيل",
       noHostSelected: "لم يتم تحديد مضيف",
       initialPromptRequired: "مطلوب موجه الأولي",

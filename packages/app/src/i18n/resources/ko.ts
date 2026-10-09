@@ -190,6 +190,7 @@ export const ko: TranslationResources = {
       dropImagesHere: "여기에 이미지를 끌어다 놓으세요",
       dropFilesHere: "여기에 파일을 끌어다 놓으세요",
       editQueuedMessage: "대기 중인 메시지 편집",
+      queueWaitingToSync: "호스트와 동기화 대기 중",
       sendQueuedMessageNow: "대기 중인 메시지 지금 보내기",
       openImage: "이미지 첨부 열기",
       removeImage: "이미지 첨부 제거",
@@ -204,6 +205,8 @@ export const ko: TranslationResources = {
     },
     errors: {
       failedToSend: "메시지를 보내지 못했습니다",
+      queuedPersistFailed: "대기 중인 메시지를 이 기기에 저장하지 못했습니다.",
+      queueSubmissionInFlight: "이 대기 메시지는 아직 저장 중입니다.",
       failedToCreateAgent: "에이전트를 생성하지 못했습니다",
       noHostSelected: "선택된 호스트가 없습니다",
       initialPromptRequired: "초기 프롬프트가 필요합니다",

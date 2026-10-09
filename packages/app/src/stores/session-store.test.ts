@@ -17,7 +17,7 @@ vi.mock("@react-native-async-storage/async-storage", () => {
 
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { AgentQueueSnapshot, WorkspaceDescriptorPayload } from "@getpaseo/protocol/messages";
-import { useQueueOutboxStore } from "./queue-outbox-store";
+import { outboxPersistedStorage, useQueueOutboxStore } from "./queue-outbox-store";
 
 import {
   normalizeWorkspaceDescriptor,
@@ -838,8 +838,8 @@ describe("durable agent queue snapshots", () => {
     };
   }
 
-  function seedOutboxEntry(itemId: string): void {
-    useQueueOutboxStore.getState().add({
+  async function seedOutboxEntry(itemId: string): Promise<void> {
+    await useQueueOutboxStore.getState().add({
       serverId: "test-server",
       agentId,
       itemId,
@@ -863,10 +863,10 @@ describe("durable agent queue snapshots", () => {
     }
   });
 
-  it("applies a snapshot as queue rows and records the revision", () => {
+  it("applies a snapshot as queue rows and records the revision", async () => {
     initializeTestSession();
 
-    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+    await useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
 
     const session = useSessionStore.getState().sessions["test-server"];
     expect(session?.queuedMessageRevisions.get(agentId)).toBe(1);
@@ -881,38 +881,43 @@ describe("durable agent queue snapshots", () => {
     ]);
   });
 
-  it("re-appends an un-acked outbox row a snapshot would erase", () => {
+  it("stores snapshot rows only; the un-acked outbox row stays in the outbox store", async () => {
     initializeTestSession();
-    seedOutboxEntry("pending-1");
+    await seedOutboxEntry("pending-1");
 
-    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+    await useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
 
+    // The composer overlays the outbox at render time, so stored rows stay
+    // snapshot-only: acknowledging or discarding the entry removes its row
+    // without needing another snapshot.
     const rows = useSessionStore.getState().sessions["test-server"]?.queuedMessages.get(agentId);
-    expect(rows?.map((row) => [row.id, row.syncState])).toEqual([
-      ["item-1", undefined],
-      ["pending-1", "pending"],
-    ]);
+    expect(rows?.map((row) => row.id)).toEqual(["item-1"]);
+    expect(useQueueOutboxStore.getState().entries["pending-1"]?.itemId).toBe("pending-1");
+    expect(
+      useSessionStore.getState().sessions["test-server"]?.acceptedQueueMessageIds.get(agentId),
+    ).toEqual(new Set(["item-1"]));
   });
 
-  it("marks a re-appended row failed when its entry exhausted the retries", () => {
+  it("keeps a parked outbox entry out of stored rows and out of the accepted set", async () => {
     initializeTestSession();
-    seedOutboxEntry("pending-1");
+    await seedOutboxEntry("pending-1");
     useQueueOutboxStore.getState().bumpAttempts("pending-1");
     useQueueOutboxStore.getState().markFailed("pending-1");
 
-    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+    await useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
 
     const rows = useSessionStore.getState().sessions["test-server"]?.queuedMessages.get(agentId);
-    expect(rows?.at(-1)).toMatchObject({ id: "pending-1", syncState: "failed" });
+    expect(rows?.map((row) => row.id)).toEqual(["item-1"]);
+    expect(useQueueOutboxStore.getState().entries["pending-1"]?.failedAt).toBeDefined();
   });
 
-  it("drops a snapshot that is older than the applied revision", () => {
+  it("drops a snapshot that is older than the applied revision", async () => {
     initializeTestSession();
 
-    useSessionStore
+    await useSessionStore
       .getState()
       .applyAgentQueueSnapshot("test-server", queueSnapshot({ revision: 4 }));
-    useSessionStore
+    await useSessionStore
       .getState()
       .applyAgentQueueSnapshot("test-server", queueSnapshot({ revision: 3 }));
 
@@ -921,10 +926,10 @@ describe("durable agent queue snapshots", () => {
     expect(session?.queuedMessages.get(agentId)?.[0]?.id).toBe("item-1");
   });
 
-  it("never creates a submitted timeline row: snapshots only touch the queue", () => {
+  it("never creates a submitted timeline row: snapshots only touch the queue", async () => {
     initializeTestSession();
 
-    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+    await useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
 
     const timeline = selectAgentTimelineState(
       useSessionStore.getState().sessions["test-server"],
@@ -936,10 +941,228 @@ describe("durable agent queue snapshots", () => {
     ).toBeUndefined();
   });
 
-  it("is a no-op without a session, leaving local queues to their own meaning", () => {
-    useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
+  it("is a no-op without a session, leaving local queues to their own meaning", async () => {
+    await useSessionStore.getState().applyAgentQueueSnapshot("test-server", queueSnapshot());
 
     expect(useSessionStore.getState().sessions["test-server"]).toBeUndefined();
     expect(Object.keys(useQueueOutboxStore.getState().entries).length).toBe(0);
+  });
+});
+
+// The storage stub is the outbox store's live backing store in this suite; the
+// acknowledgement-failure tests patch it for the duration of one apply.
+
+/**
+ * Patches the outbox store's own persist storage — whichever backing module the
+ * graph resolved — so failure/hang injection is graph-independent.
+ */
+function patchOutboxPersistStorage(
+  wrapped: (name: string, value: unknown) => Promise<void>,
+): () => void {
+  const original = outboxPersistedStorage.setItem.bind(outboxPersistedStorage);
+  outboxPersistedStorage.setItem = (name, value) => wrapped(name, value);
+  return () => {
+    outboxPersistedStorage.setItem = original;
+  };
+}
+
+function outboxWriteThrough(): (name: string, value: unknown) => Promise<void> {
+  return (name, value) =>
+    Promise.resolve(outboxPersistedStorage.setItem(name, value as never)).then(() => undefined);
+}
+
+describe("durable agent queue snapshot concurrency", () => {
+  const agentId = "agent-1";
+
+  function queueSnapshotRevision(revision: number, itemId: string): AgentQueueSnapshot {
+    return {
+      agentId,
+      revision,
+      items: [
+        {
+          id: itemId,
+          text: `text for ${itemId}`,
+          intent: "queue",
+          deliveryState: "pending",
+          attempts: 0,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    };
+  }
+
+  it("re-applies an equal-revision snapshot to reconcile against the live outbox", async () => {
+    initializeTestSession();
+    await useQueueOutboxStore.getState().add({
+      serverId: "test-server",
+      agentId,
+      itemId: "pending-1",
+      text: "not acked yet",
+      intent: "queue",
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+    });
+
+    await useSessionStore
+      .getState()
+      .applyAgentQueueSnapshot("test-server", queueSnapshotRevision(1, "item-1"));
+
+    // Simulate drift (a raced broadcast), then prove the equal revision still
+    // re-applies: the accepted set is recomputed from the snapshot.
+    const session = useSessionStore.getState().sessions["test-server"];
+    useSessionStore.setState((prev) => ({
+      sessions: {
+        ...prev.sessions,
+        "test-server": {
+          ...prev.sessions["test-server"],
+          acceptedQueueMessageIds: new Map([[agentId, new Set<string>()]]),
+        },
+      },
+    }));
+
+    await useSessionStore
+      .getState()
+      .applyAgentQueueSnapshot("test-server", queueSnapshotRevision(1, "item-1"));
+
+    expect(
+      useSessionStore.getState().sessions["test-server"]?.acceptedQueueMessageIds.get(agentId),
+    ).toEqual(new Set(["item-1"]));
+    expect(
+      useSessionStore.getState().sessions["test-server"]?.queuedMessageRevisions.get(agentId),
+    ).toBe(1);
+    void session;
+  });
+
+  it("an older snapshot completing after a newer revision does not overwrite rows", async () => {
+    initializeTestSession();
+    await useQueueOutboxStore.getState().add({
+      serverId: "test-server",
+      agentId,
+      itemId: "item-1",
+      text: "acked by the older snapshot",
+      intent: "queue",
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+    });
+
+    let hangEntered = false;
+    const releaseRef: { current: (() => void) | null } = { current: null };
+    const through = outboxWriteThrough();
+    const restoreStorage = patchOutboxPersistStorage((name, value) => {
+      hangEntered = true;
+      return new Promise<void>((resolve) => {
+        releaseRef.current = () => {
+          void through(name, value as never);
+          resolve();
+        };
+      });
+    });
+
+    try {
+      const olderApply = useSessionStore
+        .getState()
+        .applyAgentQueueSnapshot("test-server", queueSnapshotRevision(3, "item-1"));
+      await vi.waitFor(() => expect(hangEntered).toBe(true));
+
+      await useSessionStore
+        .getState()
+        .applyAgentQueueSnapshot("test-server", queueSnapshotRevision(5, "newer"));
+
+      releaseRef.current?.();
+      await olderApply;
+
+      const session = useSessionStore.getState().sessions["test-server"];
+      expect(session?.queuedMessageRevisions.get(agentId)).toBe(5);
+      expect(session?.queuedMessages.get(agentId)?.map((row) => row.id)).toEqual(["newer"]);
+    } finally {
+      releaseRef.current?.();
+      restoreStorage();
+      useQueueOutboxStore.getState().clearStorageError();
+    }
+  });
+
+  it("a failed acknowledgement skips the apply per item and reports the storage error", async () => {
+    initializeTestSession();
+    await useSessionStore
+      .getState()
+      .applyAgentQueueSnapshot("test-server", queueSnapshotRevision(1, "item-1"));
+
+    await useQueueOutboxStore.getState().add({
+      serverId: "test-server",
+      agentId,
+      itemId: "acked-1",
+      text: "first acked",
+      intent: "queue",
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+    });
+    await useQueueOutboxStore.getState().add({
+      serverId: "test-server",
+      agentId,
+      itemId: "acked-2",
+      text: "second acked",
+      intent: "queue",
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+    });
+
+    let failuresLeft = 1;
+    const through = outboxWriteThrough();
+    const restoreStorage = patchOutboxPersistStorage((name, value) => {
+      if (failuresLeft > 0) {
+        failuresLeft -= 1;
+        return Promise.reject(new Error("Simulated storage failure"));
+      }
+      return through(name, value as never);
+    });
+
+    try {
+      await useSessionStore.getState().applyAgentQueueSnapshot("test-server", {
+        agentId,
+        revision: 2,
+        items: [
+          {
+            id: "acked-1",
+            text: "first acked",
+            intent: "queue",
+            deliveryState: "pending",
+            attempts: 0,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "acked-2",
+            text: "second acked",
+            intent: "queue",
+            deliveryState: "pending",
+            attempts: 0,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      });
+
+      // Apply skipped: nothing newer stored...
+      const session = useSessionStore.getState().sessions["test-server"];
+      expect(session?.queuedMessageRevisions.get(agentId)).toBe(1);
+
+      // ...but the removals are per-item durable: acked-1's write failed (its
+      // entry was restored), acked-2's succeeded (its entry is gone). The
+      // second removal settles after the rejected Promise.all, so wait it out.
+      await vi.waitFor(() =>
+        expect(useQueueOutboxStore.getState().entries["acked-2"]).toBeUndefined(),
+      );
+      const entries = useQueueOutboxStore.getState().entries;
+      expect(entries["acked-1"]?.itemId).toBe("acked-1");
+      expect(useQueueOutboxStore.getState().storageError).not.toBeNull();
+    } finally {
+      restoreStorage();
+      for (const itemId of ["acked-1", "acked-2"]) {
+        useQueueOutboxStore.getState().remove(itemId);
+      }
+      useQueueOutboxStore.getState().clearStorageError();
+    }
   });
 });

@@ -193,6 +193,7 @@ export const fr: TranslationResources = {
       dropImagesHere: "Déposez des images ici",
       dropFilesHere: "Déposez des fichiers ici",
       editQueuedMessage: "Modifier le message en file d’attente",
+      queueWaitingToSync: "En attente de synchronisation avec l’hôte",
       sendQueuedMessageNow: "Envoyer maintenant le message en file d’attente",
       openImage: "Ouvrir l’image jointe",
       removeImage: "Retirer l’image jointe",
@@ -207,6 +208,9 @@ export const fr: TranslationResources = {
     },
     errors: {
       failedToSend: "Impossible d’envoyer le message",
+      queuedPersistFailed:
+        "Impossible d’enregistrer le message en file d’attente sur cet appareil.",
+      queueSubmissionInFlight: "Ce message en file d’attente est encore en cours d’enregistrement.",
       failedToCreateAgent: "Impossible de créer l’agent",
       noHostSelected: "Aucun hôte sélectionné",
       initialPromptRequired: "Un prompt initial est requis",

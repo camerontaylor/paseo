@@ -28,6 +28,8 @@ import {
   dispatchComposerAgentMessage,
   editQueuedComposerMessage,
   findForgeItemByOption,
+  resolveQueueSubmitClearing,
+  runQueuedSubmission,
   isAttachmentSelectedForForgeItem,
   isQueueRevisionConflictError,
   openComposerAttachment,
@@ -46,6 +48,7 @@ import {
   type ComposerCancelClient,
   type ComposerQueueClient,
   type ComposerSendClient,
+  type QueueComposerMessageResult,
   type QueueWriter,
   type QueuedComposerMessage,
 } from "./actions";
@@ -1208,8 +1211,12 @@ describe("queueComposerMessageOnServer", () => {
       queue,
       applySnapshot: () => {},
       outbox: {
-        add: (entry) => added.push(entry.itemId),
-        remove: (itemId) => removed.push(itemId),
+        add: (entry) => {
+          added.push(entry.itemId);
+        },
+        remove: (itemId) => {
+          removed.push(itemId);
+        },
       },
     });
 
@@ -1236,8 +1243,12 @@ describe("queueComposerMessageOnServer", () => {
       queue,
       applySnapshot: () => {},
       outbox: {
-        add: (entry) => added.push(entry.itemId),
-        remove: (itemId) => removed.push(itemId),
+        add: (entry) => {
+          added.push(entry.itemId);
+        },
+        remove: (itemId) => {
+          removed.push(itemId);
+        },
       },
     });
 
@@ -1587,4 +1598,159 @@ describe("file upload preparation", () => {
       expect(sends).toBe(0);
     },
   );
+});
+
+describe("resolveQueueSubmitClearing", () => {
+  it("clears input the user has not touched during the await", () => {
+    const attachments = [{ kind: "file" as const }];
+    expect(
+      resolveQueueSubmitClearing({
+        liveText: "queued text",
+        submittedText: "queued text",
+        liveAttachments: attachments,
+        submittedAttachments: attachments,
+      }),
+    ).toEqual({ clearText: true, clearAttachments: true });
+  });
+
+  it("survives newer text and newer attachments", () => {
+    expect(
+      resolveQueueSubmitClearing({
+        liveText: "queued text plus the user's next thought",
+        submittedText: "queued text",
+        liveAttachments: [{ kind: "file" as const }],
+        submittedAttachments: [],
+      }),
+    ).toEqual({ clearText: false, clearAttachments: false });
+  });
+});
+
+describe("runQueuedSubmission", () => {
+  const owner = () => {
+    const attachments: ComposerAttachment[] = [];
+    return {
+      submittedText: "queued text",
+      submittedAttachments: attachments,
+      getLiveText: vi.fn(() => "queued text"),
+      getLiveAttachments: vi.fn(() => attachments),
+      clearText: vi.fn(),
+      clearAttachments: vi.fn(),
+    };
+  };
+
+  it("clears only after the queue resolves and only untouched input", async () => {
+    const o = owner();
+    let release: (value: QueueComposerMessageResult) => void = () => {};
+    const submit = () =>
+      new Promise<QueueComposerMessageResult>((resolve) => {
+        release = resolve;
+      });
+
+    const done = runQueuedSubmission(o, submit);
+    expect(o.clearText).not.toHaveBeenCalled();
+    expect(o.clearAttachments).not.toHaveBeenCalled();
+    release({ queued: { id: "id-1", text: "queued text", attachments: [] } });
+    await done;
+
+    expect(o.clearText).toHaveBeenCalledTimes(1);
+    expect(o.clearAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it("survives input the user replaced during the await", async () => {
+    const o = owner();
+    o.getLiveText.mockReturnValue("queued text and more typing");
+    o.getLiveAttachments.mockReturnValue([{ kind: "file" }] as never[]);
+    await runQueuedSubmission(o, async () => ({
+      queued: { id: "id-1", text: "queued text", attachments: [] },
+    }));
+    expect(o.clearText).not.toHaveBeenCalled();
+    expect(o.clearAttachments).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a returned error and never clears", async () => {
+    const o = owner();
+    await expect(
+      runQueuedSubmission(o, async () => ({
+        queued: null,
+        error: "Couldn't save the queued message on this device.",
+      })),
+    ).rejects.toThrow("Couldn't save the queued message on this device.");
+    expect(o.clearText).not.toHaveBeenCalled();
+    expect(o.clearAttachments).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a rejection and never clears", async () => {
+    const o = owner();
+    await expect(
+      runQueuedSubmission(o, async () => {
+        throw new Error("Simulated storage failure");
+      }),
+    ).rejects.toThrow("Simulated storage failure");
+    expect(o.clearText).not.toHaveBeenCalled();
+    expect(o.clearAttachments).not.toHaveBeenCalled();
+  });
+});
+
+describe("queueComposerMessageOnServer flush path", () => {
+  it("persists the outbox entry before resolving queued, then fires flush", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient();
+    const events: string[] = [];
+    const flush = vi.fn(async () => {
+      events.push("flush");
+    });
+
+    const result = await queueComposerMessageOnServer({
+      client,
+      agentId: "agent",
+      text: "durable first",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      queue,
+      applySnapshot: () => {},
+      outbox: {
+        serverId: "server-1",
+        add: async (entry) => {
+          events.push(`persist:${entry.itemId}`);
+        },
+        remove: () => {},
+        flush,
+      },
+    });
+
+    // Persistence precedes the dispatch attempt, and the composer resolves
+    // queued without any optimistic local row.
+    expect(events).toEqual([`persist:${result.queued?.id}`, "flush"]);
+    expect(queue.read("agent")).toEqual([]);
+    expect(flush).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the persistence error and never flushes when the write fails", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient();
+    const flush = vi.fn(async () => {});
+
+    const result = await queueComposerMessageOnServer({
+      client,
+      agentId: "agent",
+      text: "never persisted",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      queue,
+      applySnapshot: () => {},
+      outbox: {
+        serverId: "server-1",
+        add: async () => {
+          throw new Error("Simulated storage failure");
+        },
+        remove: () => {},
+        flush,
+      },
+    });
+
+    expect(result.queued).toBeNull();
+    expect(result.error).toBe("Simulated storage failure");
+    expect(flush).not.toHaveBeenCalled();
+    expect(queue.read("agent")).toEqual([]);
+  });
 });
