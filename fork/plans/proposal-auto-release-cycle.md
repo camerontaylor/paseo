@@ -1,7 +1,8 @@
 # Proposal: run the release cycle automatically on a new upstream release
 
-Status: proposal, 2026-10-02; check cadence changed to twice a day on
-2026-10-08. Nothing here is built.
+Status: implemented, 2026-10-08; original proposal 2026-10-02.
+Setup and recovery: [../release-watch.md](../release-watch.md).
+Initial unattended level: `canary`; the cadence is twice a day.
 
 The cycle itself — who runs which step, the gates, neptune last via a saturn
 worker — is in the fleet runbook, `~/.local/agents/docs/paseo.md`, *The
