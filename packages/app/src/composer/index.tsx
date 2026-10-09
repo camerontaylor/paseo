@@ -1948,7 +1948,12 @@ function ComposerContentImpl({
       }
       queueSubmissionInFlight.current.add(submissionKey);
       const submittedText = queuedMessage;
-      const submittedAttachments = queuedAttachments;
+      // The clearing decision compares what the user can see, not the
+      // outgoing payload: `queuedAttachments` may be a rebuilt array (workspace
+      // attachments) that never equals the live list, and the submitted text
+      // is trimmed while the live input keeps its whitespace.
+      const submittedLiveText = messageInputRef.current?.getText() ?? queuedMessage;
+      const submittedLiveAttachments = latestAttachmentsRef.current;
       try {
         if (supportsDurableQueue && client) {
           // Clearing follows durable acceptance; input the user replaced
@@ -1956,9 +1961,9 @@ function ComposerContentImpl({
           // submit or the direct queue press — which surfaces them once.
           await runQueuedSubmission(
             {
-              submittedText,
-              submittedAttachments,
-              getLiveText: () => messageInputRef.current?.getText() ?? submittedText,
+              submittedText: submittedLiveText,
+              submittedAttachments: submittedLiveAttachments,
+              getLiveText: () => messageInputRef.current?.getText() ?? submittedLiveText,
               getLiveAttachments: () => latestAttachmentsRef.current,
               clearText: () => {
                 messageInputRef.current?.replaceText("");
@@ -1998,10 +2003,10 @@ function ComposerContentImpl({
         if (!result.queued) return;
 
         const decision = resolveQueueSubmitClearing({
-          liveText: messageInputRef.current?.getText() ?? submittedText,
-          submittedText,
+          liveText: messageInputRef.current?.getText() ?? submittedLiveText,
+          submittedText: submittedLiveText,
           liveAttachments: latestAttachmentsRef.current,
-          submittedAttachments,
+          submittedAttachments: submittedLiveAttachments,
         });
         if (decision.clearText) {
           messageInputRef.current?.replaceText("");
@@ -2514,12 +2519,17 @@ function ComposerContentImpl({
     (id: string) => {
       if (failedOutboxEntries.some((entry) => entry.itemId === id)) {
         // The daemon never accepted this enqueue: retry re-sends the original
-        // payload rather than mutating a durable item.
+        // payload rather than mutating a durable item. A failure (the reset
+        // write did not persist, so the park fence holds) surfaces here.
         if (!client) return;
-        void retryFailedOutboxEntry({
+        retryFailedOutboxEntry({
           itemId: id,
           client,
           applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+        }).catch((error) => {
+          setSendError(
+            error instanceof Error ? error.message : t("composer.errors.queuedPersistFailed"),
+          );
         });
         return;
       }
@@ -2545,6 +2555,7 @@ function ComposerContentImpl({
       handleQueuedMutationResult,
       serverId,
       supportsDurableQueue,
+      t,
     ],
   );
 
@@ -2560,7 +2571,16 @@ function ComposerContentImpl({
             destructive: true,
           });
           if (!confirmed) return;
-          useQueueOutboxStore.getState().remove(id);
+          try {
+            // The discard must be durable: a failed write keeps the row
+            // visible instead of letting a restart resurrect it silently.
+            await useQueueOutboxStore.getState().removeDurably(id);
+          } catch (error) {
+            setSendError(
+              error instanceof Error ? error.message : t("composer.errors.queuedPersistFailed"),
+            );
+            return;
+          }
           removeQueuedComposerMessageLocally({
             agentId,
             messageId: id,
@@ -3174,6 +3194,7 @@ function ComposerContentImpl({
                   onCancelAgent={handleCancelAgent}
                   defaultSendBehavior={activeSendBehavior}
                   onQueue={handleQueue}
+                  onQueueError={setSendError}
                   onSubmitLoadingPress={submitLoadingPressHandler}
                   onKeyPress={handleCommandKeyPress}
                   onSelectionChange={handleSelectionChange}

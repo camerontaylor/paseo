@@ -20,7 +20,3 @@ The reservation is the fork-side mechanism that keeps that cap exact under stora
 Conservative cost: a crash between reservation and send burns the reserved attempt, so an entry can
 park one attempt early. Explicit retry remains available. Over-counting is safe; under-counting would
 be an unbounded retry.
-
-Also fork-side: `getPendingQueueMessageIds` treats `removalRequested` (C1 s2) entries as pending, and
-snapshot acknowledgement skips entries with a pending removal intent — the daemon still listing the
-item does not cancel a cancellation.

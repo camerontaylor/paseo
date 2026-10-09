@@ -1754,3 +1754,47 @@ describe("queueComposerMessageOnServer flush path", () => {
     expect(queue.read("agent")).toEqual([]);
   });
 });
+
+describe("queue submission clearing contracts", () => {
+  it("compares raw live text: a trimmed payload alone must not block clearing", () => {
+    // The composer captures the raw input text as the baseline; the submitted
+    // payload is trimmed, so these strings differ while the input is untouched.
+    const attachments: ComposerAttachment[] = [];
+    expect(
+      resolveQueueSubmitClearing({
+        liveText: "  queued  ",
+        submittedText: "  queued  ",
+        liveAttachments: attachments,
+        submittedAttachments: attachments,
+      }),
+    ).toEqual({ clearText: true, clearAttachments: true });
+    expect(
+      resolveQueueSubmitClearing({
+        liveText: "  queued  ",
+        submittedText: "queued",
+        liveAttachments: attachments,
+        submittedAttachments: attachments,
+      }),
+    ).toEqual({ clearText: false, clearAttachments: true });
+  });
+
+  it("clears unchanged attachments even though the outgoing payload was a rebuilt array", async () => {
+    const attachments: ComposerAttachment[] = [];
+    const o = {
+      submittedText: "queued text",
+      submittedAttachments: attachments,
+      getLiveText: vi.fn(() => "queued text"),
+      getLiveAttachments: vi.fn(() => attachments),
+      clearText: vi.fn(),
+      clearAttachments: vi.fn(),
+    };
+    // buildOutgoingAttachments (workspace context) hands the submit a rebuilt
+    // array; the clearing decision must key on the captured live identity.
+    const outgoingPayload: ComposerAttachment[] = [{ kind: "file" } as ComposerAttachment];
+    await runQueuedSubmission(o, async () => {
+      if (outgoingPayload.length === 0) return { queued: null };
+      return { queued: { id: "id-1", text: "queued text", attachments: [] } };
+    });
+    expect(o.clearAttachments).toHaveBeenCalledTimes(1);
+  });
+});

@@ -956,19 +956,21 @@ describe("durable agent queue snapshots", () => {
  * Patches the outbox store's own persist storage — whichever backing module the
  * graph resolved — so failure/hang injection is graph-independent.
  */
-function patchOutboxPersistStorage(
-  wrapped: (name: string, value: unknown) => Promise<void>,
-): () => void {
+function patchOutboxPersistStorage(wrapped: (name: string, value: unknown) => Promise<void>): {
+  restore: () => void;
+  writeThrough: (name: string, value: unknown) => Promise<void>;
+} {
+  // Capture the original BEFORE patching: a write-through bound afterwards
+  // would call the wrapper itself and never reach real persistence.
   const original = outboxPersistedStorage.setItem.bind(outboxPersistedStorage);
   outboxPersistedStorage.setItem = (name, value) => wrapped(name, value);
-  return () => {
-    outboxPersistedStorage.setItem = original;
+  return {
+    restore: () => {
+      outboxPersistedStorage.setItem = original;
+    },
+    writeThrough: (name: string, value: unknown): Promise<void> =>
+      Promise.resolve(original(name, value as never)).then(() => undefined),
   };
-}
-
-function outboxWriteThrough(): (name: string, value: unknown) => Promise<void> {
-  return (name, value) =>
-    Promise.resolve(outboxPersistedStorage.setItem(name, value as never)).then(() => undefined);
 }
 
 describe("durable agent queue snapshot concurrency", () => {
@@ -1049,12 +1051,11 @@ describe("durable agent queue snapshot concurrency", () => {
 
     let hangEntered = false;
     const releaseRef: { current: (() => void) | null } = { current: null };
-    const through = outboxWriteThrough();
-    const restoreStorage = patchOutboxPersistStorage((name, value) => {
+    const { restore: restoreStorage, writeThrough } = patchOutboxPersistStorage((name, value) => {
       hangEntered = true;
       return new Promise<void>((resolve) => {
         releaseRef.current = () => {
-          void through(name, value as never);
+          void writeThrough(name, value);
           resolve();
         };
       });
@@ -1111,13 +1112,12 @@ describe("durable agent queue snapshot concurrency", () => {
     });
 
     let failuresLeft = 1;
-    const through = outboxWriteThrough();
-    const restoreStorage = patchOutboxPersistStorage((name, value) => {
+    const { restore: restoreStorage, writeThrough } = patchOutboxPersistStorage((name, value) => {
       if (failuresLeft > 0) {
         failuresLeft -= 1;
         return Promise.reject(new Error("Simulated storage failure"));
       }
-      return through(name, value as never);
+      return writeThrough(name, value);
     });
 
     try {
@@ -1145,18 +1145,42 @@ describe("durable agent queue snapshot concurrency", () => {
       });
 
       // Apply skipped: nothing newer stored...
-      const session = useSessionStore.getState().sessions["test-server"];
-      expect(session?.queuedMessageRevisions.get(agentId)).toBe(1);
-
       // ...but the removals are per-item durable: acked-1's write failed (its
       // entry was restored), acked-2's succeeded (its entry is gone). The
       // second removal settles after the rejected Promise.all, so wait it out.
       await vi.waitFor(() =>
         expect(useQueueOutboxStore.getState().entries["acked-2"]).toBeUndefined(),
       );
+      const session = useSessionStore.getState().sessions["test-server"];
+      expect(session?.queuedMessageRevisions.get(agentId)).toBe(1);
+      expect(session?.queuedMessages.get(agentId)?.map((row) => row.id)).toEqual(["item-1"]);
+      expect(session?.acceptedQueueMessageIds.get(agentId)).toEqual(new Set(["item-1"]));
       const entries = useQueueOutboxStore.getState().entries;
       expect(entries["acked-1"]?.itemId).toBe("acked-1");
       expect(useQueueOutboxStore.getState().storageError).not.toBeNull();
+
+      // Reload state: the surviving entries and the removed one read back the
+      // same from storage.
+      console.log(
+        "[ack2-probe] pre-rehydrate memory:",
+        Object.keys(useQueueOutboxStore.getState().entries),
+      );
+      {
+        const { outboxPersistedStorage: probeStorage } = await import("./queue-outbox-store");
+        const raw = await probeStorage.getItem("paseo-queue-outbox");
+        console.log(
+          "[ack2-probe] storage payload keys:",
+          raw ? Object.keys((raw as { state: { entries: object } }).state.entries) : null,
+        );
+      }
+      await useQueueOutboxStore.persist.rehydrate();
+      console.log(
+        "[ack2-probe] post-rehydrate memory:",
+        Object.keys(useQueueOutboxStore.getState().entries),
+      );
+      const reloaded = useQueueOutboxStore.getState().entries;
+      expect(reloaded["acked-1"]?.itemId).toBe("acked-1");
+      expect(reloaded["acked-2"]).toBeUndefined();
     } finally {
       restoreStorage();
       for (const itemId of ["acked-1", "acked-2"]) {

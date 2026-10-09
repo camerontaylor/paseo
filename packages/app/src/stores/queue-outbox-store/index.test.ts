@@ -69,9 +69,11 @@ async function readPersistedEntries(): Promise<Record<string, PendingQueueEnqueu
  */
 function controlStorage() {
   const original = stub.setItem.bind(stub);
+  const originalGetItem = stub.getItem.bind(stub);
   let failNext = 0;
   let healthyBeforeFail = Number.POSITIVE_INFINITY;
   let hangNext = 0;
+  let failNextGetItem = 0;
   const releaseHooks: Array<() => void> = [];
   const wrapped = (key: string, value: string): Promise<void> => {
     if (hangNext > 0) {
@@ -93,10 +95,21 @@ function controlStorage() {
     healthyBeforeFail -= 1;
     return original(key, value);
   };
+  const wrappedGetItem = (key: string): Promise<string | null> => {
+    if (failNextGetItem > 0) {
+      failNextGetItem -= 1;
+      return Promise.reject(new Error("Simulated read failure"));
+    }
+    return originalGetItem(key);
+  };
   stub.setItem = wrapped as typeof stub.setItem;
+  stub.getItem = wrappedGetItem as typeof stub.getItem;
   return {
     failNextCalls(count: number) {
       failNext = count;
+    },
+    failNextReads(count: number) {
+      failNextGetItem = count;
     },
     /** Passes the next `count` writes, then fails everything until restored. */
     failAfterHealthy(count: number) {
@@ -113,6 +126,7 @@ function controlStorage() {
     },
     restore() {
       stub.setItem = original as typeof stub.setItem;
+      stub.getItem = originalGetItem as typeof stub.getItem;
     },
   };
 }
@@ -150,15 +164,18 @@ function createClient(sends: string[], failItemIds: ReadonlySet<string> = new Se
 }
 
 const pristineSetItem = AsyncStorageStub.setItem.bind(AsyncStorageStub);
+const pristineGetItem = AsyncStorageStub.getItem.bind(AsyncStorageStub);
 
 beforeEach(() => {
   AsyncStorageStub.clear();
+  AsyncStorageStub.getItem = pristineGetItem as typeof AsyncStorageStub.getItem;
 });
 
 afterEach(() => {
   // A test that escaped a rejection skips its own restore; never leak the
   // failing wrapper into later tests.
   stub.setItem = pristineSetItem as typeof stub.setItem;
+  stub.getItem = pristineGetItem as typeof stub.getItem;
 });
 
 describe("queue outbox store durability", () => {
@@ -271,29 +288,52 @@ describe("queue outbox store durability", () => {
 
   test("entriesForServer hides every entry of an agent with a write in flight", async () => {
     const storage = controlStorage();
-    console.log("[t] control ready");
     const { useQueueOutboxStore } = await loadOutbox();
-    console.log("[t] loaded; hydrated:", useQueueOutboxStore.persist.hasHydrated());
     storage.hangNextCalls(1);
-    console.log("[t] hang armed");
     const pending = useQueueOutboxStore.getState().add(entry({ itemId: "item-1" }));
-    console.log("[t] add issued");
-    await new Promise((r) => setTimeout(r, 20));
-    console.log(
-      "[t] mid-flight entries:",
-      Object.keys(useQueueOutboxStore.getState().entries),
-      "listed:",
-      useQueueOutboxStore.getState().entriesForServer("server-1").length,
-    );
 
+    // Wait until the write is actually hung: the agent is excluded from the
+    // listing for as long as its entry is mid-write.
+    await vi.waitFor(() => expect(storage.pendingHooks()).toBe(1));
     expect(useQueueOutboxStore.getState().entriesForServer("server-1")).toEqual([]);
 
     storage.releaseHanging();
-    console.log("[t] released");
     await pending;
-    console.log("[t] add settled");
     const listed = useQueueOutboxStore.getState().entriesForServer("server-1");
     expect(listed.map((item) => item.itemId)).toEqual(["item-1"]);
+  });
+
+  test("entriesForServer excludes a whole agent when a later entry has a write in flight", async () => {
+    const storage = controlStorage();
+    const { useQueueOutboxStore } = await loadOutbox();
+    // Persist one row per agent before the hang: agent-a's older row and
+    // agent-b's row are both eligible until agent-a's newer write lands.
+    await useQueueOutboxStore.getState().add(entry({ itemId: "old-row", createdAt: 1 }));
+    await useQueueOutboxStore
+      .getState()
+      .add(entry({ itemId: "agent-b-row", agentId: "agent-b", createdAt: 3 }));
+    storage.hangNextCalls(1);
+    const pending = useQueueOutboxStore.getState().add(entry({ itemId: "new-row", createdAt: 2 }));
+    await vi.waitFor(() => expect(storage.pendingHooks()).toBe(1));
+
+    // The agent's earlier, already-listed entry is held back with the newer
+    // in-flight one, while the other agent stays eligible.
+    const listed = useQueueOutboxStore
+      .getState()
+      .entriesForServer("server-1")
+      .map((item) => item.itemId);
+    expect(listed).toEqual(["agent-b-row"]);
+
+    storage.releaseHanging();
+    await pending;
+    // The store stamps createdAt at write time: old-row, agent-b-row,
+    // new-row in insertion order.
+    expect(
+      useQueueOutboxStore
+        .getState()
+        .entriesForServer("server-1")
+        .map((item) => item.itemId),
+    ).toEqual(["old-row", "agent-b-row", "new-row"]);
   });
 
   test("flush waits for outbox hydration before listing entries", async () => {
@@ -544,12 +584,17 @@ describe("queue outbox store durability", () => {
     });
     flush.catch(() => {});
 
-    // The reservation is durable before the send resolves (or never does).
+    // Deterministic barrier: the reservation is durable while the send is
+    // still hanging, so the persisted increment preceded the send.
     await vi.waitFor(() => expect(stub.getItem(STORE_KEY)).resolves.toContain('"attempts":7'));
+    expect(sends).toEqual(["item-1"]);
 
-    // Crash: the fresh module drops the in-flight lane and its closures.
+    // Crash: the fresh module graph drops the lane's store. The abandoned
+    // lane's closures are still alive, so its storage access is sunk — it
+    // must not touch restarted state.
     const reloaded = await loadOutbox();
     await reloaded.useQueueOutboxStore.persist.rehydrate();
+    stub.setItem = (() => Promise.resolve()) as typeof stub.setItem;
     releaseSend(snapshotWith("item-1"));
 
     // The recovered process sees the persisted reservation and sends at most
@@ -561,5 +606,34 @@ describe("queue outbox store durability", () => {
       applySnapshot: () => {},
     });
     expect(laterSends).toEqual(["item-1"]);
+  });
+});
+
+describe("queue outbox hydration failures", () => {
+  test("a rejected read rejects waiting operations instead of pending forever", async () => {
+    const storage = controlStorage();
+    // Read #1 fails the automatic hydration at import; read #2 fails the
+    // recovery attempt the gate issues, which is the one with a waiter.
+    storage.failNextReads(2);
+    const { useQueueOutboxStore } = await loadOutbox();
+
+    await expect(useQueueOutboxStore.getState().add(entry({ itemId: "item-1" }))).rejects.toThrow(
+      "Unable to load saved queued messages",
+    );
+    expect(useQueueOutboxStore.getState().storageError).not.toBeNull();
+    storage.restore();
+  });
+
+  test("a failed read recovers once storage heals", async () => {
+    const storage = controlStorage();
+    storage.failNextReads(2);
+    const { useQueueOutboxStore } = await loadOutbox();
+    await expect(useQueueOutboxStore.getState().add(entry({ itemId: "blocked" }))).rejects.toThrow(
+      "Unable to load saved queued messages",
+    );
+    storage.restore();
+
+    await useQueueOutboxStore.getState().add(entry({ itemId: "healed" }));
+    expect(useQueueOutboxStore.getState().entries["healed"]?.itemId).toBe("healed");
   });
 });

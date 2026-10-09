@@ -60,6 +60,18 @@ function sortByCreation(entries: PendingQueueEnqueue[]): PendingQueueEnqueue[] {
 
 const writesInFlight = new Set<string>();
 /**
+ * Waiters held while hydration is in flight. Zustand's persist reports a
+ * failed READ through `onRehydrateStorage` without firing the finish
+ * listeners, so without this list a rejected read would leave every gated
+ * operation pending forever.
+ */
+const hydrationWaiters: Array<(failure: Error) => void> = [];
+let hydrationFailure: Error | undefined;
+function failHydrationWaiters(): void {
+  hydrationFailure = new Error("Unable to load saved queued messages");
+  for (const notify of hydrationWaiters.splice(0)) notify(hydrationFailure);
+}
+/**
  * In-process fence for entries whose park write failed: failedAt stays in
  * memory and the volatile fence keeps them out of every flush listing even
  * though storage never recorded the park. Cleared only when the park or an
@@ -107,18 +119,32 @@ function awaitOutboxHydration(): Promise<void> {
   const persistApi = useQueueOutboxStore.persist;
   if (persistApi.hasHydrated()) return Promise.resolve();
   return new Promise<void>((resolve, reject) => {
+    if (hydrationFailure) {
+      // A failed read is recoverable: re-attempt hydration for this caller.
+      hydrationFailure = undefined;
+      void persistApi.rehydrate();
+    }
     let unsubscribe: () => void = () => {};
+    const waiter = (failure: Error) => {
+      unsubscribe();
+      reject(failure);
+    };
+    hydrationWaiters.push(waiter);
     unsubscribe = persistApi.onFinishHydration(() => {
       unsubscribe();
+      const index = hydrationWaiters.indexOf(waiter);
+      if (index !== -1) hydrationWaiters.splice(index, 1);
       if (persistApi.hasHydrated()) {
         resolve();
       } else {
-        reject(new Error("Unable to load saved queued messages"));
+        reject(hydrationFailure ?? new Error("Unable to load saved queued messages"));
       }
     });
     // Hydration may have completed between the first check and subscribing.
     if (persistApi.hasHydrated()) {
       unsubscribe();
+      const index = hydrationWaiters.indexOf(waiter);
+      if (index !== -1) hydrationWaiters.splice(index, 1);
       resolve();
     }
   });
@@ -153,7 +179,12 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
 
       add: async (entry) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
-          await awaitOutboxHydration();
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(entry.itemId);
+            throw error;
+          }
           writesInFlight.add(entry.itemId);
           set((state) => ({
             entries: {
@@ -186,7 +217,12 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
 
       removeDurably: (itemId) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
-          await awaitOutboxHydration();
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
           const entry = get().entries[itemId];
           if (!entry) return;
           get().remove(itemId);
@@ -220,7 +256,12 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
 
       bumpAttemptsDurably: (itemId) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
-          await awaitOutboxHydration();
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
           get().bumpAttempts(itemId);
           try {
             await pendingWrite;
@@ -250,7 +291,12 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
 
       markFailedDurably: (itemId) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
-          await awaitOutboxHydration();
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
           const previous = get().entries[itemId];
           if (!previous || previous.failedAt !== undefined) return;
           // The fence is set before the write so a failing write can never
@@ -285,7 +331,12 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
 
       retryEntryDurably: (itemId) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
-          await awaitOutboxHydration();
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
           const entry = get().entries[itemId];
           if (!entry) return;
           if (entry.failedAt === undefined && !parkedVolatile.has(itemId)) return;
@@ -327,20 +378,22 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
       },
 
       entriesForServer: (serverId) => {
+        // An agent with ANY durable write in flight is excluded wholesale, so
+        // a flush can never race that write with its own dispatch — including
+        // the agent's older entries that were listed before the write started.
         const blockedAgents = new Set<string>();
+        for (const entry of Object.values(get().entries)) {
+          if (writesInFlight.has(entry.itemId)) blockedAgents.add(entry.agentId);
+        }
         return sortByCreation(
           Object.values(get().entries).filter(
             (entry) =>
               entry.serverId === serverId &&
               entry.failedAt === undefined &&
-              !parkedVolatile.has(entry.itemId),
+              !parkedVolatile.has(entry.itemId) &&
+              !blockedAgents.has(entry.agentId),
           ),
-        ).filter((entry) => {
-          // An agent with a durable write in flight is excluded wholesale so a
-          // flush can never race that write with its own dispatch.
-          if (writesInFlight.has(entry.itemId)) blockedAgents.add(entry.agentId);
-          return !blockedAgents.has(entry.agentId);
-        });
+        );
       },
 
       entriesForAgent: (serverId, agentId) =>
@@ -355,6 +408,9 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
       version: 1,
       storage: durableStorage,
       partialize: ({ entries }) => ({ entries }),
+      onRehydrateStorage: () => (_state, error) => {
+        if (error) failHydrationWaiters();
+      },
     },
   ),
 );
@@ -407,7 +463,12 @@ export async function flushQueueOutboxForServer(input: {
   applySnapshot: (snapshot: AgentQueueSnapshot) => void;
   onEntryExhausted?: (entry: PendingQueueEnqueue) => void;
 }): Promise<void> {
-  await awaitOutboxHydration();
+  try {
+    await awaitOutboxHydration();
+  } catch (error) {
+    useQueueOutboxStore.getState().reportStorageError(null);
+    throw error;
+  }
   try {
     await probeOutboxStorage();
   } catch (error) {
