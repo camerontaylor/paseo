@@ -698,8 +698,15 @@ export function resolveQueueSubmitClearing(input: {
  * once per path.
  */
 export interface QueuedSubmissionOwner {
+  /**
+   * The clearing baseline: the raw live input captured at submit time. The
+   * submitted payload may be trimmed or rebuilt (workspace attachments) and
+   * must not participate in this comparison.
+   */
   submittedText: string;
   submittedAttachments: readonly ComposerAttachment[];
+  /** The outgoing payload handed to the queue — the sent-context cleanup receives this. */
+  submittedOutgoing?: readonly ComposerAttachment[];
   getLiveText: () => string;
   getLiveAttachments: () => readonly ComposerAttachment[];
   clearText: () => void;
@@ -735,7 +742,7 @@ export async function runQueuedSubmission(
   if (decision.clearAttachments) {
     owner.clearAttachments();
   }
-  owner.clearSentAttachments?.(owner.submittedAttachments);
+  owner.clearSentAttachments?.(owner.submittedOutgoing ?? owner.submittedAttachments);
 }
 
 export function removeQueuedComposerMessageLocally(input: {

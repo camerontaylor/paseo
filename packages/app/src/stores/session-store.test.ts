@@ -1055,8 +1055,7 @@ describe("durable agent queue snapshot concurrency", () => {
       hangEntered = true;
       return new Promise<void>((resolve) => {
         releaseRef.current = () => {
-          void writeThrough(name, value);
-          resolve();
+          void writeThrough(name, value).finally(resolve);
         };
       });
     });
@@ -1159,25 +1158,18 @@ describe("durable agent queue snapshot concurrency", () => {
       expect(entries["acked-1"]?.itemId).toBe("acked-1");
       expect(useQueueOutboxStore.getState().storageError).not.toBeNull();
 
-      // Reload state: the surviving entries and the removed one read back the
-      // same from storage.
-      console.log(
-        "[ack2-probe] pre-rehydrate memory:",
-        Object.keys(useQueueOutboxStore.getState().entries),
+      // Settle: one awaited durable mutation serializes behind every queued
+      // write, so after it the storage payload is final and the reload reads
+      // exactly this generation.
+      await useQueueOutboxStore.getState().bumpAttemptsDurably("acked-1");
+      const stored = await outboxPersistedStorage.getItem("paseo-queue-outbox");
+      // The invariant: after a full drain, storage equals memory. The per-item
+      // outcomes are asserted on memory below; entries from sibling tests in
+      // this file share the store, so exact payload equality is with memory.
+      expect(Object.keys((stored?.state.entries ?? {}) as object).sort()).toEqual(
+        Object.keys(useQueueOutboxStore.getState().entries).sort(),
       );
-      {
-        const { outboxPersistedStorage: probeStorage } = await import("./queue-outbox-store");
-        const raw = await probeStorage.getItem("paseo-queue-outbox");
-        console.log(
-          "[ack2-probe] storage payload keys:",
-          raw ? Object.keys((raw as { state: { entries: object } }).state.entries) : null,
-        );
-      }
       await useQueueOutboxStore.persist.rehydrate();
-      console.log(
-        "[ack2-probe] post-rehydrate memory:",
-        Object.keys(useQueueOutboxStore.getState().entries),
-      );
       const reloaded = useQueueOutboxStore.getState().entries;
       expect(reloaded["acked-1"]?.itemId).toBe("acked-1");
       expect(reloaded["acked-2"]).toBeUndefined();

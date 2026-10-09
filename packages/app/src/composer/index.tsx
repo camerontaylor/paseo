@@ -1963,6 +1963,7 @@ function ComposerContentImpl({
             {
               submittedText: submittedLiveText,
               submittedAttachments: submittedLiveAttachments,
+              submittedOutgoing: queuedAttachments,
               getLiveText: () => messageInputRef.current?.getText() ?? submittedLiveText,
               getLiveAttachments: () => latestAttachmentsRef.current,
               clearText: () => {

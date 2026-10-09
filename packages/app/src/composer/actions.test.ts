@@ -1780,21 +1780,49 @@ describe("queue submission clearing contracts", () => {
 
   it("clears unchanged attachments even though the outgoing payload was a rebuilt array", async () => {
     const attachments: ComposerAttachment[] = [];
+    const clearSentAttachments = vi.fn();
     const o = {
       submittedText: "queued text",
       submittedAttachments: attachments,
+      submittedOutgoing: [{ kind: "file" }] as ComposerAttachment[],
       getLiveText: vi.fn(() => "queued text"),
       getLiveAttachments: vi.fn(() => attachments),
       clearText: vi.fn(),
       clearAttachments: vi.fn(),
+      clearSentAttachments,
     };
     // buildOutgoingAttachments (workspace context) hands the submit a rebuilt
     // array; the clearing decision must key on the captured live identity.
-    const outgoingPayload: ComposerAttachment[] = [{ kind: "file" } as ComposerAttachment];
+    const outgoingPayload: ComposerAttachment[] = [{ kind: "file" }] as ComposerAttachment[];
     await runQueuedSubmission(o, async () => {
       if (outgoingPayload.length === 0) return { queued: null };
       return { queued: { id: "id-1", text: "queued text", attachments: [] } };
     });
     expect(o.clearAttachments).toHaveBeenCalledTimes(1);
+    // Sent-context cleanup receives the outgoing payload (workspace/review
+    // attachments live there), not the raw live capture.
+    expect(clearSentAttachments).toHaveBeenCalledWith(o.submittedOutgoing);
+  });
+
+  it("survives newer input while still cleaning up the sent payload", async () => {
+    const attachments: ComposerAttachment[] = [];
+    const clearSentAttachments = vi.fn();
+    const o = {
+      submittedText: "queued text",
+      submittedAttachments: attachments,
+      submittedOutgoing: [{ kind: "file" }] as ComposerAttachment[],
+      getLiveText: vi.fn(() => "queued text and more typing"),
+      getLiveAttachments: vi.fn(() => [{ kind: "file" }] as ComposerAttachment[]),
+      clearText: vi.fn(),
+      clearAttachments: vi.fn(),
+      clearSentAttachments,
+    };
+    await runQueuedSubmission(o, async () => ({
+      queued: { id: "id-1", text: "queued text", attachments: [] },
+    }));
+    // Newer input survives, but the sent payload is still released for GC.
+    expect(o.clearText).not.toHaveBeenCalled();
+    expect(o.clearAttachments).not.toHaveBeenCalled();
+    expect(clearSentAttachments).toHaveBeenCalledWith(o.submittedOutgoing);
   });
 });

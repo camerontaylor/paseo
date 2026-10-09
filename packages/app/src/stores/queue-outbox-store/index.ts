@@ -91,6 +91,14 @@ export const outboxPersistedStorage = createValidatedPersistStorage(
 const durableStorage: typeof outboxPersistedStorage = {
   ...outboxPersistedStorage,
   setItem: (name, value) => {
+    if (!useQueueOutboxStore.persist.hasHydrated()) {
+      // Before hydration the in-memory entries do not describe the saved
+      // outbox — persisting them could replace saved payloads with an empty
+      // set. Real mutations and the probe await hydration first, so this
+      // guard only skips incidental writes (storage-error flags during a
+      // failed read) that must never erase unknown entries.
+      return Promise.resolve();
+    }
     // Each write chains behind the previous one but resolves on its own: the
     // caller's promise carries only its own write's outcome, and a rejection
     // never poisons the chain for the writes queued behind it. The void catch
