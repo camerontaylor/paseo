@@ -1,0 +1,49 @@
+# Execution start — fork source refresh implementation campaign
+
+Date: 2026-10-10. Control workspace `wks_171bca3667c4acf6`, branch `fork/source-refresh-control-20261010` (based on frozen `custom`). Campaign owner: GLM-5.3-Flash. Plan: `/Volumes/offload/neptune/repos/paseo/plans/ralplan-fork-source-refresh.md`, sha256 `abfe87512f35907382ff559d59a6a5c102ceff28290bb09faf62d16ed0605c53` — uncommitted in the source checkout, preserved there unmodified. This file is the binding EXECUTION-START note per plan §1.
+
+## Authorization record
+
+- User, 2026-10-10: "Send out implementation to be done by glm-5.3-flash with sol advisor."
+- This authorizes local implementation of all 21 packages in the reviewed plan (5-pass consensus, pass 5 architect ACCEPT + critic APPROVE). The plan header's `Authority: none` / pending-approval status is superseded for local implementation only. Deployment, activation, publication, live-manifest edit, `mine` rebuild, production remediation, and remote pushes remain out of scope (plan §10).
+- Advisor override: every "Opus 5.5 advisor" reference in the plan is replaced by the persistent GPT-6.1 Sol advisor (`codex/gpt-6.1-sol`, agent `54e4d36e-38b4-4efa-8c19-c0aca88fa575`, full-access/low, read-only reviews, reused — never relaunched). Protocol unchanged: per-stage ADVANCE, [PF] PREFLIGHT before any edit/commit, package gate + rolling-basket verdicts, one review request outstanding at a time.
+- Model routing: package workers run `claude-zai/glm-5.3-flash` — the same verified GLM-5.3-Flash (native ZCode repeated launch timeouts in this session; user-directed same-model fallback, not a model switch), settings `bypassPermissions` + `high` thinking, `notifyOnFinish`. Provider availability/modes/model verified by root 2026-10-10. All implementation code by GLM-5.3-Flash; integration/conflict resolution by the coordinator (also GLM) under Sol checks.
+
+## Frozen heads (verified 2026-10-10 via `git rev-parse refs/heads/*` from the control worktree)
+
+| Ref | Full SHA |
+| --- | --- |
+| `custom` | `cbc2017186b980e7928bc376cfdeabb90ef56aa2` |
+| `fork/carries-0.11.1` | `36fdadba65369dc41feb756d5b2c6004dc2a17e8` |
+| `fork/infi-backend-0.11.1` | `1dd375931a0c4de5e930abb4b2cf2dc52d9cbcc5` |
+| `fork/infi-ui-0.11.1` | `133ff0f7e0234da8aa684a23a8da31024531242d` |
+| `fork/tmad-0.11.1` | `139e0c81e8eb51b0f97551171b2217838c3ebab5` |
+| baseline `v0.11.1` | `ab10a6694ccf068959d1a6b67b6c915e21a9fe91` |
+| `mine` (release channel; not an adoption source) | `95c31f6a9c0a6105057607c56a382d7e21683402` |
+| upstream diff base | `41537e6a0a57a33b99d483e3d6f8f37202204d91` |
+
+The rolling basket must contain exactly the five frozen heads. A moved head on any frozen line is a stop + advisor-approved re-pin record, never auto-adopt.
+
+## Custom-owned list (captured 2026-10-10)
+
+`git diff --name-only 41537e6a0 custom` → `fork/plans/proposal-auto-release-cycle.md` (today `fork/**` only, as committed; the remaining `fork/**` files in the source checkout are uncommitted dirty state and out of bounds). Re-captured at each basket; a new non-`fork/` entry combined with a tmad overlay touching it is a [PF] stop.
+
+## Local research refs (verified present 2026-10-10)
+
+- `refs/research/fork-refresh-tmad-20261008` = `695c48fed` (TMAD snapshot head)
+- `refs/research/fork-refresh-infi-20261008` = `886a8690317a72c1177484c3f7358bf72d943cc3` (infi snapshot head)
+- `refs/research/fork-refresh-cjk-20261008` = `701bf00d7`
+- `refs/research/fork-refresh-accounts-20261008` = `f9ee6713b`
+- `refs/research/tmad-main` = `f0d5507d2` (frozen intake)
+
+All TMAD/infi source SHAs needed by near-term packages verified present locally (incl. C1's `929f1add3`, `d7bf8205f`, `380218527`; C2's intake lineage; B4's full infi SHA). The five not-local pins (`554a140ee…`, `142683d18f…`, `8e6473ee31…`, `94c987cf18…`, `c9a1d7a064…`) are fetched and pinned to `refs/research/*` only when their owning package needs them, advisor-verified before any worker reads.
+
+## Execution order
+
+baseline/equivalence records (§5.3 + A1 s0) → C1 → C2 → A1 → A2 → B9 → A3 → B1 → B2 → B3 → B4 → B5 → B6 → B10 → B7 → B8 → C3 → C4 → C5 → C6 → C7 → C8.
+
+Serial. At most one implementation worker active. Sol gate between stages; package gate + rolling basket after each package. Canonical [PF] map per plan §4.
+
+## Standing out-of-scope list
+
+Live `~/.paseo-fork/manifest.txt` edit; `mine` rebuild/change; releases, deployment, activation, publication; remote pushes; production daemon on port 6767 (no restart/access/repair); live-home audit or repair (C8 Track 2); edits to the frozen refs or to the source checkout's unrelated dirty files.
