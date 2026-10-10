@@ -116,10 +116,17 @@ export function createDraftPersistStorage<T>(
   const flush = (): Promise<void> => {
     cancelTimer();
     if (inFlight !== null) {
-      return inFlight
+      const waited = inFlight;
+      return waited
         .catch(() => {})
         .then(() => {
-          inFlight = null;
+          // Ownership-safe: only clear the slot when no continuation has
+          // already started a newer write. A second waiter on the same
+          // completed write must chain behind that newer writer, never clear
+          // it and start an overlapping one.
+          if (inFlight === waited) {
+            inFlight = null;
+          }
           return flush();
         });
     }

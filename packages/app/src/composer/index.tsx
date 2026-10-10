@@ -25,6 +25,8 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { QueuedMessageRow, type QueuedRowDurableControls } from "@/composer/queued-message-row";
+import type { QueuedRowSaveResult } from "@/composer/queued-row-save";
+import { createServerQueueFlushClient } from "@/composer/server-queue-flush-client";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useHasFinePointer } from "@/hooks/use-fine-pointer";
@@ -73,7 +75,6 @@ import {
   isAttachmentSelectedForForgeItem,
   openComposerAttachment,
   pickAndPersistImages,
-  createQueueOutboxFlushClient,
   queueComposerMessage,
   queueComposerMessageOnServer,
   isQueueRevisionConflictError,
@@ -392,7 +393,11 @@ interface RenderQueueTrackArgs {
   pendingLabel: string;
   appliedRevision: number;
   draftScope: string;
-  onSaveQueuedMessage: (id: string, text: string, baselineRevision: number) => Promise<boolean>;
+  onSaveQueuedMessage: (
+    id: string,
+    text: string,
+    baselineRevision: number,
+  ) => Promise<QueuedRowSaveResult>;
   onRemoveQueuedMessage: (id: string) => Promise<boolean>;
   onQueueRowError: (message: string) => void;
   onMoveToComposer: (id: string) => void;
@@ -1748,25 +1753,13 @@ function ComposerContentImpl({
             flush: () =>
               flushQueueOutboxForServer({
                 serverId,
-                client: createQueueOutboxFlushClient({
-                  client,
-                  getAppliedRevision: getAppliedQueueRevision,
-                  onRevisionConflict: (conflictAgentId) =>
-                    agentId === conflictAgentId ? refreshQueuedMessages() : Promise.resolve(),
-                }),
+                client: createServerQueueFlushClient({ client, serverId }),
                 applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
               }),
           }
         : {}),
     }),
-    [
-      serverId,
-      client,
-      getAppliedQueueRevision,
-      refreshQueuedMessages,
-      applyAgentQueueSnapshot,
-      agentId,
-    ],
+    [serverId, client, applyAgentQueueSnapshot],
   );
 
   const handleQueuedMutationResult = useCallback(
@@ -2301,8 +2294,8 @@ function ComposerContentImpl({
   );
 
   const handleSaveQueuedMessage = useCallback(
-    async (id: string, text: string, baselineRevision: number): Promise<boolean> => {
-      if (!(supportsDurableQueue && client)) return false;
+    async (id: string, text: string, baselineRevision: number): Promise<QueuedRowSaveResult> => {
+      if (!(supportsDurableQueue && client)) return { status: "unsaved" };
       const row = queuedMessages.find((candidate) => candidate.id === id);
       let images: Array<{ data: string; mimeType: string }> = [];
       try {
@@ -2327,7 +2320,9 @@ function ComposerContentImpl({
           ...payload,
         });
         applyAgentQueueSnapshot(serverId, snapshot);
-        return true;
+        // The snapshot is the host-confirmed generation: finalization re-bases
+        // the edit to ITS revision, never the request's.
+        return { status: "saved", confirmedRevision: snapshot.revision };
       } catch (error) {
         if (isQueueRevisionConflictError(error)) {
           // A remote change intervened. The draft is retained with its conflict
@@ -2400,9 +2395,16 @@ function ComposerContentImpl({
         // The durable removal is a tombstone: the intent persists before the
         // host is asked, surviving lost responses and reconnects.
         await handleRemoveQueuedMessage(id);
-      })();
+      })().catch((error) => {
+        // The menu path owns its feedback exactly once, same as the row path.
+        setSendError(
+          error instanceof Error && error.message
+            ? error.message
+            : t("composer.errors.queueRemoveFailed"),
+        );
+      });
     },
-    [client, handleRemoveQueuedMessage, supportsDurableQueue, t],
+    [client, handleRemoveQueuedMessage, setSendError, supportsDurableQueue, t],
   );
 
   const handleMoveQueuedMessage = useCallback(
@@ -2447,11 +2449,7 @@ function ComposerContentImpl({
         if (!client) return;
         retryFailedOutboxEntry({
           itemId: id,
-          client: createQueueOutboxFlushClient({
-            client,
-            getAppliedRevision: getAppliedQueueRevision,
-            onRevisionConflict: () => refreshQueuedMessages(),
-          }),
+          client: createServerQueueFlushClient({ client, serverId }),
           applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
         }).catch((error) => {
           setSendError(
@@ -2480,7 +2478,6 @@ function ComposerContentImpl({
       failedOutboxEntries,
       getAppliedQueueRevision,
       handleQueuedMutationResult,
-      refreshQueuedMessages,
       serverId,
       supportsDurableQueue,
       t,
@@ -2489,6 +2486,12 @@ function ComposerContentImpl({
 
   const handleDiscardQueuedMessage = useCallback(
     (id: string) => {
+      // An unresolved tombstone must not be discarded: its cancellation has to
+      // reach the host (or be explicitly retried), never silently dropped.
+      if (useQueueOutboxStore.getState().entries[id]?.removalRequested === true) {
+        setSendError(t("composer.errors.queueRemoveFailed"));
+        return;
+      }
       if (failedOutboxEntries.some((entry) => entry.itemId === id)) {
         void (async () => {
           const confirmed = await confirmDialog({
@@ -2519,7 +2522,7 @@ function ComposerContentImpl({
       }
       handleDeleteQueuedMessage(id);
     },
-    [agentId, failedOutboxEntries, handleDeleteQueuedMessage, queueWriter, t],
+    [agentId, failedOutboxEntries, handleDeleteQueuedMessage, queueWriter, setSendError, t],
   );
 
   const handleQueue = useCallback(

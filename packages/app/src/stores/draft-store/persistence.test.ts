@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PersistStorage, StorageValue } from "zustand/middleware";
 import {
   createDraftPersistStorage,
   DRAFT_PERSIST_INTERVAL_MS,
   type PersistenceScheduler,
+  type DraftPersistStorage,
 } from "./persistence";
 
 interface DraftState {
@@ -233,5 +234,140 @@ describe("draft persistence durability", () => {
     await Promise.all([first, second]);
     expect(await drafts.storedText()).toBe("two");
     expect(drafts.writtenTexts()).toEqual(["one", "two"]);
+  });
+});
+
+describe("hydration gate", () => {
+  function createGatedPersistence() {
+    const persisted: Record<string, string> = {};
+    const backing: PersistStorage<DraftState> = {
+      getItem: (name) =>
+        persisted[name] ? (JSON.parse(persisted[name]) as StorageValue<DraftState>) : null,
+      setItem: (name, value) => {
+        persisted[name] = JSON.stringify(value);
+        return Promise.resolve();
+      },
+      removeItem: (name) => {
+        delete persisted[name];
+        return Promise.resolve();
+      },
+    };
+    let hydrated = false;
+    // The same construction as the draft store's storage seam: an inline
+    // setItem gate over the backing storage, inside the debouncing wrapper.
+    const drafts: DraftPersistStorage<DraftState> = createDraftPersistStorage({
+      ...backing,
+      setItem: (name, value) => {
+        if (!hydrated) {
+          return Promise.resolve();
+        }
+        return backing.setItem(name, value);
+      },
+    });
+    return {
+      drafts,
+      checkpoint(text: string) {
+        void drafts.setItem("drafts", { state: { text } });
+      },
+      async flush() {
+        await drafts.flush();
+      },
+      openGate() {
+        hydrated = true;
+      },
+      storedText() {
+        const raw = persisted["drafts"];
+        if (!raw) return null;
+        return (JSON.parse(raw) as { state?: { text?: string } }).state?.text ?? null;
+      },
+    };
+  }
+
+  it("a post-hydration checkpoint persists; the gate passes it through", async () => {
+    const gate = createGatedPersistence();
+    gate.openGate();
+    gate.checkpoint("saved edit");
+    await gate.flush();
+    expect(gate.storedText()).toBe("saved edit");
+  });
+
+  it("a pre-hydration checkpoint never reaches storage, and saved payloads survive", async () => {
+    const gate = createGatedPersistence();
+    // The saved store holds a payload (as if written by a previous launch);
+    // the pre-hydration checkpoint must not replace it.
+    gate.checkpoint("typed before hydration");
+    await gate.flush();
+    expect(gate.storedText()).toBeNull();
+
+    gate.openGate();
+    gate.checkpoint("typed after hydration");
+    await gate.flush();
+    expect(gate.storedText()).toBe("typed after hydration");
+  });
+
+  it("multiple waiters on one in-flight write never overlap", async () => {
+    let nowMs = 0;
+    let activeWrites = 0;
+    let overlapped = false;
+    let writeCount = 0;
+    const persisted: Record<string, string> = {};
+    const pendingWrites: Array<() => void> = [];
+    const storage: PersistStorage<DraftState> = {
+      getItem: (name) =>
+        persisted[name] ? (JSON.parse(persisted[name]) as StorageValue<DraftState>) : null,
+      setItem: (name, value) => {
+        writeCount += 1;
+        activeWrites += 1;
+        if (activeWrites > 1) overlapped = true;
+        return new Promise<void>((resolve) => {
+          pendingWrites.push(() => {
+            persisted[name] = JSON.stringify(value);
+            activeWrites -= 1;
+            resolve();
+          });
+        });
+      },
+      removeItem: (name) => {
+        delete persisted[name];
+        return Promise.resolve();
+      },
+    };
+    const scheduler: PersistenceScheduler = {
+      now: () => nowMs,
+      schedule: (callback) => {
+        callback();
+        return 1;
+      },
+      cancel: () => {},
+    };
+    const drafts = createDraftPersistStorage(storage, scheduler);
+
+    drafts.setItem("drafts", { state: { text: "one" } });
+    const first = drafts.flush();
+    // Deterministic barrier: the first write is in flight.
+    await vi.waitFor(() => expect(pendingWrites.length).toBe(1));
+
+    drafts.setItem("drafts", { state: { text: "two" } });
+    // Two waiters chain on the SAME in-flight write: the second must queue
+    // behind the first continuation's retry, never clear its ownership and
+    // start an overlapping write.
+    const second = drafts.flush();
+    const third = drafts.flush();
+
+    // The first write resolves; the first continuation retries with "two".
+    pendingWrites.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(pendingWrites.length).toBe(1));
+    expect(overlapped).toBe(false);
+    // The retry write lands; every waiter resolves behind it.
+    pendingWrites.splice(0).forEach((release) => release());
+    await Promise.all([first, second, third]);
+
+    expect(overlapped).toBe(false);
+    expect(writeCount).toBe(2);
+    expect(pendingWrites.length).toBe(0);
+    expect((JSON.parse(persisted["drafts"]) as { state: { text: string } }).state.text).toBe("two");
+    // Exact reload state: a fresh read sees the final checkpoint only.
+    const reloaded = await storage.getItem("drafts");
+    expect(reloaded?.state.text).toBe("two");
   });
 });

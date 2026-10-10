@@ -65,9 +65,26 @@ interface DraftStoreRuntimeState {
 type DraftStore = DraftStoreState & DraftStoreRuntimeState & DraftStoreActions;
 
 let gcScheduled = false;
-const draftPersistStorage = createDraftPersistStorage(
-  createValidatedPersistStorage(AsyncStorage, PersistedDraftStoreSchema),
+const draftValidatedStorage = createValidatedPersistStorage(
+  AsyncStorage,
+  PersistedDraftStoreSchema,
 );
+const draftPersistStorage = createDraftPersistStorage({
+  ...draftValidatedStorage,
+  setItem: (name, value) => {
+    if (!useDraftStore.persist.hasHydrated()) {
+      // Before hydration the in-memory drafts do not describe the saved store
+      // — persisting them could replace saved payloads with a partial set.
+      // Saves gate on hydration before they dispatch, so this guard only
+      // skips incidental pre-hydration checkpoints (a row opened in the
+      // storage-resolution window) whose in-memory copy the rehydrate may
+      // replace; the saved store is never touched. Zustand keeps the flag
+      // false through a failed read, so a rejected read never opens the gate.
+      return Promise.resolve();
+    }
+    return draftValidatedStorage.setItem(name, value);
+  },
+});
 
 export function flushDraftPersistStorage(): Promise<void> {
   return draftPersistStorage?.flush() ?? Promise.resolve();

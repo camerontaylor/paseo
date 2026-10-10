@@ -337,3 +337,30 @@ it("pending ids include tombstoned entries even when a snapshot contains them", 
   const ids = getPendingQueueMessageIds([tombstoned], new Set(["item-1"]));
   expect([...ids]).toEqual(["item-1"]);
 });
+
+it("an outbox-only tombstone row carries its removal intent so discard stays rejected", () => {
+  const tombstoned: PendingQueueEnqueue = {
+    serverId: "server-1",
+    agentId: "agent-1",
+    itemId: "item-t",
+    text: "cancel me",
+    intent: "queue",
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+    createdAt: 1,
+    attempts: 3,
+    removalRequested: true,
+  };
+  const plain: PendingQueueEnqueue = {
+    ...tombstoned,
+    itemId: "item-p",
+    text: "plain pending",
+    removalRequested: undefined,
+  };
+  const rows = appendPendingQueueRows([], [tombstoned, plain]);
+  const tombstoneRow = rows.find((row) => row.id === "item-t");
+  const plainRow = rows.find((row) => row.id === "item-p");
+  expect(tombstoneRow?.removalRequested).toBe(true);
+  expect(plainRow?.removalRequested).toBeUndefined();
+});

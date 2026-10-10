@@ -19,13 +19,10 @@ import {
   Trash2,
   X,
 } from "lucide-react-native";
-import {
-  resolveQueuedEditFailure,
-  resolveQueuedEditFinalization,
-  resolveQueuedEditSave,
-  type QueuedComposerMessage,
-} from "@/composer/actions";
-import { flushDraftPersistStorage, useDraftStore, type DraftInput } from "@/stores/draft-store";
+import { resolveQueuedEditFinalization } from "@/composer/actions";
+import type { QueuedComposerMessage } from "@/composer/actions";
+import { runQueuedRowEditSave, type QueuedRowSaveResult } from "@/composer/queued-row-save";
+import { flushDraftPersistStorage, useDraftStore } from "@/stores/draft-store";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
@@ -339,7 +336,7 @@ export interface QueuedMessageRowProps {
   pendingLabel: string;
   draftKey: string;
   baselineKey: string;
-  onSave: (id: string, text: string, baselineRevision: number) => Promise<boolean>;
+  onSave: (id: string, text: string, baselineRevision: number) => Promise<QueuedRowSaveResult>;
   onRemove: (id: string) => Promise<boolean>;
   onError: (message: string) => void;
   readLabel: string;
@@ -358,58 +355,38 @@ export interface QueuedMessageRowProps {
   durable?: QueuedRowDurableControls;
 }
 
-type PreparedRowSave =
-  | { kind: "skip" }
-  | { kind: "conflict"; message: string }
-  | {
-      kind: "save";
-      /** "noop" finalizes without an RPC; "rpc" sends the revision-checked update. */
-      mode: "noop" | "rpc";
-      text: string;
-      rpcRevision: number;
-      attemptedRevision: number;
-      baselineRevision: number;
-    };
-
-/**
- * The save decision for one row-edit save trigger, read from the live draft
- * records: skip (no edit, or a save already in flight), the standing conflict
- * fence, or the resolved save (no-op finalize or revision-checked RPC).
- */
-function prepareRowSave(input: {
-  working: DraftInput | undefined;
-  baseline: DraftInput | undefined;
-  editing: boolean;
-  saving: boolean;
-  text: string;
+export interface QueuedMessageRowProps {
+  item: QueuedComposerMessage;
+  /** Legacy take-to-composer edit for old hosts; durable rows edit in place. */
+  onEdit: (id: string) => void;
+  onMoveToComposer: (id: string) => void;
+  onSendNow: (id: string) => void;
+  editLabel: string;
+  sendNowLabel: string;
+  moveToComposerLabel: string;
+  isFirst: boolean;
+  isLast: boolean;
+  isPending: boolean;
+  pendingLabel: string;
+  draftKey: string;
+  baselineKey: string;
+  onSave: (id: string, text: string, baselineRevision: number) => Promise<QueuedRowSaveResult>;
+  onRemove: (id: string) => Promise<boolean>;
+  onError: (message: string) => void;
+  readLabel: string;
+  removeLabel: string;
+  removeFailedLabel: string;
+  doneLabel: string;
+  saveAnywayLabel: string;
+  discardEditLabel: string;
+  removalPendingLabel: string;
+  removalFailedLabel: string;
+  conflictLabel: string;
+  persistFailedLabel: string;
+  isRemovalPending: boolean;
+  isRemovalFailed: boolean;
   appliedRevision: number;
-  force: boolean;
-  conflictMessage: string;
-}): PreparedRowSave {
-  if (!input.editing || input.saving || !input.working) {
-    return { kind: "skip" };
-  }
-  const decision = resolveQueuedEditSave({
-    text: input.text,
-    baselineText: input.baseline?.text,
-    baselineRevision: input.baseline?.queueEdit?.baselineRevision ?? 0,
-    appliedRevision: input.appliedRevision,
-    conflicted: input.working.queueEdit?.conflicted === true,
-    force: input.force,
-    conflictMessage: input.conflictMessage,
-  });
-  if (decision.kind === "conflict") {
-    return { kind: "conflict", message: decision.message };
-  }
-  const baselineRevision = input.baseline?.queueEdit?.baselineRevision ?? 0;
-  return {
-    kind: "save",
-    mode: decision.kind === "rpc" ? "rpc" : "noop",
-    text: input.text,
-    rpcRevision: decision.kind === "rpc" ? decision.revision : baselineRevision,
-    attemptedRevision: decision.kind === "rpc" ? decision.revision : baselineRevision,
-    baselineRevision,
-  };
+  durable?: QueuedRowDurableControls;
 }
 
 export function QueuedMessageRow({
@@ -464,9 +441,6 @@ export function QueuedMessageRow({
   const editingRef = useRef(isEditing);
   editingRef.current = isEditing;
   const savingRef = useRef(false);
-  const draftVersionRef = useRef<number | undefined>(
-    hasDraftHydrated ? useDraftStore.getState().drafts[draftKey]?.version : undefined,
-  );
   const editInputRef = useRef<EditingTextInputHandle | null>(null);
   const conflicted =
     useDraftStore.getState().getDraftInput(draftKey)?.queueEdit?.conflicted === true;
@@ -490,13 +464,12 @@ export function QueuedMessageRow({
     if (!restored) return;
     draftRef.current = restored.text;
     setDraft(restored.text);
-    draftVersionRef.current = useDraftStore.getState().drafts[draftKey]?.version;
     editingRef.current = true;
     setIsEditing(true);
   }, [hasDraftHydrated, draftKey]);
 
   const preserveDraft = useCallback(
-    (text: string) => {
+    (text: string): number | undefined => {
       draftRef.current = text;
       setDraft(text);
       const store = useDraftStore.getState();
@@ -508,7 +481,7 @@ export function QueuedMessageRow({
         });
       }
       store.editDraftText({ draftKey, text, keepActive: true });
-      draftVersionRef.current = useDraftStore.getState().drafts[draftKey]?.version;
+      return useDraftStore.getState().drafts[draftKey]?.version;
     },
     [appliedRevision, baselineKey, draftKey, item.id, item.text],
   );
@@ -527,9 +500,11 @@ export function QueuedMessageRow({
   );
 
   // Persist the conflict fence: implicit saves stay blocked (across restarts)
-  // until the user explicitly overwrites or discards.
-  const markEditConflicted = useCallback(
-    (attemptedRevision: number) => {
+  // until the user explicitly overwrites or discards. The checkpoint flush is
+  // awaited so a fence that cannot land surfaces instead of silently vanishing
+  // on the next restart.
+  const persistEditFence = useCallback(
+    async (attemptedRevision: number) => {
       const current = useDraftStore.getState().getDraftInput(draftKey);
       if (!current) return;
       useDraftStore.getState().saveDraftInput({
@@ -543,15 +518,16 @@ export function QueuedMessageRow({
           },
         },
       });
+      await flushDraftPersistStorage();
     },
     [draftKey, item.id],
   );
 
   const finalizeSave = useCallback(
-    (confirmedText: string, confirmedRevision: number) => {
+    (confirmedText: string, confirmedRevision: number, submittedVersion: number | undefined) => {
       const store = useDraftStore.getState();
       const finalization = resolveQueuedEditFinalization({
-        savedVersion: draftVersionRef.current,
+        savedVersion: submittedVersion,
         currentVersion: store.drafts[draftKey]?.version,
         latestText: draftRef.current,
         confirmedText,
@@ -595,52 +571,29 @@ export function QueuedMessageRow({
 
   const runSave = useCallback(
     async (force: boolean) => {
-      const prepared = prepareRowSave({
-        working: useDraftStore.getState().getDraftInput(draftKey),
-        baseline: useDraftStore.getState().getDraftInput(baselineKey),
-        editing: editingRef.current,
-        saving: savingRef.current,
-        text: editInputRef.current?.getText() ?? draftRef.current,
-        appliedRevision,
+      await runQueuedRowEditSave({
+        itemId: item.id,
         force,
         conflictMessage: conflictLabel,
+        persistMessage: persistFailedLabel,
+        isReady: () => hasDraftHydrated,
+        isEditing: () => editingRef.current,
+        isSaving: () => savingRef.current,
+        getWorking: () => useDraftStore.getState().getDraftInput(draftKey),
+        getBaseline: () => useDraftStore.getState().getDraftInput(baselineKey),
+        getAppliedRevision: () => appliedRevision,
+        getText: () => editInputRef.current?.getText() ?? draftRef.current,
+        checkpoint: preserveDraft,
+        flushCheckpoint: flushDraftPersistStorage,
+        persistFence: persistEditFence,
+        finalize: finalizeSave,
+        onSave,
+        onError,
+        setSaving: (saving) => {
+          savingRef.current = saving;
+          setIsSaving(saving);
+        },
       });
-      if (prepared.kind === "skip") return;
-      if (prepared.kind === "conflict") {
-        // The fence stands (or the row moved remotely): retain the draft,
-        // surface the conflict, dispatch nothing.
-        onError(prepared.message);
-        return;
-      }
-      preserveDraft(prepared.text);
-      savingRef.current = true;
-      setIsSaving(true);
-      try {
-        // The draft checkpoint is the durability barrier: it must be on disk
-        // before the host sees anything.
-        await flushDraftPersistStorage();
-        if (prepared.mode === "noop") {
-          finalizeSave(prepared.text, prepared.baselineRevision);
-          return;
-        }
-        if (!(await onSave(item.id, prepared.text, prepared.rpcRevision))) {
-          onError(persistFailedLabel);
-          return;
-        }
-        finalizeSave(prepared.text, prepared.rpcRevision);
-      } catch (error) {
-        const failure = resolveQueuedEditFailure(error, {
-          conflictMessage: conflictLabel,
-          persistMessage: persistFailedLabel,
-        });
-        if (failure.conflicted) {
-          markEditConflicted(prepared.attemptedRevision);
-        }
-        onError(failure.message);
-      } finally {
-        savingRef.current = false;
-        setIsSaving(false);
-      }
     },
     [
       appliedRevision,
@@ -648,10 +601,11 @@ export function QueuedMessageRow({
       conflictLabel,
       draftKey,
       finalizeSave,
+      hasDraftHydrated,
       item.id,
-      markEditConflicted,
       onError,
       onSave,
+      persistEditFence,
       persistFailedLabel,
       preserveDraft,
     ],
@@ -663,10 +617,15 @@ export function QueuedMessageRow({
       onEdit(item.id);
       return;
     }
+    if (!hasDraftHydrated) {
+      // The store's persisted state is unknown until hydration: no editor,
+      // no checkpoint write, no implicit save can run against it.
+      return;
+    }
     preserveDraft(item.text);
     editingRef.current = true;
     setIsEditing(true);
-  }, [durable, item.id, item.text, onEdit, preserveDraft]);
+  }, [durable, hasDraftHydrated, item.id, item.text, onEdit, preserveDraft]);
 
   const handleMoveToComposer = useCallback(() => {
     // Leaving the editor without saving: the retained draft is dropped in

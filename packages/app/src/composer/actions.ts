@@ -508,6 +508,7 @@ export interface ComposerQueueClient {
     itemId: string,
     expectedRevision: number,
   ) => Promise<AgentQueueSnapshot>;
+  listQueuedAgentMessages: (agentId: string) => Promise<AgentQueueSnapshot>;
   getQueuedAgentMessageImages: (
     agentId: string,
     itemId: string,

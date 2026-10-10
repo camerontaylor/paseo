@@ -1102,6 +1102,11 @@ function createFakeQueueClient(
     retryQueuedAgentMessage: async () => {
       throw new Error("not expected in this test");
     },
+    listQueuedAgentMessages: async (agentId: string) => ({
+      agentId,
+      revision: 1,
+      items: [],
+    }),
     getQueuedAgentMessageImages: async () => [],
     ...overrides,
   };

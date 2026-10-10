@@ -94,12 +94,20 @@ export function appendPendingQueueRows(
   const present = new Set(items.map((item) => item.id));
   const rows = pending
     .filter((entry) => !present.has(entry.itemId))
-    .map((entry) => ({
-      id: entry.itemId,
-      text: entry.text,
-      attachments: toComposerAttachments(entry.composerAttachments),
-      syncState: entry.failedAt === undefined ? ("pending" as const) : ("failed" as const),
-    }));
+    .map((entry) => {
+      const row: QueuedComposerMessage = {
+        id: entry.itemId,
+        text: entry.text,
+        attachments: toComposerAttachments(entry.composerAttachments),
+        syncState: entry.failedAt === undefined ? ("pending" as const) : ("failed" as const),
+      };
+      // An outbox-only tombstone has no host row to annotate later: carry the
+      // cancellation onto the appended row so its discard stays rejected.
+      if (entry.removalRequested) {
+        row.removalRequested = true;
+      }
+      return row;
+    });
   return rows.length === 0 ? items : [...items, ...rows];
 }
 
