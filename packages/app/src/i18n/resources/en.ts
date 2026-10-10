@@ -19,6 +19,10 @@ export const en = {
     questionPlaceholder: "An answer you still need…",
     addQuestion: "Add question",
     writeUnavailable: "Connect to an updated host to change Stream items.",
+    captureDegraded:
+      "The host could not save recent Stream entries (disk). Entries are kept and will save when space allows.",
+    offlineNotice: "offline — cached items may be out of date",
+    upgradeNotice: "update this host to use global Stream",
   },
   paneFind: {
     connectionFailure: "Could not search this chat. Check the host connection and retry.",

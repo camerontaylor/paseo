@@ -22,6 +22,10 @@ export const zhCN: TranslationResources = {
     questionPlaceholder: "An answer you still need…",
     addQuestion: "Add question",
     writeUnavailable: "Connect to an updated host to change Stream items.",
+    captureDegraded:
+      "The host could not save recent Stream entries (disk). Entries are kept and will save when space allows.",
+    offlineNotice: "offline — cached items may be out of date",
+    upgradeNotice: "update this host to use global Stream",
   },
   paneFind: {
     connectionFailure: "无法搜索此聊天。请检查主机连接后重试。",

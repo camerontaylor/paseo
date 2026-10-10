@@ -22,6 +22,10 @@ export const ko: TranslationResources = {
     questionPlaceholder: "An answer you still need…",
     addQuestion: "Add question",
     writeUnavailable: "Connect to an updated host to change Stream items.",
+    captureDegraded:
+      "The host could not save recent Stream entries (disk). Entries are kept and will save when space allows.",
+    offlineNotice: "offline — cached items may be out of date",
+    upgradeNotice: "update this host to use global Stream",
   },
   paneFind: {
     connectionFailure: "이 채팅을 검색할 수 없습니다. 호스트 연결을 확인하고 다시 시도하세요.",

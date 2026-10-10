@@ -111,6 +111,8 @@ export interface Agent {
   projectPlacement?: ProjectPlacementPayload | null;
   artifacts?: AgentArtifact[];
   companionEntries?: CompanionEntry[];
+  // COMPAT(captureDegraded): added in v0.11.1-fork (C2), remove after 2027-04-07.
+  captureDegraded?: boolean;
 }
 
 export interface WorkspaceDescriptor {

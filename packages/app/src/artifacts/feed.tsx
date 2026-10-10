@@ -31,6 +31,8 @@ interface ArtifactCardProps {
   cwd: string;
   onOpen: (artifact: AgentArtifact) => void;
   onPin?: () => void;
+  /** Disables the long-press pin while the feed cannot acknowledge writes. */
+  pinDisabled?: boolean;
 }
 
 const ICON_BY_KIND: Record<
@@ -143,7 +145,14 @@ export function ArtifactFeed({
   );
 }
 
-export function ArtifactCard({ artifact, serverId, cwd, onOpen, onPin }: ArtifactCardProps) {
+export function ArtifactCard({
+  artifact,
+  serverId,
+  cwd,
+  onOpen,
+  onPin,
+  pinDisabled,
+}: ArtifactCardProps) {
   const { t } = useTranslation();
   const handlePress = useCallback(() => onOpen(artifact), [artifact, onOpen]);
   const pressableStyle = useCallback(
@@ -161,7 +170,7 @@ export function ArtifactCard({ artifact, serverId, cwd, onOpen, onPin }: Artifac
       accessibilityRole="button"
       accessibilityLabel={t("agentPanel.artifacts.open", { name: artifact.name })}
       onPress={handlePress}
-      onLongPress={onPin}
+      onLongPress={pinDisabled ? undefined : onPin}
       style={pressableStyle}
       testID={`artifact-card-${artifact.path}`}
     >

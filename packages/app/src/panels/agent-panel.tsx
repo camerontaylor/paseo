@@ -122,6 +122,7 @@ interface ChatAgentStateShape {
   lastError?: Agent["lastError"] | null;
   artifacts?: Agent["artifacts"];
   companionEntries?: Agent["companionEntries"];
+  captureDegraded?: Agent["captureDegraded"];
 }
 
 interface ChatAgentSelectedState extends ChatAgentStateShape {
@@ -1347,6 +1348,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           serverId={serverId}
           agentId={agentId}
           cwd={cwd}
+          captureDegraded={agentState.captureDegraded === true}
           entries={agentState.companionEntries ?? EMPTY_COMPANION_ENTRIES}
           artifacts={agentState.artifacts ?? []}
           isSupported={companionStreamSupported}

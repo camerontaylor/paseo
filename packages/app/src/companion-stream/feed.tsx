@@ -21,6 +21,7 @@ interface CompanionFeedProps {
   serverId: string;
   agentId: string;
   cwd: string;
+  captureDegraded?: boolean;
   entries: readonly CompanionEntry[];
   artifacts: readonly AgentArtifact[];
   isSupported: boolean;
@@ -43,6 +44,7 @@ export function CompanionFeed({
   serverId,
   agentId,
   cwd,
+  captureDegraded,
   entries,
   artifacts,
   isSupported,
@@ -59,7 +61,14 @@ export function CompanionFeed({
     (state) => state.sessions[serverId]?.serverInfo?.features?.globalStream === true,
   );
   const [saving, setSaving] = useState(false);
-  const draftEntryId = useRef<string | null>(null);
+  // Ownership of the pending state: several writes can overlap (two artifact
+  // long-presses), and `saving` clears only when the LAST one settles, so the
+  // first completion cannot re-enable controls while another is pending.
+  const pendingSaves = useRef(0);
+  // Retry identity is scoped per host+agent+action: switching tabs after a
+  // lost acknowledgement starts a fresh identity instead of replaying the
+  // old id under a different action prefix.
+  const draftEntryIds = useRef(new Map<string, string>());
   const artifactPins = useRef(new ArtifactPinOperations());
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -114,6 +123,7 @@ export function CompanionFeed({
 
   const save = useCallback(
     async (input: Parameters<NonNullable<typeof client>["updateStreamEntry"]>[0]) => {
+      pendingSaves.current += 1;
       setSaving(true);
       setSaveError(null);
       try {
@@ -126,7 +136,10 @@ export function CompanionFeed({
         reportFailure();
         throw error;
       } finally {
-        setSaving(false);
+        pendingSaves.current -= 1;
+        if (pendingSaves.current === 0) {
+          setSaving(false);
+        }
       }
     },
     [client, connection, supportsWrites, t, reportFailure],
@@ -160,6 +173,7 @@ export function CompanionFeed({
           serverId={serverId}
           cwd={cwd}
           onOpen={openArtifact}
+          pinDisabled={saving || !supportsWrites || connection !== "online"}
           // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop
           onPin={() => handlePinArtifact(item.artifact)}
         />
@@ -191,20 +205,19 @@ export function CompanionFeed({
   const handleToggleOnlyOpen = useCallback(() => setOnlyOpen((v) => !v), []);
   const handleSubmitPin = useCallback(() => {
     if (!pinText.trim() || saving) return;
-    void save({
-      agentId,
-      action: viewTab === "pinned" ? "add_pin" : "add_question",
-      entryId: (draftEntryId.current ??= globalThis.crypto.randomUUID()),
-      text: pinText.trim(),
-    })
+    const action = viewTab === "pinned" ? "add_pin" : "add_question";
+    const identityKey = JSON.stringify([serverId, agentId, action]);
+    const entryId = draftEntryIds.current.get(identityKey) ?? globalThis.crypto.randomUUID();
+    draftEntryIds.current.set(identityKey, entryId);
+    void save({ agentId, action, entryId, text: pinText.trim() })
       .then(() => {
-        draftEntryId.current = null;
+        draftEntryIds.current.delete(identityKey);
         setPinText("");
         noteInput.current?.replaceText("");
         return;
       })
       .catch(() => undefined);
-  }, [save, agentId, pinText, viewTab, saving]);
+  }, [save, agentId, serverId, pinText, viewTab, saving]);
 
   const header = useMemo(
     () => (
@@ -216,6 +229,14 @@ export function CompanionFeed({
           <View style={styles.notice} testID="companion-stream-connection">
             {connection === "connecting" ? <ActivityIndicator size="small" /> : null}
             <Text style={styles.description}>{t("agentPanel.stream.offline")}</Text>
+          </View>
+        ) : null}
+
+        {captureDegraded ? (
+          <View style={styles.notice} testID="companion-stream-degraded">
+            <Text accessibilityRole="alert" style={styles.description}>
+              {t("globalStream.captureDegraded")}
+            </Text>
           </View>
         ) : null}
 
@@ -284,6 +305,7 @@ export function CompanionFeed({
             <Button
               onPress={handleSubmitPin}
               disabled={saving || connection !== "online" || !pinText.trim()}
+              testID="note-submit"
             >
               {t(viewTab === "pinned" ? "agentPanel.stream.addNote" : "globalStream.addQuestion")}
             </Button>
@@ -293,6 +315,7 @@ export function CompanionFeed({
     ),
     [
       connection,
+      captureDegraded,
       viewTab,
       filter,
       onlyOpen,

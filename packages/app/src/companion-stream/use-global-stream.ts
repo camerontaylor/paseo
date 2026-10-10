@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import type { StreamListOptions, StreamRow } from "@getpaseo/protocol/global-stream";
+import { useTranslation } from "react-i18next";
 import { getHostRuntimeStore, isHostRuntimeConnected, useHosts } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
 import { useFetchQueries } from "@/data/query";
@@ -23,6 +24,7 @@ export function useGlobalStream(
     () => runtime.getVersion(),
   );
   const sessions = useSessionStore((state) => state.sessions);
+  const { t } = useTranslation();
   const [depth, setDepth] = useState(1);
   const selected = hosts.filter((host) => !options.serverId || host.serverId === options.serverId);
   const availability = selected.map((host) => {
@@ -112,9 +114,9 @@ export function useGlobalStream(
   ]);
   const notices = selected.flatMap((host, index) => {
     if (availability[index] === "offline")
-      return [`${host.label}: offline — cached items may be out of date`];
+      return [`${host.label}: ${t("globalStream.offlineNotice")}`];
     if (availability[index] === "upgrade")
-      return [`${host.label}: update this host to use global Stream`];
+      return [`${host.label}: ${t("globalStream.upgradeNotice")}`];
     const error = results[index].error;
     return error ? [`${host.label}: ${error.message}`] : [];
   });
