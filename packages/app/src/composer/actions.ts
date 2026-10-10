@@ -2,6 +2,7 @@ import type { SelectedFile } from "@/attachments/selected-file";
 import type { ForgeSearchItem } from "@getpaseo/protocol/messages";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import type {
+  AgentAttachmentWire,
   AgentQueueSnapshot,
   QueuedAgentDeliveryIntent,
   QueuedAgentMessageDeliveryState,
@@ -21,6 +22,11 @@ import {
   type ComposerAttachmentSubmitFormat,
 } from "@/composer/attachments/submit";
 import { toQueuedComposerAttachments } from "@/composer/queue-sync";
+import {
+  QueueRevisionConflictError,
+  serializeQueueOperation,
+  type QueueOutboxFlushClient,
+} from "@/stores/queue-outbox-store/model";
 import { createUserMessage, generateMessageId, type UserMessageItem } from "@/types/stream";
 import type { MessageSubmissionRejectionOutcome } from "@/composer/submission/model";
 import type { PickedImageAttachmentInput } from "@/hooks/image-attachment-picker";
@@ -42,6 +48,13 @@ export interface QueuedComposerMessage {
    * once it exhausted its retries without ever reaching the daemon.
    */
   syncState?: "pending" | "failed";
+  /**
+   * The daemon's wire-form attachments, carried so a text-only inline edit can
+   * re-send the full payload (the update RPC clears omitted fields).
+   */
+  wireAttachments?: AgentAttachmentWire[];
+  /** Durable cancellation intent mirrored from the outbox entry. */
+  removalRequested?: boolean;
 }
 
 export interface AttachmentPersister {
@@ -73,7 +86,7 @@ export interface ComposerSendClient {
       images: Array<{ data: string; mimeType: string }>;
       attachments: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
     },
-  ) => Promise<void>;
+  ) => Promise<{ queued: boolean } | void>;
   uploadFile: (input: { fileName: string; mimeType: string; bytes: Uint8Array }) => Promise<{
     requestId: string;
     file: {
@@ -237,13 +250,20 @@ export async function dispatchComposerAgentMessage(
   input.submission.begin(input.agentId, userMessage);
   try {
     const imagesData = await input.encodeImages(wirePayload.images);
-    await input.client.sendAgentMessage(input.agentId, input.text, {
+    const result = await input.client.sendAgentMessage(input.agentId, input.text, {
       messageId: clientMessageId,
       ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),
       images: imagesData ?? [],
       attachments: wirePayload.attachments,
     });
-    input.submission.accept(input.agentId, clientMessageId);
+    if (result !== undefined && "queued" in result && result.queued) {
+      // Queue admission is not provider submission. Retire only the optimistic
+      // bubble; the reject preserves a canonical echo that raced the RPC
+      // response (observeMessageSubmissionCanonical).
+      input.submission.reject(input.agentId, clientMessageId);
+    } else {
+      input.submission.accept(input.agentId, clientMessageId);
+    }
   } catch (error) {
     input.submission.reject(input.agentId, clientMessageId);
     throw error;
@@ -495,6 +515,7 @@ export interface ComposerQueueClient {
     itemId: string,
     expectedRevision: number,
   ) => Promise<AgentQueueSnapshot>;
+  listQueuedAgentMessages: (agentId: string) => Promise<AgentQueueSnapshot>;
   getQueuedAgentMessageImages: (
     agentId: string,
     itemId: string,
@@ -504,8 +525,11 @@ export interface ComposerQueueClient {
 /**
  * Durable copy of an enqueue until the daemon acknowledges it. Backed by the
  * queue outbox store; actions only see this narrow writer so they stay pure.
+ * `add` resolves only once the entry is persisted; `flush` pushes un-acked
+ * entries to the daemon.
  */
 export interface QueueOutboxWriter {
+  serverId?: string;
   add: (entry: {
     agentId: string;
     itemId: string;
@@ -514,8 +538,9 @@ export interface QueueOutboxWriter {
     images: Array<{ data: string; mimeType: string }>;
     attachments: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
     composerAttachments: QueuedComposerAttachment[];
-  }) => void;
-  remove: (itemId: string) => void;
+  }) => void | Promise<void>;
+  remove: (itemId: string) => void | Promise<void>;
+  flush?: () => Promise<void>;
 }
 
 export interface QueueComposerMessageOnServerInput {
@@ -550,6 +575,57 @@ export interface QueueComposerMessageOnServerInput {
 export async function queueComposerMessageOnServer(
   input: QueueComposerMessageOnServerInput,
 ): Promise<QueueComposerMessageResult & { error?: string }> {
+  if (input.outbox?.flush && input.outbox.serverId) {
+    // Durable path: the full wire payload is persisted before this resolves,
+    // and no optimistic row is written — the row renders from the outbox
+    // overlay until a snapshot acks the item, so there is exactly one
+    // canonical row per admitted message.
+    const outbox = input.outbox;
+    const flush = input.outbox.flush;
+    const serverId = outbox.serverId;
+    if (!serverId || !flush) {
+      return { queued: null, error: i18n.t("composer.errors.queuedPersistFailed") };
+    }
+    return serializeQueueOperation(
+      JSON.stringify(["prepare", serverId, input.agentId]),
+      async () => {
+        const text = input.text.trim();
+        if (!text && input.attachments.length === 0) return { queued: null };
+        const queued = { id: generateMessageId(), text, attachments: input.attachments };
+        try {
+          const wirePayload = splitComposerAttachmentsForSubmit(input.attachments, {
+            format: input.attachmentSubmitFormat,
+          });
+          const images = await input.encodeImages(wirePayload.images);
+          if (wirePayload.images.length > 0 && images?.length !== wirePayload.images.length) {
+            throw new Error(i18n.t("composer.errors.queuedPersistFailed"));
+          }
+          await outbox.add({
+            agentId: input.agentId,
+            itemId: queued.id,
+            text,
+            intent: "queue",
+            images: images ?? [],
+            attachments: wirePayload.attachments,
+            composerAttachments: toQueuedComposerAttachments(input.attachments),
+          });
+        } catch (error) {
+          return {
+            queued: null,
+            error:
+              error instanceof Error
+                ? error.message
+                : i18n.t("composer.errors.queuedPersistFailed"),
+          };
+        }
+        void flush().catch((flushError) => {
+          console.error("[queue-outbox] flush failed:", flushError);
+        });
+        return { queued };
+      },
+    );
+  }
+
   const optimistic = queueComposerMessage({
     agentId: input.agentId,
     text: input.text,
@@ -592,10 +668,14 @@ export async function queueComposerMessageOnServer(
     attachments: wirePayload.attachments,
     composerAttachments: toQueuedComposerAttachments(input.attachments),
   };
-  input.outbox?.add(enqueueInput);
+  try {
+    await input.outbox?.add(enqueueInput);
+  } catch (error) {
+    return rollBack(error);
+  }
   try {
     const snapshot = await input.client.enqueueAgentMessage(enqueueInput);
-    input.outbox?.remove(enqueueInput.itemId);
+    await input.outbox?.remove(enqueueInput.itemId);
     input.applySnapshot(snapshot);
     return optimistic;
   } catch (error) {
@@ -606,6 +686,251 @@ export async function queueComposerMessageOnServer(
     }
     return rollBack(error);
   }
+}
+
+export interface QueueSubmitClearingDecision {
+  clearText: boolean;
+  clearAttachments: boolean;
+}
+
+/**
+ * The liveness decision for clearing after a queue admission: input the user
+ * has already replaced during the await survives; input that still matches
+ * what was submitted is cleared.
+ */
+export function resolveQueueSubmitClearing(input: {
+  liveText: string;
+  submittedText: string;
+  liveAttachments: readonly unknown[];
+  submittedAttachments: readonly unknown[];
+}): QueueSubmitClearingDecision {
+  return {
+    clearText: input.liveText === input.submittedText,
+    clearAttachments: input.liveAttachments === input.submittedAttachments,
+  };
+}
+
+/**
+ * The clearing owner for queue admissions. Runs the submit, then clears only
+ * after the queue resolved and only input the user has not replaced. Errors
+ * are normalized and rethrown — surfacing belongs to the entry point that
+ * invoked the queue path (submit, the queue button, or dictation), exactly
+ * once per path.
+ */
+export interface QueuedSubmissionOwner {
+  /**
+   * The clearing baseline: the raw live input captured at submit time. The
+   * submitted payload may be trimmed or rebuilt (workspace attachments) and
+   * must not participate in this comparison.
+   */
+  submittedText: string;
+  submittedAttachments: readonly ComposerAttachment[];
+  /** The outgoing payload handed to the queue — the sent-context cleanup receives this. */
+  submittedOutgoing?: readonly ComposerAttachment[];
+  getLiveText: () => string;
+  getLiveAttachments: () => readonly ComposerAttachment[];
+  clearText: () => void;
+  clearAttachments: () => void;
+  resetSuppression?: () => void;
+  clearSentAttachments?: (attachments: readonly ComposerAttachment[]) => void;
+}
+
+export async function runQueuedSubmission(
+  owner: QueuedSubmissionOwner,
+  submit: () => Promise<QueueComposerMessageResult & { error?: string }>,
+): Promise<void> {
+  let result: QueueComposerMessageResult & { error?: string };
+  try {
+    result = await submit();
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(i18n.t("composer.errors.queuedPersistFailed"));
+  }
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  if (!result.queued) return;
+  const decision = resolveQueueSubmitClearing({
+    liveText: owner.getLiveText(),
+    submittedText: owner.submittedText,
+    liveAttachments: owner.getLiveAttachments(),
+    submittedAttachments: owner.submittedAttachments,
+  });
+  if (decision.clearText) {
+    owner.clearText();
+    owner.resetSuppression?.();
+  }
+  if (decision.clearAttachments) {
+    owner.clearAttachments();
+  }
+  owner.clearSentAttachments?.(owner.submittedOutgoing ?? owner.submittedAttachments);
+}
+
+/**
+ * The one QueueOutboxFlushClient construction point. Every outbox dispatch
+ * entry — the reconnect flush, the composer's flush, and explicit retries —
+ * goes through this adapter, so tombstoned removals ride the same
+ * revision-checked delete everywhere. A revision conflict refreshes the queue
+ * (via onRevisionConflict) and throws QueueRevisionConflictError so the flush
+ * lane can re-dispatch with a fresh reservation.
+ */
+export function createQueueOutboxFlushClient(input: {
+  client: ComposerQueueClient;
+  getAppliedRevision: (agentId: string) => number;
+  onRevisionConflict?: (agentId: string) => void | Promise<void>;
+}): QueueOutboxFlushClient {
+  return {
+    enqueueAgentMessage: (dispatch) => input.client.enqueueAgentMessage(dispatch),
+    removeQueuedAgentMessage: async (agentId, itemId) => {
+      try {
+        return await input.client.deleteQueuedAgentMessage(
+          agentId,
+          itemId,
+          input.getAppliedRevision(agentId),
+        );
+      } catch (error) {
+        if (!isQueueRevisionConflictError(error)) {
+          throw error;
+        }
+        await input.onRevisionConflict?.(agentId);
+        throw new QueueRevisionConflictError();
+      }
+    },
+  };
+}
+
+export type QueuedEditSaveDecision =
+  | { kind: "noop" }
+  | { kind: "conflict"; message: string }
+  | { kind: "rpc"; revision: number };
+
+/**
+ * The queued-edit save decision, made before any RPC: a no-op save (text
+ * unchanged from the row), a fresh-snapshot conflict (the applied revision
+ * moved past the edit-start baseline — an intervening remote edit), or a
+ * revision-checked update. While the conflict fence stands, only an explicit
+ * force (the user's "Save anyway") is eligible, and it saves against the
+ * current applied revision.
+ */
+export function resolveQueuedEditSave(input: {
+  text: string;
+  baselineText: string | undefined;
+  baselineRevision: number;
+  appliedRevision: number;
+  conflicted: boolean;
+  force: boolean;
+  conflictMessage: string;
+}): QueuedEditSaveDecision {
+  const baselineRevision = input.force ? input.appliedRevision : input.baselineRevision;
+  if (input.conflicted && !input.force) {
+    return { kind: "conflict", message: input.conflictMessage };
+  }
+  if (input.baselineText !== undefined && input.text === input.baselineText && !input.force) {
+    return { kind: "noop" };
+  }
+  if (!input.force && input.appliedRevision > input.baselineRevision) {
+    return { kind: "conflict", message: input.conflictMessage };
+  }
+  return { kind: "rpc", revision: baselineRevision };
+}
+
+/**
+ * Classifies a failed queued-edit save: a revision conflict keeps the conflict
+ * fence standing (implicit saves stay blocked), anything else is surfaced as
+ * the failure message. Storage and transport failures are both actionable.
+ */
+export function resolveQueuedEditFailure(
+  error: unknown,
+  labels: { conflictMessage: string; persistMessage: string },
+): { conflicted: boolean; message: string } {
+  if (isQueueRevisionConflictError(error)) {
+    return { conflicted: true, message: labels.conflictMessage };
+  }
+  return {
+    conflicted: false,
+    message: error instanceof Error ? error.message : labels.persistMessage,
+  };
+}
+
+export type QueuedEditFinalization =
+  | {
+      /** A newer checkpoint landed during the save: keep it and advance its baseline. */
+      kind: "retainDraft";
+      baseline: { itemId: string; text: string; baselineRevision: number };
+    }
+  | { kind: "clear" }
+  | {
+      /** The edit's owner is gone (discarded, finalized, or replaced by a
+       * remount): an old completion must never recreate or overwrite it. */
+      kind: "abandon";
+    };
+
+/**
+ * Version-safe, ownership-aware finalization: the draft version captured
+ * before the save is compared against the store after it, and the edit's
+ * ownership is re-verified. Unchanged version with a live record — the edit
+ * clears. A moved version with a live record — the user typed during the save;
+ * that newer checkpoint is kept and its baseline advances to the confirmed
+ * generation. A missing record (discarded or finalized mid-save) or a replaced
+ * owner generation (remount) — the completion abandons: recreating or
+ * overwriting would resurrect discarded work or clobber a replacement
+ * editor's baseline.
+ */
+export function resolveQueuedEditFinalization(input: {
+  savedVersion: number | undefined;
+  currentVersion: number | undefined;
+  /** The working record is present AND lifecycle-active: a cleared edit keeps
+   * a "sent" record behind, which is NOT the edit anymore. */
+  activeRecordExists: boolean;
+  ownerGenerationChanged: boolean;
+  latestText: string;
+  confirmedText: string;
+  confirmedRevision: number;
+  itemId: string;
+}): QueuedEditFinalization {
+  if (input.ownerGenerationChanged || !input.activeRecordExists) {
+    return { kind: "abandon" };
+  }
+  if (input.currentVersion !== input.savedVersion) {
+    return {
+      kind: "retainDraft",
+      baseline: {
+        itemId: input.itemId,
+        text: input.confirmedText,
+        baselineRevision: input.confirmedRevision,
+      },
+    };
+  }
+  return { kind: "clear" };
+}
+
+export interface QueuedEditRpcPayload {
+  text: string;
+  expectedRevision: number;
+  images?: Array<{ data: string; mimeType: string }>;
+  attachments?: AgentAttachmentWire[];
+  composerAttachments: QueuedComposerAttachment[];
+}
+
+/**
+ * Assembles the full update payload for a text-only queued-row edit. The
+ * update RPC clears omitted fields, so the row's complete attachment payload —
+ * wire-form attachments, rehydrated image bytes, and composer attachments —
+ * rides along unchanged; only the text differs.
+ */
+export function resolveQueuedEditRpcPayload(input: {
+  text: string;
+  expectedRevision: number;
+  images: ReadonlyArray<{ data: string; mimeType: string }>;
+  wireAttachments: readonly AgentAttachmentWire[] | undefined;
+  attachments: readonly ComposerAttachment[] | undefined;
+}): QueuedEditRpcPayload {
+  return {
+    text: input.text,
+    expectedRevision: input.expectedRevision,
+    ...(input.images.length ? { images: [...input.images] } : {}),
+    ...(input.wireAttachments?.length ? { attachments: [...input.wireAttachments] } : {}),
+    composerAttachments: toQueuedComposerAttachments([...(input.attachments ?? [])]),
+  };
 }
 
 export function removeQueuedComposerMessageLocally(input: {

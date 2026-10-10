@@ -19,6 +19,7 @@ import { type ViewedTimelineOwner } from "@/timeline/viewed-timeline-sync";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import { parseServerInfoStatusPayload } from "@getpaseo/protocol/messages";
 import { flushQueueOutboxForServer } from "@/stores/queue-outbox-store";
+import { createServerQueueFlushClient } from "@/composer/server-queue-flush-client";
 import {
   buildAgentAttentionNotificationPayload,
   type AgentAttentionReason,
@@ -629,9 +630,14 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         if (serverInfo.features?.durableAgentQueueV1 === true) {
           void flushQueueOutboxForServer({
             serverId,
-            client,
+            client: createServerQueueFlushClient({ client, serverId }),
             applySnapshot: (snapshot) =>
               useSessionStore.getState().applyAgentQueueSnapshot(serverId, snapshot),
+          }).catch((error) => {
+            // Failures are surfaced through the outbox storage-error state and
+            // the queue track; this keeps the reconnect flush from becoming an
+            // unhandled rejection.
+            console.error("[queue-outbox] reconnect flush failed:", error);
           });
         }
         return;

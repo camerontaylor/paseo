@@ -49,6 +49,9 @@ export function toQueuedComposerMessage(item: QueuedAgentMessage): QueuedCompose
     id: item.id,
     text: item.text,
     attachments: toComposerAttachments(item.composerAttachments),
+    // The wire form rides along so a text-only inline edit can re-send the
+    // full payload — the update RPC clears omitted attachment fields.
+    wireAttachments: item.attachments,
     deliveryState: item.deliveryState,
     lastError: item.lastError,
   };
@@ -91,11 +94,89 @@ export function appendPendingQueueRows(
   const present = new Set(items.map((item) => item.id));
   const rows = pending
     .filter((entry) => !present.has(entry.itemId))
-    .map((entry) => ({
-      id: entry.itemId,
-      text: entry.text,
-      attachments: toComposerAttachments(entry.composerAttachments),
-      syncState: entry.failedAt === undefined ? ("pending" as const) : ("failed" as const),
-    }));
+    .map((entry) => {
+      const row: QueuedComposerMessage = {
+        id: entry.itemId,
+        text: entry.text,
+        attachments: toComposerAttachments(entry.composerAttachments),
+        syncState: entry.failedAt === undefined ? ("pending" as const) : ("failed" as const),
+      };
+      // An outbox-only tombstone has no host row to annotate later: carry the
+      // cancellation onto the appended row so its discard stays rejected.
+      if (entry.removalRequested) {
+        row.removalRequested = true;
+      }
+      return row;
+    });
   return rows.length === 0 ? items : [...items, ...rows];
+}
+
+/**
+ * Outbox entry ids the daemon has not acknowledged yet. These rows render as
+ * waiting-to-sync and cannot be edited or sent until a snapshot includes them.
+ */
+export function getPendingQueueMessageIds(
+  pending: readonly PendingQueueEnqueue[],
+  acceptedIds: ReadonlySet<string> | undefined,
+): ReadonlySet<string> {
+  return new Set(
+    pending
+      .filter((entry) => entry.removalRequested || !acceptedIds?.has(entry.itemId))
+      .map((entry) => entry.itemId),
+  );
+}
+
+/**
+ * The queue track's single reconciliation point: stored rows are snapshot rows
+ * only, so the composer overlays the durable outbox here. Failed entries
+ * annotate their rows (and re-append rows this device lost, e.g. after a
+ * restart) so an enqueue that exhausted its retries stays visible with
+ * explicit retry/discard instead of dropping.
+ */
+export function annotateQueueRows(input: {
+  rows: readonly QueuedComposerMessage[];
+  entries: readonly PendingQueueEnqueue[];
+}): QueuedComposerMessage[] {
+  const failedIds = new Set(
+    input.entries.filter((entry) => entry.failedAt !== undefined).map((entry) => entry.itemId),
+  );
+  const tombstonedIds = new Set(
+    input.entries.filter((entry) => entry.removalRequested).map((entry) => entry.itemId),
+  );
+  const annotated = input.rows.map((row) => {
+    const next = {
+      ...row,
+      ...(tombstonedIds.has(row.id) ? { removalRequested: true as const } : {}),
+    };
+    return failedIds.has(row.id) && row.syncState !== "failed"
+      ? { ...next, syncState: "failed" as const }
+      : next;
+  });
+  return appendPendingQueueRows(annotated, input.entries);
+}
+
+export interface QueueStorageErrorRow {
+  id: "queue-storage-error";
+  messageKey: "composer.errors.queuedPersistFailed";
+  entryText: string | null;
+}
+
+/**
+ * The rendered storage-error descriptor for the queue track: presence means the
+ * track shows the error row with retry/dismiss affordances, even when no queue
+ * rows are visible.
+ */
+export function resolveQueueStorageErrorRow(
+  storageError: { itemId: string | null } | null | undefined,
+  entries: readonly PendingQueueEnqueue[],
+): QueueStorageErrorRow | null {
+  if (!storageError) return null;
+  const entry = storageError.itemId
+    ? entries.find((candidate) => candidate.itemId === storageError.itemId)
+    : undefined;
+  return {
+    id: "queue-storage-error",
+    messageKey: "composer.errors.queuedPersistFailed",
+    entryText: entry?.text ?? null,
+  };
 }

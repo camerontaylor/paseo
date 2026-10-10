@@ -195,3 +195,41 @@ describe("draft-store normalization", () => {
     });
   });
 });
+
+describe("editDraftRecordText queued-edit durability", () => {
+  const baseRecord = {
+    input: {
+      text: "row text",
+      attachments: [],
+      queueEdit: { itemId: "item-1", baselineRevision: 4 },
+    },
+    lifecycle: "active" as const,
+    updatedAt: 1,
+    version: 3,
+  };
+
+  it("keepActive retains an in-progress edit as active and carries the metadata", () => {
+    const emptied = editDraftRecordText(baseRecord, "", 2, true);
+    // An in-progress clearing edit survives: the queued row's edit is not lost.
+    expect(emptied.lifecycle).toBe("active");
+    expect(emptied.input.text).toBe("");
+    expect(emptied.input.queueEdit).toEqual({ itemId: "item-1", baselineRevision: 4 });
+    expect(emptied.version).toBe(4);
+  });
+
+  it("without keepActive, emptying an edit abandons it (carry behavior unchanged)", () => {
+    const emptied = editDraftRecordText(baseRecord, "", 2);
+    expect(emptied.lifecycle).toBe("abandoned");
+  });
+
+  it("a non-queued-edit draft is unaffected by keepActive's metadata passthrough", () => {
+    const plain = {
+      input: { text: "plain", attachments: [] },
+      lifecycle: "active" as const,
+      updatedAt: 1,
+      version: 1,
+    };
+    const next = editDraftRecordText(plain, "next", 2, true);
+    expect(next.input).toEqual({ text: "next", attachments: [] });
+  });
+});
