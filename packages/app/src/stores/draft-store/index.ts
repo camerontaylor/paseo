@@ -43,7 +43,7 @@ interface DraftStoreActions {
   getDraftInput: (draftKey: string) => DraftInput | undefined;
   hydrateDraftInput: (input: { draftKey: string }) => Promise<DraftInput | undefined>;
   saveDraftInput: (input: { draftKey: string; draft: DraftInput }) => void;
-  editDraftText: (input: { draftKey: string; text: string }) => void;
+  editDraftText: (input: { draftKey: string; text: string; keepActive?: boolean }) => void;
   markDraftLifecycle: (input: { draftKey: string; lifecycle: DraftLifecycleState }) => void;
   clearDraftInput: (input: {
     draftKey: string;
@@ -82,6 +82,7 @@ function createDraftRecord(input: {
     input: {
       text: input.draft.text,
       attachments: input.draft.attachments.map(normalizeComposerAttachment),
+      ...(input.draft.queueEdit ? { queueEdit: input.draft.queueEdit } : {}),
     },
     lifecycle: input.lifecycle,
     updatedAt: Date.now(),
@@ -318,10 +319,10 @@ export const useDraftStore = create<DraftStore>()(
         scheduleAttachmentGc();
       },
 
-      editDraftText: ({ draftKey, text }) => {
+      editDraftText: ({ draftKey, text, keepActive }) => {
         set((state) => {
           const previous = state.drafts[draftKey];
-          const next = editDraftRecordText(previous, text, Date.now());
+          const next = editDraftRecordText(previous, text, Date.now(), keepActive === true);
           return next === previous ? state : { drafts: { ...state.drafts, [draftKey]: next } };
         });
       },
