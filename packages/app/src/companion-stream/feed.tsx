@@ -13,7 +13,9 @@ import type { ToastApi } from "@/components/toast-host";
 import { useHostRuntimeConnectionStatus, useHostRuntimeClient } from "@/runtime/host-runtime";
 import { formatMessageTimestamp } from "@/utils/time";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
+import { useSessionStore } from "@/stores/session-store";
 import { buildCompanionFeed, type CompanionFeedItem } from "./model";
+import { ArtifactPinOperations } from "./artifact-pin-operations";
 
 interface CompanionFeedProps {
   serverId: string;
@@ -53,6 +55,13 @@ export function CompanionFeed({
   const { t } = useTranslation();
   const connection = useHostRuntimeConnectionStatus(serverId);
   const client = useHostRuntimeClient(serverId);
+  const supportsWrites = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.globalStream === true,
+  );
+  const [saving, setSaving] = useState(false);
+  const draftEntryId = useRef<string | null>(null);
+  const artifactPins = useRef(new ArtifactPinOperations());
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [viewTab, setViewTab] = useState<ViewTab>("stream");
   const [filter, setFilter] = useState<StreamFilter>("all");
@@ -78,7 +87,7 @@ export function CompanionFeed({
 
         if (onlyOpen) {
           if (item.entry.kind === "question" || item.entry.kind === "feature_request") {
-            return item.entry.status === "open";
+            return isCompanionEntryPending(item.entry);
           }
           if (item.entry.kind === "permission") {
             return item.entry.status === "pending";
@@ -103,34 +112,44 @@ export function CompanionFeed({
     toast?.error(t("agentPanel.stream.mutationFailed"));
   }, [toast, t]);
 
+  const save = useCallback(
+    async (input: Parameters<NonNullable<typeof client>["updateStreamEntry"]>[0]) => {
+      setSaving(true);
+      setSaveError(null);
+      try {
+        if (!client || !supportsWrites || connection !== "online") {
+          throw new Error(t("globalStream.writeUnavailable"));
+        }
+        await client.updateStreamEntry(input);
+      } catch (error) {
+        setSaveError(error instanceof Error ? error.message : t("globalStream.saveFailed"));
+        reportFailure();
+        throw error;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [client, connection, supportsWrites, t, reportFailure],
+  );
   const handleUpdateStatus = useCallback(
     (entryId: string, status: "open" | "reviewed" | "done") => {
-      client
-        ?.updateCompanionEntry({ agentId, entryId, action: "update_status", status })
-        .catch(reportFailure);
+      void save({ agentId, entryId, action: "update_status", status }).catch(() => undefined);
     },
-    [client, agentId, reportFailure],
+    [save, agentId],
   );
 
   const handleRemovePin = useCallback(
     (entryId: string) => {
-      client?.updateCompanionEntry({ agentId, entryId, action: "remove_pin" }).catch(reportFailure);
+      void save({ agentId, entryId, action: "remove_pin" }).catch(() => undefined);
     },
-    [client, agentId, reportFailure],
+    [save, agentId],
   );
 
   const handlePinArtifact = useCallback(
     (artifact: { path: string }) => {
-      client
-        ?.updateCompanionEntry({
-          agentId,
-          action: "add_pin",
-          text: `Artifact: ${artifact.path}`,
-          sourceId: `artifact:${artifact.path}`,
-        })
-        .catch(reportFailure);
+      void artifactPins.current.save(serverId, agentId, artifact.path, save).catch(() => undefined);
     },
-    [client, agentId, reportFailure],
+    [save, serverId, agentId],
   );
 
   const renderItem = useCallback(
@@ -151,6 +170,7 @@ export function CompanionFeed({
           onReplyInChat={onReplyInChat}
           onUpdateStatus={handleUpdateStatus}
           onRemovePin={handleRemovePin}
+          disabled={saving || !supportsWrites || connection !== "online"}
         />
       ),
     [
@@ -162,18 +182,29 @@ export function CompanionFeed({
       onReplyInChat,
       handleUpdateStatus,
       handleRemovePin,
+      saving,
+      supportsWrites,
+      connection,
     ],
   );
 
   const handleToggleOnlyOpen = useCallback(() => setOnlyOpen((v) => !v), []);
   const handleSubmitPin = useCallback(() => {
-    if (!pinText.trim()) return;
-    client
-      ?.updateCompanionEntry({ agentId, action: "add_pin", text: pinText.trim() })
-      .catch(reportFailure);
-    setPinText("");
-    noteInput.current?.replaceText("");
-  }, [client, agentId, pinText, reportFailure]);
+    if (!pinText.trim() || saving) return;
+    void save({
+      agentId,
+      action: viewTab === "pinned" ? "add_pin" : "add_question",
+      entryId: (draftEntryId.current ??= globalThis.crypto.randomUUID()),
+      text: pinText.trim(),
+    })
+      .then(() => {
+        draftEntryId.current = null;
+        setPinText("");
+        noteInput.current?.replaceText("");
+        return;
+      })
+      .catch(() => undefined);
+  }, [save, agentId, pinText, viewTab, saving]);
 
   const header = useMemo(
     () => (
@@ -225,22 +256,54 @@ export function CompanionFeed({
           </View>
         )}
 
-        {viewTab === "pinned" && (
+        {saveError ? (
+          <Text accessibilityRole="alert" style={styles.description}>
+            {saveError}
+          </Text>
+        ) : null}
+        {saving ? <Text style={styles.description}>{t("globalStream.saving")}</Text> : null}
+        {!supportsWrites ? (
+          <Text style={styles.description}>{t("globalStream.writeUnavailable")}</Text>
+        ) : null}
+        {supportsWrites && (
           <View style={styles.pinInputContainer}>
             <NoteInput
               ref={noteInput}
               style={styles.pinInput}
-              placeholder={t("agentPanel.stream.notePlaceholder")}
+              placeholder={t(
+                viewTab === "pinned"
+                  ? "agentPanel.stream.notePlaceholder"
+                  : "globalStream.questionPlaceholder",
+              )}
+              maxLength={4000}
+              editable={!saving}
               initialValue=""
               onChangeText={setPinText}
               onSubmitEditing={handleSubmitPin}
             />
-            <Button onPress={handleSubmitPin}>{t("agentPanel.stream.addNote")}</Button>
+            <Button
+              onPress={handleSubmitPin}
+              disabled={saving || connection !== "online" || !pinText.trim()}
+            >
+              {t(viewTab === "pinned" ? "agentPanel.stream.addNote" : "globalStream.addQuestion")}
+            </Button>
           </View>
         )}
       </View>
     ),
-    [connection, viewTab, filter, onlyOpen, t, handleToggleOnlyOpen, handleSubmitPin],
+    [
+      connection,
+      viewTab,
+      filter,
+      onlyOpen,
+      t,
+      handleToggleOnlyOpen,
+      handleSubmitPin,
+      supportsWrites,
+      saveError,
+      saving,
+      pinText,
+    ],
   );
 
   const empty = useMemo(
@@ -312,14 +375,16 @@ function CardSeparator() {
 }
 
 // eslint-disable-next-line complexity
-function EntryCard({
+export function EntryCard({
   entry,
   onReturnToChat,
   onReplyInChat,
   onUpdateStatus,
   onRemovePin,
+  disabled = false,
 }: {
   entry: CompanionEntry;
+  disabled?: boolean;
   onReturnToChat: () => void;
   onReplyInChat: () => void;
   onUpdateStatus: (id: string, status: "open" | "reviewed" | "done") => void;
@@ -411,7 +476,7 @@ function EntryCard({
       <View style={styles.entryHeaderRow}>
         <Text style={styles.eyebrow}>{formatMessageTimestamp(new Date(entry.timestamp))}</Text>
         {entry.kind === "pin" ? (
-          <Button variant="ghost" size="sm" onPress={handleRemovePinLocal}>
+          <Button variant="ghost" size="sm" onPress={handleRemovePinLocal} disabled={disabled}>
             <Text style={styles.description}>{t("agentPanel.stream.unpin")}</Text>
           </Button>
         ) : null}
@@ -449,13 +514,13 @@ function EntryCard({
 
         {(entry.kind === "question" || entry.kind === "feature_request") && (
           <View style={styles.statusActionsRow}>
-            <Button variant="outline" onPress={handleSetOpen}>
+            <Button variant="outline" onPress={handleSetOpen} disabled={disabled}>
               {t("agentPanel.stream.statusOpen")}
             </Button>
-            <Button variant="outline" onPress={handleSetReviewed}>
+            <Button variant="outline" onPress={handleSetReviewed} disabled={disabled}>
               {t("agentPanel.stream.statusReviewed")}
             </Button>
-            <Button variant="outline" onPress={handleSetDone}>
+            <Button variant="outline" onPress={handleSetDone} disabled={disabled}>
               {t("agentPanel.stream.statusDone")}
             </Button>
           </View>
