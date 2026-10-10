@@ -25,6 +25,8 @@ import {
   toAgentPersistenceHandle,
 } from "../persistence-hooks.js";
 import { restoreCompanionEntries } from "./companion-stream.js";
+import { STREAM_SNAPSHOT_ENTRY_LIMIT, boundEntryTextForTransport } from "./global-stream.js";
+import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 export type { ManagedAgent };
 
 interface ProjectionOptions {
@@ -143,7 +145,8 @@ export function toAgentPayload(
     title: options?.title ?? null,
     labels: agent.labels,
     artifacts: agent.artifacts ?? [],
-    companionEntries: agent.companionEntries ?? [],
+    companionEntries: projectCompanionEntriesForWire(agent.companionEntries),
+    ...(agent.streamCaptureDegraded ? { captureDegraded: true } : {}),
   };
 
   const usage = sanitizeUsage(agent.lastUsage);
@@ -254,9 +257,21 @@ export function buildStoredAgentPayload(
     archivedAt: record.archivedAt ?? null,
     labels: normalizeLabels(record.labels),
     artifacts: record.artifacts ?? [],
-    companionEntries: restoreCompanionEntries(record),
+    companionEntries: projectCompanionEntriesForWire(restoreCompanionEntries(record)),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
   };
+}
+
+/**
+ * Wire bound for the snapshot payload's companion entries: the stored history
+ * is unbounded by design, the payload is a transport view of it. Last 50
+ * entries, each read-time bounded to the excerpt limit. Storage is untouched.
+ */
+function projectCompanionEntriesForWire(entries: CompanionEntry[] | undefined): CompanionEntry[] {
+  return (entries ?? []).slice(-STREAM_SNAPSHOT_ENTRY_LIMIT).map((entry) => {
+    const bounded = boundEntryTextForTransport(entry);
+    return bounded === entry ? entry : bounded;
+  });
 }
 
 export function toAgentListItemPayload(agent: AgentSnapshotPayload): AgentListItemPayload {
