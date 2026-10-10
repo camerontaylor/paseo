@@ -47,3 +47,15 @@ Serial. At most one implementation worker active. Sol gate between stages; packa
 ## Standing out-of-scope list
 
 Live `~/.paseo-fork/manifest.txt` edit; `mine` rebuild/change; releases, deployment, activation, publication; remote pushes; production daemon on port 6767 (no restart/access/repair); live-home audit or repair (C8 Track 2); edits to the frozen refs or to the source checkout's unrelated dirty files.
+
+## Re-pin record — host migration neptune → uranus (2026-10-10)
+
+Operations moved from neptune (macOS; network heavily throttled) to uranus (Ubuntu cloud box, `/home/ctaylor/repos/paseo`). All campaign work was preserved as pushed commits before the move. The frozen heads above were re-verified identical on uranus; nothing about the basket changed.
+
+- **Coordinator:** the neptune GLM coordinator (`acb705cc-…`) is replaced by a Claude Opus 5.5 coordinator on uranus.
+- **Advisor re-pin.** The authorization record says the Sol advisor is "reused — never relaunched." Sol `54e4d36e-38b4-4efa-8c19-c0aca88fa575` lives on neptune and cannot be reached reliably from uranus, so a new Sol was launched on uranus: `3f2c7ea5-1328-4cd7-85c3-8c3d3ddbe4ff` (`codex/gpt-6.1-sol`, full-access, low thinking, read-only reviews, reused for the rest of the campaign). Its first prompt carried the full C1 log and the approved C1 s2 PREFLIGHT verbatim, so prior verdicts bind it. Protocol is unchanged. This is the only advisor relaunch; any further one needs its own record here.
+- **Plan location.** The plan is now committed on this branch at `plans/ralplan-fork-source-refresh.md` (sha256 unchanged, `abfe8751…0605c53`). This branch is the control branch from now on.
+- **Remote pushes (out-of-scope change).** Cameron authorized pushing campaign branches to `origin` (git@github.com:camerontaylor/paseo.git) to preserve work: `fork/*refresh*`, `fork/source-refresh-control-20261010`, `fork/acp-diagnostics-0.11.1`, `fork/queue-alias-guard-0.11.1`, and `handover/*`, after each committed stage. No PRs. No pushes to `custom`, `mine`, or the frozen fork/* heads. The "remote pushes" entry in the standing out-of-scope list is narrowed accordingly; everything else on that list stands.
+- **C1 s2 starting point.** The neptune worker `24636e40-330f-47a2-bde0-8817265461c1` was still running at handover and could not be cancelled. Its uncommitted tree was snapshotted as `handover/c1-s2-wip-20261010` (`b5dd0d2e2`, on `db54e7d71`). That snapshot is authoritative; neptune edits after it are ignored.
+- **Neptune `custom` drift.** Neptune's local `custom` moved to `c07c4e528` after the freeze. That move is outside this campaign; the basket keeps `cbc201718`.
+- **Workers.** `claude-zai/glm-5.3-flash` (bypass, high thinking) stays the assigned worker model. Muse Code is listed but `unavailable`/`Disabled` on the uranus daemon; it is not used unless Cameron enables it.
