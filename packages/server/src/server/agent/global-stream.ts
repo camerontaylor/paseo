@@ -138,7 +138,11 @@ export function boundEntryTextForTransport(entry: CompanionEntry): CompanionEntr
     bounded.answer &&
     bounded.answer.length > COMPANION_TEXT_LIMIT
   ) {
-    bounded = { ...bounded, answer: bounded.answer.slice(0, COMPANION_TEXT_LIMIT) };
+    bounded = {
+      ...bounded,
+      answer: bounded.answer.slice(0, COMPANION_TEXT_LIMIT),
+      truncated: true,
+    };
   }
   return bounded;
 }

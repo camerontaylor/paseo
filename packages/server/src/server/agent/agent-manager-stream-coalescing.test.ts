@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
+import { ReleasedAgentSnapshotSchema } from "../../test-utils/released-stream-schemas.js";
 import { AgentManager, type AgentManagerEvent } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS } from "./agent-stream-coalescer.js";
@@ -1489,10 +1490,12 @@ test("Stream mutations preserve independent questions and report missing items",
 test("stream writes reject failed persistence and preserve live state for retry", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "stream-write-failure-"));
   const storage = new AgentStorage(join(workdir, "agents"), createTestLogger());
+  const logger = createTestLogger();
+  const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => logger);
   const manager = new AgentManager({
     clients: { codex: new TestAgentClient() },
     registry: storage,
-    logger: createTestLogger(),
+    logger,
   });
   const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
   await manager.flush();
@@ -1506,19 +1509,106 @@ test("stream writes reject failed persistence and preserve live state for retry"
       action: "add_question" as const,
       text: "Choose channel",
     };
+    const writesBeforeFailure = write.mock.calls.length;
     await expect(manager.updateCompanionEntry(input)).rejects.toThrow("Disk full");
+    const writesAfterFailure = write.mock.calls.length;
     expect(manager.getAgent(agent.id)?.companionEntries).toContainEqual(
       expect.objectContaining({ id: "question:draft", text: input.text }),
     );
     expect((await storage.get(agent.id))?.companionEntries ?? []).toEqual([]);
-    // The failed generation is recorded: the snapshot carries the degraded flag.
-    expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(true);
+    // The degraded log carries the errno code and the record path.
+    const degradedLogs = errorSpy.mock.calls.filter(
+      ([, msg]) => msg === "agent.manager.capture_degraded",
+    );
+    expect(degradedLogs).toHaveLength(1);
+    expect(degradedLogs[0]?.[0]).toMatchObject({ agentId: agent.id, code: "ENOSPC" });
+    expect(typeof degradedLogs[0]?.[0]?.path).toBe("string");
+    // The degraded flag reaches the wire payload…
+    const degradedPayload = toAgentPayload(manager.getAgent(agent.id)!);
+    expect(degradedPayload.captureDegraded).toBe(true);
+    // …it parses through the released snapshot schema with the flag stripped…
+    const released = ReleasedAgentSnapshotSchema.parse(degradedPayload);
+    expect("captureDegraded" in released).toBe(false);
+    // …and the transition notification never scheduled another persist.
+    expect(write.mock.calls.length).toBe(writesAfterFailure);
+    await manager.flush();
+    expect(write.mock.calls.length).toBe(writesAfterFailure);
+    expect(writesAfterFailure).toBe(writesBeforeFailure + 1);
     await manager.updateCompanionEntry(input);
     expect((await storage.get(agent.id))?.companionEntries).toContainEqual(
       expect.objectContaining({ id: "question:draft", text: input.text }),
     );
-    // A newer successful write covers the failed generation: flag cleared.
+    // A newer successful write covers the failed generation: flag cleared and
+    // the clearing reached the wire payload.
     expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(false);
+    expect(toAgentPayload(manager.getAgent(agent.id)!).captureDegraded).toBeUndefined();
+    const recovered = ReleasedAgentSnapshotSchema.parse(
+      toAgentPayload(manager.getAgent(agent.id)!),
+    );
+    expect("captureDegraded" in recovered).toBe(false);
+  } finally {
+    write.mockRestore();
+    errorSpy.mockRestore();
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a late OLDER failure never moves the degraded marker backward", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-degraded-order-"));
+  const storage = new AgentStorage(join(workdir, "agents"), createTestLogger());
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger: createTestLogger(),
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  await manager.flush();
+  const apply = storage.applySnapshot.bind(storage);
+  const barriers: Array<{ enter: Promise<void>; release: () => void; fail: boolean }> = [];
+  const write = vi.spyOn(storage, "applySnapshot").mockImplementation((async (
+    ...args: unknown[]
+  ) => {
+    const controls = barriers.shift();
+    if (!controls) return apply(...(args as Parameters<typeof storage.applySnapshot>));
+    await controls.enter;
+    if (controls.fail) {
+      throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
+    }
+    await apply(...(args as Parameters<typeof storage.applySnapshot>));
+  }) as typeof storage.applySnapshot);
+  const arm = (fail: boolean, hold = true) => {
+    let release!: () => void;
+    const enter = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    barriers.push({ enter: hold ? enter : Promise.resolve(), release, fail });
+    return release;
+  };
+  try {
+    const session = agent.session as TestAgentSession;
+    // Persist #1 (older): held in flight, will FAIL when released later.
+    const releaseOlderFailure = arm(true);
+    session.pushEvent(terminalEvent("turn_completed", "ord-1"));
+    await waitForSessionEventQueue();
+    // Persist #2 (newer): fails immediately while #1 is still in flight.
+    arm(true, false);
+    session.pushEvent(terminalEvent("turn_completed", "ord-2"));
+    await waitForSessionEventQueue();
+    await vi.waitFor(() => {
+      expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(true);
+    });
+    // The OLDER write now fails too — it must not move the marker backward
+    // (the marker stays at the newer failure) and must not clear the flag.
+    releaseOlderFailure();
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(true);
+    // A newer success clears, and the clearing reaches the wire payload.
+    session.pushEvent(terminalEvent("turn_completed", "ord-3"));
+    await waitForSessionEventQueue();
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(false);
+    expect(toAgentPayload(manager.getAgent(agent.id)!).captureDegraded).toBeUndefined();
   } finally {
     write.mockRestore();
     await manager.closeAgent(agent.id);

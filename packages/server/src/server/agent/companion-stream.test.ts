@@ -499,6 +499,32 @@ it("bounds oversized persisted entry text at read time without touching storage"
   expect(sources[0].companionEntries[0].text).toHaveLength(COMPANION_TEXT_LIMIT + 1000);
 });
 
+it("marks truncation when an oversized answer is clipped at read time", () => {
+  const oversizedAnswer: CompanionEntry = {
+    id: "qa:legacy",
+    kind: "q_and_a",
+    text: "Question",
+    answer: "a".repeat(COMPANION_TEXT_LIMIT + 500),
+    truncated: false,
+    timestamp,
+  };
+  const sources = [{ id: "a", cwd: "/project", companionEntries: [oversizedAnswer] }];
+  const page = listStreamRows(sources, {});
+  expect(page.rows[0]?.item).toMatchObject({
+    kind: "entry",
+    entry: {
+      text: "Question",
+      answer: "a".repeat(COMPANION_TEXT_LIMIT),
+      truncated: true,
+    },
+  });
+  // Storage keeps the full answer.
+  expect(sources[0].companionEntries[0].truncated).toBe(false);
+  expect(
+    (sources[0].companionEntries[0] as Extract<CompanionEntry, { kind: "q_and_a" }>).answer,
+  ).toHaveLength(COMPANION_TEXT_LIMIT + 500);
+});
+
 it("retries a pin save without duplicating the live entry after a failed acknowledgement", () => {
   const input = {
     agentId: "a",

@@ -12629,6 +12629,34 @@ test("a dormant stream mutation rejects on storage failure and recovers on retry
     // the entries (and the record's own fields), never a degraded flag.
     expect(Object.keys(stored ?? {})).not.toContain("captureDegraded");
     expect(JSON.stringify(stored)).not.toContain("captureDegraded");
+    // Lifecycle cleanup: discarding the agent state drops the dormant
+    // bookkeeping maps for the agent (fresh generations on any later write).
+    manager.deleteAgentState(agent.id);
+    const internals = manager as unknown as {
+      dormantPersistSeq: Map<string, number>;
+      dormantDegradedSeq: Map<string, number>;
+    };
+    expect(internals.dormantPersistSeq.has(agent.id)).toBe(false);
+    expect(internals.dormantDegradedSeq.has(agent.id)).toBe(false);
+    // A new dormant failure after cleanup behaves as a fresh generation.
+    const writeAgain = vi
+      .spyOn(storage, "upsert")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("No space left on device"), { code: "ENOSPC" }),
+      );
+    try {
+      await expect(
+        manager.updateCompanionEntry({
+          agentId: agent.id,
+          action: "add_pin",
+          entryId: "post-cleanup",
+          text: "Post cleanup",
+        }),
+      ).rejects.toThrow("No space left on device");
+      expect(internals.dormantDegradedSeq.has(agent.id)).toBe(true);
+    } finally {
+      writeAgain.mockRestore();
+    }
   } finally {
     write.mockRestore();
     rmSync(workdir, { recursive: true, force: true });

@@ -1,8 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { join, dirname } from "node:path";
-import { z } from "zod";
 import {
-  AgentSnapshotPayloadSchema,
+  type AgentSnapshotPayload,
   type SessionOutboundMessage,
 } from "@getpaseo/protocol/messages";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
@@ -11,6 +10,7 @@ import { createDaemonTestContext, type DaemonTestContext } from "../test-utils/i
 import { DaemonClient } from "../test-utils/daemon-client.js";
 import { createTestAgentClients } from "../test-utils/fake-agent-client.js";
 import { createMessageCollector, type MessageCollector } from "../test-utils/message-collector.js";
+import { ReleasedAgentSnapshotSchema } from "../test-utils/released-stream-schemas.js";
 
 /**
  * Durable Stream RPC surface over the real daemon, on the fake provider
@@ -19,72 +19,6 @@ import { createMessageCollector, type MessageCollector } from "../test-utils/mes
  * real handlers refusing manual entries at the carried cap, and the released
  * snapshot schema parsing an actual emitted payload.
  */
-
-// COMPAT(globalStream): released 0.11.1-fork client shapes, frozen
-// independently of the current schemas. The released client knows artifacts
-// and companionEntries; it does not know `ask` or `captureDegraded`.
-const ReleasedCompanionEntrySchema = z.discriminatedUnion("kind", [
-  z.object({
-    id: z.string(),
-    timestamp: z.string(),
-    text: z.string(),
-    truncated: z.boolean(),
-    kind: z.literal("question"),
-    status: z.enum(["open", "reviewed", "done", "reply_sent"]),
-  }),
-  z.object({
-    id: z.string(),
-    timestamp: z.string(),
-    text: z.string(),
-    truncated: z.boolean(),
-    kind: z.literal("feature_request"),
-    status: z.enum(["open", "reviewed", "done"]),
-  }),
-  z.object({
-    id: z.string(),
-    timestamp: z.string(),
-    text: z.string(),
-    truncated: z.boolean(),
-    kind: z.literal("permission"),
-    requestId: z.string(),
-    requestKind: z.enum(["tool", "plan", "question", "mode", "other"]),
-    status: z.enum(["pending", "allowed", "denied", "expired"]),
-  }),
-  z.object({
-    id: z.string(),
-    timestamp: z.string(),
-    text: z.string(),
-    truncated: z.boolean(),
-    kind: z.literal("outcome"),
-    status: z.enum(["completed", "failed", "canceled"]),
-  }),
-  z.object({
-    id: z.string(),
-    timestamp: z.string(),
-    text: z.string(),
-    truncated: z.boolean(),
-    kind: z.literal("pin"),
-    sourceId: z.string().optional(),
-  }),
-  z.object({
-    id: z.string(),
-    timestamp: z.string(),
-    text: z.string(),
-    truncated: z.boolean(),
-    kind: z.literal("q_and_a"),
-    answer: z.string().optional(),
-    questionMessageId: z.string().optional(),
-    answerMessageId: z.string().optional(),
-  }),
-]);
-
-const ReleasedAgentSnapshotSchema = AgentSnapshotPayloadSchema.omit({
-  captureDegraded: true,
-}).extend({
-  // The released payload keeps every released field (artifacts and
-  // companionEntries included) and strips only what it does not know.
-  companionEntries: z.array(ReleasedCompanionEntrySchema).optional(),
-});
 
 async function waitFor<T>(
   poll: () => T | undefined,
@@ -276,21 +210,58 @@ describe("stream durability daemon", () => {
     // Pages clamp at 50 rows even though 100 pins are stored. The edit kept
     // its original timestamp (upsert semantics), so it can sit mid-history:
     // page through everything and assert there.
-    const page = await ctx.client.listGlobalStream({ agentId: agent.id, filter: "pinned" });
-    expect(page.rows).toHaveLength(50);
-    expect(page.nextCursor).toBeTruthy();
+    const firstPage = await ctx.client.listGlobalStream({ agentId: agent.id, filter: "pinned" });
+    expect(firstPage.rows).toHaveLength(50);
+    expect(firstPage.nextCursor).toBeTruthy();
     const secondPage = await ctx.client.listGlobalStream({
       agentId: agent.id,
       filter: "pinned",
-      cursor: page.nextCursor!,
+      cursor: firstPage.nextCursor!,
     });
-    const allTexts = [...page.rows, ...secondPage.rows].map((candidate) =>
+    const allTexts = [...firstPage.rows, ...secondPage.rows].map((candidate) =>
       candidate.item.kind === "entry" ? candidate.item.entry.text : "<artifact>",
     );
     expect(allTexts).toHaveLength(100);
     expect(allTexts).toContain("Rewritten filler");
     expect(allTexts).not.toContain("Overflow");
     expect(allTexts).not.toContain("Legacy overflow");
+    // Legacy oversized text clips at 4000 with the excerpt flag (declared
+    // carried behavior); empty/whitespace text is rejected by the engine.
+    // Free one manual slot first — the legacy create consults the same cap.
+    await ctx.client.updateCompanionEntry({
+      agentId: agent.id,
+      entryId: "pin:filler-0",
+      action: "remove_pin",
+    });
+    await ctx.client.updateCompanionEntry({
+      agentId: agent.id,
+      action: "add_pin",
+      text: "y".repeat(4500),
+    });
+    await expect(
+      ctx.client.updateCompanionEntry({ agentId: agent.id, action: "add_pin", text: "   " }),
+    ).rejects.toThrow("Enter between 1 and 4000 characters");
+    let cursor: string | null = null;
+    let sawClippedLegacyPin = false;
+    do {
+      const page = await ctx.client.listGlobalStream({
+        agentId: agent.id,
+        filter: "pinned",
+        cursor: cursor ?? undefined,
+      });
+      for (const row of page.rows) {
+        if (
+          row.item.kind === "entry" &&
+          row.item.entry.kind === "pin" &&
+          row.item.entry.truncated === true &&
+          row.item.entry.text === "y".repeat(4000)
+        ) {
+          sawClippedLegacyPin = true;
+        }
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(sawClippedLegacyPin).toBe(true);
   }, 30_000);
 
   test("an emitted snapshot parses through the released snapshot schema", async () => {

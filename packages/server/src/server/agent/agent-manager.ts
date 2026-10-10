@@ -2362,7 +2362,10 @@ export class AgentManager {
     // the marker backward past a newer failure.
     const previous = agent.captureDegradedSeq;
     agent.captureDegradedSeq = previous === null ? seq : Math.max(previous, seq);
-    this.logger.error({ err: error, agentId: agent.id, code }, "agent.manager.capture_degraded");
+    this.logger.error(
+      { err: error, agentId: agent.id, code, path: this.registry?.describeRecordPath(agent.id) },
+      "agent.manager.capture_degraded",
+    );
     if (agent.streamCaptureDegraded !== true) {
       agent.streamCaptureDegraded = true;
       this.emitState(agent, { persist: false });
@@ -2385,7 +2388,10 @@ export class AgentManager {
     if (code !== "ENOSPC" && code !== "EIO") return;
     const previous = this.dormantDegradedSeq.get(agentId);
     this.dormantDegradedSeq.set(agentId, previous === undefined ? seq : Math.max(previous, seq));
-    this.logger.error({ err: error, agentId, code }, "agent.manager.capture_degraded");
+    this.logger.error(
+      { err: error, agentId, code, path: this.registry?.describeRecordPath(agentId) },
+      "agent.manager.capture_degraded",
+    );
   }
 
   private noteDormantPersistSuccess(agentId: string, seq: number): void {
@@ -4131,6 +4137,11 @@ export class AgentManager {
     this.companionCollector.clear(agentId);
     this.timelineStore.delete(agentId);
     this.paseoToolPolicies.delete(agentId);
+    // Dormant degraded bookkeeping dies with the record. This runs inside the
+    // archive/delete lifecycle lane, so no dormant write for this agent can
+    // be in flight; the next dormant write starts a fresh generation.
+    this.dormantPersistSeq.delete(agentId);
+    this.dormantDegradedSeq.delete(agentId);
     for (const event of this.sideConversations.deleteParent(agentId)) {
       this.dispatch({ type: "side_conversation", event });
     }
