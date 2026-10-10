@@ -10,6 +10,12 @@ The queue is daemon-only infrastructure (`packages/server/src/server/agent-queue
 - The daemon mirrors `agent.queue.update` broadcasts only to clients advertising `CLIENT_CAPS.durableAgentQueue`, so an old client never receives an event its outbound union cannot parse.
 - Legacy `send_agent_message_request` keeps its released receipt-backed path. It never enqueues, and admission is never inferred from a message the daemon did not classify.
 
+## Queued admission vs provider delivery
+
+A direct send response may report `queued: true` (optional, additive on `send_agent_message_response`). Queue admission alone is not provider submission: the composer retires only its optimistic bubble and submission activity — the daemon-owned queue stays the source of truth until delivery — and a canonical provider echo that raced the response is preserved (`observeMessageSubmissionCanonical`).
+
+A Codex turn start cancelled before `turn/start` was issued throws `AGENT_PROMPT_NOT_SUBMITTED`; the receipt service treats that code as "never dispatched", strips the attempt receipt, and the item returns to `pending` for the next idle boundary. A timeout or a failure after `turn/start` is never classified as safe to retry: the outcome is `uncertain` and demands an explicit retry or discard.
+
 ## Delivery lifecycle
 
 ```

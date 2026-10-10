@@ -86,7 +86,7 @@ export interface ComposerSendClient {
       images: Array<{ data: string; mimeType: string }>;
       attachments: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
     },
-  ) => Promise<void>;
+  ) => Promise<{ queued: boolean } | void>;
   uploadFile: (input: { fileName: string; mimeType: string; bytes: Uint8Array }) => Promise<{
     requestId: string;
     file: {
@@ -250,13 +250,20 @@ export async function dispatchComposerAgentMessage(
   input.submission.begin(input.agentId, userMessage);
   try {
     const imagesData = await input.encodeImages(wirePayload.images);
-    await input.client.sendAgentMessage(input.agentId, input.text, {
+    const result = await input.client.sendAgentMessage(input.agentId, input.text, {
       messageId: clientMessageId,
       ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),
       images: imagesData ?? [],
       attachments: wirePayload.attachments,
     });
-    input.submission.accept(input.agentId, clientMessageId);
+    if (result !== undefined && "queued" in result && result.queued) {
+      // Queue admission is not provider submission. Retire only the optimistic
+      // bubble; the reject preserves a canonical echo that raced the RPC
+      // response (observeMessageSubmissionCanonical).
+      input.submission.reject(input.agentId, clientMessageId);
+    } else {
+      input.submission.accept(input.agentId, clientMessageId);
+    }
   } catch (error) {
     input.submission.reject(input.agentId, clientMessageId);
     throw error;

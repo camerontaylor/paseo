@@ -5497,6 +5497,14 @@ export const SendAgentMessageResponseMessageSchema = z.object({
     agentId: z.string(),
     accepted: z.boolean(),
     error: z.string().nullable(),
+    /**
+     * True when the daemon admitted the message into its queue instead of
+     * delivering it: queue admission is not provider submission. Optional and
+     * additive — daemons that never queue omit it, and released clients strip
+     * it. See docs/queue-mirroring.md, "queued admission vs provider
+     * delivery".
+     */
+    queued: z.boolean().optional(),
   }),
 });
 
