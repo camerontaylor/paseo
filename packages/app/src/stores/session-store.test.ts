@@ -911,6 +911,47 @@ describe("durable agent queue snapshots", () => {
     expect(useQueueOutboxStore.getState().entries["pending-1"]?.failedAt).toBeDefined();
   });
 
+  it("a snapshot containing the item never acknowledges a tombstoned entry", async () => {
+    initializeTestSession();
+    await seedOutboxEntry("item-1");
+    const tombstoned = useQueueOutboxStore.getState().entries["item-1"];
+    await useQueueOutboxStore.getState().requestRemoval({
+      ...tombstoned,
+      removalRequested: true,
+    });
+    // A plain un-acked entry the snapshot acknowledges, for contrast.
+    await seedOutboxEntry("item-2");
+
+    await useSessionStore.getState().applyAgentQueueSnapshot(
+      "test-server",
+      queueSnapshot({
+        items: [
+          {
+            id: "item-1",
+            text: "first",
+            intent: "queue",
+            deliveryState: "pending",
+            attempts: 0,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "item-2",
+            text: "second",
+            intent: "queue",
+            deliveryState: "pending",
+            attempts: 0,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      }),
+    );
+
+    // The host still lists item-1, so the cancellation stands until the host
+    // confirms the removal; the plain entry is acknowledged and removed.
+    expect(useQueueOutboxStore.getState().entries["item-1"]?.removalRequested).toBe(true);
+    expect(useQueueOutboxStore.getState().entries["item-2"]).toBeUndefined();
+  });
+
   it("drops a snapshot that is older than the applied revision", async () => {
     initializeTestSession();
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentAttachment,
+  AgentAttachmentWire,
   AgentQueueSnapshot,
   ForgeSearchItem,
 } from "@getpaseo/protocol/messages";
@@ -28,7 +29,12 @@ import {
   dispatchComposerAgentMessage,
   editQueuedComposerMessage,
   findForgeItemByOption,
+  createQueueOutboxFlushClient,
   resolveQueueSubmitClearing,
+  resolveQueuedEditSave,
+  resolveQueuedEditFailure,
+  resolveQueuedEditFinalization,
+  resolveQueuedEditRpcPayload,
   runQueuedSubmission,
   isAttachmentSelectedForForgeItem,
   isQueueRevisionConflictError,
@@ -1824,5 +1830,213 @@ describe("queue submission clearing contracts", () => {
     expect(o.clearText).not.toHaveBeenCalled();
     expect(o.clearAttachments).not.toHaveBeenCalled();
     expect(clearSentAttachments).toHaveBeenCalledWith(o.submittedOutgoing);
+  });
+});
+
+describe("resolveQueuedEditSave", () => {
+  const base = {
+    appliedRevision: 4,
+    conflicted: false,
+    force: false,
+    conflictMessage: "changed on another device",
+  };
+
+  it("skips a no-op save when the row already holds the text", () => {
+    expect(
+      resolveQueuedEditSave({
+        ...base,
+        text: "row text",
+        baselineText: "row text",
+        baselineRevision: 4,
+      }),
+    ).toEqual({ kind: "noop" });
+  });
+
+  it("conflicts without an RPC when a remote edit intervened before save", () => {
+    expect(
+      resolveQueuedEditSave({
+        ...base,
+        text: "new text",
+        baselineText: "old",
+        baselineRevision: 2,
+      }),
+    ).toEqual({ kind: "conflict", message: "changed on another device" });
+  });
+
+  it("a conflicted fence blocks implicit saves but yields to the explicit force", () => {
+    expect(
+      resolveQueuedEditSave({
+        ...base,
+        conflicted: true,
+        text: "draft",
+        baselineText: "row",
+        baselineRevision: 4,
+      }),
+    ).toEqual({ kind: "conflict", message: "changed on another device" });
+    expect(
+      resolveQueuedEditSave({
+        ...base,
+        conflicted: true,
+        force: true,
+        text: "draft",
+        baselineText: "row",
+        baselineRevision: 2,
+      }),
+    ).toEqual({ kind: "rpc", revision: 4 });
+  });
+});
+
+describe("resolveQueuedEditFailure", () => {
+  const labels = { conflictMessage: "changed on another device", persistMessage: "couldn't save" };
+
+  it("keeps the conflict fence standing for a revision conflict", () => {
+    expect(resolveQueuedEditFailure(new Error("queue_revision_conflict"), labels)).toEqual({
+      conflicted: true,
+      message: "changed on another device",
+    });
+  });
+
+  it("surfaces an Error's message without the fence", () => {
+    expect(resolveQueuedEditFailure(new Error("transport down"), labels)).toEqual({
+      conflicted: false,
+      message: "transport down",
+    });
+  });
+
+  it("surfaces the persist fallback for a non-Error rejection", () => {
+    expect(resolveQueuedEditFailure("boom", labels)).toEqual({
+      conflicted: false,
+      message: "couldn't save",
+    });
+  });
+});
+
+describe("resolveQueuedEditFinalization", () => {
+  it("clears the edit when no newer checkpoint landed during the save", () => {
+    expect(
+      resolveQueuedEditFinalization({
+        savedVersion: 4,
+        currentVersion: 4,
+        latestText: "unused",
+        confirmedText: "saved text",
+        confirmedRevision: 7,
+        itemId: "item-1",
+      }),
+    ).toEqual({ kind: "clear" });
+  });
+
+  it("retains newer input and advances its baseline to the confirmed generation", () => {
+    expect(
+      resolveQueuedEditFinalization({
+        savedVersion: 4,
+        currentVersion: 5,
+        latestText: "typed during save",
+        confirmedText: "saved text",
+        confirmedRevision: 7,
+        itemId: "item-1",
+      }),
+    ).toEqual({
+      kind: "retainDraft",
+      baseline: { itemId: "item-1", text: "saved text", baselineRevision: 7 },
+    });
+  });
+});
+
+describe("resolveQueuedEditRpcPayload", () => {
+  it("carries the full attachment payload so the update clears nothing", () => {
+    const wire = [{ kind: "file", name: "notes.txt" }] as unknown as AgentAttachmentWire[];
+    const payload = resolveQueuedEditRpcPayload({
+      text: "next text",
+      expectedRevision: 4,
+      images: [{ data: "aGVsbG8=", mimeType: "image/png" }],
+      wireAttachments: wire,
+      attachments: [],
+    });
+    expect(payload).toEqual({
+      text: "next text",
+      expectedRevision: 4,
+      images: [{ data: "aGVsbG8=", mimeType: "image/png" }],
+      attachments: wire,
+      composerAttachments: [],
+    });
+  });
+
+  it("omits empty image and wire arrays", () => {
+    const payload = resolveQueuedEditRpcPayload({
+      text: "t",
+      expectedRevision: 1,
+      images: [],
+      wireAttachments: [],
+      attachments: undefined,
+    });
+    expect(payload.images).toBeUndefined();
+    expect(payload.attachments).toBeUndefined();
+    expect(payload.composerAttachments).toEqual([]);
+  });
+});
+
+describe("createQueueOutboxFlushClient", () => {
+  it("dispatches the revision-checked delete through the shared adapter", async () => {
+    const client = createFakeQueueClient();
+    const adapter = createQueueOutboxFlushClient({
+      client,
+      getAppliedRevision: () => 9,
+    });
+    const snapshot = await adapter.removeQueuedAgentMessage!("agent-1", "item-1");
+    expect(snapshot.revision).toBe(2);
+    expect(client.removed).toEqual([["agent-1", "item-1", 9]]);
+  });
+
+  it("refreshes on a revision conflict and rethrows the lane conflict error", async () => {
+    const conflicts: string[] = [];
+    const client = createFakeQueueClient({
+      deleteQueuedAgentMessage: async () => {
+        throw new Error("queue_revision_conflict");
+      },
+    });
+    const adapter = createQueueOutboxFlushClient({
+      client,
+      getAppliedRevision: () => 3,
+      onRevisionConflict: async (agentId) => {
+        conflicts.push(agentId);
+      },
+    });
+    await expect(adapter.removeQueuedAgentMessage!("agent-1", "item-1")).rejects.toThrow(
+      "queue_revision_conflict",
+    );
+    expect(conflicts).toEqual(["agent-1"]);
+    expect(isQueueRevisionConflictError(new Error("queue_revision_conflict"))).toBe(true);
+  });
+
+  it("rethrows non-conflict removal failures untouched", async () => {
+    const client = createFakeQueueClient({
+      deleteQueuedAgentMessage: async () => {
+        throw new Error("transport down");
+      },
+    });
+    const adapter = createQueueOutboxFlushClient({
+      client,
+      getAppliedRevision: () => 3,
+    });
+    await expect(adapter.removeQueuedAgentMessage!("agent-1", "item-1")).rejects.toThrow(
+      "transport down",
+    );
+  });
+
+  it("passes enqueues through unchanged", async () => {
+    const client = createFakeQueueClient();
+    const adapter = createQueueOutboxFlushClient({ client, getAppliedRevision: () => 1 });
+    const input = {
+      agentId: "agent-1",
+      itemId: "item-1",
+      text: "hello",
+      intent: "queue" as const,
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+    };
+    const snapshot = await adapter.enqueueAgentMessage(input);
+    expect(snapshot.revision).toBe(1);
+    expect(client.enqueued).toEqual([input]);
   });
 });
