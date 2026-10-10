@@ -28,8 +28,11 @@ function createHarness() {
     appliedRevision: 4,
     hydrated: true,
     saving: false,
-    ownerGeneration: 1,
+    /** The real store keeps a "sent" record behind a cleared edit. */
+    clearedRecordRetained: false,
   };
+  // The current owner generation (the row's per-key map); the orchestrator
+  // captures whatever this is at save start.
   const generationRef = { current: 1 };
   const calls = {
     checkpoints: [] as Array<{ text: string; version: number }>,
@@ -82,15 +85,16 @@ function createHarness() {
         };
       }
     },
-    finalize: (confirmedText, confirmedRevision, submittedVersion) => {
+    finalize: (confirmedText, confirmedRevision, submittedVersion, ownerGeneration) => {
       calls.finalized.push({
         text: confirmedText,
         confirmedRevision,
         submittedVersion,
       });
-      if (!store.working || store.ownerGeneration !== generationRef.current) {
-        // Abandon: the record was discarded/finalized mid-save, or a
-        // replacement editor owns the keys.
+      const activeRecord = !store.clearedRecordRetained && store.working !== undefined;
+      if (!activeRecord || generationRef.current !== ownerGeneration) {
+        // Abandon: the edit was cleared (a "sent" record remains but is not
+        // the edit) or a replacement editor owns the keys.
         return;
       }
       if (store.version !== submittedVersion) {
@@ -106,9 +110,15 @@ function createHarness() {
       store.working = undefined;
       store.baseline = undefined;
     },
-    getOwnerGeneration: () => store.ownerGeneration,
-    discardSavedDraft: () => {
+    getOwnerGeneration: () => generationRef.current,
+    hasOwnership: (ownerGeneration: number) =>
+      generationRef.current === ownerGeneration &&
+      (store.clearedRecordRetained ? false : store.working !== undefined),
+    discardSavedDraft: (ownerGeneration: number) => {
+      if (generationRef.current !== ownerGeneration) return;
       calls.discardedSavedDrafts += 1;
+      // The real clearDraftInput keeps a "sent" record behind.
+      store.clearedRecordRetained = true;
       store.working = undefined;
       store.baseline = undefined;
     },
@@ -168,14 +178,15 @@ describe("runQueuedRowEditSave", () => {
     const run = runQueuedRowEditSave(h.ports);
     await vi.waitFor(() => expect(h.calls.saves).toEqual([4]));
 
-    // The user discards the edit while the RPC is in flight: the working
-    // record is gone.
+    // The user discards the edit while the RPC is in flight: clearDraftInput
+    // retains a "sent" record with a bumped version — the edit is still gone.
+    h.store.clearedRecordRetained = true;
     h.store.working = undefined;
     h.store.baseline = undefined;
     h.resolve({ status: "saved", confirmedRevision: 5, confirmedText: "saved text" });
     await run;
 
-    // The stale completion must not recreate the discarded edit.
+    // The stale completion must not resurrect the discarded edit.
     expect(h.calls.finalized).toEqual([
       { text: "saved text", confirmedRevision: 5, submittedVersion: 6 },
     ]);
@@ -209,6 +220,45 @@ describe("runQueuedRowEditSave", () => {
     expect(h.store.working).toBeUndefined();
     expect(h.calls.errors).toEqual([]);
     expect(h.calls.finalized).toEqual([]);
+  });
+
+  it("a deferred vanished response after replacement ownership erases nothing", async () => {
+    const h = createHarness();
+    const run = runQueuedRowEditSave(h.ports);
+    await vi.waitFor(() => expect(h.calls.saves).toEqual([4]));
+
+    // A remount hands the keys to a replacement editor before the response.
+    h.generationRef.current = 2;
+    h.resolve({ status: "vanished" });
+    await run;
+
+    // The stale completion must not discard the replacement's saved draft.
+    expect(h.calls.discardedSavedDrafts).toBe(0);
+    expect(h.store.working?.text).toBe("draft");
+    expect(h.calls.errors).toEqual([]);
+  });
+
+  it("a deferred conflict rejection after replacement ownership fences nothing", async () => {
+    const h = createHarness();
+    let attempts = 0;
+    const run = runQueuedRowEditSave({
+      ...h.ports,
+      onSave: async () => {
+        attempts += 1;
+        throw new Error("queue_revision_conflict");
+      },
+    });
+
+    // A remount hands the keys to a replacement editor before the rejection.
+    h.generationRef.current = 2;
+    await run;
+
+    // The stale completion must not write a conflict fence into the
+    // replacement editor's draft, nor surface its error.
+    expect(attempts).toBe(1);
+    expect(h.calls.fence).toEqual([]);
+    expect(h.store.working?.queueEdit?.conflicted).toBeUndefined();
+    expect(h.calls.errors).toEqual([]);
   });
 
   it("a fresh-snapshot conflict persists the fence and dispatches nothing", async () => {

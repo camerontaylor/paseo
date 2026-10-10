@@ -1930,7 +1930,7 @@ describe("resolveQueuedEditFinalization", () => {
         ...base,
         savedVersion: 4,
         currentVersion: 4,
-        recordExists: true,
+        activeRecordExists: true,
         ownerGenerationChanged: false,
       }),
     ).toEqual({ kind: "clear" });
@@ -1942,7 +1942,7 @@ describe("resolveQueuedEditFinalization", () => {
         ...base,
         savedVersion: 4,
         currentVersion: 5,
-        recordExists: true,
+        activeRecordExists: true,
         ownerGenerationChanged: false,
       }),
     ).toEqual({
@@ -1951,13 +1951,13 @@ describe("resolveQueuedEditFinalization", () => {
     });
   });
 
-  it("abandons when the record was discarded or finalized during the save", () => {
+  it("abandons when the edit was discarded — a retained sent record is not the edit", () => {
     expect(
       resolveQueuedEditFinalization({
         ...base,
         savedVersion: 4,
         currentVersion: 5,
-        recordExists: false,
+        activeRecordExists: false,
         ownerGenerationChanged: false,
       }),
     ).toEqual({ kind: "abandon" });
@@ -1969,7 +1969,7 @@ describe("resolveQueuedEditFinalization", () => {
         ...base,
         savedVersion: 4,
         currentVersion: 5,
-        recordExists: true,
+        activeRecordExists: true,
         ownerGenerationChanged: true,
       }),
     ).toEqual({ kind: "abandon" });

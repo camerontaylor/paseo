@@ -871,14 +871,16 @@ export type QueuedEditFinalization =
 export function resolveQueuedEditFinalization(input: {
   savedVersion: number | undefined;
   currentVersion: number | undefined;
-  recordExists: boolean;
+  /** The working record is present AND lifecycle-active: a cleared edit keeps
+   * a "sent" record behind, which is NOT the edit anymore. */
+  activeRecordExists: boolean;
   ownerGenerationChanged: boolean;
   latestText: string;
   confirmedText: string;
   confirmedRevision: number;
   itemId: string;
 }): QueuedEditFinalization {
-  if (input.ownerGenerationChanged || !input.recordExists) {
+  if (input.ownerGenerationChanged || !input.activeRecordExists) {
     return { kind: "abandon" };
   }
   if (input.currentVersion !== input.savedVersion) {

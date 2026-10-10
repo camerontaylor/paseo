@@ -547,7 +547,9 @@ export function QueuedMessageRow({
       const finalization = resolveQueuedEditFinalization({
         savedVersion: submittedVersion,
         currentVersion: store.drafts[draftKey]?.version,
-        recordExists: store.drafts[draftKey] !== undefined,
+        // Bare existence is not ownership: a cleared edit keeps a "sent"
+        // record behind, which must never be resurrected as an active draft.
+        activeRecordExists: store.drafts[draftKey]?.lifecycle === "active",
         ownerGenerationChanged: editorGenerations.get(draftKey) !== ownerGeneration,
         latestText: draftRef.current,
         confirmedText,
@@ -612,8 +614,19 @@ export function QueuedMessageRow({
         flushCheckpoint: flushDraftPersistStorage,
         persistFence: persistEditFence,
         getOwnerGeneration: () => ownerGenerationRef.current,
+        hasOwnership: (ownerGeneration) =>
+          editorGenerations.get(draftKey) === ownerGeneration &&
+          useDraftStore.getState().getDraftInput(draftKey) !== undefined,
         finalize: finalizeSave,
-        discardSavedDraft: clearSavedDraft,
+        discardSavedDraft: (ownerGeneration) => {
+          if (
+            editorGenerations.get(draftKey) !== ownerGeneration ||
+            useDraftStore.getState().getDraftInput(draftKey) === undefined
+          ) {
+            return;
+          }
+          clearSavedDraft();
+        },
         onSave,
         onError,
         setSaving: (saving) => {

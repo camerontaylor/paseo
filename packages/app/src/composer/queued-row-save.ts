@@ -101,8 +101,14 @@ export interface QueuedRowSavePorts {
     submittedVersion: number | undefined,
     ownerGeneration: number,
   ) => void;
+  /**
+   * True when this save's owner still owns the edit: the generation matches
+   * and an active draft record remains. Gates every post-await draft
+   * mutation.
+   */
+  hasOwnership: (ownerGeneration: number) => boolean;
   /** The host no longer lists the row: drop the saved draft quietly. */
-  discardSavedDraft: () => void;
+  discardSavedDraft: (ownerGeneration: number) => void;
   onSave: (itemId: string, text: string, revision: number) => Promise<QueuedRowSaveResult>;
   onError: (message: string) => void;
   setSaving: (saving: boolean) => void;
@@ -155,8 +161,11 @@ export async function runQueuedRowEditSave(ports: QueuedRowSavePorts): Promise<v
     const result = await ports.onSave(ports.itemId, prepared.text, prepared.rpcRevision);
     if (result.status === "vanished") {
       // The host no longer lists the row (removed remotely mid-save): the
-      // edit is moot — drop the saved draft, surface nothing.
-      ports.discardSavedDraft();
+      // edit is moot — drop the saved draft, surface nothing. A stale
+      // completion must not erase a replacement editor's work.
+      if (ports.hasOwnership(ownerGeneration)) {
+        ports.discardSavedDraft(ownerGeneration);
+      }
       return;
     }
     if (result.status === "unsaved") {
@@ -175,6 +184,11 @@ export async function runQueuedRowEditSave(ports: QueuedRowSavePorts): Promise<v
       persistMessage: ports.persistMessage,
     });
     if (failure.conflicted) {
+      // A late conflict must not write a fence into a replacement editor's
+      // draft: stale completions abandon silently.
+      if (!ports.hasOwnership(ownerGeneration)) {
+        return;
+      }
       try {
         await ports.persistFence(prepared.attemptedRevision);
       } catch {
