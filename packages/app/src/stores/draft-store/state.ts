@@ -16,9 +16,26 @@ export interface LegacyDraftImage {
 
 export type PersistedDraftImage = AttachmentMetadata | LegacyDraftImage;
 
+/**
+ * Durability metadata for an in-progress queued-row edit: the row being edited
+ * and the queue revision at edit start. Persisted with the draft so the save's
+ * revision check is bound to edit start and survives a restart.
+ */
+export interface DraftQueueEditMetadata {
+  itemId: string;
+  baselineRevision: number;
+  /**
+   * Set when a save hit a revision conflict. While set, every implicit save
+   * trigger (blur, Done, collapse, unmount) is blocked; only an explicit user
+   * confirmation may overwrite the remote change.
+   */
+  conflicted?: boolean;
+}
+
 export interface DraftInput {
   text: string;
   attachments: UserComposerAttachment[];
+  queueEdit?: DraftQueueEditMetadata;
 }
 
 export type DraftLifecycleState = "active" | "abandoned" | "sent";
@@ -36,12 +53,19 @@ export function editDraftRecordText(
   record: DraftRecord | undefined,
   text: string,
   now: number,
+  keepActive = false,
 ): DraftRecord {
-  if (record?.lifecycle === "active" && record.input.text === text) return record;
+  if (!keepActive && record?.lifecycle === "active" && record.input.text === text) {
+    return record;
+  }
   const attachments = record?.lifecycle === "active" ? record.input.attachments : [];
   return {
-    input: { text, attachments },
-    lifecycle: text.length > 0 || attachments.length > 0 ? "active" : "abandoned",
+    input: {
+      text,
+      attachments,
+      ...(record?.input.queueEdit ? { queueEdit: record.input.queueEdit } : {}),
+    },
+    lifecycle: keepActive || text.length > 0 || attachments.length > 0 ? "active" : "abandoned",
     updatedAt: now,
     version: (record?.version ?? 0) + 1,
   };
@@ -124,6 +148,13 @@ export const CanonicalDraftInputSchema = z.strictObject({
   attachments: z.array(UserComposerAttachmentSchema),
   // COMPAT(draft-cwd): accept legacy persisted drafts that include cwd. Stop accepting after 2026-11-09.
   cwd: z.string().optional(),
+  queueEdit: z
+    .strictObject({
+      itemId: z.string(),
+      baselineRevision: z.number().int().nonnegative(),
+      conflicted: z.boolean().optional(),
+    })
+    .optional(),
 });
 const DraftRecordSchema: z.ZodType<DraftRecord> = z.strictObject({
   input: CanonicalDraftInputSchema,
@@ -202,6 +233,7 @@ export function toDraftInputIfReady(
   return {
     text: record.input.text,
     attachments: record.input.attachments.map(normalizeComposerAttachment),
+    ...(record.input.queueEdit ? { queueEdit: record.input.queueEdit } : {}),
   };
 }
 

@@ -54,6 +54,14 @@ export function createDraftPersistStorage<T>(
   let pending: { name: string; value: Parameters<typeof storage.setItem>[1] } | null = null;
   let timer: unknown = null;
   let lastWriteAt = -Infinity;
+  // Writes serialize: an explicit flush awaits any in-flight write before its
+  // own, and a failed write retains its payload (unless a newer checkpoint
+  // arrived) so the next flush retries it.
+  let inFlight: Promise<void> | null = null;
+  let lastFailure: {
+    error: unknown;
+    payload: { name: string; value: Parameters<typeof storage.setItem>[1] };
+  } | null = null;
 
   const cancelTimer = () => {
     if (timer !== null) {
@@ -61,19 +69,67 @@ export function createDraftPersistStorage<T>(
       timer = null;
     }
   };
-  const flush = async (): Promise<void> => {
-    cancelTimer();
-    const write = pending;
+  const SYNC_DONE = Symbol("draft-flush-sync");
+  // Writes the pending (or previously failed) checkpoint. Returns SYNC_DONE
+  // when the storage completed synchronously, so idle flushes keep their
+  // same-tick side effects; otherwise the storage's own promise.
+  const performWrite = (): Promise<void> | typeof SYNC_DONE => {
+    const failed = lastFailure;
+    lastFailure = null;
+    const write = pending ?? failed?.payload ?? null;
     pending = null;
     if (!write) {
-      return;
+      return SYNC_DONE;
     }
     lastWriteAt = scheduler.now();
     try {
-      await storage.setItem(write.name, write.value);
+      const outcome = storage.setItem(write.name, write.value);
+      // A synchronously-completing storage keeps the flush same-tick; an
+      // async one is awaited with failure retention.
+      if (outcome instanceof Promise) {
+        return outcome.then(
+          () => undefined,
+          (error: unknown) => {
+            retainFailedWrite(write, error);
+            throw error;
+          },
+        );
+      }
+      return SYNC_DONE;
     } catch (error) {
-      console.warn("[DraftStore] Failed to persist draft checkpoint", error);
+      retainFailedWrite(write, error);
+      throw error;
     }
+  };
+  const retainFailedWrite = (
+    write: { name: string; value: Parameters<typeof storage.setItem>[1] },
+    error: unknown,
+  ): void => {
+    // Retain the failed payload unless a newer checkpoint replaced it, and
+    // record the failure: an explicit flush re-attempts and surfaces it
+    // instead of hiding it behind a console warning.
+    if (pending === null) {
+      pending = { name: write.name, value: write.value };
+    }
+    lastFailure = { error, payload: { name: write.name, value: write.value } };
+  };
+  const flush = (): Promise<void> => {
+    cancelTimer();
+    if (inFlight !== null) {
+      return inFlight
+        .catch(() => {})
+        .then(() => {
+          inFlight = null;
+          return flush();
+        });
+    }
+    const outcome = performWrite();
+    if (outcome === SYNC_DONE) {
+      return Promise.resolve();
+    }
+    inFlight = outcome;
+    void outcome.catch(() => {});
+    return outcome;
   };
 
   return {
@@ -85,7 +141,11 @@ export function createDraftPersistStorage<T>(
         return flush();
       }
       timer ??= scheduler.schedule(() => {
-        void flush();
+        timer = null;
+        flush().catch(() => {
+          // A timer-triggered failure is recorded; the next explicit flush
+          // re-attempts the retained payload and surfaces the failure.
+        });
       }, delay);
     },
     removeItem: (name) => {
