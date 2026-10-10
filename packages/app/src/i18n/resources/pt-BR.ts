@@ -556,6 +556,10 @@ export const ptBR: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "Falha ao listar diretório",
+        pathUnavailable:
+          "Não é possível resolver este caminho a partir do diretório de trabalho da conversa.",
+        outsideWorkspaceDirectory:
+          "Esta pasta está fora do espaço de trabalho atual. Abra-a no espaço de trabalho de origem.",
         createFailed: "Falha ao criar entrada",
         renameFailed: "Falha ao renomear entrada",
         duplicateFailed: "Falha ao duplicar entrada",
@@ -774,6 +778,8 @@ export const ptBR: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "Raiz",
+      searchPlaceholder: "Buscar scripts ou pacotes…",
       title: "Scripts",
       actions: {
         chooseUrl: "Escolher URL",
@@ -801,6 +807,8 @@ export const ptBR: TranslationResources = {
         direct: "Direta",
       },
       states: {
+        empty: "Nenhum script encontrado",
+        noMatches: "Nenhum script correspondente",
         exitCode: "saída {{code}}",
         startFailed: "Falha ao iniciar {{scriptName}}",
         stopFailed: "Falha ao parar {{scriptName}}",
@@ -1317,6 +1325,7 @@ export const ptBR: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "Script {{name}} em execução",
         serviceRunning: "Serviço {{name}} em execução",
         serviceUnhealthy: "Serviço {{name}} com falha",
         creating: "Criando...",

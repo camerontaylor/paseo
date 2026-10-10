@@ -6,6 +6,7 @@ import { getForgeDefinitionOrNeutral } from "@getpaseo/protocol/forge-manifest";
 import { validateBranchSlug } from "@getpaseo/protocol/branch-slug";
 import type {
   BranchSuggestionsRequest,
+  CheckoutBaseRefSetRequest,
   CheckoutCommitsListRequest,
   CheckoutCommitFileDiffRequest,
   CheckoutRefreshRequest,
@@ -52,6 +53,7 @@ import {
   pushCurrentBranch,
   listCheckoutCommits,
   getCommitFileDiff,
+  setCheckoutBaseRef,
 } from "../../../utils/checkout-git.js";
 import { runGitCommand } from "../../../utils/run-git-command.js";
 import { expandTilde } from "../../../utils/path.js";
@@ -122,6 +124,7 @@ export interface CheckoutDiffSubscriber {
 export interface CheckoutSessionOptions {
   host: CheckoutSessionHost;
   gitMutation: Pick<GitMutationService, "checkoutExistingBranch" | "notifyGitMutation">;
+  setCheckoutBaseRef?: typeof setCheckoutBaseRef;
   workspaceGitService: WorkspaceGitService;
   github: ForgeService;
   checkoutDiffManager: CheckoutDiffSubscriber;
@@ -156,6 +159,7 @@ export class CheckoutSession {
   private readonly paseoHome: string;
   private readonly worktreesRoot: string | undefined;
   private readonly logger: pino.Logger;
+  private readonly setCheckoutBaseRef: typeof setCheckoutBaseRef;
   private readonly statusUpdateFingerprints = new Map<string, string>();
 
   constructor(options: CheckoutSessionOptions) {
@@ -168,6 +172,7 @@ export class CheckoutSession {
     this.paseoHome = options.paseoHome;
     this.worktreesRoot = options.worktreesRoot;
     this.logger = options.logger;
+    this.setCheckoutBaseRef = options.setCheckoutBaseRef ?? setCheckoutBaseRef;
   }
 
   private async resolveForgeService(
@@ -642,6 +647,31 @@ export class CheckoutSession {
           error: toCheckoutError(error),
           requestId,
         },
+      });
+    }
+  }
+
+  async handleCheckoutBaseRefSetRequest(msg: CheckoutBaseRefSetRequest): Promise<void> {
+    const { cwd, baseRef, requestId } = msg;
+    try {
+      assertSafeGitRef(baseRef, "base branch");
+      const result = await this.setCheckoutBaseRef(cwd, baseRef, {
+        paseoHome: this.paseoHome,
+        worktreesRoot: this.worktreesRoot,
+      });
+      await this.gitMutation.notifyGitMutation(cwd, "set-base-ref");
+      this.scheduleDiffRefresh(cwd);
+      // The header and sidebar stats read the base from the workspace's git snapshot; push it
+      // now rather than waiting for the watcher.
+      await this.host.emitWorkspaceUpdateForCwd(cwd);
+      this.host.emit({
+        type: "checkout.base_ref.set.response",
+        payload: { cwd, success: true, baseRef: result.baseRef, error: null, requestId },
+      });
+    } catch (error) {
+      this.host.emit({
+        type: "checkout.base_ref.set.response",
+        payload: { cwd, success: false, baseRef: null, error: toCheckoutError(error), requestId },
       });
     }
   }
