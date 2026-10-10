@@ -59,3 +59,15 @@ Operations moved from neptune (macOS; network heavily throttled) to uranus (Ubun
 - **C1 s2 starting point.** The neptune worker `24636e40-330f-47a2-bde0-8817265461c1` was still running at handover and could not be cancelled. Its uncommitted tree was snapshotted as `handover/c1-s2-wip-20261010` (`b5dd0d2e2`, on `db54e7d71`). That snapshot is authoritative; neptune edits after it are ignored.
 - **Moved frozen head: `custom`.** Cameron had neptune's `custom` pushed: `origin/custom` moved `cbc201718` → `c07c4e5280223f1cc9927c478102e27e0b039d29` ("feat(fork): Add automatic upstream release cycles"). Per this note that is a moved frozen head: the campaign keeps `cbc201718`, local `custom` on uranus is not fast-forwarded, and no campaign work is rebased onto it. The re-pin question goes to Sol at the next basket (C1). Custom-owned re-capture against `c07c4e528` (`git diff --name-only 41537e6a0 c07c4e528`) now lists one **non-`fork/`** path, `.github/workflows/fork-ci.yml`, alongside `fork/README.md`, `fork/briefs/release-cycle.md`, `fork/launchd/local.paseo-release-watch.plist`, `fork/plans/proposal-auto-release-cycle.md`, `fork/release-watch.md`, `fork/scripts/release-watch.{mjs,sh,test.mjs}`. If it is re-pinned, any tmad overlay touching `.github/workflows/fork-ci.yml` is a [PF] stop.
 - **Workers.** `claude-zai/glm-5.3-flash` (bypass, high thinking) stays the assigned worker model. Muse Spark 1.3 Contributor is available as a second worker option through the `pi` provider (`pi/opencode-go/muse-spark-1.3-contributor`); the separate `muse` provider stays disabled and unused.
+
+### Re-pin ruling — custom (Sol, C1 gate, 2026-10-11)
+
+> **APPROVE — CUSTOM RE-PIN ruling: retain `cbc201718`; do not adopt `c07c4e528` mid-campaign.**
+>
+> Verified the moved origin-tracking head and reported path delta. The existing control record identifies the move (`fork/campaign/execution-start.md:60`); the current basket excludes it.
+>
+> Record this ruling: all campaign baskets continue using frozen custom `cbc201718`. Add `.github/workflows/fork-ci.yml` to the prospective custom-ownership watch list; any overlay touching it requires a **[PF] stop**, even while the newer custom remains excluded. Re-evaluate the move at final rehearsal before any manifest proposal. This resolves the moved-head stop without changing the campaign baseline.
+
+**Custom-ownership watch list** (checked at every basket in addition to the re-captured custom-owned list): `.github/workflows/fork-ci.yml`.
+
+**Basket assembly convention** (C1 onward): base `v0.11.1` `ab10a6694`, then `--no-ff` merges in mine's deployed order — custom `cbc201718`, carries, infi-backend, infi-ui, tmad — then accepted overlays in schedule order. The infi-ui merge conflicts in `packages/app/src/agent-stream/view.tsx`; replay mine's resolution from `7021e8b4a` (identical inputs). Basket refs are pushed as `fork/refresh-basket-<pkg>`.
