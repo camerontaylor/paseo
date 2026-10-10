@@ -218,6 +218,47 @@ describe("ClaudeAgentSession integration", () => {
     }
   }, 60_000);
 
+  test("answers a side question during a live turn without adding it to the main timeline", async () => {
+    const handle = await createSession({ cwdPrefix: "claude-agent-side-question-" });
+    const mainEvents: AgentStreamEvent[] = [];
+    const unsubscribe = handle.session.subscribe((event) => mainEvents.push(event));
+    try {
+      await handle.session.startTurn(
+        "Run `sleep 8` with the shell tool, then respond with exactly MAIN_TURN_DONE.",
+      );
+      await collectSubscribedUntil(
+        handle.session,
+        (event) => event.type === "timeline" && event.item.type === "tool_call",
+      );
+
+      const answer = await withTimeout(
+        handle.session.askSideQuestion!(
+          "Respond with exactly SIDE_CHANNEL_OK. Do not affect the active task.",
+          [],
+        ),
+        45_000,
+        "Timed out waiting for Claude side question",
+      );
+      expect(answer).toMatchObject({ status: "answered", threading: "threaded" });
+      if (answer.status === "answered") {
+        expect(compactText(answer.content)).toContain("side_channel_ok");
+      }
+      expect(
+        mainEvents.some(
+          (event) =>
+            event.type === "timeline" &&
+            (event.item.type === "user_message" || event.item.type === "assistant_message") &&
+            compactText(event.item.text).includes("side_channel_ok"),
+        ),
+      ).toBe(false);
+      expect(mainEvents.some((event) => event.type === "turn_completed")).toBe(false);
+    } finally {
+      unsubscribe();
+      await handle.session.interrupt().catch(() => undefined);
+      await cleanupSession(handle);
+    }
+  }, 75_000);
+
   test("keeps bypassPermissions available after a thinking-option restart", async () => {
     const handle = await createSession({
       cwdPrefix: "claude-agent-bypass-restart-",

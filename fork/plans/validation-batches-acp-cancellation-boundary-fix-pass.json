@@ -1,0 +1,26 @@
+[
+  {
+    "schemaVersion": 1,
+    "batchId": "VB001-death-settlement",
+    "memberIds": ["G001"],
+    "finalGoalId": "G001"
+  },
+  {
+    "schemaVersion": 1,
+    "batchId": "VB002-ownerless-release",
+    "memberIds": ["G002", "G003"],
+    "finalGoalId": "G003"
+  },
+  {
+    "schemaVersion": 1,
+    "batchId": "VB003-deny-router",
+    "memberIds": ["G004"],
+    "finalGoalId": "G004"
+  },
+  {
+    "schemaVersion": 1,
+    "batchId": "VB004-docs-record-final-sweep",
+    "memberIds": ["G005"],
+    "finalGoalId": "G005"
+  }
+]
