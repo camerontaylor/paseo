@@ -12631,7 +12631,7 @@ test("a dormant stream mutation rejects on storage failure and recovers on retry
     expect(JSON.stringify(stored)).not.toContain("captureDegraded");
     // Lifecycle cleanup: discarding the agent state drops the dormant
     // bookkeeping maps for the agent (fresh generations on any later write).
-    manager.deleteAgentState(agent.id);
+    await manager.deleteAgentState(agent.id);
     const internals = manager as unknown as {
       dormantPersistSeq: Map<string, number>;
       dormantDegradedSeq: Map<string, number>;
@@ -12657,6 +12657,84 @@ test("a dormant stream mutation rejects on storage failure and recovers on retry
     } finally {
       writeAgain.mockRestore();
     }
+  } finally {
+    write.mockRestore();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("deletion cleanup is serialized against in-flight dormant writes", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-dormant-lane-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  await manager.updateCompanionEntry({
+    agentId: agent.id,
+    action: "add_question",
+    entryId: "seeded",
+    text: "Seeded",
+  });
+  await manager.closeAgent(agent.id);
+  const internals = manager as unknown as {
+    dormantPersistSeq: Map<string, number>;
+    dormantDegradedSeq: Map<string, number>;
+  };
+  let releaseWrite!: () => void;
+  const writeGate = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const upsert = storage.upsert.bind(storage);
+  const write = vi.spyOn(storage, "upsert").mockImplementationOnce(async (record) => {
+    await writeGate;
+    await upsert(record);
+  });
+  try {
+    // The dormant write enters the lane first and blocks inside persistence.
+    const mutation = manager
+      .updateCompanionEntry({
+        agentId: agent.id,
+        action: "add_pin",
+        entryId: "in-flight",
+        text: "In flight",
+      })
+      .then(
+        () => "settled" as const,
+        () => "settled" as const,
+      );
+    await vi.waitFor(() => {
+      expect(write.mock.calls.length).toBe(1);
+    });
+    // Deletion queues behind the same lane while the write is in flight.
+    let deletionDone = false;
+    const deletion = manager.deleteAgentState(agent.id).then(() => {
+      deletionDone = true;
+      return undefined;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deletionDone).toBe(false);
+    // The write completes and repopulates its bookkeeping; only THEN does
+    // the serialized cleanup run — the late completion cannot resurrect the
+    // maps afterwards.
+    releaseWrite();
+    await mutation;
+    await deletion;
+    expect(deletionDone).toBe(true);
+    expect(internals.dormantPersistSeq.has(agent.id)).toBe(false);
+    expect(internals.dormantDegradedSeq.has(agent.id)).toBe(false);
+    // Subsequent dormant writes recover normally after the cleanup.
+    await manager.updateCompanionEntry({
+      agentId: agent.id,
+      action: "add_pin",
+      entryId: "after-delete",
+      text: "After delete",
+    });
+    const stored = await storage.get(agent.id);
+    expect(stored?.companionEntries?.map((entry) => entry.id)).toContain("pin:after-delete");
   } finally {
     write.mockRestore();
     rmSync(workdir, { recursive: true, force: true });

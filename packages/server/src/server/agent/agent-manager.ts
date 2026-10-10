@@ -3591,8 +3591,14 @@ export class AgentManager {
   }
 
   async deleteAgentState(agentId: string): Promise<void> {
-    this.discardRetainedAgentState(agentId);
-    await this.deleteCommittedTimeline(agentId);
+    // Serialize the cleanup against dormant Stream mutations on the same
+    // lane: an in-flight dormant write finishes (and repopulates its
+    // generation maps) BEFORE the discard runs, so a late completion can
+    // never resurrect the bookkeeping after cleanup.
+    return this.runLifecycleMutation(agentId, async () => {
+      this.discardRetainedAgentState(agentId);
+      await this.deleteCommittedTimeline(agentId);
+    });
   }
 
   async deleteCommittedTimeline(agentId: string): Promise<void> {

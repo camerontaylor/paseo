@@ -552,4 +552,11 @@ it("bounds oversized companion entries on the snapshot payload and passes the de
     truncated: true,
   });
   expect(payload.captureDegraded).toBe(true);
+  // The projection is read-time only: the agent's own entry is untouched.
+  const storedEntry = agent.companionEntries?.[0] as Extract<
+    NonNullable<ReturnType<typeof toAgentPayload>["companionEntries"]>[number],
+    { kind: "q_and_a" }
+  >;
+  expect(storedEntry.answer).toBe(oversizedAnswer);
+  expect(storedEntry.truncated).toBe(false);
 });
