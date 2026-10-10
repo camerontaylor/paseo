@@ -48,7 +48,14 @@ for (const width of [390, 1440]) {
       await resetSeededPageState(page);
       await page.setViewportSize({ width, height: 900 });
       await gotoAppShell(page);
-      await page.goto("/stream");
+      // Enter through the app's own navigation: the pinned sidebar row on
+      // desktop, the compact drawer's row on phone width.
+      if (width === 1440) {
+        await page.getByTestId("sidebar-stream").click();
+      } else {
+        await page.getByTestId("menu-button").click();
+        await page.getByTestId("sidebar-stream").click();
+      }
       await expect(page.getByText("Choose the launch name", { exact: true })).toBeVisible();
       await expect(page.getByText("Choose the release channel", { exact: true })).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath("global-stream-all.png"), fullPage: true });
@@ -106,3 +113,47 @@ for (const width of [390, 1440]) {
     }
   });
 }
+
+test("global Stream pages long histories through Load more", async ({ page }, testInfo) => {
+  test.setTimeout(240_000);
+  const repo = await createTempGitRepo("global-stream-pages-");
+  const client = await connectSeedClient();
+  const created = await client.createWorkspace({
+    source: { kind: "directory", path: repo.path },
+  });
+  if (!created.workspace) throw new Error(created.error ?? "Workspace missing");
+  const workspace = created.workspace;
+  try {
+    const agent = await createIdleAgent(client, {
+      cwd: repo.path,
+      workspaceId: workspace.id,
+      title: "Stream paging",
+    });
+    // 53 questions: the server page clamp is 50, so the first page cannot
+    // contain the oldest entry until Load more runs.
+    for (let i = 0; i < 53; i++) {
+      await client.updateStreamEntry({
+        agentId: agent.id,
+        action: "add_question",
+        entryId: `paged-${i}`,
+        text: `Paged question ${i}`,
+      });
+    }
+    await resetSeededPageState(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoAppShell(page);
+    await page.getByTestId("sidebar-stream").click();
+    await expect(page.getByText("Paged question 52", { exact: true })).toBeVisible();
+    await expect(page.getByText("Paged question 0", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Load more", exact: true }).click();
+    await expect(page.getByText("Paged question 0", { exact: true })).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath("global-stream-paged.png"),
+      fullPage: true,
+    });
+  } finally {
+    await client.removeProject(workspace.projectId);
+    await client.close();
+    await repo.cleanup();
+  }
+});

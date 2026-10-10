@@ -104,42 +104,13 @@ import { derivePendingPermissionKey, normalizeAgentSnapshot } from "@/utils/agen
 import { applyLegacyDaemonWorkspaceOwnership } from "@/workspace/legacy-daemon-workspaces";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { deriveSidebarStateBucket } from "@/utils/sidebar-agent-state";
+import {
+  resolveChatAgentFromSession,
+  selectChatAgentState,
+  type ChatAgentSelectedState,
+  type ChatAgentStateShape,
+} from "@/panels/select-chat-agent-state";
 import { buildDraftAgentSetup, type ClientSlashCommand } from "@/client-slash-commands";
-
-interface ChatAgentStateShape {
-  serverId: string | null;
-  id: string | null;
-  provider?: Agent["provider"];
-  status: Agent["status"] | null;
-  cwd: string | null;
-  workspaceId?: string;
-  capabilities?: Agent["capabilities"];
-  currentModeId?: Agent["currentModeId"];
-  model?: Agent["model"];
-  thinkingOptionId?: Agent["thinkingOptionId"];
-  runtimeInfo?: Agent["runtimeInfo"];
-  features?: Agent["features"];
-  lastError?: Agent["lastError"] | null;
-  artifacts?: Agent["artifacts"];
-  companionEntries?: Agent["companionEntries"];
-  captureDegraded?: Agent["captureDegraded"];
-}
-
-interface ChatAgentSelectedState extends ChatAgentStateShape {
-  archivedAt: Date | null;
-  requiresAttention: boolean;
-  attentionReason: Agent["attentionReason"] | null;
-}
-
-function resolveChatAgentFromSession(
-  state: ReturnType<typeof useSessionStore.getState>,
-  serverId: string,
-  agentId: string | undefined,
-): Agent | null {
-  if (!agentId) return null;
-  const session = state.sessions[serverId];
-  return session?.agents?.get(agentId) ?? session?.agentDetails?.get(agentId) ?? null;
-}
 
 function readViewedTimelineError(input: {
   agentId: string | undefined;
@@ -148,46 +119,6 @@ function readViewedTimelineError(input: {
 }): string | null {
   if (!input.agentId || input.status !== "error" || !input.sync) return null;
   return input.sync.getAgentTimelineError(input.agentId);
-}
-
-const EMPTY_CHAT_AGENT_STATE: ChatAgentSelectedState = {
-  serverId: null,
-  id: null,
-  status: null,
-  cwd: null,
-  lastError: null,
-  archivedAt: null,
-  requiresAttention: false,
-  attentionReason: null,
-};
-
-function selectChatAgentState(
-  state: ReturnType<typeof useSessionStore.getState>,
-  serverId: string,
-  agentId: string | undefined,
-): ChatAgentSelectedState {
-  const agent = resolveChatAgentFromSession(state, serverId, agentId);
-  if (!agent) return EMPTY_CHAT_AGENT_STATE;
-  return {
-    serverId: agent.serverId,
-    id: agent.id,
-    provider: agent.provider,
-    status: agent.status,
-    cwd: agent.cwd,
-    workspaceId: agent.workspaceId,
-    capabilities: agent.capabilities,
-    currentModeId: agent.currentModeId,
-    model: agent.model,
-    thinkingOptionId: agent.thinkingOptionId,
-    runtimeInfo: agent.runtimeInfo,
-    features: agent.features,
-    lastError: agent.lastError ?? null,
-    artifacts: agent.artifacts,
-    companionEntries: agent.companionEntries,
-    archivedAt: agent.archivedAt ?? null,
-    requiresAttention: agent.requiresAttention ?? false,
-    attentionReason: agent.attentionReason ?? null,
-  };
 }
 
 function buildChatAgentFromState(

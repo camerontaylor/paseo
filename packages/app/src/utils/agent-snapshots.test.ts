@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { normalizeAgentSnapshot, projectAgentSnapshot } from "./agent-snapshots";
+import { selectChatAgentState } from "@/panels/select-chat-agent-state";
 
 function createSnapshot(
   input: Partial<Omit<AgentSnapshotPayload, "labels">> & {
@@ -113,5 +114,36 @@ describe("normalizeAgentSnapshot", () => {
     expect(missing.parentAgentId).toBeNull();
     expect(empty.parentAgentId).toBeNull();
     expect(nonString.parentAgentId).toBeNull();
+  });
+});
+
+describe("degraded capture wiring", () => {
+  it("carries the flag from snapshot through panel selection and clears on recovery", () => {
+    const degradedSnapshot = createSnapshot();
+    degradedSnapshot.captureDegraded = true;
+    const degraded = normalizeAgentSnapshot(degradedSnapshot, "server-1");
+    expect(degraded.captureDegraded).toBe(true);
+    const state = {
+      sessions: {
+        "server-1": {
+          agents: new Map([["agent-1", degraded]]),
+          agentDetails: new Map(),
+        },
+      },
+    } as unknown as Parameters<typeof selectChatAgentState>[0];
+    const selected = selectChatAgentState(state, "server-1", "agent-1");
+    expect(selected.captureDegraded).toBe(true);
+
+    // Recovery: the next snapshot without the flag clears it end to end.
+    const recovered = normalizeAgentSnapshot(createSnapshot({}), "server-1");
+    const recoveredState = {
+      sessions: {
+        "server-1": {
+          agents: new Map([["agent-1", recovered]]),
+          agentDetails: new Map(),
+        },
+      },
+    } as unknown as Parameters<typeof selectChatAgentState>[0];
+    expect(selectChatAgentState(recoveredState, "server-1", "agent-1").captureDegraded).toBe(false);
   });
 });
