@@ -870,6 +870,11 @@ export const AgentSnapshotPayloadSchema = z.object({
   providerUnavailable: z.boolean().optional(),
   artifacts: z.array(AgentArtifactSchema).optional(),
   companionEntries: z.array(CompanionEntrySchema).optional(),
+  // COMPAT(captureDegraded): added in v0.11.1-fork (C2), remove after 2027-04-07.
+  // Present only while a durable-capture persist recently failed with
+  // ENOSPC/EIO and no newer persist has covered the failure. Optional on an
+  // existing message: old clients strip it; no new capability needed.
+  captureDegraded: z.boolean().optional(),
 });
 
 export type AgentSnapshotPayload = z.infer<typeof AgentSnapshotPayloadSchema>;

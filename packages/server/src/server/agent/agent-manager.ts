@@ -4,10 +4,12 @@ import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/inde
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 import {
-  appendManualCompanionEntry,
   CompanionStreamCollector,
   restoreCompanionEntries,
 } from "./companion-stream.js";
+import { applyStreamEntryUpdate } from "./stream-entry-update.js";
+import { listStreamRows, STREAM_PAGE_LIMIT, type StreamSource } from "./global-stream.js";
+import type { StreamEntryUpdate, StreamListOptions } from "@getpaseo/protocol/global-stream";
 import { AgentArtifactCollector } from "./artifacts/collector.js";
 import type { AgentArtifact } from "@getpaseo/protocol/agent-types";
 import { randomUUID } from "node:crypto";
@@ -478,6 +480,15 @@ interface ManagedAgentBase {
   labels: Record<string, string>;
   artifacts: AgentArtifact[];
   companionEntries?: CompanionEntry[];
+  /**
+   * Durable-capture degraded state: set when a background snapshot persist
+   * failed with ENOSPC/EIO. Capture continues in memory and is flushed by the
+   * first persist that starts after the failing one; both transitions emit
+   * with persist:false so degradation never reschedules persistence.
+   */
+  streamCaptureDegraded?: boolean;
+  persistSeq: number;
+  captureDegradedSeq: number | null;
 }
 
 type ManagedAgentWithSession = ManagedAgentBase & {
@@ -799,6 +810,14 @@ export class AgentManager {
   private acceptingAgentRegistrations = true;
   private readonly artifactCollector = new AgentArtifactCollector();
   private readonly companionCollector = new CompanionStreamCollector();
+  // Dormant degraded bookkeeping lives in manager memory only: never persisted
+  // (nothing diagnostic is written into failing storage), never exposed on
+  // stored snapshots. Cleared on close/archive/remove.
+  private readonly dormantPersistSeq = new Map<string, number>();
+  private readonly dormantDegradedSeq = new Map<string, number>();
+  // Read-cap observability: debug-log once per agent per daemon run the first
+  // time a read observes more stored entries than a wire page carries.
+  private readonly streamReadCapLogged = new Set<string>();
 
   constructor(options: AgentManagerOptions) {
     this.pluginLifecycle = options.pluginLifecycle;
@@ -2111,6 +2130,9 @@ export class AgentManager {
         labels: record.labels,
         artifacts: record.artifacts ?? [],
         companionEntries: restoreCompanionEntries(record),
+        streamCaptureDegraded: false,
+        persistSeq: 0,
+        captureDegradedSeq: null,
       },
     });
   }
@@ -2259,72 +2281,126 @@ export class AgentManager {
     return nextRecord;
   }
 
-  async updateCompanionEntry(input: {
-    agentId: string;
-    entryId?: string;
-    action: "update_status" | "add_pin" | "remove_pin" | "add_q_and_a";
-    status?: "open" | "reviewed" | "done";
-    text?: string;
-    answerText?: string;
-    sourceId?: string;
-  }): Promise<void> {
-    const liveAgent = this.getAgent(input.agentId);
+  async listGlobalStream(options: StreamListOptions) {
+    const sources = new Map<string, StreamSource>();
+    for (const record of (await this.registry?.list()) ?? []) {
+      sources.set(record.id, { ...record, companionEntries: restoreCompanionEntries(record) });
+    }
+    for (const agent of this.agents.values()) {
+      sources.set(agent.id, {
+        ...agent,
+        title: sources.get(agent.id)?.title ?? agent.config.title,
+        archivedAt: sources.get(agent.id)?.archivedAt,
+      });
+    }
+    for (const source of sources.values()) {
+      const storedCount = source.companionEntries?.length ?? 0;
+      if (
+        storedCount > STREAM_PAGE_LIMIT &&
+        !this.streamReadCapLogged.has(source.id)
+      ) {
+        this.streamReadCapLogged.add(source.id);
+        this.logger.debug(
+          { agentId: source.id, stored: storedCount, served: STREAM_PAGE_LIMIT },
+          "agent.manager.stream_read_cap",
+        );
+      }
+    }
+    return listStreamRows(sources.values(), options);
+  }
+
+  async updateCompanionEntry(input: StreamEntryUpdate): Promise<void> {
+    return this.runLifecycleMutation(input.agentId, () =>
+      this.updateCompanionEntrySerialized(input),
+    );
+  }
+
+  private async updateCompanionEntrySerialized(input: StreamEntryUpdate): Promise<void> {
+    // getAgent() hands out a copy; mutate the live record so the next snapshot carries the change.
+    const liveAgent = this.agents.get(input.agentId) ?? null;
     let entries = liveAgent?.companionEntries;
     if (!liveAgent) {
-      if (!this.registry) return;
+      if (!this.registry) throw new Error("Stream storage unavailable");
       const stored = await this.registry.get(input.agentId);
-      if (!stored) return;
+      if (!stored) throw new Error("Conversation no longer exists");
       entries = restoreCompanionEntries({ companionEntries: stored.companionEntries });
     } else {
       entries = entries ?? [];
     }
 
-    if (!entries) return;
-    let next = [...entries];
-
-    if (input.action === "update_status" && input.entryId && input.status) {
-      next = next.map((e) =>
-        e.id === input.entryId && (e.kind === "question" || e.kind === "feature_request")
-          ? { ...e, status: input.status as "open" | "reviewed" | "done" }
-          : e,
-      );
-    } else if (input.action === "add_pin") {
-      const pinId = `pin:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const appended = appendManualCompanionEntry(next, {
-        id: pinId,
-        kind: "pin",
-        timestamp: new Date().toISOString(),
-        text: input.text ?? "",
-        truncated: false,
-        sourceId: input.sourceId,
-      });
-      if (appended.error) {
-        throw new Error(appended.error);
-      }
-      next = appended.entries;
-    } else if (input.action === "remove_pin" && input.entryId) {
-      next = next.filter((e) => !(e.id === input.entryId && e.kind === "pin"));
-    } else if (input.action === "add_q_and_a") {
-      const qnaId = `qa:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const appended = appendManualCompanionEntry(next, {
-        id: qnaId,
-        kind: "q_and_a",
-        timestamp: new Date().toISOString(),
-        text: input.text ?? "",
-        answer: input.answerText,
-        truncated: false,
-      });
-      if (appended.error) {
-        throw new Error(appended.error);
-      }
-      next = appended.entries;
-    }
+    const next = applyStreamEntryUpdate(entries, input);
 
     if (liveAgent) {
+      this.requireRegistry();
       liveAgent.companionEntries = next;
-      this.emitState(liveAgent, { persist: true });
+      // Ack follows durable storage: the response is only sent after the
+      // record write settles, and a failed write propagates as a rejection
+      // (never acknowledged as persisted).
+      const seq = ++liveAgent.persistSeq;
+      try {
+        await this.persistSnapshot(liveAgent);
+      } catch (error) {
+        this.notePersistFailure(liveAgent, seq, error);
+        throw error;
+      }
+      this.notePersistSuccess(liveAgent, seq);
+      this.emitState(liveAgent, { persist: false });
     } else {
-      await this.writeStoredMetadata(input.agentId, { companionEntries: next });
+      const seq = (this.dormantPersistSeq.get(input.agentId) ?? 0) + 1;
+      this.dormantPersistSeq.set(input.agentId, seq);
+      try {
+        await this.writeStoredMetadata(input.agentId, { companionEntries: next });
+      } catch (error) {
+        this.noteDormantPersistFailure(input.agentId, seq, error);
+        throw error;
+      }
+      this.noteDormantPersistSuccess(input.agentId, seq);
+    }
+  }
+
+  private notePersistFailure(agent: ManagedAgent, seq: number, error: unknown): void {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOSPC" && code !== "EIO") {
+      this.logger.error({ err: error, agentId: agent.id }, "Failed to persist agent snapshot");
+      return;
+    }
+    // Monotonic highest failed generation: a late OLDER failure never moves
+    // the marker backward past a newer failure.
+    const previous = agent.captureDegradedSeq;
+    agent.captureDegradedSeq = previous === null ? seq : Math.max(previous, seq);
+    this.logger.error(
+      { err: error, agentId: agent.id, code },
+      "agent.manager.capture_degraded",
+    );
+    if (agent.streamCaptureDegraded !== true) {
+      agent.streamCaptureDegraded = true;
+      this.emitState(agent, { persist: false });
+    }
+  }
+
+  private notePersistSuccess(agent: ManagedAgent, seq: number): void {
+    if (agent.captureDegradedSeq === null || seq <= agent.captureDegradedSeq) {
+      return;
+    }
+    agent.captureDegradedSeq = null;
+    if (agent.streamCaptureDegraded === true) {
+      agent.streamCaptureDegraded = false;
+      this.emitState(agent, { persist: false });
+    }
+  }
+
+  private noteDormantPersistFailure(agentId: string, seq: number, error: unknown): void {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOSPC" && code !== "EIO") return;
+    const previous = this.dormantDegradedSeq.get(agentId);
+    this.dormantDegradedSeq.set(agentId, previous === undefined ? seq : Math.max(previous, seq));
+    this.logger.error({ err: error, agentId, code }, "agent.manager.capture_degraded");
+  }
+
+  private noteDormantPersistSuccess(agentId: string, seq: number): void {
+    const failedSeq = this.dormantDegradedSeq.get(agentId);
+    if (failedSeq !== undefined && seq > failedSeq) {
+      this.dormantDegradedSeq.delete(agentId);
     }
   }
 
@@ -4004,6 +4080,9 @@ export class AgentManager {
       labels: options?.labels ?? {},
       artifacts: resolveInitialArtifacts(options?.artifacts),
       companionEntries: restoreCompanionEntries(options),
+      streamCaptureDegraded: false,
+      persistSeq: 0,
+      captureDegradedSeq: null,
     } as ActiveManagedAgent;
   }
 
@@ -5316,9 +5395,18 @@ export class AgentManager {
   }
 
   private enqueueBackgroundPersist(agent: ManagedAgent): void {
-    const task = this.persistSnapshot(agent).catch((err) => {
-      this.logger.error({ err, agentId: agent.id }, "Failed to persist agent snapshot");
-    });
+    // Async IIFE so a SYNCHRONOUS throw from persistSnapshot routes through the
+    // same classifier as a rejection — it cannot bypass the degraded policy.
+    const task = (async () => {
+      const seq = ++agent.persistSeq;
+      try {
+        await this.persistSnapshot(agent);
+      } catch (err) {
+        this.notePersistFailure(agent, seq, err);
+        return;
+      }
+      this.notePersistSuccess(agent, seq);
+    })();
     this.trackBackgroundTask(task);
   }
 

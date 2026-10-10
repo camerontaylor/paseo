@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
+import type { StreamEntryUpdate } from "@getpaseo/protocol/global-stream";
 import {
-  appendManualCompanionEntry,
   CompanionStreamCollector,
   restoreCompanionEntries,
   COMPANION_ENTRY_LIMIT,
   COMPANION_MANUAL_ENTRY_LIMIT,
   COMPANION_TEXT_LIMIT,
 } from "./companion-stream.js";
+import { applyStreamEntryUpdate } from "./stream-entry-update.js";
+import { listStreamRows } from "./global-stream.js";
 
 describe("conversation companion stream", () => {
   it("returns the same entries reference when an event changes nothing", () => {
@@ -51,59 +53,68 @@ describe("conversation companion stream", () => {
     expect(afterUnrelatedResolution).toBe(settled);
   });
 
-  it("never evicts pins or tracked Q&A when captured moments churn", () => {
+  it("retains pins and each unanswered question beyond the recent outcome window", () => {
     const collector = new CompanionStreamCollector();
     const timestamp = "2026-09-21T12:00:00.000Z";
-    const pin: CompanionEntry = {
-      id: "pin:keep",
-      kind: "pin",
-      timestamp,
-      text: "user note",
-      truncated: false,
-    };
-    let entries: CompanionEntry[] = [pin];
-    for (let turn = 0; turn < COMPANION_ENTRY_LIMIT + 5; turn += 1) {
+    let entries: CompanionEntry[] = [
+      { id: "q1", kind: "question", status: "open", text: "First?", timestamp, truncated: false },
+      {
+        id: "q2",
+        kind: "question",
+        status: "reviewed",
+        text: "Second?",
+        timestamp,
+        truncated: false,
+      },
+      { id: "pin", kind: "pin", text: "Keep this", timestamp, truncated: false },
+      {
+        id: "permission",
+        kind: "permission",
+        requestId: "p",
+        requestKind: "question",
+        status: "pending",
+        text: "Choose",
+        timestamp,
+        truncated: false,
+      },
+    ];
+    for (let i = 0; i < 60; i++) {
       entries = collector.observe(
-        "agent",
+        "a",
         entries,
-        {
-          type: "turn_completed",
-          provider: "codex",
-          turnId: `t${turn}`,
-        } as never,
+        { type: "turn_completed", provider: "codex", turnId: String(i) },
         timestamp,
       );
     }
-    expect(entries).toContain(pin);
-    expect(entries.filter((entry) => entry.kind === "outcome").length).toBeLessThanOrEqual(
-      COMPANION_ENTRY_LIMIT,
-    );
+    expect(entries.slice(0, 4).map((entry) => entry.id)).toEqual([
+      "q1",
+      "q2",
+      "pin",
+      "permission",
+    ]);
+    expect(entries.filter((entry) => entry.kind === "outcome")).toHaveLength(60);
   });
 
   it("clips manual entry text to the shared excerpt limit", () => {
-    const appended = appendManualCompanionEntry([], {
-      id: "pin:long",
-      kind: "pin",
-      timestamp: "2026-09-21T12:00:00.000Z",
+    const appended = applyStreamEntryUpdate([], {
+      agentId: "a",
+      action: "add_pin",
+      entryId: "long",
       text: "x".repeat(COMPANION_TEXT_LIMIT + 1),
-      truncated: false,
     });
-    expect(appended.error).toBeUndefined();
-    expect(appended.entries[0]?.text).toHaveLength(COMPANION_TEXT_LIMIT);
-    expect(appended.entries[0]?.truncated).toBe(true);
+    expect(appended[0]?.text).toHaveLength(COMPANION_TEXT_LIMIT);
+    expect(appended[0]?.truncated).toBe(true);
   });
 
-  it("clips a manual Q&A answer and refuses appends past the manual ceiling", () => {
+  it("clips a manual Q&A answer and refuses new manual entries past the ceiling", () => {
     const timestamp = "2026-09-21T12:00:00.000Z";
-    const appended = appendManualCompanionEntry([], {
-      id: "qa:long",
-      kind: "q_and_a",
-      timestamp,
+    const appended = applyStreamEntryUpdate([], {
+      agentId: "a",
+      action: "add_q_and_a",
       text: "q",
-      answer: "a".repeat(COMPANION_TEXT_LIMIT + 1),
-      truncated: false,
+      answerText: "a".repeat(COMPANION_TEXT_LIMIT + 1),
     });
-    expect(appended.entries[0]).toMatchObject({ answer: "a".repeat(COMPANION_TEXT_LIMIT) });
+    expect(appended[0]).toMatchObject({ answer: "a".repeat(COMPANION_TEXT_LIMIT) });
 
     const full: CompanionEntry[] = Array.from(
       { length: COMPANION_MANUAL_ENTRY_LIMIT },
@@ -115,15 +126,40 @@ describe("conversation companion stream", () => {
         truncated: false,
       }),
     );
-    const refused = appendManualCompanionEntry(full, {
-      id: "pin:one-too-many",
-      kind: "pin",
-      timestamp,
-      text: "overflow",
-      truncated: false,
+    expect(() =>
+      applyStreamEntryUpdate(full, {
+        agentId: "a",
+        action: "add_pin",
+        entryId: "one-too-many",
+        text: "overflow",
+      }),
+    ).toThrow("Stream pin limit reached");
+    // Edits to an existing pin remain possible at capacity.
+    const edited = applyStreamEntryUpdate(full, {
+      agentId: "a",
+      action: "add_pin",
+      entryId: "3",
+      text: "rewritten note",
     });
-    expect(refused.error).toBeTruthy();
-    expect(refused.entries).toBe(full);
+    expect(edited.find((entry) => entry.id === "pin:3")).toMatchObject({
+      text: "rewritten note",
+    });
+    expect(edited).toHaveLength(full.length);
+    // Q&A has no edit identity: creation is always capped.
+    expect(() =>
+      applyStreamEntryUpdate(full, {
+        agentId: "a",
+        action: "add_q_and_a",
+        text: "overflow q",
+        answerText: "a",
+      }),
+    ).toThrow("Stream pin limit reached");
+  });
+
+  it("rejects empty or whitespace manual text on the engine path", () => {
+    expect(() =>
+      applyStreamEntryUpdate([], { agentId: "a", action: "add_pin", entryId: "blank", text: "   " }),
+    ).toThrow("Enter between 1 and 4000 characters");
   });
 
   it("keeps a question open until the provider resolves its permission request", () => {
@@ -394,6 +430,122 @@ it("bounds stored output and records failure independently of an assistant succe
     );
   }
   expect(entries.map((entry) => entry.id)).toEqual(
-    Array.from({ length: COMPANION_ENTRY_LIMIT }, (_, i) => `turn:${i + 2}`),
+    Array.from({ length: COMPANION_ENTRY_LIMIT + 2 }, (_, i) => `turn:${i}`),
   );
+});
+
+it("pages global items without collisions, includes dormant records and excludes hidden/archived agents", () => {
+  const entry: CompanionEntry = {
+    id: "same",
+    kind: "question",
+    status: "open",
+    text: "Pick a name?",
+    timestamp,
+    truncated: false,
+  };
+  const sources = [
+    { id: "a", cwd: "/project/a", companionEntries: [entry] },
+    { id: "b", cwd: "/project/b", companionEntries: [entry] },
+    { id: "hidden", cwd: "/project", internal: true, companionEntries: [entry] },
+    { id: "archived", cwd: "/project", archivedAt: timestamp, companionEntries: [entry] },
+  ];
+  const first = listStreamRows(sources, { limit: 1 });
+  const second = listStreamRows(sources, { limit: 1, cursor: first.nextCursor! });
+  expect(first.rows.map((row) => row.agentId)).toEqual(["a"]);
+  expect(second.rows.map((row) => row.agentId)).toEqual(["b"]);
+  expect(second.nextCursor).toBeNull();
+  expect(listStreamRows(sources, { includeArchived: true }).rows.map((row) => row.agentId)).toEqual(
+    ["a", "archived", "b"],
+  );
+  expect(
+    listStreamRows(sources, { search: "/project/b", filter: "pending" }).rows.map(
+      (row) => row.agentId,
+    ),
+  ).toEqual(["b"]);
+  expect(listStreamRows(sources, { filter: "pinned" }).rows).toEqual([]);
+  expect(() => listStreamRows(sources, { cursor: "bad" })).toThrow();
+  // Server-side transport clamp: the s1 wire schema allows limit<=100; pages cap at 50.
+  const many = Array.from({ length: 60 }, (_, index): CompanionEntry => ({
+    id: `turn:${index}`,
+    kind: "outcome",
+    status: "completed",
+    text: `done ${index}`,
+    timestamp,
+    truncated: false,
+  }));
+  const clamped = listStreamRows([{ id: "a", cwd: "/project", companionEntries: many }], {
+    limit: 100,
+  });
+  expect(clamped.rows).toHaveLength(50);
+});
+
+it("bounds oversized persisted entry text at read time without touching storage", () => {
+  const oversized: CompanionEntry = {
+    id: "turn:legacy",
+    kind: "outcome",
+    status: "completed",
+    text: "x".repeat(COMPANION_TEXT_LIMIT + 1000),
+    truncated: false,
+    timestamp,
+  };
+  const sources = [{ id: "a", cwd: "/project", companionEntries: [oversized] }];
+  const page = listStreamRows(sources, {});
+  expect(page.rows[0]?.item).toMatchObject({
+    kind: "entry",
+    entry: { text: "x".repeat(COMPANION_TEXT_LIMIT), truncated: true },
+  });
+  expect(sources[0].companionEntries[0].text).toHaveLength(COMPANION_TEXT_LIMIT + 1000);
+});
+
+it("retries a pin save without duplicating the live entry after a failed acknowledgement", () => {
+  const input = {
+    agentId: "a",
+    action: "add_pin" as const,
+    entryId: "draft",
+    text: "Keep context",
+  };
+  const first = applyStreamEntryUpdate([], input);
+  expect(applyStreamEntryUpdate(first, input)).toEqual(first);
+});
+
+it("upserts durable questions by identity and resolves only the selected item", () => {
+  const base = { agentId: "a", action: "add_question" as const };
+  let entries = applyStreamEntryUpdate([], { ...base, entryId: "name", text: "Choose name" });
+  entries = applyStreamEntryUpdate(entries, {
+    ...base,
+    entryId: "channel",
+    text: "Choose channel",
+  });
+  entries = applyStreamEntryUpdate(entries, {
+    ...base,
+    entryId: "name",
+    text: "Name selected",
+    status: "done",
+  });
+  expect(
+    entries.map((entry) => ({
+      id: entry.id,
+      text: entry.text,
+      status: "status" in entry ? entry.status : null,
+    })),
+  ).toEqual([
+    { id: "question:name", text: "Name selected", status: "done" },
+    { id: "question:channel", text: "Choose channel", status: "open" },
+  ]);
+  expect(
+    listStreamRows([{ id: "a", cwd: "/project", companionEntries: entries }], {
+      filter: "pending",
+    }).rows.map((row) => row.item),
+  ).toEqual([{ kind: "entry", entry: entries[1] }]);
+  expect(() =>
+    applyStreamEntryUpdate(entries, {
+      agentId: "a",
+      action: "update_status",
+      entryId: "missing",
+      status: "done",
+    }),
+  ).toThrow("no longer exists");
+  expect(() =>
+    applyStreamEntryUpdate(entries, { ...base, entryId: "name", text: " " }),
+  ).toThrow("Enter between");
 });

@@ -12582,3 +12582,56 @@ test("usage session is a pure read of the live adapter and disappears on close",
   }
   expect(manager.usageSession(agent.id)).toBeNull();
 });
+
+test("a dormant stream mutation rejects on storage failure and recovers on retry", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-dormant-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  await manager.updateCompanionEntry({
+    agentId: agent.id,
+    action: "add_question",
+    entryId: "seeded",
+    text: "Seeded question",
+  });
+  await manager.closeAgent(agent.id);
+  expect(manager.getAgent(agent.id)).toBeNull();
+
+  const upsert = storage.upsert.bind(storage);
+  const write = vi
+    .spyOn(storage, "upsert")
+    .mockRejectedValueOnce(Object.assign(new Error("No space left on device"), { code: "ENOSPC" }));
+  try {
+    await expect(
+      manager.updateCompanionEntry({
+        agentId: agent.id,
+        action: "add_pin",
+        entryId: "dormant-pin",
+        text: "Dormant note",
+      }),
+    ).rejects.toThrow("No space left on device");
+    write.mockRestore();
+    // Retry through the same manager settles the retained entries.
+    await manager.updateCompanionEntry({
+      agentId: agent.id,
+      action: "add_pin",
+      entryId: "dormant-pin",
+      text: "Dormant note",
+    });
+    const stored = await storage.get(agent.id);
+    const ids = stored?.companionEntries?.map((entry) => entry.id);
+    expect(ids).toContain("question:seeded");
+    expect(ids).toContain("pin:dormant-pin");
+    // No diagnostic bookkeeping ever reached storage: the record carries only
+    // the entries (and the record's own fields), never a degraded flag.
+    expect(Object.keys(stored ?? {})).not.toContain("captureDegraded");
+    expect(JSON.stringify(stored)).not.toContain("captureDegraded");
+  } finally {
+    write.mockRestore();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

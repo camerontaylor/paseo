@@ -3191,6 +3191,12 @@ export class Session {
       case "agent.companion.update_entry.request":
         await this.handleCompanionUpdateEntryRequest(msg);
         return;
+      case "stream.list.request":
+        await this.handleStreamListRequest(msg);
+        return;
+      case "stream.entry.update.request":
+        await this.handleStreamUpdateRequest(msg);
+        return;
       case "agent.artifacts.scan.request":
         await this.handleAgentArtifactsScanRequest(msg.agentId, msg.requestId, msg.limit);
         return;
@@ -3598,6 +3604,65 @@ export class Session {
         error,
       },
     });
+  }
+
+  // COMPAT(globalStream): added in v0.11.1-fork (C2), remove after 2027-04-06.
+  // The stream RPCs are served only to sessions declaring the capability, so
+  // an unknown response type can never reach a client whose outbound union
+  // cannot parse it. A capability-absent request is dropped: no response of
+  // either new type, and no mutation for update requests.
+  private streamRpcAdmitted(): boolean {
+    if (this.supports(CLIENT_CAPS.globalStream)) return true;
+    this.sessionLogger.info(
+      { sessionId: this.sessionId },
+      "session: stream request dropped (capability absent)",
+    );
+    return false;
+  }
+
+  private async handleStreamListRequest(
+    msg: Extract<SessionInboundMessage, { type: "stream.list.request" }>,
+  ): Promise<void> {
+    if (!this.streamRpcAdmitted()) return;
+    try {
+      const page = await this.agentManager.listGlobalStream(msg);
+      this.emit({
+        type: "stream.list.response",
+        payload: { requestId: msg.requestId, ...page, error: null },
+      });
+    } catch (error) {
+      this.emit({
+        type: "stream.list.response",
+        payload: {
+          requestId: msg.requestId,
+          rows: [],
+          nextCursor: null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  private async handleStreamUpdateRequest(
+    msg: Extract<SessionInboundMessage, { type: "stream.entry.update.request" }>,
+  ): Promise<void> {
+    if (!this.streamRpcAdmitted()) return;
+    try {
+      await this.agentManager.updateCompanionEntry(msg);
+      this.emit({
+        type: "stream.entry.update.response",
+        payload: { requestId: msg.requestId, accepted: true },
+      });
+    } catch (error) {
+      this.emit({
+        type: "stream.entry.update.response",
+        payload: {
+          requestId: msg.requestId,
+          accepted: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
   }
 
   private async handleUpdateAgentRequest(

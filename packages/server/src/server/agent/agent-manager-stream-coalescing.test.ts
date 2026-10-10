@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager, type AgentManagerEvent } from "./agent-manager.js";
+import { AgentStorage } from "./agent-storage.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS } from "./agent-stream-coalescer.js";
 import type { AgentTimelineRow } from "./agent-timeline-store-types.js";
 import { projectTimelineRows } from "./timeline-projection.js";
@@ -243,10 +244,13 @@ interface Harness {
   cleanup: () => void;
 }
 
-function createHarness(options?: { provider?: AgentProvider }): Harness {
+function createHarness(options?: { provider?: AgentProvider; storage?: boolean }): Harness {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stream-coalescing-"));
   const client = new TestAgentClient(options?.provider ?? "codex");
   const manager = new AgentManager({
+    registry: options?.storage
+      ? new AgentStorage(join(workdir, "agents"), createTestLogger())
+      : undefined,
     clients: { [client.provider]: client },
     idFactory: createIdFactory(),
     logger: createTestLogger(),
@@ -1418,4 +1422,308 @@ describe("target coalesced behavior", () => {
       harness.cleanup();
     }
   });
+});
+
+test("Stream mutations preserve independent questions and report missing items", async () => {
+  const harness = createHarness({ storage: true });
+  try {
+    const { agentId } = await createManagedSession(harness);
+    await harness.manager.setTitle(agentId, "Renamed stream source");
+    await Promise.all([
+      harness.manager.updateCompanionEntry({
+        agentId,
+        action: "add_question",
+        entryId: "first",
+        text: "First question?",
+      }),
+      harness.manager.updateCompanionEntry({
+        agentId,
+        action: "add_question",
+        entryId: "second",
+        text: "Second question?",
+      }),
+    ]);
+    await harness.manager.updateCompanionEntry({
+      agentId,
+      action: "update_status",
+      entryId: "question:first",
+      status: "done",
+    });
+    const page = await harness.manager.listGlobalStream({ filter: "pending" });
+    expect(page.rows[0]?.agentTitle).toBe("Renamed stream source");
+    expect(page.rows.map((row) => row.item)).toEqual([
+      {
+        kind: "entry",
+        entry: expect.objectContaining({
+          id: "question:second",
+          status: "open",
+          text: "Second question?",
+        }),
+      },
+    ]);
+    await expect(
+      harness.manager.updateCompanionEntry({
+        agentId,
+        action: "update_status",
+        entryId: "missing",
+        status: "done",
+      }),
+    ).rejects.toThrow("no longer exists");
+    await harness.manager.closeAgent(agentId);
+    expect(harness.manager.getAgent(agentId)).toBeNull();
+    const dormant = await harness.manager.listGlobalStream({ filter: "pending" });
+    expect(dormant.rows[0]?.agentTitle).toBe("Renamed stream source");
+    await harness.manager.updateCompanionEntry({
+      agentId,
+      action: "update_status",
+      entryId: "question:second",
+      status: "done",
+    });
+    expect((await harness.manager.listGlobalStream({ filter: "pending" })).rows).toEqual([]);
+    expect(harness.manager.getAgent(agentId)).toBeNull();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("stream writes reject failed persistence and preserve live state for retry", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-write-failure-"));
+  const storage = new AgentStorage(join(workdir, "agents"), createTestLogger());
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger: createTestLogger(),
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  await manager.flush();
+  const write = vi.spyOn(storage, "applySnapshot").mockRejectedValueOnce(
+    Object.assign(new Error("Disk full"), { code: "ENOSPC" }),
+  );
+  try {
+    const input = {
+      agentId: agent.id,
+      entryId: "draft",
+      action: "add_question" as const,
+      text: "Choose channel",
+    };
+    await expect(manager.updateCompanionEntry(input)).rejects.toThrow("Disk full");
+    expect(manager.getAgent(agent.id)?.companionEntries).toContainEqual(
+      expect.objectContaining({ id: "question:draft", text: input.text }),
+    );
+    expect((await storage.get(agent.id))?.companionEntries ?? []).toEqual([]);
+    // The failed generation is recorded: the snapshot carries the degraded flag.
+    expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(true);
+    await manager.updateCompanionEntry(input);
+    expect((await storage.get(agent.id))?.companionEntries).toContainEqual(
+      expect.objectContaining({ id: "question:draft", text: input.text }),
+    );
+    // A newer successful write covers the failed generation: flag cleared.
+    expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(false);
+  } finally {
+    write.mockRestore();
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("stream writes await persistence without overwriting concurrent provider events", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-write-concurrent-"));
+  const storage = new AgentStorage(join(workdir, "agents"), createTestLogger());
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger: createTestLogger(),
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  await manager.flush();
+  let release!: () => void;
+  let entered!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const apply = storage.applySnapshot.bind(storage);
+  const write = vi.spyOn(storage, "applySnapshot").mockImplementationOnce(async (...args) => {
+    entered();
+    await blocked;
+    await apply(...args);
+  });
+  try {
+    let acknowledged = false;
+    const mutation = manager
+      .updateCompanionEntry({
+        agentId: agent.id,
+        entryId: "draft",
+        action: "add_question",
+        text: "Choose name",
+      })
+      .then(() => {
+        acknowledged = true;
+        return;
+      });
+    await started;
+    // A provider event arrives while the mutation's persist is blocked: the
+    // outcome is captured in memory and its own background persist queues
+    // behind the blocked write (the storage serializes per agent).
+    (agent.session as TestAgentSession).pushEvent(terminalEvent("turn_completed", "concurrent"));
+    await waitForSessionEventQueue();
+    expect(acknowledged).toBe(false);
+    release();
+    await mutation;
+    await manager.flush();
+    const entries = manager.getAgent(agent.id)?.companionEntries;
+    expect(entries).toContainEqual(expect.objectContaining({ id: "question:draft" }));
+    expect(entries).toContainEqual(expect.objectContaining({ kind: "outcome" }));
+    expect((await storage.get(agent.id))?.companionEntries).toEqual(entries);
+  } finally {
+    release();
+    write.mockRestore();
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("degraded capture recovery is generation-safe across overlapping writes", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-degraded-"));
+  const storage = new AgentStorage(join(workdir, "agents"), createTestLogger());
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger: createTestLogger(),
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  await manager.flush();
+  const apply = storage.applySnapshot.bind(storage);
+  // Each applySnapshot call awaits its own barrier; the test chooses the
+  // completion order. Barriers are promises, never timers.
+  const barriers: Array<{ enter: Promise<void>; release: () => void; fail: boolean }> = [];
+  const write = vi
+    .spyOn(storage, "applySnapshot")
+    .mockImplementation((async (...args: unknown[]) => {
+      const controls = barriers.shift();
+      if (!controls) return apply(...(args as Parameters<typeof storage.applySnapshot>));
+      await controls.enter;
+      if (controls.fail) {
+        throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
+      }
+      await apply(...(args as Parameters<typeof storage.applySnapshot>));
+    }) as typeof storage.applySnapshot);
+  const arm = (fail: boolean, hold = true) => {
+    let release!: () => void;
+    const enter = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    barriers.push({ enter: hold ? enter : Promise.resolve(), release, fail });
+    return release;
+  };
+  try {
+    const session = agent.session as TestAgentSession;
+    // Persist #1 (older): captured, blocked in flight.
+    const releaseOlder = arm(false);
+    session.pushEvent(terminalEvent("turn_completed", "gen-1"));
+    await waitForSessionEventQueue();
+    // Persist #2 (newer): fails with ENOSPC immediately, while #1 is still in
+    // flight and blocked.
+    arm(true, false);
+    session.pushEvent(terminalEvent("turn_completed", "gen-2"));
+    await waitForSessionEventQueue();
+    await vi.waitFor(() => {
+      expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(true);
+    });
+    // The older, still-blocked write finishes AFTER the failure. It must not
+    // clear a newer failure it does not cover.
+    releaseOlder();
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(true);
+    // A newer successful write covers the failed generation: flag clears.
+    session.pushEvent(terminalEvent("turn_completed", "gen-3"));
+    await waitForSessionEventQueue();
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(false);
+    const stored = await storage.get(agent.id);
+    expect(stored?.companionEntries?.map((entry) => entry.id)).toEqual([
+      "turn:gen-1",
+      "turn:gen-2",
+      "turn:gen-3",
+    ]);
+  } finally {
+    write.mockRestore();
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a synchronous applySnapshot throw routes through the degraded classifier", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-degraded-sync-"));
+  const storage = new AgentStorage(join(workdir, "agents"), createTestLogger());
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger: createTestLogger(),
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  await manager.flush();
+  const write = vi.spyOn(storage, "applySnapshot").mockImplementation(() => {
+    throw Object.assign(new Error("Sync EIO"), { code: "EIO" });
+  });
+  try {
+    const session = agent.session as TestAgentSession;
+    session.pushEvent(terminalEvent("turn_completed", "sync-1"));
+    await waitForSessionEventQueue();
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(true);
+    // Recovery: restore real writes; a newer persist clears the flag.
+    write.mockRestore();
+    await manager.flush();
+    session.pushEvent(terminalEvent("turn_completed", "sync-2"));
+    await waitForSessionEventQueue();
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.streamCaptureDegraded).toBe(false);
+    expect((await storage.get(agent.id))?.companionEntries?.map((entry) => entry.id)).toEqual([
+      "turn:sync-1",
+      "turn:sync-2",
+    ]);
+  } finally {
+    write.mockRestore();
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("read-cap hits log once per agent per run", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-read-cap-"));
+  const storage = new AgentStorage(join(workdir, "agents"), createTestLogger());
+  const logger = createTestLogger();
+  const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  try {
+    for (let i = 0; i < 55; i++) {
+      await manager.updateCompanionEntry({
+        agentId: agent.id,
+        action: "add_question",
+        entryId: `q${i}`,
+        text: `Question ${i}`,
+      });
+    }
+    debugSpy.mockClear();
+    await manager.listGlobalStream({});
+    await manager.listGlobalStream({});
+    // One event per run, not per read.
+    const readCapCalls = debugSpy.mock.calls.filter(
+      ([, msg]) => msg === "agent.manager.stream_read_cap",
+    );
+    expect(readCapCalls).toHaveLength(1);
+    expect(readCapCalls[0]?.[0]).toMatchObject({ agentId: agent.id, stored: 55, served: 50 });
+  } finally {
+    debugSpy.mockRestore();
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
