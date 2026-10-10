@@ -23,6 +23,14 @@ import { resolveQueuedEditFinalization } from "@/composer/actions";
 import type { QueuedComposerMessage } from "@/composer/actions";
 import { runQueuedRowEditSave, type QueuedRowSaveResult } from "@/composer/queued-row-save";
 import { flushDraftPersistStorage, useDraftStore } from "@/stores/draft-store";
+
+/**
+ * Owner generation per draft key: bumped whenever a fresh row instance takes
+ * the keys (mount). An in-flight save captures its generation at start; a
+ * completion after a replacement editor mounted must abandon instead of
+ * overwriting the replacement's baseline.
+ */
+const editorGenerations = new Map<string, number>();
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
@@ -442,6 +450,11 @@ export function QueuedMessageRow({
   editingRef.current = isEditing;
   const savingRef = useRef(false);
   const editInputRef = useRef<EditingTextInputHandle | null>(null);
+  const ownerGenerationRef = useRef<number>(-1);
+  if (ownerGenerationRef.current === -1) {
+    ownerGenerationRef.current = (editorGenerations.get(draftKey) ?? 0) + 1;
+    editorGenerations.set(draftKey, ownerGenerationRef.current);
+  }
   const conflicted =
     useDraftStore.getState().getDraftInput(draftKey)?.queueEdit?.conflicted === true;
 
@@ -524,16 +537,28 @@ export function QueuedMessageRow({
   );
 
   const finalizeSave = useCallback(
-    (confirmedText: string, confirmedRevision: number, submittedVersion: number | undefined) => {
+    (
+      confirmedText: string,
+      confirmedRevision: number,
+      submittedVersion: number | undefined,
+      ownerGeneration: number,
+    ) => {
       const store = useDraftStore.getState();
       const finalization = resolveQueuedEditFinalization({
         savedVersion: submittedVersion,
         currentVersion: store.drafts[draftKey]?.version,
+        recordExists: store.drafts[draftKey] !== undefined,
+        ownerGenerationChanged: editorGenerations.get(draftKey) !== ownerGeneration,
         latestText: draftRef.current,
         confirmedText,
         confirmedRevision,
         itemId: item.id,
       });
+      if (finalization.kind === "abandon") {
+        // A stale completion: the edit was discarded, finalized, or its keys
+        // now belong to a replacement editor. Never recreate or overwrite.
+        return;
+      }
       if (finalization.kind === "clear") {
         clearSavedDraft();
         editingRef.current = false;
@@ -586,7 +611,9 @@ export function QueuedMessageRow({
         checkpoint: preserveDraft,
         flushCheckpoint: flushDraftPersistStorage,
         persistFence: persistEditFence,
+        getOwnerGeneration: () => ownerGenerationRef.current,
         finalize: finalizeSave,
+        discardSavedDraft: clearSavedDraft,
         onSave,
         onError,
         setSaving: (saving) => {
@@ -598,6 +625,7 @@ export function QueuedMessageRow({
     [
       appliedRevision,
       baselineKey,
+      clearSavedDraft,
       conflictLabel,
       draftKey,
       finalizeSave,

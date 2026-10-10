@@ -850,23 +850,37 @@ export type QueuedEditFinalization =
       kind: "retainDraft";
       baseline: { itemId: string; text: string; baselineRevision: number };
     }
-  | { kind: "clear" };
+  | { kind: "clear" }
+  | {
+      /** The edit's owner is gone (discarded, finalized, or replaced by a
+       * remount): an old completion must never recreate or overwrite it. */
+      kind: "abandon";
+    };
 
 /**
- * Version-safe finalization: compares the draft version captured before the
- * save with the store's version after it. Unchanged means no newer input
- * arrived — the edit clears. Changed means the user typed during the save —
+ * Version-safe, ownership-aware finalization: the draft version captured
+ * before the save is compared against the store after it, and the edit's
+ * ownership is re-verified. Unchanged version with a live record — the edit
+ * clears. A moved version with a live record — the user typed during the save;
  * that newer checkpoint is kept and its baseline advances to the confirmed
- * generation, so the next save sends against the revision the host confirmed.
+ * generation. A missing record (discarded or finalized mid-save) or a replaced
+ * owner generation (remount) — the completion abandons: recreating or
+ * overwriting would resurrect discarded work or clobber a replacement
+ * editor's baseline.
  */
 export function resolveQueuedEditFinalization(input: {
   savedVersion: number | undefined;
   currentVersion: number | undefined;
+  recordExists: boolean;
+  ownerGenerationChanged: boolean;
   latestText: string;
   confirmedText: string;
   confirmedRevision: number;
   itemId: string;
 }): QueuedEditFinalization {
+  if (input.ownerGenerationChanged || !input.recordExists) {
+    return { kind: "abandon" };
+  }
   if (input.currentVersion !== input.savedVersion) {
     return {
       kind: "retainDraft",

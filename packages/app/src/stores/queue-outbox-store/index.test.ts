@@ -1041,3 +1041,54 @@ describe("queue outbox tombstones", () => {
     expect(useQueueOutboxStore.getState().entries["item-b"]).toBeUndefined();
   });
 });
+
+describe("queue outbox discard boundary", () => {
+  test("a discard is refused at the serialized boundary when a tombstone raced the confirmation", async () => {
+    const { useQueueOutboxStore } = await loadOutbox();
+    await useQueueOutboxStore.getState().add(entry({ itemId: "item-1" }));
+
+    // The user requests removal while the discard's confirmation dialog is
+    // open; the confirm then lands.
+    await useQueueOutboxStore.getState().requestRemoval({
+      ...entry({ itemId: "item-1" }),
+      removalRequested: true,
+    });
+    await expect(
+      useQueueOutboxStore.getState().discardQueuedEntryDurably("item-1"),
+    ).rejects.toThrow("queue_removal_pending");
+
+    // The unresolved cancellation survives the attempted discard.
+    expect(useQueueOutboxStore.getState().entries["item-1"]?.removalRequested).toBe(true);
+    const { useQueueOutboxStore: reloaded } = await loadOutbox();
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().entries["item-1"]?.removalRequested).toBe(true);
+  });
+
+  test("a discard of a plain entry removes durably", async () => {
+    const { useQueueOutboxStore, adapter } = await loadOutbox();
+    await useQueueOutboxStore.getState().add(entry({ itemId: "item-1" }));
+
+    await useQueueOutboxStore.getState().discardQueuedEntryDurably("item-1");
+
+    expect(useQueueOutboxStore.getState().entries["item-1"]).toBeUndefined();
+    const persisted = await readPersistedEntries(adapter);
+    expect(persisted["item-1"]).toBeUndefined();
+  });
+
+  test("a failed discard write restores the entry and reports the storage error", async () => {
+    const { useQueueOutboxStore, adapter } = await loadOutbox();
+    await useQueueOutboxStore.getState().add(entry({ itemId: "item-1" }));
+    const storage = controlStorage(adapter);
+    storage.failNextCalls(1);
+
+    await expect(
+      useQueueOutboxStore.getState().discardQueuedEntryDurably("item-1"),
+    ).rejects.toThrow("Simulated storage failure");
+    storage.restore();
+
+    expect(useQueueOutboxStore.getState().entries["item-1"]?.itemId).toBe("item-1");
+    expect(useQueueOutboxStore.getState().storageError?.itemId).toBe("item-1");
+    const persisted = await readPersistedEntries(adapter);
+    expect(persisted["item-1"]?.itemId).toBe("item-1");
+  });
+});

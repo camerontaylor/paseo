@@ -57,7 +57,15 @@ function prepareRowSave(input: {
 
 /** The host's answer to one queued-row update. */
 export type QueuedRowSaveResult =
-  | { status: "saved"; confirmedRevision: number }
+  | {
+      status: "saved";
+      /** The revision the host confirmed, from the returned snapshot. */
+      confirmedRevision: number;
+      /** The confirmed row content, from the returned snapshot (the server
+       * trims submitted text). */
+      confirmedText: string;
+    }
+  | { status: "vanished" }
   | { status: "unsaved" };
 
 export interface QueuedRowSavePorts {
@@ -78,12 +86,23 @@ export interface QueuedRowSavePorts {
   flushCheckpoint: () => Promise<void>;
   /** Persists the conflict fence; rejects when the write cannot land. */
   persistFence: (attemptedRevision: number) => Promise<void>;
-  /** Version-safe finalization against the HOST-CONFIRMED revision. */
+  /**
+   * The current owner generation of this edit's draft keys. A replacement
+   * editor (remount) bumps it; an old completion must then abandon.
+   */
+  getOwnerGeneration: () => number;
+  /**
+   * Version- and ownership-safe finalization against the HOST-CONFIRMED
+   * content and revision.
+   */
   finalize: (
     confirmedText: string,
     confirmedRevision: number,
     submittedVersion: number | undefined,
+    ownerGeneration: number,
   ) => void;
+  /** The host no longer lists the row: drop the saved draft quietly. */
+  discardSavedDraft: () => void;
   onSave: (itemId: string, text: string, revision: number) => Promise<QueuedRowSaveResult>;
   onError: (message: string) => void;
   setSaving: (saving: boolean) => void;
@@ -123,21 +142,33 @@ export async function runQueuedRowEditSave(ports: QueuedRowSavePorts): Promise<v
     return;
   }
   const submittedVersion = ports.checkpoint(prepared.text);
+  const ownerGeneration = ports.getOwnerGeneration();
   ports.setSaving(true);
   try {
     // The draft checkpoint is the durability barrier: it must be on disk
     // before the host sees anything.
     await ports.flushCheckpoint();
     if (prepared.mode === "noop") {
-      ports.finalize(prepared.text, prepared.baselineRevision, submittedVersion);
+      ports.finalize(prepared.text, prepared.baselineRevision, submittedVersion, ownerGeneration);
       return;
     }
     const result = await ports.onSave(ports.itemId, prepared.text, prepared.rpcRevision);
+    if (result.status === "vanished") {
+      // The host no longer lists the row (removed remotely mid-save): the
+      // edit is moot — drop the saved draft, surface nothing.
+      ports.discardSavedDraft();
+      return;
+    }
     if (result.status === "unsaved") {
       ports.onError(ports.persistMessage);
       return;
     }
-    ports.finalize(prepared.text, result.confirmedRevision, submittedVersion);
+    ports.finalize(
+      result.confirmedText,
+      result.confirmedRevision,
+      submittedVersion,
+      ownerGeneration,
+    );
   } catch (error) {
     const failure = resolveQueuedEditFailure(error, {
       conflictMessage: ports.conflictMessage,

@@ -238,8 +238,15 @@ describe("draft persistence durability", () => {
 });
 
 describe("hydration gate", () => {
-  function createGatedPersistence() {
+  /**
+   * The store's exact composition: the debouncer wrapped by a capture-time
+   * hydration gate, over a genuinely seeded backing store.
+   */
+  function createGatedPersistence(seedText: string | null) {
     const persisted: Record<string, string> = {};
+    if (seedText !== null) {
+      persisted["drafts"] = JSON.stringify({ state: { text: seedText } });
+    }
     const backing: PersistStorage<DraftState> = {
       getItem: (name) =>
         persisted[name] ? (JSON.parse(persisted[name]) as StorageValue<DraftState>) : null,
@@ -253,17 +260,16 @@ describe("hydration gate", () => {
       },
     };
     let hydrated = false;
-    // The same construction as the draft store's storage seam: an inline
-    // setItem gate over the backing storage, inside the debouncing wrapper.
-    const drafts: DraftPersistStorage<DraftState> = createDraftPersistStorage({
-      ...backing,
+    const debouncer: DraftPersistStorage<DraftState> = createDraftPersistStorage(backing);
+    const drafts: DraftPersistStorage<DraftState> = {
+      ...debouncer,
       setItem: (name, value) => {
         if (!hydrated) {
           return Promise.resolve();
         }
-        return backing.setItem(name, value);
+        return debouncer.setItem(name, value);
       },
-    });
+    };
     return {
       drafts,
       checkpoint(text: string) {
@@ -272,7 +278,8 @@ describe("hydration gate", () => {
       async flush() {
         await drafts.flush();
       },
-      openGate() {
+      /** Hydration completes: the gate opens. */
+      hydrate() {
         hydrated = true;
       },
       storedText() {
@@ -283,28 +290,37 @@ describe("hydration gate", () => {
     };
   }
 
-  it("a post-hydration checkpoint persists; the gate passes it through", async () => {
-    const gate = createGatedPersistence();
-    gate.openGate();
-    gate.checkpoint("saved edit");
+  it("a post-hydration checkpoint persists through the gate", async () => {
+    const gate = createGatedPersistence(null);
+    gate.hydrate();
+    gate.checkpoint("after hydration");
     await gate.flush();
-    expect(gate.storedText()).toBe("saved edit");
+    expect(gate.storedText()).toBe("after hydration");
   });
 
-  it("a pre-hydration checkpoint never reaches storage, and saved payloads survive", async () => {
-    const gate = createGatedPersistence();
-    // The saved store holds a payload (as if written by a previous launch);
-    // the pre-hydration checkpoint must not replace it.
-    gate.checkpoint("typed before hydration");
-    await gate.flush();
-    expect(gate.storedText()).toBeNull();
+  it("two pre-hydration checkpoints never reach a genuinely seeded saved store", async () => {
+    // A previous launch left a saved checkpoint behind.
+    const gate = createGatedPersistence("saved edit");
 
-    gate.openGate();
+    // Two checkpoints captured before hydration; the debounce clock runs.
+    gate.checkpoint("typed too early one");
+    gate.checkpoint("typed too early two");
+    await gate.flush();
+
+    // Hydration completes only now — and the stale partial payloads were
+    // never captured, so the saved store is untouched.
+    gate.hydrate();
+    await gate.flush();
+    expect(gate.storedText()).toBe("saved edit");
+
+    // A post-hydration checkpoint persists alongside the rehydrated state.
     gate.checkpoint("typed after hydration");
     await gate.flush();
     expect(gate.storedText()).toBe("typed after hydration");
   });
+});
 
+describe("flush serialization", () => {
   it("multiple waiters on one in-flight write never overlap", async () => {
     let nowMs = 0;
     let activeWrites = 0;

@@ -69,22 +69,21 @@ const draftValidatedStorage = createValidatedPersistStorage(
   AsyncStorage,
   PersistedDraftStoreSchema,
 );
-const draftPersistStorage = createDraftPersistStorage({
-  ...draftValidatedStorage,
+const draftPersistDebouncer = createDraftPersistStorage(draftValidatedStorage);
+// The hydration gate sits OUTSIDE the debouncer, at capture time: a checkpoint
+// issued before hydration must never sit in the debouncer's pending slot, or a
+// gate that opens before the debounced flush would persist that stale partial
+// payload over the saved store. Zustand keeps its hydration flag false through
+// a failed read, so a rejected read never opens the gate mid-failure.
+const draftPersistStorage: typeof draftPersistDebouncer = {
+  ...draftPersistDebouncer,
   setItem: (name, value) => {
     if (!useDraftStore.persist.hasHydrated()) {
-      // Before hydration the in-memory drafts do not describe the saved store
-      // — persisting them could replace saved payloads with a partial set.
-      // Saves gate on hydration before they dispatch, so this guard only
-      // skips incidental pre-hydration checkpoints (a row opened in the
-      // storage-resolution window) whose in-memory copy the rehydrate may
-      // replace; the saved store is never touched. Zustand keeps the flag
-      // false through a failed read, so a rejected read never opens the gate.
       return Promise.resolve();
     }
-    return draftValidatedStorage.setItem(name, value);
+    return draftPersistDebouncer.setItem(name, value);
   },
-});
+};
 
 export function flushDraftPersistStorage(): Promise<void> {
   return draftPersistStorage?.flush() ?? Promise.resolve();

@@ -1917,15 +1917,21 @@ describe("resolveQueuedEditFailure", () => {
 });
 
 describe("resolveQueuedEditFinalization", () => {
+  const base = {
+    latestText: "typed during save",
+    confirmedText: "saved text",
+    confirmedRevision: 7,
+    itemId: "item-1",
+  };
+
   it("clears the edit when no newer checkpoint landed during the save", () => {
     expect(
       resolveQueuedEditFinalization({
+        ...base,
         savedVersion: 4,
         currentVersion: 4,
-        latestText: "unused",
-        confirmedText: "saved text",
-        confirmedRevision: 7,
-        itemId: "item-1",
+        recordExists: true,
+        ownerGenerationChanged: false,
       }),
     ).toEqual({ kind: "clear" });
   });
@@ -1933,17 +1939,40 @@ describe("resolveQueuedEditFinalization", () => {
   it("retains newer input and advances its baseline to the confirmed generation", () => {
     expect(
       resolveQueuedEditFinalization({
+        ...base,
         savedVersion: 4,
         currentVersion: 5,
-        latestText: "typed during save",
-        confirmedText: "saved text",
-        confirmedRevision: 7,
-        itemId: "item-1",
+        recordExists: true,
+        ownerGenerationChanged: false,
       }),
     ).toEqual({
       kind: "retainDraft",
       baseline: { itemId: "item-1", text: "saved text", baselineRevision: 7 },
     });
+  });
+
+  it("abandons when the record was discarded or finalized during the save", () => {
+    expect(
+      resolveQueuedEditFinalization({
+        ...base,
+        savedVersion: 4,
+        currentVersion: 5,
+        recordExists: false,
+        ownerGenerationChanged: false,
+      }),
+    ).toEqual({ kind: "abandon" });
+  });
+
+  it("abandons when a replacement editor owns the keys after a remount", () => {
+    expect(
+      resolveQueuedEditFinalization({
+        ...base,
+        savedVersion: 4,
+        currentVersion: 5,
+        recordExists: true,
+        ownerGenerationChanged: true,
+      }),
+    ).toEqual({ kind: "abandon" });
   });
 });
 

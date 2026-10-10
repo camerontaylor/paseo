@@ -2319,10 +2319,22 @@ function ComposerContentImpl({
           itemId: id,
           ...payload,
         });
-        applyAgentQueueSnapshot(serverId, snapshot);
+        // Awaited: the row's baseline must not advance before the confirmed
+        // rows are applied, or a racing snapshot could revert them.
+        await applyAgentQueueSnapshot(serverId, snapshot);
         // The snapshot is the host-confirmed generation: finalization re-bases
-        // the edit to ITS revision, never the request's.
-        return { status: "saved", confirmedRevision: snapshot.revision };
+        // the edit to ITS revision and the host's (trimmed) row text, never
+        // the request's.
+        const confirmedRow = snapshot.items.find((item) => item.id === id);
+        if (!confirmedRow) {
+          // The host no longer lists the row (removed remotely mid-save).
+          return { status: "vanished" };
+        }
+        return {
+          status: "saved",
+          confirmedRevision: snapshot.revision,
+          confirmedText: confirmedRow.text,
+        };
       } catch (error) {
         if (isQueueRevisionConflictError(error)) {
           // A remote change intervened. The draft is retained with its conflict
@@ -2503,12 +2515,16 @@ function ComposerContentImpl({
           });
           if (!confirmed) return;
           try {
-            // The discard must be durable: a failed write keeps the row
-            // visible instead of letting a restart resurrect it silently.
-            await useQueueOutboxStore.getState().removeDurably(id);
+            // The discard must be durable and rechecked at the serialized
+            // boundary: a tombstone requested while this confirmation was
+            // open is refused, and a failed write keeps the row visible
+            // instead of letting a restart resurrect it silently.
+            await useQueueOutboxStore.getState().discardQueuedEntryDurably(id);
           } catch (error) {
             setSendError(
-              error instanceof Error ? error.message : t("composer.errors.queuedPersistFailed"),
+              error instanceof Error && error.message
+                ? error.message
+                : t("composer.errors.queuedPersistFailed"),
             );
             return;
           }

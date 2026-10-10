@@ -28,7 +28,9 @@ function createHarness() {
     appliedRevision: 4,
     hydrated: true,
     saving: false,
+    ownerGeneration: 1,
   };
+  const generationRef = { current: 1 };
   const calls = {
     checkpoints: [] as Array<{ text: string; version: number }>,
     fence: [] as number[],
@@ -40,6 +42,7 @@ function createHarness() {
     }>,
     errors: [] as string[],
     saves: [] as number[],
+    discardedSavedDrafts: 0,
   };
   let respond: ((result: QueuedRowSaveResult) => void) | null = null;
   const ports: QueuedRowSavePorts = {
@@ -85,6 +88,11 @@ function createHarness() {
         confirmedRevision,
         submittedVersion,
       });
+      if (!store.working || store.ownerGeneration !== generationRef.current) {
+        // Abandon: the record was discarded/finalized mid-save, or a
+        // replacement editor owns the keys.
+        return;
+      }
       if (store.version !== submittedVersion) {
         // Retain: the baseline advances to the confirmed generation, editing
         // continues with the newer input.
@@ -95,6 +103,12 @@ function createHarness() {
         };
         return;
       }
+      store.working = undefined;
+      store.baseline = undefined;
+    },
+    getOwnerGeneration: () => store.ownerGeneration,
+    discardSavedDraft: () => {
+      calls.discardedSavedDrafts += 1;
       store.working = undefined;
       store.baseline = undefined;
     },
@@ -111,7 +125,13 @@ function createHarness() {
       store.saving = saving;
     },
   };
-  return { store, calls, ports, resolve: (result: QueuedRowSaveResult) => respond?.(result) };
+  return {
+    store,
+    calls,
+    ports,
+    generationRef,
+    resolve: (result: QueuedRowSaveResult) => respond?.(result),
+  };
 }
 
 describe("runQueuedRowEditSave", () => {
@@ -120,24 +140,75 @@ describe("runQueuedRowEditSave", () => {
     const run = runQueuedRowEditSave(h.ports);
     await vi.waitFor(() => expect(h.calls.saves).toEqual([4]));
 
-    // A newer keystroke and a newer broadcast land while the RPC is in flight.
+    // A newer keystroke and a strictly newer broadcast (revision 12, past the
+    // response's 9) land while the RPC and the deferred snapshot application
+    // are in flight.
     h.store.working = { ...h.store.working!, text: "draft 2" };
     h.ports.checkpoint("draft 2");
-    h.store.appliedRevision = 9;
-    h.resolve({ status: "saved", confirmedRevision: 9 });
+    h.store.appliedRevision = 12;
+    h.resolve({ status: "saved", confirmedRevision: 9, confirmedText: "saved text" });
     await run;
 
-    // Finalization used the HOST-CONFIRMED revision, never the request's.
+    // Finalization used the HOST-CONFIRMED generation and text — never the
+    // request's (4), never the later broadcast's (12).
     expect(h.calls.finalized).toEqual([
-      { text: "draft", confirmedRevision: 9, submittedVersion: 6 },
+      { text: "saved text", confirmedRevision: 9, submittedVersion: 6 },
     ]);
-    // The retained draft's next save dispatches against the confirmed
-    // generation, not the stale request revision.
-    const second = runQueuedRowEditSave(h.ports);
-    await vi.waitFor(() => expect(h.calls.saves).toEqual([4, 9]));
-    h.resolve({ status: "saved", confirmedRevision: 10 });
-    await second;
-    expect(h.calls.finalized).toHaveLength(2);
+    // The retained draft was re-based to the confirmed generation: the next
+    // implicit save now fences at revision 9 (the broadcast at 12 makes it a
+    // fresh-snapshot conflict — re-base + explicit re-save by design).
+    await runQueuedRowEditSave(h.ports);
+    expect(h.calls.saves).toEqual([4]);
+    expect(h.calls.fence).toEqual([9]);
+    expect(h.calls.errors).toEqual(["changed on another device"]);
+  });
+
+  it("a deferred completion after the edit was discarded abandons", async () => {
+    const h = createHarness();
+    const run = runQueuedRowEditSave(h.ports);
+    await vi.waitFor(() => expect(h.calls.saves).toEqual([4]));
+
+    // The user discards the edit while the RPC is in flight: the working
+    // record is gone.
+    h.store.working = undefined;
+    h.store.baseline = undefined;
+    h.resolve({ status: "saved", confirmedRevision: 5, confirmedText: "saved text" });
+    await run;
+
+    // The stale completion must not recreate the discarded edit.
+    expect(h.calls.finalized).toEqual([
+      { text: "saved text", confirmedRevision: 5, submittedVersion: 6 },
+    ]);
+    expect(h.store.working).toBeUndefined();
+    expect(h.store.baseline).toBeUndefined();
+    expect(h.calls.errors).toEqual([]);
+  });
+
+  it("a deferred completion after a replacement editor mounted abandons", async () => {
+    const h = createHarness();
+    const run = runQueuedRowEditSave(h.ports);
+    await vi.waitFor(() => expect(h.calls.saves).toEqual([4]));
+
+    // A remount bumps the owner generation past the captured one.
+    h.generationRef.current = 2;
+    h.resolve({ status: "saved", confirmedRevision: 5, confirmedText: "saved text" });
+    await run;
+
+    expect(h.store.working?.text).toBe("draft");
+    expect(h.calls.errors).toEqual([]);
+  });
+
+  it("a vanished row drops the saved draft quietly", async () => {
+    const h = createHarness();
+    const run = runQueuedRowEditSave(h.ports);
+    await vi.waitFor(() => expect(h.calls.saves).toEqual([4]));
+    h.resolve({ status: "vanished" });
+    await run;
+
+    expect(h.calls.discardedSavedDrafts).toBe(1);
+    expect(h.store.working).toBeUndefined();
+    expect(h.calls.errors).toEqual([]);
+    expect(h.calls.finalized).toEqual([]);
   });
 
   it("a fresh-snapshot conflict persists the fence and dispatches nothing", async () => {
@@ -170,7 +241,7 @@ describe("runQueuedRowEditSave", () => {
       onSave: async (_itemId, _text, revision) => {
         attempts += 1;
         if (attempts === 1) {
-          return { status: "saved", confirmedRevision: revision };
+          return { status: "saved", confirmedRevision: revision, confirmedText: "saved text" };
         }
         throw new Error("queue_revision_conflict");
       },
@@ -260,7 +331,7 @@ describe("runQueuedRowEditSave", () => {
     const first = runQueuedRowEditSave(h.ports);
     await vi.waitFor(() => expect(h.calls.saves).toEqual([4]));
     const second = runQueuedRowEditSave(h.ports);
-    h.resolve({ status: "saved", confirmedRevision: 5 });
+    h.resolve({ status: "saved", confirmedRevision: 5, confirmedText: "saved text" });
     await Promise.all([first, second]);
     expect(h.calls.saves).toEqual([4]);
   });

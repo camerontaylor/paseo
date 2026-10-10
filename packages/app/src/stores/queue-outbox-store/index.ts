@@ -38,6 +38,12 @@ interface QueueOutboxActions {
   add: (entry: Omit<PendingQueueEnqueue, "createdAt" | "attempts">) => Promise<void>;
   remove: (itemId: string) => void;
   removeDurably: (itemId: string, preserveRemovalIntent?: boolean) => Promise<void>;
+  /**
+   * The user-facing discard: rechecks the tombstone INSIDE the serialized
+   * mutation, so a cancellation requested while a confirmation dialog was
+   * open is refused instead of silently dropped.
+   */
+  discardQueuedEntryDurably: (itemId: string) => Promise<void>;
   bumpAttempts: (itemId: string) => void;
   /** The pre-send attempt reservation: resolving means the increment is persisted. */
   bumpAttemptsDurably: (itemId: string) => Promise<void>;
@@ -242,6 +248,37 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
           if (!entry) return;
           // A snapshot containing the item never acknowledges a tombstone.
           if (preserveRemovalIntent && entry.removalRequested) return;
+          get().remove(itemId);
+          try {
+            await pendingWrite;
+          } catch (error) {
+            // Restore only when no newer mutation replaced the entry meanwhile.
+            if (!get().entries[itemId]) {
+              set((state) => ({ entries: { ...state.entries, [itemId]: entry } }));
+            }
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          get().clearStorageError();
+        }),
+
+      discardQueuedEntryDurably: (itemId) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          const entry = get().entries[itemId];
+          if (!entry) return;
+          // The serialized recheck: a tombstone created while the discard's
+          // confirmation dialog was open is an unresolved cancellation — it
+          // must reach the host (or be explicitly retried), never be dropped
+          // locally.
+          if (entry.removalRequested) {
+            throw new Error("queue_removal_pending");
+          }
           get().remove(itemId);
           try {
             await pendingWrite;
