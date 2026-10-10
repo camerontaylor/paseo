@@ -18,7 +18,23 @@ export {
 import { TerminalProfileSchema } from "./terminal-profile.js";
 export { TerminalProfileSchema, type TerminalProfile } from "./terminal-profile.js";
 import { z } from "zod";
+import { AgentArtifactSchema } from "./agent-artifact.js";
+export { AgentArtifactSchema } from "./agent-artifact.js";
 import { CompanionEntrySchema } from "./companion-stream.js";
+import {
+  StreamListRequestSchema,
+  StreamListResponseSchema,
+  StreamUpdateRequestSchema,
+  StreamUpdateResponseSchema,
+} from "./global-stream.js";
+export {
+  StreamListRequestSchema,
+  StreamListResponseSchema,
+  StreamUpdateRequestSchema,
+  StreamUpdateResponseSchema,
+  StreamRowSchema,
+  StreamFilterSchema,
+} from "./global-stream.js";
 import { TerminalActivitySchema } from "./terminal-activity.js";
 import { CLIENT_CAPS } from "./client-capabilities.js";
 import { AGENT_LIFECYCLE_STATUSES } from "./agent-lifecycle.js";
@@ -819,16 +835,6 @@ const AgentRuntimeInfoSchema: z.ZodType<AgentRuntimeInfo> = z.object({
 const AgentActiveTurnPayloadSchema = z.object({
   turnId: z.string(),
   startedAt: z.string().nullable(),
-});
-
-export const AgentArtifactSchema = z.object({
-  path: z.string(),
-  name: z.string(),
-  kind: z.enum(["html", "markdown", "image", "svg", "pdf", "diff"]),
-  mimeType: z.string(),
-  size: z.number().int().nonnegative(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
 });
 
 export type AgentArtifactPayload = z.infer<typeof AgentArtifactSchema>;
@@ -3620,6 +3626,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   CloseItemsRequestMessageSchema,
   UpdateAgentRequestMessageSchema,
   AgentCompanionUpdateEntryRequestMessageSchema,
+  StreamListRequestSchema,
+  StreamUpdateRequestSchema,
   AgentArtifactsScanRequestMessageSchema,
   ProjectRenameRequestSchema,
   ProjectIconSetRequestSchema,
@@ -4118,6 +4126,13 @@ export const ServerInfoStatusPayloadSchema = z
         // that saw those names would expect the source's flat companion RPC, which this
         // daemon does not accept.
         companionStreamPortV1: z.boolean().optional(),
+        // COMPAT(globalStream): added in v0.11.1-fork (C2), remove gate after 2027-04-06.
+        // Gates the stream.list/stream.entry.update RPC surface; per-chat and global feed reads.
+        globalStream: z.boolean().optional(),
+        // COMPAT(trackedAsks): added in v0.11.1-fork (C2), remove gate after 2027-04-07.
+        // Gates set_ask/expectedRevision mutations and the durable ask checklist. Deliberately
+        // not the source fork's `durableStream` name (plan-mandated rename; no third flag).
+        trackedAsks: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: z.boolean().optional(),
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
@@ -7396,6 +7411,8 @@ export const AgentSkillsImportLegacySelectionResponseSchema = z.object({
 
 export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentCompanionUpdateEntryResponseMessageSchema,
+  StreamListResponseSchema,
+  StreamUpdateResponseSchema,
   AgentArtifactsScanResponseMessageSchema,
   BrowserHostRegisterResponseSchema,
   SubscriptionReleaseResponseSchema,

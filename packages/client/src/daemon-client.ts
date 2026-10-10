@@ -16,6 +16,11 @@ import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 // declaration at merge time. A separate value-import line survives that merge.
 import type { ClientCapability } from "@getpaseo/protocol/client-capabilities";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
+import type {
+  StreamEntryUpdate,
+  StreamListOptions,
+  StreamRow,
+} from "@getpaseo/protocol/global-stream";
 import type { AgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
 import {
   AgentCreateFailedStatusPayloadSchema,
@@ -3065,6 +3070,31 @@ export class DaemonClient {
       });
     if (!payload.accepted) {
       throw new Error(payload.error ?? "updateCompanionEntry rejected");
+    }
+  }
+
+  // COMPAT(globalStream): added in v0.11.1-fork (C2), remove after 2027-04-06.
+  // Callers must check server_info.features.globalStream first; the daemon
+  // serves these RPCs only to sessions advertising CLIENT_CAPS.globalStream.
+  async listGlobalStream(options: StreamListOptions = {}): Promise<{
+    requestId: string;
+    rows: StreamRow[];
+    nextCursor: string | null;
+  }> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"stream.list.response">({
+      message: { type: "stream.list.request", ...options },
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async updateStreamEntry(input: StreamEntryUpdate): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"stream.entry.update.response">({
+        message: { type: "stream.entry.update.request", ...input },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "Could not save Stream item");
     }
   }
 

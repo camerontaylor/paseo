@@ -61,6 +61,11 @@ export const CLIENT_CAPS = {
   // agent-snapshot fields. Paired with the `agent.companion.update_entry.*`
   // operations; not the source fork's `companionStream` capability name.
   companionStreamPortV1: "companion_stream_port_v1",
+  // COMPAT(globalStream): added in v0.11.1-fork (C2), remove after 2027-04-06.
+  // The daemon serves the correlated stream.list/stream.entry.update RPCs only
+  // to sessions declaring this, so an unknown response type never reaches a
+  // client whose outbound union cannot parse it.
+  globalStream: "global_stream",
 } as const;
 
 export type ClientCapability = (typeof CLIENT_CAPS)[keyof typeof CLIENT_CAPS];

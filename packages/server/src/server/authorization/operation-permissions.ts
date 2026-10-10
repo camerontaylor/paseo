@@ -205,6 +205,9 @@ const INBOUND_PERMISSION = {
   update_agent_request: "workspace.write",
   // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
   "agent.companion.update_entry.request": "workspace.write",
+  // COMPAT(globalStream): added in v0.11.1-fork (C2), remove gate after 2027-04-06.
+  "stream.list.request": "workspace.read",
+  "stream.entry.update.request": "workspace.write",
   validate_branch_request: "workspace.read",
   "voice.input.receipts.read.request": "workspace.read",
   voice_audio_chunk: "workspace.write",
@@ -233,6 +236,9 @@ const INBOUND_PERMISSION = {
 const OUTBOUND_PERMISSION = {
   // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
   "agent.companion.update_entry.response": "workspace.write",
+  // COMPAT(globalStream): added in v0.11.1-fork (C2), remove gate after 2027-04-06.
+  "stream.list.response": "workspace.read",
+  "stream.entry.update.response": "workspace.write",
   "agent.artifacts.scan.response": "workspace.read",
   "agent.create.response": ["workspace.write", "hub.execute"],
   "agent.create.update": ["workspace.write", "hub.execute"],
