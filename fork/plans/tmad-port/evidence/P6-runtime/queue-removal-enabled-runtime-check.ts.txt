@@ -1,0 +1,56 @@
+import { createHash } from "node:crypto";
+import { readFile, rm } from "node:fs/promises";
+import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
+import { createTestAgentClient } from "./test-utils/fake-agent-client.js";
+import { DaemonClient } from "./test-utils/daemon-client.js";
+
+async function main() {
+  const homeRoot = process.env.TMAD_AUDIT_HOME!;
+  const agentId = "12345678-1234-4123-8123-123456789abc";
+  const queuePath = `${homeRoot}/.paseo/queues/${agentId}.json`;
+  const sha = (value: Buffer) => createHash("sha256").update(value).digest("hex");
+  const before = sha(await readFile(queuePath));
+  let providerTurns = 0;
+  let daemon: Awaited<ReturnType<typeof createTestPaseoDaemon>> | undefined;
+  let client: DaemonClient | undefined;
+  try {
+    daemon = await createTestPaseoDaemon({
+      paseoHomeRoot: homeRoot,
+      cleanup: false,
+      mcpEnabled: false,
+      agentClients: {
+        codex: createTestAgentClient("codex", { onStartTurn: () => { providerTurns += 1; } }),
+      },
+    });
+    client = new DaemonClient({
+      url: `ws://127.0.0.1:${daemon.port}/ws`,
+      appVersion: "0.1.82",
+      reconnect: { enabled: false },
+    });
+    await client.connect();
+    const restored = await client.listQueuedAgentMessages(agentId);
+    const during = sha(await readFile(queuePath));
+    if (restored.items.length !== 1 || restored.items[0]?.id !== "pending-copy-1" || restored.items[0]?.deliveryState !== "pending") {
+      throw new Error("enabled queue runtime did not recover copied pending state");
+    }
+    await client.close();
+    client = undefined;
+    const staticDir = daemon.staticDir;
+    await daemon.close();
+    daemon = undefined;
+    await rm(staticDir, { recursive: true, force: true });
+    const after = sha(await readFile(queuePath));
+    if (before !== during || before !== after) throw new Error("enabled recovery changed pending queue bytes");
+    if (providerTurns !== 0) throw new Error(`fake provider received ${providerTurns} queued turns during recovery check`);
+    console.log(JSON.stringify({ phase: "queue-enabled-runtime-recovery", isolatedHome: homeRoot, queuePath, queueSha256Before: before, queueSha256DuringRead: during, queueSha256AfterStop: after, restoredRevision: restored.revision, restoredPendingIds: restored.items.map((item) => item.id), fakeProviderQueuedTurns: providerTurns, daemonPortWasEphemeralLoopback: true }, null, 2));
+  } finally {
+    await client?.close().catch(() => undefined);
+    if (daemon) {
+      const staticDir = daemon.staticDir;
+      await daemon.close().catch(() => undefined);
+      await rm(staticDir, { recursive: true, force: true });
+    }
+  }
+}
+
+await main();

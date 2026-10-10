@@ -75,9 +75,25 @@ async function startOrReplaceRun(
   replaced: boolean;
 }> {
   const replaced = Boolean(options?.replaceRunning && agentManager.hasInFlightRun(agentId));
-  const iterator = replaced
-    ? await agentManager.replaceAgentRun(agentId, prompt, options?.runOptions)
-    : agentManager.streamAgent(agentId, prompt, options?.runOptions);
+  let iterator: AsyncGenerator<import("./agent-sdk-types.js").AgentStreamEvent>;
+  if (replaced) {
+    iterator = await agentManager.replaceAgentRun(agentId, prompt, options?.runOptions);
+  } else {
+    try {
+      iterator = agentManager.streamAgent(agentId, prompt, options?.runOptions);
+    } catch (cause) {
+      // streamAgent reserves synchronously; an exception here preceded startTurn.
+      if (
+        options?.replaceRunning === false &&
+        !(cause instanceof Error && "code" in cause && cause.code === "AGENT_RUN_BUSY")
+      ) {
+        throw Object.assign(new Error("Agent run reservation failed", { cause }), {
+          code: "AGENT_PROMPT_NOT_SUBMITTED",
+        });
+      }
+      throw cause;
+    }
+  }
   return { iterator, replaced };
 }
 
@@ -118,7 +134,9 @@ export async function startAgentRun(
   try {
     return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
   } catch (error) {
-    if (!isStaleProviderSessionError(error)) throw error;
+    // A queue attempt must fail as not-submitted instead of silently reloading
+    // and retrying: the caller owns whether the prompt is attempted again.
+    if (options?.replaceRunning === false || !isStaleProviderSessionError(error)) throw error;
     logger.info({ agentId, err: error }, "Provider session went stale; reopening from persistence");
     // The live session belongs to a retired plugin runtime. Reload swaps in a
     // fresh session on the current runtime while preserving history and labels.
@@ -240,6 +258,14 @@ export interface SendPromptToAgentParams {
   unarchive?: boolean;
   /** See {@link StartAgentRunOptions.clearPendingPermissions}. */
   clearPendingPermissions?: boolean;
+  /**
+   * Default true: an explicit send replaces an in-flight turn. Queue delivery
+   * passes false, so losing a busy race fails the attempt instead of
+   * interrupting the turn that won it.
+   */
+  replaceRunning?: boolean;
+  /** Queue delivery waits while a provider permission request is pending. */
+  blockPendingPermissions?: boolean;
   logger: Logger;
 }
 
@@ -308,34 +334,51 @@ export async function sendPromptToAgent(
 ): Promise<{ disposition: PromptDispatchDisposition }> {
   const unarchive = params.unarchive ?? true;
 
-  const record = await params.agentStorage.get(params.agentId);
-  let archivedAtToRestore: string | null = null;
-  if (record?.archivedAt) {
-    if (!unarchive) {
-      return { disposition: "turn_started" };
-    }
-    if (await unarchiveAgentState(params.agentStorage, params.agentManager, params.agentId)) {
-      archivedAtToRestore = record.archivedAt;
-    }
-  }
-
   try {
-    await ensureAgentLoaded(params.agentId, {
-      agentManager: params.agentManager,
-      agentStorage: params.agentStorage,
-      logger: params.logger,
-    });
-  } catch (error) {
-    // A send that could not load the agent leaves it where it was: still archived.
-    // Concurrent sends share this load, so none of them holds a live session.
-    if (archivedAtToRestore) {
-      await params.agentManager.archiveSnapshot(params.agentId, archivedAtToRestore);
+    const record = await params.agentStorage.get(params.agentId);
+    let archivedAtToRestore: string | null = null;
+    if (record?.archivedAt) {
+      if (!unarchive) {
+        if (params.replaceRunning === false) throw new Error("Queued agent is archived");
+        return { disposition: "turn_started" };
+      }
+      if (await unarchiveAgentState(params.agentStorage, params.agentManager, params.agentId)) {
+        archivedAtToRestore = record.archivedAt;
+      }
     }
-    throw error;
-  }
+    try {
+      await ensureAgentLoaded(params.agentId, {
+        agentManager: params.agentManager,
+        agentStorage: params.agentStorage,
+        logger: params.logger,
+      });
+    } catch (error) {
+      // Restore an archive cleared by a send whose provider failed to load.
+      if (archivedAtToRestore) {
+        await params.agentManager.archiveSnapshot(params.agentId, archivedAtToRestore);
+      }
+      throw error;
+    }
 
-  if (params.sessionMode) {
-    await params.agentManager.setAgentMode(params.agentId, params.sessionMode);
+    if (params.sessionMode) {
+      await params.agentManager.setAgentMode(params.agentId, params.sessionMode);
+    }
+
+    if (
+      params.blockPendingPermissions &&
+      params.agentManager.getPendingPermissions(params.agentId).length
+    ) {
+      const error = new Error(`Agent ${params.agentId} is waiting for permission`);
+      Object.assign(error, { code: "AGENT_RUN_BUSY" });
+      throw error;
+    }
+  } catch (cause) {
+    // No prompt dispatch has happened; a queue can safely retain and retry this head.
+    if (params.replaceRunning === false)
+      throw Object.assign(new Error("Agent prompt preparation failed", { cause }), {
+        code: "AGENT_PROMPT_NOT_SUBMITTED",
+      });
+    throw cause;
   }
 
   const runOptions = params.messageId
@@ -343,10 +386,12 @@ export async function sendPromptToAgent(
     : params.runOptions;
 
   return await startAgentRun(params.agentManager, params.agentId, params.prompt, params.logger, {
-    replaceRunning: true,
+    replaceRunning: params.replaceRunning ?? true,
     activeTurnBehavior: params.activeTurnBehavior,
     clearPendingPermissions: params.clearPendingPermissions,
-    runOptions,
+    runOptions: params.blockPendingPermissions
+      ? { ...runOptions, requireNoPendingPermissions: true }
+      : runOptions,
   });
 }
 

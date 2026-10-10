@@ -113,9 +113,10 @@ test("ending the voice waiting cue leaves a plugin's active audio playing", asyn
   });
   runtime.registerSession({
     serverId: "host",
-    setVoiceMode: async () => {},
+    setVoiceMode: async () => ({}),
     sendVoiceAudioChunk: async () => {},
     audioPlayed: async () => {},
+    readVoiceInputReceipts: async () => ({ items: [], nextCursor: null }),
     abortRequest: async () => {},
     setAssistantAudioPlaying: () => {},
   });

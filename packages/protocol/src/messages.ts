@@ -18,6 +18,7 @@ export {
 import { TerminalProfileSchema } from "./terminal-profile.js";
 export { TerminalProfileSchema, type TerminalProfile } from "./terminal-profile.js";
 import { z } from "zod";
+import { CompanionEntrySchema } from "./companion-stream.js";
 import { TerminalActivitySchema } from "./terminal-activity.js";
 import { CLIENT_CAPS } from "./client-capabilities.js";
 import { AGENT_LIFECYCLE_STATUSES } from "./agent-lifecycle.js";
@@ -820,6 +821,18 @@ const AgentActiveTurnPayloadSchema = z.object({
   startedAt: z.string().nullable(),
 });
 
+export const AgentArtifactSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  kind: z.enum(["html", "markdown", "image", "svg", "pdf", "diff"]),
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type AgentArtifactPayload = z.infer<typeof AgentArtifactSchema>;
+
 export const AgentSnapshotPayloadSchema = z.object({
   id: z.string(),
   provider: AgentProviderSchema,
@@ -849,6 +862,8 @@ export const AgentSnapshotPayloadSchema = z.object({
   attentionTimestamp: z.string().nullable().optional(),
   archivedAt: z.string().nullable().optional(),
   providerUnavailable: z.boolean().optional(),
+  artifacts: z.array(AgentArtifactSchema).optional(),
+  companionEntries: z.array(CompanionEntrySchema).optional(),
 });
 
 export type AgentSnapshotPayload = z.infer<typeof AgentSnapshotPayloadSchema>;
@@ -899,6 +914,10 @@ export type RecentProviderSessionDescriptorPayload = z.infer<
 
 export const VoiceAudioChunkMessageSchema = z.object({
   type: z.literal("voice_audio_chunk"),
+  /** Voice attachment identity. Absent in legacy clients without attachments. */
+  attachmentId: z.string().optional(),
+  /** Transport generation handed out by the host for this attachment. */
+  generation: z.string().optional(),
   audio: z.string(), // base64 encoded
   format: z.string(),
   isLast: z.boolean(),
@@ -906,11 +925,45 @@ export const VoiceAudioChunkMessageSchema = z.object({
 
 export const AbortRequestMessageSchema = z.object({
   type: z.literal("abort_request"),
+  attachmentId: z.string().optional(),
+  generation: z.string().optional(),
 });
 
 export const AudioPlayedMessageSchema = z.object({
   type: z.literal("audio_played"),
+  attachmentId: z.string().optional(),
+  generation: z.string().optional(),
   id: z.string(),
+  /** Set when the client failed to play the clip; the speech caller sees the failure. */
+  error: z.string().optional(),
+});
+
+export const VoiceInputReceiptsReadRequestSchema = z.object({
+  type: z.literal("voice.input.receipts.read.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+  attachmentId: z.string(),
+  generation: z.string(),
+  after: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});
+
+export const VoiceInputReceiptsReadResponseSchema = z.object({
+  type: z.literal("voice.input.receipts.read.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    attachmentId: z.string(),
+    items: z.array(
+      z.object({
+        messageId: z.string(),
+        state: z.enum(["queued", "submitted", "removed", "unknown"]),
+        createdAt: z.string(),
+      }),
+    ),
+    nextCursor: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
 });
 
 const AgentDirectoryFilterSchema = z.object({
@@ -947,6 +1000,53 @@ export const UpdateAgentRequestMessageSchema = z.object({
   name: z.string().optional(),
   labels: z.record(z.string(), z.string()).optional(),
   requestId: z.string(),
+});
+
+// COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+// Ported from the source fork's flat `update_companion_entry_request`; renamed to the
+// dotted namespace so the two contracts stay distinct on the wire.
+export const AgentCompanionUpdateEntryRequestMessageSchema = z.object({
+  type: z.literal("agent.companion.update_entry.request"),
+  agentId: z.string(),
+  entryId: z.string().optional(),
+  action: z.enum(["update_status", "add_pin", "remove_pin", "add_q_and_a"]),
+  status: z.enum(["open", "reviewed", "done"]).optional(),
+  text: z.string().optional(),
+  answerText: z.string().optional(),
+  sourceId: z.string().optional(),
+  requestId: z.string(),
+});
+
+export const AgentCompanionUpdateEntryResponseMessageSchema = z.object({
+  type: z.literal("agent.companion.update_entry.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const AgentArtifactsScanRequestMessageSchema = z.object({
+  type: z.literal("agent.artifacts.scan.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+  /** Overrides the daemon's default retention ceiling for this scan. */
+  limit: z.number().int().positive().optional(),
+});
+
+export const AgentArtifactsScanResponseMessageSchema = z.object({
+  type: z.literal("agent.artifacts.scan.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+    /** Files newly recorded or refreshed by this scan. */
+    addedOrUpdated: z.number().int().nonnegative(),
+    /** Size of the agent's artifact list after the scan. */
+    total: z.number().int().nonnegative(),
+  }),
 });
 
 // The daemon accepts only image bytes chosen or acquired by the client. It must
@@ -1052,6 +1152,10 @@ export const WorkspaceRecoveryRestoreRequestSchema = z.object({
 
 export const SetVoiceModeMessageSchema = z.object({
   type: z.literal("set_voice_mode"),
+  /** Voice attachment identity; the host binds its generation to it. */
+  attachmentId: z.string().optional(),
+  /** Supplied when an existing attachment reclaims itself after a reconnect. */
+  generation: z.string().optional(),
   enabled: z.boolean(),
   agentId: z.string().optional(),
   requestId: z.string().optional(),
@@ -1117,19 +1221,21 @@ export const ExternalResourceAttachmentMetadataSchema = z.object({
   url: z.string(),
 });
 
-export const TextAttachmentSchema = z
-  .object({
-    type: z.literal("text"),
-    mimeType: z.literal("text/plain"),
-    contextKind: z.string().optional(),
-    title: z.string().nullable().optional(),
-    text: z.string(),
-    externalResource: ExternalResourceAttachmentMetadataSchema.optional(),
-  })
-  .transform(({ contextKind, ...attachment }) => ({
+export const TextAttachmentWireSchema = z.object({
+  type: z.literal("text"),
+  mimeType: z.literal("text/plain"),
+  contextKind: z.string().optional(),
+  title: z.string().nullable().optional(),
+  text: z.string(),
+  externalResource: ExternalResourceAttachmentMetadataSchema.optional(),
+});
+
+export const TextAttachmentSchema = TextAttachmentWireSchema.transform(
+  ({ contextKind, ...attachment }) => ({
     ...attachment,
     ...(contextKind === "chat_history" ? { contextKind } : {}),
-  }));
+  }),
+);
 
 export const ReviewAttachmentContextLineSchema = z.object({
   oldLineNumber: z.number().int().positive().nullable(),
@@ -1174,6 +1280,21 @@ export const AgentAttachmentSchema = z.discriminatedUnion("type", [
   GitHubPrAttachmentSchema,
   GitHubIssueAttachmentSchema,
   TextAttachmentSchema,
+  ReviewAttachmentSchema,
+  UploadedFileAttachmentSchema,
+]);
+
+/**
+ * Same shape as AgentAttachmentSchema without the text-attachment transform, so
+ * attachments can appear in outbound messages. Message schemas stay pure — see
+ * docs/protocol-validation.md.
+ */
+export const AgentAttachmentWireSchema = z.discriminatedUnion("type", [
+  ForgeChangeRequestAttachmentSchema,
+  ForgeIssueAttachmentSchema,
+  GitHubPrAttachmentSchema,
+  GitHubIssueAttachmentSchema,
+  TextAttachmentWireSchema,
   ReviewAttachmentSchema,
   UploadedFileAttachmentSchema,
 ]);
@@ -2170,6 +2291,9 @@ export const SetVoiceModeResponseMessageSchema = z.object({
     reasonCode: z.string().optional(),
     retryable: z.boolean().optional(),
     missingModelIds: z.array(z.string()).optional(),
+    /** Echoed attachment identity plus the host's fresh transport generation. */
+    attachmentId: z.string().optional(),
+    generation: z.string().optional(),
   }),
 });
 
@@ -2498,6 +2622,250 @@ export const ForgeSearchKindSchema = z.enum([
 ]);
 
 export const GitHubSearchKindSchema = ForgeSearchKindSchema;
+
+// ---------------------------------------------------------------------------
+// Durable agent message queue. Removal group: Queue (TM-02).
+//
+// Admission through these RPCs is opt-in. `send_agent_message_request` without
+// queue intent keeps the legacy receipt-backed interrupt path and never reaches
+// the queue, so every message in this block is new to an old daemon: gate a
+// client on `server_info.features.durableAgentQueueV1` before sending any of it,
+// and never send the new `intent` values to a daemon that lacks the flag. The
+// daemon only broadcasts `agent.queue.update` to clients advertising
+// CLIENT_CAPS.durableAgentQueue, so an old client never sees an unknown event.
+// ---------------------------------------------------------------------------
+
+/**
+ * How the daemon delivers a queued item. `queue` waits for a free agent;
+ * `steer_strict` asks the provider to steer the running turn and never
+ * interrupts or replaces it. Both values postdate every released daemon, which
+ * is why the feature flag gates the whole block.
+ */
+export const QueuedAgentDeliveryIntentSchema = z.enum(["queue", "steer_strict"]);
+export type QueuedAgentDeliveryIntent = z.infer<typeof QueuedAgentDeliveryIntentSchema>;
+
+/**
+ * Where a queued item stands in the claim/dispatch/receipt/removal cycle.
+ *
+ * - `pending`: accepted and never handed to a provider; safe to resume.
+ * - `dispatching`: claimed, dispatch in flight.
+ * - `uncertain`: the provider may or may not have accepted it. Visible for
+ *   reconciliation; the daemon never resends it on its own.
+ * - `failed`: repeated known failures (see the daemon's attempt limit). Visible
+ *   with an explicit retry or discard.
+ */
+export const QueuedAgentMessageDeliveryStateSchema = z.enum([
+  "pending",
+  "dispatching",
+  "uncertain",
+  "failed",
+]);
+export type QueuedAgentMessageDeliveryState = z.infer<typeof QueuedAgentMessageDeliveryStateSchema>;
+
+/**
+ * Queued images are described, never shipped. The bytes live on the daemon, so a
+ * queue holding a photo does not push megabytes of base64 at every connected
+ * client on every queue change.
+ */
+export const QueuedAgentMessageImageSchema = z.object({
+  id: z.string(),
+  mimeType: z.string(),
+  fileName: z.string().nullable().optional(),
+  byteSize: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * The composer-side view of an attachment, kept alongside the agent-side one so
+ * any device can pull a queued message back into its composer with the same
+ * pills the author saw. Images are excluded: their bytes are stored separately
+ * and fetched with agent.queue.get_item_images.request.
+ */
+export const QueuedComposerAttachmentSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("file"), attachment: UploadedFileAttachmentSchema }),
+  z.object({
+    kind: z.literal("workspace_file"),
+    path: z.string(),
+    selection: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("whole_file") }),
+      z.object({
+        kind: z.literal("line_range"),
+        startLine: z.number().int().positive(),
+        endLine: z.number().int().positive(),
+      }),
+    ]),
+  }),
+  z.object({ kind: z.literal("forge_issue"), item: ForgeSearchItemSchema }),
+  z.object({ kind: z.literal("forge_change_request"), item: ForgeSearchItemSchema }),
+  z.object({ kind: z.literal("github_issue"), item: ForgeSearchItemSchema }),
+  z.object({ kind: z.literal("github_pr"), item: ForgeSearchItemSchema }),
+]);
+
+export const QueuedAgentMessageSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  /** Set when the item was admitted as spoken input rather than typed or tool-created. */
+  origin: z.literal("voice").optional(),
+  intent: QueuedAgentDeliveryIntentSchema,
+  deliveryState: QueuedAgentMessageDeliveryStateSchema,
+  attempts: z.number().int().nonnegative(),
+  lastError: z.string().nullable().optional(),
+  attachments: z.array(AgentAttachmentWireSchema).optional(),
+  composerAttachments: z.array(QueuedComposerAttachmentSchema).optional(),
+  images: z.array(QueuedAgentMessageImageSchema).optional(),
+  createdAt: z.string(),
+});
+
+export const AgentQueueSnapshotSchema = z.object({
+  agentId: z.string(),
+  /** Increments on every mutation so clients can drop a stale broadcast. */
+  revision: z.number().int().nonnegative(),
+  items: z.array(QueuedAgentMessageSchema),
+});
+
+export const AgentQueueEnqueueRequestSchema = z.object({
+  type: z.literal("agent.queue.enqueue.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+  /** Client-generated so the optimistic local item and the stored item share an id. */
+  itemId: z.string(),
+  text: z.string(),
+  intent: QueuedAgentDeliveryIntentSchema,
+  images: z.array(ImageAttachmentSchema).optional(),
+  attachments: z.array(AgentAttachmentWireSchema).optional(),
+  composerAttachments: z.array(QueuedComposerAttachmentSchema).optional(),
+});
+
+/**
+ * The revision the client last saw. A stale device is rejected with
+ * `queue_revision_conflict` instead of overwriting another device's edit, so
+ * edits, reorders and deletions are governed by queue revisions.
+ */
+export const AgentQueueMutationRequestSchema = z.object({
+  type: z.string(),
+  requestId: z.string(),
+  agentId: z.string(),
+  expectedRevision: z.number().int().nonnegative(),
+});
+
+export const AgentQueueUpdateRequestSchema = AgentQueueMutationRequestSchema.extend({
+  type: z.literal("agent.queue.update.request"),
+  itemId: z.string(),
+  text: z.string(),
+  images: z.array(ImageAttachmentSchema).optional(),
+  attachments: z.array(AgentAttachmentWireSchema).optional(),
+  composerAttachments: z.array(QueuedComposerAttachmentSchema).optional(),
+});
+
+export const AgentQueueReorderRequestSchema = AgentQueueMutationRequestSchema.extend({
+  type: z.literal("agent.queue.reorder.request"),
+  /** Full id list in the desired order. Unknown ids are ignored, omitted ids keep their relative order at the end. */
+  itemIds: z.array(z.string()),
+});
+
+export const AgentQueueDeleteRequestSchema = AgentQueueMutationRequestSchema.extend({
+  type: z.literal("agent.queue.delete.request"),
+  itemId: z.string(),
+});
+
+/** Returns a failed or uncertain item to the drain loop after an explicit user decision. */
+export const AgentQueueRetryRequestSchema = AgentQueueMutationRequestSchema.extend({
+  type: z.literal("agent.queue.retry.request"),
+  itemId: z.string(),
+});
+
+/**
+ * Attempts delivery of one item now instead of waiting for the queue to reach
+ * the head. The response carries the queue after the attempt, so a client can
+ * tell a delivered item from one the admission fence refused.
+ */
+export const AgentQueueSendNowRequestSchema = AgentQueueMutationRequestSchema.extend({
+  type: z.literal("agent.queue.send_now.request"),
+  itemId: z.string(),
+});
+
+export const AgentQueueListRequestSchema = z.object({
+  type: z.literal("agent.queue.list.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+});
+
+/**
+ * Fetches the image bytes of one queued item. A device that did not queue the
+ * item has no local copy, so editing it there would otherwise drop the images.
+ */
+export const AgentQueueGetItemImagesRequestSchema = z.object({
+  type: z.literal("agent.queue.get_item_images.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+  itemId: z.string(),
+});
+
+export const AgentQueueGetItemImagesResponseSchema = z.object({
+  type: z.literal("agent.queue.get_item_images.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    itemId: z.string(),
+    images: z.array(
+      z.object({
+        id: z.string(),
+        mimeType: z.string(),
+        fileName: z.string().nullable().optional(),
+        data: z.string(),
+      }),
+    ),
+    error: z.string().nullable(),
+  }),
+});
+
+export const AgentQueueResponsePayloadSchema = z.object({
+  requestId: z.string(),
+  agentId: z.string(),
+  queue: AgentQueueSnapshotSchema.nullable(),
+  /** Machine-readable on mutation failures, e.g. `queue_revision_conflict`. */
+  error: z.string().nullable(),
+});
+
+export const AgentQueueEnqueueResponseSchema = z.object({
+  type: z.literal("agent.queue.enqueue.response"),
+  payload: AgentQueueResponsePayloadSchema,
+});
+
+export const AgentQueueUpdateResponseSchema = z.object({
+  type: z.literal("agent.queue.update.response"),
+  payload: AgentQueueResponsePayloadSchema,
+});
+
+export const AgentQueueReorderResponseSchema = z.object({
+  type: z.literal("agent.queue.reorder.response"),
+  payload: AgentQueueResponsePayloadSchema,
+});
+
+export const AgentQueueDeleteResponseSchema = z.object({
+  type: z.literal("agent.queue.delete.response"),
+  payload: AgentQueueResponsePayloadSchema,
+});
+
+export const AgentQueueRetryResponseSchema = z.object({
+  type: z.literal("agent.queue.retry.response"),
+  payload: AgentQueueResponsePayloadSchema,
+});
+
+export const AgentQueueSendNowResponseSchema = z.object({
+  type: z.literal("agent.queue.send_now.response"),
+  payload: AgentQueueResponsePayloadSchema,
+});
+
+export const AgentQueueListResponseSchema = z.object({
+  type: z.literal("agent.queue.list.response"),
+  payload: AgentQueueResponsePayloadSchema,
+});
+
+/** Unsolicited full-queue broadcast, only to clients advertising CLIENT_CAPS.durableAgentQueue. */
+export const AgentQueueUpdateMessageSchema = z.object({
+  type: z.literal("agent.queue.update"),
+  payload: AgentQueueSnapshotSchema,
+});
 
 export const ForgeSearchRequestSchema = z.object({
   type: z.literal("forge.search.request"),
@@ -3184,6 +3552,10 @@ export const SessionEventSubscriptionSchema = z.enum([
   "script_status_update",
   "workspace_setup_progress",
   "agent.provider_subagents.update",
+  // COMPAT(durableAgentQueue): fork addition (TM-02). Only sent by clients that
+  // saw features.durableAgentQueueV1; an old daemon parsing this enum rejects
+  // the subscription request, which is why the client gates before subscribing.
+  "agent.queue.update",
   "terminal_attention_required",
   "status.server_info",
   "status.daemon_config_changed",
@@ -3247,6 +3619,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ArchiveAgentRequestMessageSchema,
   CloseItemsRequestMessageSchema,
   UpdateAgentRequestMessageSchema,
+  AgentCompanionUpdateEntryRequestMessageSchema,
+  AgentArtifactsScanRequestMessageSchema,
   ProjectRenameRequestSchema,
   ProjectIconSetRequestSchema,
   ProjectRemoveRequestSchema,
@@ -3260,6 +3634,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceRecoveryInspectRequestSchema,
   WorkspaceRecoveryRestoreRequestSchema,
   SetVoiceModeMessageSchema,
+  VoiceInputReceiptsReadRequestSchema,
   SendAgentMessageRequestSchema,
   WaitForFinishRequestSchema,
   DaemonGetStatusRequestSchema,
@@ -3324,6 +3699,14 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   SideConversationAskRequestMessageSchema,
   SideConversationTimelineGetRequestMessageSchema,
   SideConversationListRequestMessageSchema,
+  AgentQueueEnqueueRequestSchema,
+  AgentQueueUpdateRequestSchema,
+  AgentQueueReorderRequestSchema,
+  AgentQueueDeleteRequestSchema,
+  AgentQueueRetryRequestSchema,
+  AgentQueueSendNowRequestSchema,
+  AgentQueueListRequestSchema,
+  AgentQueueGetItemImagesRequestSchema,
   SetAgentTimelineSubscriptionRequestMessageSchema,
   AgentForkContextRequestMessageSchema,
   SetAgentModeRequestMessageSchema,
@@ -3472,6 +3855,8 @@ export const AudioOutputMessageSchema = z.object({
     audio: z.string(), // base64 encoded
     format: z.string(),
     id: z.string(),
+    attachmentId: z.string().optional(),
+    generation: z.string().optional(),
     isVoiceMode: z.boolean(), // Mode when audio was generated (for drift protection)
     groupId: z.string().optional(), // Logical utterance id
     chunkIndex: z.number().int().nonnegative().optional(),
@@ -3486,6 +3871,11 @@ export const TranscriptionResultMessageSchema = z.object({
     language: z.string().optional(),
     duration: z.number().optional(),
     requestId: z.string(), // Echoed back from request for tracking
+    attachmentId: z.string().optional(),
+    generation: z.string().optional(),
+    /** Queue item id of the admitted utterance; present only when it was queued. */
+    messageId: z.string().optional(),
+    queued: z.boolean().optional(),
     avgLogprob: z.number().optional(),
     isLowConfidence: z.boolean().optional(),
     byteLength: z.number().optional(),
@@ -3498,6 +3888,13 @@ export const VoiceInputStateMessageSchema = z.object({
   type: z.literal("voice_input_state"),
   payload: z.object({
     isSpeaking: z.boolean(),
+    /** Input problem text, e.g. a transcript that could not be queued. */
+    error: z.string().optional(),
+    attachmentId: z.string().optional(),
+    generation: z.string().optional(),
+    // "nothing_recognized" | "timed_out" | "failed". A string so later hosts can add
+    // values that older clients ignore instead of rejecting the message.
+    recognitionIssue: z.string().optional(),
   }),
 });
 
@@ -3693,6 +4090,15 @@ export const ServerInfoStatusPayloadSchema = z
         agentTimelinePromptIndex: z.boolean().optional(),
         // COMPAT(agentHistorySearch): added in v0.3.0, remove gate after 2027-02-07.
         agentHistorySearch: z.boolean().optional(),
+        // COMPAT(durableAgentQueue): fork addition (TM-02). Gates the whole
+        // agent.queue.* block, including the delivery-intent enum that no
+        // released daemon understands. Remove the gate after 2027-10-01 once
+        // the supported daemon floor is past every 0.11.x host.
+        durableAgentQueueV1: z.boolean().optional(),
+        // COMPAT(durableVoiceInputV1): fork addition (TM-04). Gates voice
+        // attachment admission into the durable agent queue; an old daemon
+        // never answers voice.input.receipts.read requests.
+        durableVoiceInputV1: z.boolean().optional(),
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: z.boolean().optional(),
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
@@ -3707,6 +4113,11 @@ export const ServerInfoStatusPayloadSchema = z
         workspaceRecovery: z.boolean().optional(),
         // COMPAT(workspaceFileEditing): added in v0.2.0, remove after 2027-01-18 once daemon floor >= v0.2.0.
         workspaceFileEditing: z.boolean().optional(),
+        // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+        // Deliberately not the source fork's `companionStream`/`artifactFeed` flags: a client
+        // that saw those names would expect the source's flat companion RPC, which this
+        // daemon does not accept.
+        companionStreamPortV1: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: z.boolean().optional(),
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
@@ -6984,6 +7395,8 @@ export const AgentSkillsImportLegacySelectionResponseSchema = z.object({
 });
 
 export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
+  AgentCompanionUpdateEntryResponseMessageSchema,
+  AgentArtifactsScanResponseMessageSchema,
   BrowserHostRegisterResponseSchema,
   SubscriptionReleaseResponseSchema,
   SessionEventsSetSubscriptionResponseSchema,
@@ -7074,6 +7487,15 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   SideConversationUpdateMessageSchema,
   SideConversationListResponseMessageSchema,
   SideConversationRemovedMessageSchema,
+  AgentQueueEnqueueResponseSchema,
+  AgentQueueUpdateResponseSchema,
+  AgentQueueReorderResponseSchema,
+  AgentQueueDeleteResponseSchema,
+  AgentQueueRetryResponseSchema,
+  AgentQueueSendNowResponseSchema,
+  AgentQueueListResponseSchema,
+  AgentQueueGetItemImagesResponseSchema,
+  AgentQueueUpdateMessageSchema,
   SetAgentTimelineSubscriptionResponseMessageSchema,
   AgentAttentionRequiredMessageSchema,
   AgentForkContextResponseMessageSchema,
@@ -7088,6 +7510,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceMarkUnreadResponseSchema,
   SendAgentMessageResponseMessageSchema,
   SetVoiceModeResponseMessageSchema,
+  VoiceInputReceiptsReadResponseSchema,
   DaemonGetStatusResponseSchema,
   DaemonGetPairingOfferResponseSchema,
   DaemonConfigReloadResponseSchema,
@@ -7415,6 +7838,20 @@ export type DictationStreamFinishMessage = z.infer<typeof DictationStreamFinishM
 export type DictationStreamCancelMessage = z.infer<typeof DictationStreamCancelMessageSchema>;
 export type CreateAgentRequestMessage = z.infer<typeof CreateAgentRequestMessageSchema>;
 export type AgentAttachment = z.infer<typeof AgentAttachmentSchema>;
+export type AgentAttachmentWire = z.infer<typeof AgentAttachmentWireSchema>;
+export type QueuedAgentMessage = z.infer<typeof QueuedAgentMessageSchema>;
+export type QueuedAgentMessageImage = z.infer<typeof QueuedAgentMessageImageSchema>;
+export type QueuedComposerAttachment = z.infer<typeof QueuedComposerAttachmentSchema>;
+export type AgentQueueSnapshot = z.infer<typeof AgentQueueSnapshotSchema>;
+export type AgentQueueEnqueueRequest = z.infer<typeof AgentQueueEnqueueRequestSchema>;
+export type AgentQueueUpdateRequest = z.infer<typeof AgentQueueUpdateRequestSchema>;
+export type AgentQueueReorderRequest = z.infer<typeof AgentQueueReorderRequestSchema>;
+export type AgentQueueDeleteRequest = z.infer<typeof AgentQueueDeleteRequestSchema>;
+export type AgentQueueRetryRequest = z.infer<typeof AgentQueueRetryRequestSchema>;
+export type AgentQueueSendNowRequest = z.infer<typeof AgentQueueSendNowRequestSchema>;
+export type AgentQueueListRequest = z.infer<typeof AgentQueueListRequestSchema>;
+export type AgentQueueGetItemImagesRequest = z.infer<typeof AgentQueueGetItemImagesRequestSchema>;
+export type AgentQueueUpdateMessage = z.infer<typeof AgentQueueUpdateMessageSchema>;
 export type ForgeChangeRequestAttachment = z.infer<typeof ForgeChangeRequestAttachmentSchema>;
 export type ForgeIssueAttachment = z.infer<typeof ForgeIssueAttachmentSchema>;
 export type UploadedFileAttachment = z.infer<typeof UploadedFileAttachmentSchema>;
@@ -7463,6 +7900,18 @@ export type LoopStopRequest = z.infer<typeof LoopStopRequestSchema>;
 export type ResumeAgentRequestMessage = z.infer<typeof ResumeAgentRequestMessageSchema>;
 export type DeleteAgentRequestMessage = z.infer<typeof DeleteAgentRequestMessageSchema>;
 export type UpdateAgentRequestMessage = z.infer<typeof UpdateAgentRequestMessageSchema>;
+export type AgentCompanionUpdateEntryRequestMessage = z.infer<
+  typeof AgentCompanionUpdateEntryRequestMessageSchema
+>;
+export type AgentCompanionUpdateEntryResponseMessage = z.infer<
+  typeof AgentCompanionUpdateEntryResponseMessageSchema
+>;
+export type AgentArtifactsScanRequestMessage = z.infer<
+  typeof AgentArtifactsScanRequestMessageSchema
+>;
+export type AgentArtifactsScanResponseMessage = z.infer<
+  typeof AgentArtifactsScanResponseMessageSchema
+>;
 export type ProjectIconSource = z.infer<typeof ProjectIconSourceSchema>;
 export type ProjectRenameRequest = z.infer<typeof ProjectRenameRequestSchema>;
 export type ProjectIconSetRequest = z.infer<typeof ProjectIconSetRequestSchema>;
