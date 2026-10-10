@@ -20,3 +20,8 @@ The reservation is the fork-side mechanism that keeps that cap exact under stora
 Conservative cost: a crash between reservation and send burns the reserved attempt, so an entry can
 park one attempt early. Explicit retry remains available. Over-counting is safe; under-counting would
 be an unbounded retry.
+
+C1 s2 adds the fork-side tombstone: `removalRequested` in the outbox entry, persisted before the
+remove RPC, flushed as a host removal (never an enqueue), excluded from snapshot acknowledgement, and
+parking — with explicit retry, never discard — at the attempt cap. Snapshot acknowledgement skips
+tombstoned entries: the daemon still listing the item does not cancel a cancellation.

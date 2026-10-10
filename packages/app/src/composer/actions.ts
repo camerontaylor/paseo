@@ -21,7 +21,11 @@ import {
   type ComposerAttachmentSubmitFormat,
 } from "@/composer/attachments/submit";
 import { toQueuedComposerAttachments } from "@/composer/queue-sync";
-import { serializeQueueOperation } from "@/stores/queue-outbox-store/model";
+import {
+  QueueRevisionConflictError,
+  serializeQueueOperation,
+  type QueueOutboxFlushClient,
+} from "@/stores/queue-outbox-store/model";
 import { createUserMessage, generateMessageId, type UserMessageItem } from "@/types/stream";
 import type { MessageSubmissionRejectionOutcome } from "@/composer/submission/model";
 import type { PickedImageAttachmentInput } from "@/hooks/image-attachment-picker";
@@ -43,6 +47,13 @@ export interface QueuedComposerMessage {
    * once it exhausted its retries without ever reaching the daemon.
    */
   syncState?: "pending" | "failed";
+  /**
+   * The daemon's wire-form attachments, carried so a text-only inline edit can
+   * re-send the full payload (the update RPC clears omitted fields).
+   */
+  wireAttachments?: import("@getpaseo/protocol/messages").AgentAttachmentWire[];
+  /** Durable cancellation intent mirrored from the outbox entry. */
+  removalRequested?: boolean;
 }
 
 export interface AttachmentPersister {
@@ -743,6 +754,74 @@ export async function runQueuedSubmission(
     owner.clearAttachments();
   }
   owner.clearSentAttachments?.(owner.submittedOutgoing ?? owner.submittedAttachments);
+}
+
+/**
+ * The one QueueOutboxFlushClient construction point. Every outbox dispatch
+ * entry — the reconnect flush, the composer's flush, and explicit retries —
+ * goes through this adapter, so tombstoned removals ride the same
+ * revision-checked delete everywhere. A revision conflict refreshes the queue
+ * (via onRevisionConflict) and throws QueueRevisionConflictError so the flush
+ * lane can re-dispatch with a fresh reservation.
+ */
+export function createQueueOutboxFlushClient(input: {
+  client: ComposerQueueClient;
+  getAppliedRevision: (agentId: string) => number;
+  onRevisionConflict?: (agentId: string) => void | Promise<void>;
+}): QueueOutboxFlushClient {
+  return {
+    enqueueAgentMessage: (dispatch) => input.client.enqueueAgentMessage(dispatch),
+    removeQueuedAgentMessage: async (agentId, itemId) => {
+      try {
+        return await input.client.deleteQueuedAgentMessage(
+          agentId,
+          itemId,
+          input.getAppliedRevision(agentId),
+        );
+      } catch (error) {
+        if (!isQueueRevisionConflictError(error)) {
+          throw error;
+        }
+        await input.onRevisionConflict?.(agentId);
+        throw new QueueRevisionConflictError();
+      }
+    },
+  };
+}
+
+export type QueuedEditSaveDecision =
+  | { kind: "noop" }
+  | { kind: "conflict"; message: string }
+  | { kind: "rpc"; revision: number };
+
+/**
+ * The queued-edit save decision, made before any RPC: a no-op save (text
+ * unchanged from the row), a fresh-snapshot conflict (the applied revision
+ * moved past the edit-start baseline — an intervening remote edit), or a
+ * revision-checked update. While the conflict fence stands, only an explicit
+ * force (the user's "Save anyway") is eligible, and it saves against the
+ * current applied revision.
+ */
+export function resolveQueuedEditSave(input: {
+  text: string;
+  baselineText: string | undefined;
+  baselineRevision: number;
+  appliedRevision: number;
+  conflicted: boolean;
+  force: boolean;
+  conflictMessage: string;
+}): QueuedEditSaveDecision {
+  const baselineRevision = input.force ? input.appliedRevision : input.baselineRevision;
+  if (input.conflicted && !input.force) {
+    return { kind: "conflict", message: input.conflictMessage };
+  }
+  if (input.baselineText !== undefined && input.text === input.baselineText && !input.force) {
+    return { kind: "noop" };
+  }
+  if (!input.force && input.appliedRevision > input.baselineRevision) {
+    return { kind: "conflict", message: input.conflictMessage };
+  }
+  return { kind: "rpc", revision: baselineRevision };
 }
 
 export function removeQueuedComposerMessageLocally(input: {

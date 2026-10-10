@@ -49,6 +49,9 @@ export function toQueuedComposerMessage(item: QueuedAgentMessage): QueuedCompose
     id: item.id,
     text: item.text,
     attachments: toComposerAttachments(item.composerAttachments),
+    // The wire form rides along so a text-only inline edit can re-send the
+    // full payload — the update RPC clears omitted attachment fields.
+    wireAttachments: item.attachments,
     deliveryState: item.deliveryState,
     lastError: item.lastError,
   };
@@ -109,7 +112,9 @@ export function getPendingQueueMessageIds(
   acceptedIds: ReadonlySet<string> | undefined,
 ): ReadonlySet<string> {
   return new Set(
-    pending.filter((entry) => !acceptedIds?.has(entry.itemId)).map((entry) => entry.itemId),
+    pending
+      .filter((entry) => entry.removalRequested || !acceptedIds?.has(entry.itemId))
+      .map((entry) => entry.itemId),
   );
 }
 
@@ -127,11 +132,18 @@ export function annotateQueueRows(input: {
   const failedIds = new Set(
     input.entries.filter((entry) => entry.failedAt !== undefined).map((entry) => entry.itemId),
   );
-  const annotated = input.rows.map((row) =>
-    failedIds.has(row.id) && row.syncState !== "failed"
-      ? { ...row, syncState: "failed" as const }
-      : row,
+  const tombstonedIds = new Set(
+    input.entries.filter((entry) => entry.removalRequested).map((entry) => entry.itemId),
   );
+  const annotated = input.rows.map((row) => {
+    const next = {
+      ...row,
+      ...(tombstonedIds.has(row.id) ? { removalRequested: true as const } : {}),
+    };
+    return failedIds.has(row.id) && row.syncState !== "failed"
+      ? { ...next, syncState: "failed" as const }
+      : next;
+  });
   return appendPendingQueueRows(annotated, input.entries);
 }
 

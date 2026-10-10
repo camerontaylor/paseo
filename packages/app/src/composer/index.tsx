@@ -16,6 +16,7 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  type MutableRefObject,
   useCallback,
   useMemo,
   useSyncExternalStore,
@@ -72,15 +73,17 @@ import { encodeImages } from "@/utils/encode-images";
 import { focusWithRetries } from "@/utils/web-focus";
 import {
   cancelComposerAgent,
-  deleteQueuedComposerMessage,
   dispatchComposerAgentMessage,
   editQueuedComposerMessage,
   findForgeItemByOption,
   isAttachmentSelectedForForgeItem,
   openComposerAttachment,
   pickAndPersistImages,
+  createQueueOutboxFlushClient,
   queueComposerMessage,
   queueComposerMessageOnServer,
+  isQueueRevisionConflictError,
+  resolveQueuedEditSave,
   resolveQueueSubmitClearing,
   removeComposerAttachmentAtIndex,
   removeQueuedComposerMessageLocally,
@@ -101,12 +104,18 @@ import {
   annotateQueueRows,
   getPendingQueueMessageIds,
   resolveQueueStorageErrorRow,
+  toQueuedComposerAttachments,
 } from "@/composer/queue-sync";
 import {
   flushQueueOutboxForServer,
   retryFailedOutboxEntry,
   useQueueOutboxStore,
 } from "@/stores/queue-outbox-store";
+import { flushDraftPersistStorage, useDraftStore } from "@/stores/draft-store";
+import {
+  EditingTextInput,
+  type EditingTextInputHandle,
+} from "@/components/ui/text-input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
   DropdownMenu,
@@ -410,6 +419,24 @@ interface RenderQueueTrackArgs {
   sendNowLabel: string;
   pendingMessageIds: ReadonlySet<string>;
   pendingLabel: string;
+  appliedRevision: number;
+  draftScope: string;
+  onSaveQueuedMessage: (id: string, text: string, baselineRevision: number) => Promise<boolean>;
+  onRemoveQueuedMessage: (id: string) => Promise<boolean>;
+  onQueueRowError: (message: string) => void;
+  onMoveToComposer: (id: string) => void;
+  moveToComposerLabel: string;
+  readLabel: string;
+  removeLabel: string;
+  doneLabel: string;
+  saveAnywayLabel: string;
+  discardEditLabel: string;
+  removalPendingLabel: string;
+  removalFailedLabel: string;
+  removalPendingIds: ReadonlySet<string>;
+  removalFailedIds: ReadonlySet<string>;
+  conflictLabel: string;
+  persistFailedLabel: string;
   storageError: {
     message: string;
     entryText: string | null;
@@ -440,6 +467,24 @@ function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
     sendNowLabel,
     pendingMessageIds,
     pendingLabel,
+    appliedRevision,
+    draftScope,
+    onSaveQueuedMessage,
+    onRemoveQueuedMessage,
+    onQueueRowError,
+    onMoveToComposer,
+    moveToComposerLabel,
+    readLabel,
+    removeLabel,
+      doneLabel,
+    saveAnywayLabel,
+    discardEditLabel,
+    removalPendingLabel,
+    removalFailedLabel,
+    conflictLabel,
+    persistFailedLabel,
+    removalPendingIds,
+    removalFailedIds,
     storageError,
     onRetryStorageError,
     onDismissStorageError,
@@ -489,6 +534,26 @@ function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
           isLast={index === queuedMessages.length - 1}
           isPending={pendingMessageIds.has(item.id)}
           pendingLabel={pendingLabel}
+          draftKey={`${draftScope}:${item.id}`}
+          baselineKey={`${draftScope}:${item.id}:baseline`}
+          onSave={onSaveQueuedMessage}
+          onRemove={onRemoveQueuedMessage}
+          onError={onQueueRowError}
+          onMoveToComposer={onMoveToComposer}
+          moveToComposerLabel={moveToComposerLabel}
+          readLabel={readLabel}
+          removeLabel={removeLabel}
+          saveLabel={saveLabel}
+          doneLabel={doneLabel}
+          saveAnywayLabel={saveAnywayLabel}
+          discardEditLabel={discardEditLabel}
+          removalPendingLabel={removalPendingLabel}
+          removalFailedLabel={removalFailedLabel}
+          isRemovalPending={removalPendingIds.has(item.id)}
+          isRemovalFailed={removalFailedIds.has(item.id)}
+          conflictLabel={conflictLabel}
+          persistFailedLabel={persistFailedLabel}
+          appliedRevision={appliedRevision}
           durable={durable}
         />
       ))}
@@ -759,13 +824,32 @@ function resolveMessageInputPassthroughAction(
 interface QueuedMessageRowProps {
   item: QueuedMessage;
   onEdit: (id: string) => void;
+  onMoveToComposer: (id: string) => void;
   onSendNow: (id: string) => void;
   editLabel: string;
   sendNowLabel: string;
+  moveToComposerLabel: string;
   isFirst: boolean;
   isLast: boolean;
   isPending: boolean;
   pendingLabel: string;
+  draftKey: string;
+  baselineKey: string;
+  onSave: (id: string, text: string, baselineRevision: number) => Promise<boolean>;
+  onRemove: (id: string) => Promise<boolean>;
+  onError: (message: string) => void;
+  readLabel: string;
+  removeLabel: string;
+  doneLabel: string;
+  saveAnywayLabel: string;
+  discardEditLabel: string;
+  removalPendingLabel: string;
+  removalFailedLabel: string;
+  conflictLabel: string;
+  persistFailedLabel: string;
+  isRemovalPending: boolean;
+  isRemovalFailed: boolean;
+  appliedRevision: number;
   durable?: RenderQueueTrackArgs["durable"];
 }
 
@@ -788,21 +872,333 @@ function resolveQueueStateBadge(
   return null;
 }
 
+interface QueuedMessageEditorProps {
+  testID: string;
+  editInputRef: MutableRefObject<EditingTextInputHandle | null>;
+  draft: string;
+  onEditorChange: (text: string) => void;
+  isSaving: boolean;
+  conflicted: boolean;
+  editLabel: string;
+  doneLabel: string;
+  saveAnywayLabel: string;
+  discardEditLabel: string;
+  onDone: () => void;
+  onSaveAnyway: () => void;
+  onDiscard: () => void;
+}
+
+function QueuedMessageEditor({
+  testID,
+  editInputRef,
+  draft,
+  onEditorChange,
+  isSaving,
+  conflicted,
+  editLabel,
+  doneLabel,
+  saveAnywayLabel,
+  discardEditLabel,
+  onDone,
+  onSaveAnyway,
+  onDiscard,
+}: QueuedMessageEditorProps) {
+  return (
+    <View style={[styles.queueItem, styles.queueEditItem]} testID={testID}>
+      <EditingTextInput
+        ref={editInputRef}
+        initialValue={draft}
+        onChangeText={onEditorChange}
+        multiline
+        editable={!isSaving}
+        placeholder={editLabel}
+        style={styles.queueEditInput}
+      />
+      <View style={styles.queueActions}>
+        {conflicted ? (
+          <Pressable
+            onPress={onDiscard}
+            disabled={isSaving}
+            style={styles.queueEditTextButton}
+            accessibilityRole="button"
+          >
+            <Text style={styles.queueEditTextButtonLabel}>{discardEditLabel}</Text>
+          </Pressable>
+        ) : null}
+        <Pressable
+          onPress={onDone}
+          disabled={isSaving}
+          style={styles.queueEditTextButton}
+          accessibilityRole="button"
+        >
+          <Text style={styles.queueEditTextButtonLabel}>{doneLabel}</Text>
+        </Pressable>
+        {conflicted ? (
+          <Pressable
+            onPress={onSaveAnyway}
+            disabled={isSaving}
+            style={[styles.queueEditTextButton, styles.queueEditSaveButton]}
+            accessibilityRole="button"
+          >
+            <Text style={styles.queueEditTextButtonLabel}>{saveAnywayLabel}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function QueuedMessageRow({
   item,
   onEdit,
+  onMoveToComposer,
   onSendNow,
   editLabel,
   sendNowLabel,
+  moveToComposerLabel,
   isFirst,
   isLast,
   isPending,
   pendingLabel,
+  draftKey,
+  baselineKey,
+  onSave,
+  onRemove,
+  onError,
+  readLabel,
+  removeLabel,
+  doneLabel,
+  saveAnywayLabel,
+  discardEditLabel,
+  removalPendingLabel,
+  removalFailedLabel,
+  conflictLabel,
+  persistFailedLabel,
+  isRemovalPending,
+  isRemovalFailed,
+  appliedRevision,
   durable,
 }: QueuedMessageRowProps) {
-  const handleEdit = useCallback(() => {
+  // Inline queued-edit state, persisted through the draft store: the working
+  // draft and the edit-start baseline (row text + revision) survive a restart.
+  const restoredDraft = useDraftStore.getState().getDraftInput(draftKey);
+  const [isEditing, setIsEditing] = useState(restoredDraft !== undefined);
+  const [draft, setDraft] = useState(restoredDraft?.text ?? item.text);
+  const draftRef = useRef(restoredDraft?.text ?? item.text);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isRemoving, setIsRemoving] = useState(false);
+  const [isReading, setIsReading] = useState(false);
+  const conflicted = restoredDraft?.queueEdit?.conflicted === true;
+  const editingRef = useRef(isEditing);
+  editingRef.current = isEditing;
+  const savingRef = useRef(false);
+  const draftVersionRef = useRef<number | undefined>(
+    useDraftStore.getState().drafts[draftKey]?.version,
+  );
+  const editInputRef = useRef<EditingTextInputHandle | null>(null);
+
+  const preserveDraft = useCallback(
+    (text: string) => {
+      draftRef.current = text;
+      setDraft(text);
+      const store = useDraftStore.getState();
+      const metadata = { itemId: item.id, baselineRevision: appliedRevision };
+      if (!store.getDraftInput(baselineKey)) {
+        store.saveDraftInput({
+          draftKey: baselineKey,
+          draft: { text: item.text, attachments: [], queueEdit: metadata },
+        });
+      }
+      store.editDraftText({ draftKey, text, keepActive: true });
+      draftVersionRef.current = useDraftStore.getState().drafts[draftKey]?.version;
+    },
+    [appliedRevision, baselineKey, draftKey, item.id, item.text],
+  );
+
+  const clearSavedDraft = useCallback(() => {
+    const store = useDraftStore.getState();
+    store.clearDraftInput({ draftKey, lifecycle: "sent" });
+    store.clearDraftInput({ draftKey: baselineKey, lifecycle: "sent" });
+  }, [baselineKey, draftKey]);
+
+  const handleEditorChange = useCallback(
+    (text: string) => {
+      preserveDraft(text);
+    },
+    [preserveDraft],
+  );
+
+  // Persist the conflict fence: implicit saves stay blocked (across restarts)
+  // until the user explicitly overwrites or discards.
+  const markEditConflicted = useCallback(
+    (attemptedRevision: number) => {
+      const current = useDraftStore.getState().getDraftInput(draftKey);
+      if (!current) return;
+      useDraftStore.getState().saveDraftInput({
+        draftKey,
+        draft: {
+          ...current,
+          queueEdit: {
+            itemId: item.id,
+            baselineRevision: attemptedRevision,
+            conflicted: true,
+          },
+        },
+      });
+    },
+    [draftKey, item.id],
+  );
+
+  const finalizeSave = useCallback(
+    (confirmedText: string, confirmedRevision: number) => {
+      // Version-safe finalization: newer input typed during the save is kept
+      // and its baseline advances to the confirmed generation.
+      if (useDraftStore.getState().drafts[draftKey]?.version !== draftVersionRef.current) {
+        const store = useDraftStore.getState();
+        store.saveDraftInput({
+          draftKey: baselineKey,
+          draft: {
+            text: confirmedText,
+            attachments: [],
+            queueEdit: { itemId: item.id, baselineRevision: confirmedRevision },
+          },
+        });
+        store.editDraftText({ draftKey, text: draftRef.current, keepActive: true });
+        return;
+      }
+      clearSavedDraft();
+      editingRef.current = false;
+      setIsEditing(false);
+    },
+    [clearSavedDraft, draftKey, baselineKey, item.id],
+  );
+
+  const runSave = useCallback(
+    async (force: boolean) => {
+      if (savingRef.current) return;
+      const store = useDraftStore.getState();
+      const working = store.getDraftInput(draftKey);
+      if (!working || !editingRef.current) return;
+      // While a conflict fence stands, implicit triggers retain the draft and
+      // fire no RPC; only the explicit "Save anyway" (force) may overwrite.
+      if (working.queueEdit?.conflicted && !force) return;
+      const baseline = store.getDraftInput(baselineKey);
+      const text = editInputRef.current?.getText() ?? draftRef.current;
+      preserveDraft(text);
+      const decision = resolveQueuedEditSave({
+        text,
+        baselineText: baseline?.text,
+        baselineRevision: baseline?.queueEdit?.baselineRevision ?? 0,
+        appliedRevision,
+        conflicted: working?.queueEdit?.conflicted === true,
+        force,
+        conflictMessage: conflictLabel,
+      });
+      if (decision.kind === "conflict") {
+        // The fence stands (or the row moved remotely): retain the draft,
+        // surface the conflict, dispatch nothing.
+        onError(decision.message);
+        return;
+      }
+      const attemptedRevision =
+        decision.kind === "rpc" ? decision.revision : (baseline?.queueEdit?.baselineRevision ?? 0);
+      savingRef.current = true;
+      setIsSaving(true);
+      try {
+        // The draft checkpoint is the durability barrier: it must be on disk
+        // before the host sees anything.
+        await flushDraftPersistStorage();
+        if (decision.kind === "noop") {
+          finalizeSave(text, baseline?.queueEdit?.baselineRevision ?? 0);
+          return;
+        }
+        const saved = await onSave(item.id, text, decision.revision);
+        if (saved) {
+          finalizeSave(text, decision.revision);
+        }
+      } catch (error) {
+        if (isQueueRevisionConflictError(error)) {
+          markEditConflicted(attemptedRevision);
+          onError(conflictLabel);
+        } else {
+          onError(error instanceof Error ? error.message : persistFailedLabel);
+        }
+      } finally {
+        savingRef.current = false;
+        setIsSaving(false);
+      }
+    },
+    [
+      appliedRevision,
+      baselineKey,
+      conflictLabel,
+      draftKey,
+      finalizeSave,
+      item.id,
+      markEditConflicted,
+      onError,
+      onSave,
+      persistFailedLabel,
+      preserveDraft,
+    ],
+  );
+
+  const startEditing = useCallback(() => {
     onEdit(item.id);
-  }, [onEdit, item.id]);
+    preserveDraft(item.text);
+    editingRef.current = true;
+    setIsEditing(true);
+  }, [item.id, item.text, onEdit, preserveDraft]);
+
+  const handleEdit = useCallback(() => {
+    startEditing();
+  }, [startEditing]);
+  const handleMoveToComposer = useCallback(() => {
+    // Leaving the editor without saving: the retained draft is dropped in
+    // favor of the explicit take (its content moves into the composer).
+    clearSavedDraft();
+    editingRef.current = false;
+    setIsEditing(false);
+    onMoveToComposer(item.id);
+  }, [clearSavedDraft, item.id, onMoveToComposer]);
+
+  // Leaving the workspace (unmount) attempts the implicit save; a conflicted
+  // draft blocks it and stays recoverable.
+  const saveOnLeaveRef = useRef(runSave);
+  saveOnLeaveRef.current = runSave;
+  useEffect(
+    () => () => {
+      void saveOnLeaveRef.current(false).catch(() => {});
+    },
+    [],
+  );
+
+  const handleRemove = useCallback(async () => {
+    if (isRemoving) return;
+    setIsRemoving(true);
+    try {
+      await onRemove(item.id);
+    } finally {
+      setIsRemoving(false);
+    }
+  }, [isRemoving, item.id, onRemove]);
+
+  const removeFromUI = useCallback(() => {
+    void handleRemove().catch(() => {});
+  }, [handleRemove]);
+  const saveFromUI = useCallback(() => {
+    void runSave(false).catch(() => {});
+  }, [runSave]);
+  const saveAnywayFromUI = useCallback(() => {
+    void runSave(true).catch(() => {});
+  }, [runSave]);
+  const discardEditFromUI = useCallback(() => {
+    clearSavedDraft();
+    editingRef.current = false;
+    setIsEditing(false);
+  }, [clearSavedDraft]);
+  const toggleReading = useCallback(() => setIsReading((value) => !value), []);
+  const readingAccessibilityState = useMemo(() => ({ expanded: isReading }), [isReading]);
   const handleSendNow = useCallback(() => {
     onSendNow(item.id);
   }, [onSendNow, item.id]);
@@ -838,13 +1234,49 @@ function QueuedMessageRow({
     <StatusBadge size="xs" variant={badge.variant} label={badge.label} />
   ) : null;
 
+  if (isEditing) {
+    return (
+      <QueuedMessageEditor
+        testID={`queued-message-${item.id}`}
+        editInputRef={editInputRef}
+        draft={draft}
+        onEditorChange={handleEditorChange}
+        isSaving={isSaving}
+        conflicted={conflicted}
+        editLabel={editLabel}
+        doneLabel={doneLabel}
+        saveAnywayLabel={saveAnywayLabel}
+        discardEditLabel={discardEditLabel}
+        onDone={saveFromUI}
+        onSaveAnyway={saveAnywayFromUI}
+        onDiscard={discardEditFromUI}
+      />
+    );
+  }
+
+  const removalBlocked = isRemovalPending || isRemovalFailed;
   return (
     <View style={styles.queueItem}>
-      <View style={styles.queueItemContent}>
-        <Text style={styles.queueText} numberOfLines={2} ellipsizeMode="tail">
+      <Pressable
+        onPress={toggleReading}
+        accessibilityRole="button"
+        accessibilityLabel={readLabel}
+        accessibilityState={readingAccessibilityState}
+        style={styles.queueItemContent}
+      >
+        <Text
+          style={styles.queueText}
+          numberOfLines={isReading ? undefined : 2}
+          ellipsizeMode="tail"
+          selectable={isReading}
+        >
           {item.text}
         </Text>
-        {isPending && !needsAttention ? (
+        {isRemovalPending ? (
+          <Text style={styles.queuePendingText}>{removalPendingLabel}</Text>
+        ) : null}
+        {isRemovalFailed ? <Text style={styles.queueErrorText}>{removalFailedLabel}</Text> : null}
+        {isPending && !needsAttention && !isRemovalPending ? (
           <Text style={styles.queuePendingText}>{pendingLabel}</Text>
         ) : null}
         {stateBadge !== null || item.lastError ? (
@@ -857,7 +1289,7 @@ function QueuedMessageRow({
             ) : null}
           </View>
         ) : null}
-      </View>
+      </Pressable>
       <View style={styles.queueActions}>
         {durable && needsAttention ? (
           <>
@@ -869,18 +1301,22 @@ function QueuedMessageRow({
             >
               <ThemedRotateCcw size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
             </Pressable>
-            <Pressable
-              onPress={handleDiscard}
-              style={styles.queueActionButton}
-              accessibilityLabel={durable.labels.discard}
-              accessibilityRole="button"
-            >
-              <ThemedX size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
-            </Pressable>
+            {!item.removalRequested ? (
+              <Pressable
+                onPress={handleDiscard}
+                style={styles.queueActionButton}
+                accessibilityLabel={durable.labels.discard}
+                accessibilityRole="button"
+              >
+                <ThemedX size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
+              </Pressable>
+            ) : null}
           </>
         ) : (
           <>
-            {!isPending && (!item.deliveryState || item.deliveryState === "pending") ? (
+            {!isPending &&
+            !removalBlocked &&
+            (!item.deliveryState || item.deliveryState === "pending") ? (
               <>
                 <Pressable
                   onPress={handleEdit}
@@ -900,6 +1336,15 @@ function QueuedMessageRow({
                 </Pressable>
               </>
             ) : null}
+            <Pressable
+              onPress={removeFromUI}
+              disabled={isRemoving}
+              style={styles.queueActionButton}
+              accessibilityLabel={removeLabel}
+              accessibilityRole="button"
+            >
+              <ThemedTrash2 size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
+            </Pressable>
             {!isPending && durable ? (
               <DropdownMenu>
                 <DropdownMenuTrigger
@@ -931,6 +1376,12 @@ function QueuedMessageRow({
                   >
                     {durable.labels.moveDown}
                   </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  {durable ? (
+                    <DropdownMenuItem leading={menuIcons.remove} onSelect={handleMoveToComposer}>
+                      {moveToComposerLabel}
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem destructive leading={menuIcons.remove} onSelect={handleDelete}>
                     {durable.labels.remove}
@@ -1876,25 +2327,6 @@ function ComposerContentImpl({
     [serverId, setQueuedMessages],
   );
 
-  const queueOutbox = useMemo<QueueOutboxWriter>(
-    () => ({
-      serverId,
-      add: (entry) => useQueueOutboxStore.getState().add({ ...entry, serverId }),
-      remove: (itemId) => useQueueOutboxStore.getState().removeDurably(itemId),
-      ...(client
-        ? {
-            flush: () =>
-              flushQueueOutboxForServer({
-                serverId,
-                client,
-                applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
-              }),
-          }
-        : {}),
-    }),
-    [serverId, client, applyAgentQueueSnapshot],
-  );
-
   const refreshQueuedMessages = useCallback(async () => {
     if (!supportsDurableQueue || !client) {
       return;
@@ -1915,6 +2347,37 @@ function ComposerContentImpl({
   const getAppliedQueueRevision = useCallback(
     () => useSessionStore.getState().sessions[serverId]?.queuedMessageRevisions.get(agentId) ?? 0,
     [agentId, serverId],
+  );
+
+  const queueOutbox = useMemo<QueueOutboxWriter>(
+    () => ({
+      serverId,
+      add: (entry) => useQueueOutboxStore.getState().add({ ...entry, serverId }),
+      remove: (itemId) => useQueueOutboxStore.getState().removeDurably(itemId),
+      ...(client
+        ? {
+            flush: () =>
+              flushQueueOutboxForServer({
+                serverId,
+                client: createQueueOutboxFlushClient({
+                  client,
+                  getAppliedRevision: getAppliedQueueRevision,
+                  onRevisionConflict: (conflictAgentId) =>
+                    agentId === conflictAgentId ? refreshQueuedMessages() : Promise.resolve(),
+                }),
+                applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+              }),
+          }
+        : {}),
+    }),
+    [
+      serverId,
+      client,
+      getAppliedQueueRevision,
+      refreshQueuedMessages,
+      applyAgentQueueSnapshot,
+      agentId,
+    ],
   );
 
   const handleQueuedMutationResult = useCallback(
@@ -2448,6 +2911,87 @@ function ComposerContentImpl({
     ],
   );
 
+  const handleSaveQueuedMessage = useCallback(
+    async (id: string, text: string, baselineRevision: number): Promise<boolean> => {
+      if (!(supportsDurableQueue && client)) return false;
+      const row = queuedMessages.find((candidate) => candidate.id === id);
+      let images: Array<{ data: string; mimeType: string }> = [];
+      try {
+        images = await client.getQueuedAgentMessageImages(agentId, id);
+      } catch {
+        // Retrieval failure aborts the save: no destructive update is issued.
+        throw new Error(t("composer.errors.queueEditFailed"));
+      }
+      try {
+        const snapshot = await client.updateQueuedAgentMessage({
+          agentId,
+          itemId: id,
+          text,
+          expectedRevision: baselineRevision,
+          ...(images.length ? { images } : {}),
+          ...(row?.wireAttachments?.length ? { attachments: row.wireAttachments } : {}),
+          composerAttachments: toQueuedComposerAttachments(row?.attachments ?? []),
+        });
+        applyAgentQueueSnapshot(serverId, snapshot);
+        return true;
+      } catch (error) {
+        if (isQueueRevisionConflictError(error)) {
+          // A remote change intervened. The draft is retained with its conflict
+          // fence (implicit saves blocked); the refresh shows the remote state.
+          void refreshQueuedMessages();
+          throw error;
+        }
+        throw error;
+      }
+    },
+    [
+      agentId,
+      applyAgentQueueSnapshot,
+      client,
+      queuedMessages,
+      refreshQueuedMessages,
+      serverId,
+      supportsDurableQueue,
+      t,
+    ],
+  );
+
+  const handleRemoveQueuedMessage = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!(supportsDurableQueue && client)) return false;
+      const pendingEntry = useQueueOutboxStore.getState().entries[id];
+      const row = queuedMessages.find((candidate) => candidate.id === id);
+      if (!pendingEntry && !row) return false;
+      await useQueueOutboxStore.getState().requestRemoval(
+        pendingEntry ?? {
+          serverId,
+          agentId,
+          itemId: id,
+          text: row?.text ?? "",
+          intent: "queue",
+          images: [],
+          attachments: [],
+          composerAttachments: [],
+          createdAt: Date.now(),
+          attempts: 0,
+          removalRequested: true,
+        },
+      );
+      if (isConnected) {
+        await (queueOutbox.flush?.() ?? Promise.resolve());
+      }
+      return true;
+    },
+    [agentId, client, isConnected, queueOutbox, queuedMessages, serverId, supportsDurableQueue],
+  );
+
+  const handleMoveToComposer = useCallback(
+    (id: string) => {
+      handleEditQueuedMessage(id);
+    },
+    [handleEditQueuedMessage],
+  );
+
   const handleDeleteQueuedMessage = useCallback(
     (id: string) => {
       if (!(supportsDurableQueue && client)) return;
@@ -2460,27 +3004,12 @@ function ComposerContentImpl({
           destructive: true,
         });
         if (!confirmed) return;
-        handleQueuedMutationResult(
-          await deleteQueuedComposerMessage({
-            client,
-            agentId,
-            messageId: id,
-            expectedRevision: getAppliedQueueRevision(),
-            applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
-          }),
-        );
+        // The durable removal is a tombstone: the intent persists before the
+        // host is asked, surviving lost responses and reconnects.
+        await handleRemoveQueuedMessage(id);
       })();
     },
-    [
-      agentId,
-      applyAgentQueueSnapshot,
-      client,
-      getAppliedQueueRevision,
-      handleQueuedMutationResult,
-      serverId,
-      supportsDurableQueue,
-      t,
-    ],
+    [client, handleRemoveQueuedMessage, supportsDurableQueue, t],
   );
 
   const handleMoveQueuedMessage = useCallback(
@@ -2525,7 +3054,11 @@ function ComposerContentImpl({
         if (!client) return;
         retryFailedOutboxEntry({
           itemId: id,
-          client,
+          client: createQueueOutboxFlushClient({
+            client,
+            getAppliedRevision: getAppliedQueueRevision,
+            onRevisionConflict: () => refreshQueuedMessages(),
+          }),
           applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
         }).catch((error) => {
           setSendError(
@@ -2554,6 +3087,7 @@ function ComposerContentImpl({
       failedOutboxEntries,
       getAppliedQueueRevision,
       handleQueuedMutationResult,
+      refreshQueuedMessages,
       serverId,
       supportsDurableQueue,
       t,
@@ -3035,6 +3569,36 @@ function ComposerContentImpl({
       sendNowLabel: t("composer.attachments.sendQueuedMessageNow"),
       pendingMessageIds: supportsDurableQueue ? pendingMessageIds : EMPTY_SET,
       pendingLabel: t("composer.attachments.queueWaitingToSync"),
+      appliedRevision: getAppliedQueueRevision(),
+      draftScope: `queued-edit:${serverId}:${agentId}`,
+      onSaveQueuedMessage: handleSaveQueuedMessage,
+      onRemoveQueuedMessage: handleRemoveQueuedMessage,
+      onQueueRowError: setSendError,
+      onMoveToComposer: handleMoveToComposer,
+      moveToComposerLabel: t("composer.attachments.moveToComposer"),
+      readLabel: t("composer.attachments.readQueuedMessage"),
+      removeLabel: t("composer.attachments.removeQueuedMessage"),
+      doneLabel: t("composer.attachments.doneQueuedMessage"),
+      saveAnywayLabel: t("composer.attachments.queueEditSaveAnyway"),
+      discardEditLabel: t("composer.attachments.queueEditDiscard"),
+      removalPendingLabel: t("composer.attachments.queueRemovalPending"),
+      removalFailedLabel: t("composer.attachments.queueRemovalFailed"),
+      conflictLabel: t("composer.queued.changedOnAnotherDevice"),
+      persistFailedLabel: t("composer.errors.queuedPersistFailed"),
+      removalPendingIds: supportsDurableQueue
+        ? new Set(
+            outboxEntriesForAgent
+              .filter((entry) => entry.removalRequested && entry.removalFailedAt === undefined)
+              .map((entry) => entry.itemId),
+          )
+        : EMPTY_SET,
+      removalFailedIds: supportsDurableQueue
+        ? new Set(
+            outboxEntriesForAgent
+              .filter((entry) => entry.removalRequested && entry.removalFailedAt !== undefined)
+              .map((entry) => entry.itemId),
+          )
+        : EMPTY_SET,
       storageError: storageErrorRow
         ? {
             message: t(storageErrorRow.messageKey),
@@ -3048,16 +3612,24 @@ function ComposerContentImpl({
       durable,
     });
   }, [
+    agentId,
+    getAppliedQueueRevision,
     handleDeleteQueuedMessage,
     handleDiscardQueuedMessage,
     handleEditQueuedMessage,
     handleMoveQueuedMessage,
+    handleMoveToComposer,
+    handleRemoveQueuedMessage,
     handleRetryQueuedMessage,
     handleRetryStorageError,
     handleDismissStorageError,
+    handleSaveQueuedMessage,
     handleSendQueuedNow,
+    outboxEntriesForAgent,
     pendingMessageIds,
     queueRows,
+    serverId,
+    setSendError,
     storageErrorRow,
     supportsDurableQueue,
     t,
@@ -3371,6 +3943,31 @@ const styles = StyleSheet.create((theme: Theme) => ({
   },
   queuePendingText: {
     color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  queueEditItem: {
+    flexDirection: "column",
+    gap: theme.spacing[2],
+  },
+  queueEditInput: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    minHeight: 64,
+    maxHeight: 160,
+    width: "100%",
+    padding: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+  },
+  queueEditTextButton: {
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    borderRadius: theme.borderRadius.sm,
+  },
+  queueEditSaveButton: {
+    backgroundColor: theme.colors.foreground,
+  },
+  queueEditTextButtonLabel: {
+    color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
   },
   queueActions: {
