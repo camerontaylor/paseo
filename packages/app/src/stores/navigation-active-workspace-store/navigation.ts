@@ -20,6 +20,10 @@ export interface RouteSelectionInput {
   params: {
     serverId?: string | string[];
     workspaceId?: string | string[];
+    dir?: string | string[];
+    name?: string | string[];
+    projectId?: string | string[];
+    draftId?: string | string[];
   };
 }
 
