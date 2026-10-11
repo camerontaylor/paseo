@@ -49,6 +49,16 @@ Two additional browser failures are absent from the baseline:
 
 Baseline Windows fails the nested-script `worktree-bootstrap.test.ts` case because the temp path uses `RUNNER~1` versus `runneradmin`. Those files are unchanged in the candidate. Existing browser failures include pinned prompt, archived side conversation, viewed timelines, workspace package scripts, hydration/scroll, and chat-find/creation flows. Baseline app and SDK jobs pass. Full logs are in `/home/ctaylor/.jcode/scratch/partial-deploy-{ci,baseline}-failed.log`. Do not describe the failing matrix as green.
 
+## Browser carry-test exceptions, approved before edits
+
+Sol issued separate PREFLIGHT APPROVE rulings on 2026-10-12 for C1-BROWSER-EXC-1 and C2-BROWSER-EXC-1. The coordinator signs off on both now, before worker edits. Source/log diagnosis is not proof that no message was lost.
+
+C1 scope is only `agent-message-submission.spec.ts` and `support/helpers/agent-message-gate.ts`. Preserve the original held requests without forwarding or replay. Before reconnect, prove both distinct payloads and item identities are durable and render as two pending rows. Use genuine reconnect and deterministic host acknowledgements, then keep the original two actionable-row acceptance and no canonical user messages. No synthetic ack, reseeding, additional submission, fixture or production changes. Stop for production-design review if recovery fails.
+
+C2 scope is only `sidebar-nav-settings.spec.ts` and its sidebar helper. Add literal Stream identity, visibility, order and persistence throughout. Assert each of three Schedules moves above Stream, Search, then History. Preserve shortcut, visibility, persistence, reload and plugin checks. The existing all-items-off fixture may explicitly add `{ key: "stream", visible: false }` and assert it hidden. No shared fixtures, derived expectations or weakened matchers.
+
+One isolated DeepSeek worker may make separate package commits on `fork/refresh-browser-repair-20261012`, based on held combined candidate plus the already accepted EXC-3 correction. Complete the affected browser files and required checks, then obtain Sol ADVANCE before transplanting follow-ups into package branches and both basket/release paths. A2 remains held. C1/C2 publication stays held pending exact-SHA gates. Full quoted preflight is preserved in `/home/ctaylor/.jcode/scratch/browser-repair-preflight-verdict.md` and must be mirrored into the worker report.
+
 ## Campaign continuation and safety
 
 A2 worker `3af10474-80e6-4085-8371-62a4d4b7b062`, DeepSeek V4.1 Flash via Jcode, obtained read-only s0 ADVANCE on frozen backend. Implementation is held during release checks and release-regression work. C2 follow-up worker `ab0168d1` is investigating both held browser failures read-only from source and logs, with no local builds/tests or edits authorized. Keep one implementation worker active and local builds/tests serial.
