@@ -43,7 +43,7 @@ interface DraftStoreActions {
   getDraftInput: (draftKey: string) => DraftInput | undefined;
   hydrateDraftInput: (input: { draftKey: string }) => Promise<DraftInput | undefined>;
   saveDraftInput: (input: { draftKey: string; draft: DraftInput }) => void;
-  editDraftText: (input: { draftKey: string; text: string }) => void;
+  editDraftText: (input: { draftKey: string; text: string; keepActive?: boolean }) => void;
   markDraftLifecycle: (input: { draftKey: string; lifecycle: DraftLifecycleState }) => void;
   clearDraftInput: (input: {
     draftKey: string;
@@ -65,9 +65,25 @@ interface DraftStoreRuntimeState {
 type DraftStore = DraftStoreState & DraftStoreRuntimeState & DraftStoreActions;
 
 let gcScheduled = false;
-const draftPersistStorage = createDraftPersistStorage(
-  createValidatedPersistStorage(AsyncStorage, PersistedDraftStoreSchema),
+const draftValidatedStorage = createValidatedPersistStorage(
+  AsyncStorage,
+  PersistedDraftStoreSchema,
 );
+const draftPersistDebouncer = createDraftPersistStorage(draftValidatedStorage);
+// The hydration gate sits OUTSIDE the debouncer, at capture time: a checkpoint
+// issued before hydration must never sit in the debouncer's pending slot, or a
+// gate that opens before the debounced flush would persist that stale partial
+// payload over the saved store. Zustand keeps its hydration flag false through
+// a failed read, so a rejected read never opens the gate mid-failure.
+const draftPersistStorage: typeof draftPersistDebouncer = {
+  ...draftPersistDebouncer,
+  setItem: (name, value) => {
+    if (!useDraftStore.persist.hasHydrated()) {
+      return Promise.resolve();
+    }
+    return draftPersistDebouncer.setItem(name, value);
+  },
+};
 
 export function flushDraftPersistStorage(): Promise<void> {
   return draftPersistStorage?.flush() ?? Promise.resolve();
@@ -82,6 +98,7 @@ function createDraftRecord(input: {
     input: {
       text: input.draft.text,
       attachments: input.draft.attachments.map(normalizeComposerAttachment),
+      ...(input.draft.queueEdit ? { queueEdit: input.draft.queueEdit } : {}),
     },
     lifecycle: input.lifecycle,
     updatedAt: Date.now(),
@@ -318,10 +335,10 @@ export const useDraftStore = create<DraftStore>()(
         scheduleAttachmentGc();
       },
 
-      editDraftText: ({ draftKey, text }) => {
+      editDraftText: ({ draftKey, text, keepActive }) => {
         set((state) => {
           const previous = state.drafts[draftKey];
-          const next = editDraftRecordText(previous, text, Date.now());
+          const next = editDraftRecordText(previous, text, Date.now(), keepActive === true);
           return next === previous ? state : { drafts: { ...state.drafts, [draftKey]: next } };
         });
       },

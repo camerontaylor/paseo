@@ -3612,7 +3612,7 @@ export class DaemonClient {
     agentId: string,
     text: string,
     options?: SendMessageOptions,
-  ): Promise<void> {
+  ): Promise<{ queued: boolean } | void> {
     const requestId = this.createRequestId();
     const messageId = options?.messageId ?? crypto.randomUUID();
     const message = SessionInboundMessageSchema.parse({
@@ -3642,6 +3642,7 @@ export class DaemonClient {
     if (!payload.accepted) {
       throw new Error(payload.error ?? "sendAgentMessage rejected");
     }
+    return { queued: payload.queued === true };
   }
 
   async sendMessage(agentId: string, text: string, options?: SendMessageOptions): Promise<void> {

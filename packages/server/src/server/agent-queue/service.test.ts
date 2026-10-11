@@ -969,6 +969,52 @@ describe("AgentQueueService", () => {
     expect(harness.sent.map((input) => input.messageId)).toEqual(["item-1"]);
     expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
   });
+
+  test("a cancelled pre-submission start does not poison the queue receipt", async () => {
+    const receipts = new MessageReceipts(join(dir, "agent-requests-not-submitted"));
+    harness.service.setMessageReceipts(receipts);
+    // Composition coverage for the Codex fix: the provider error carries
+    // AGENT_PROMPT_NOT_SUBMITTED, so MessageReceipts strips the attempt receipt
+    // (the prompt never reached the provider) and the item stays queued.
+    harness.failSends(
+      Object.assign(new Error("cancelled before submission"), {
+        code: "AGENT_PROMPT_NOT_SUBMITTED",
+      }),
+    );
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "notice",
+      text: "notification",
+      intent: "queue",
+    });
+    await harness.service.flushDrains();
+    expect(await receipts.outcome(AGENT_ID, "notice#1")).toBeNull();
+    expect((await harness.service.list(AGENT_ID)).items.map((item) => item.id)).toEqual(["notice"]);
+    expect((await harness.service.list(AGENT_ID)).items[0]?.deliveryState).toBe("pending");
+
+    // The next idle boundary retries "notice" before "question" and both drain.
+    harness.agents.emitLifecycle("running");
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "question",
+      text: "follow-up",
+      intent: "queue",
+    });
+    await harness.service.flushDrains();
+    harness.failSends(null);
+    harness.agents.emitLifecycle("idle");
+    await harness.service.flushDrains();
+    expect(await receipts.outcome(AGENT_ID, "notice#2")).toBe("completed");
+    expect((await harness.service.list(AGENT_ID)).items.map((item) => item.id)).toEqual([
+      "question",
+    ]);
+
+    harness.agents.emitLifecycle("running");
+    harness.agents.emitLifecycle("idle");
+    await harness.service.flushDrains();
+    expect(harness.sent.map((item) => item.messageId)).toEqual(["notice", "question"]);
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+  });
 });
 
 describe("AgentQueueService startup recovery", () => {

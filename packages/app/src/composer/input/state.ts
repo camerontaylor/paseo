@@ -1,5 +1,6 @@
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
+import { i18n } from "@/i18n/i18next";
 import type { MessagePayload } from "@/composer/types";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
 
@@ -46,7 +47,7 @@ interface StopRealtimeVoiceContext {
 interface SendActionContext {
   defaultSendBehavior: SendBehavior;
   isAgentRunning: boolean;
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => void | Promise<void>) | undefined;
   handleSendMessage: () => void;
   handleQueueMessage: () => void;
 }
@@ -55,9 +56,13 @@ interface DictationTranscriptContext {
   value: string;
   defaultSendBehavior: SendBehavior;
   isAgentRunning: boolean;
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => void | Promise<void>) | undefined;
   onSubmit: (payload: MessagePayload) => void;
   replaceText: (text: string) => void;
+  /** The live input text, so a clear never drops text typed during the queue. */
+  getLiveText?: () => string;
+  /** Surfaces a queue failure once; the transcript stays in the input. */
+  onQueueError?: (message: string) => void;
   attachments: MessagePayload["attachments"];
   cwd: string;
   autoSend: boolean;
@@ -76,8 +81,23 @@ export function applyDictationTranscript(text: string, ctx: DictationTranscriptC
   ctx.replaceText(nextValue);
 
   if (ctx.defaultSendBehavior === "queue" && ctx.isAgentRunning && ctx.onQueue) {
-    ctx.onQueue({ text: nextValue, attachments: ctx.attachments, cwd: ctx.cwd });
-    ctx.replaceText("");
+    void queueInputMessage(
+      { text: nextValue, attachments: ctx.attachments, cwd: ctx.cwd },
+      ctx.onQueue,
+    )
+      .then(() => {
+        if (ctx.getLiveText?.() === nextValue) ctx.replaceText("");
+        return undefined;
+      })
+      .catch((error: unknown) => {
+        // The transcript stays in the input; the failure surfaces through the
+        // composer's error display.
+        ctx.onQueueError?.(
+          error instanceof Error && error.message
+            ? error.message
+            : i18n.t("composer.errors.queuedPersistFailed"),
+        );
+      });
     return;
   }
 
@@ -184,4 +204,12 @@ export async function stopRealtimeVoice(ctx: StopRealtimeVoiceContext): Promise<
   // permissions, and its children keep running; interruption is the overlay's
   // explicit Interrupt agent control.
   await ctx.voice.stopVoice();
+}
+
+/** Awaits the queue callback so callers can clear only after durable acceptance. */
+export async function queueInputMessage(
+  payload: MessagePayload,
+  onQueue: (payload: MessagePayload) => void | Promise<void>,
+): Promise<void> {
+  await onQueue(payload);
 }
