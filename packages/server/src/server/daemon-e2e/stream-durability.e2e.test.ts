@@ -21,13 +21,13 @@ import { ReleasedAgentSnapshotSchema } from "../test-utils/released-stream-schem
  */
 
 async function waitFor<T>(
-  poll: () => T | undefined,
+  poll: () => T | undefined | Promise<T | undefined>,
   description: string,
   timeoutMs = 15000,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const result = poll();
+    const result = await poll();
     if (result !== undefined) {
       return result;
     }
@@ -532,31 +532,36 @@ describe("stream durability daemon", () => {
     // delivers only state updates, not `agent_stream` events.
     const timelineObservation = ctx.client.observeTimeline([agent.id]);
     await timelineObservation.ready;
-    const streamTexts = async () => {
+    const streamEntries = async () => {
       const page = await ctx.client.listGlobalStream({ agentId: agent.id });
-      return page.rows.flatMap((row) => (row.item.kind === "entry" ? [row.item.entry.text] : []));
+      return page.rows.flatMap((row) => (row.item.kind === "entry" ? [row.item.entry] : []));
     };
-    const storedTexts = async () => {
-      const record = await storage.get(agent.id);
-      return (record?.companionEntries ?? []).map((entry) => entry.text);
-    };
-    const streamedTimelineEvent = () =>
-      collector.messages.find(
-        (outbound) =>
-          outbound.type === "agent_stream" &&
-          outbound.payload.agentId === agent.id &&
-          outbound.payload.event.type === "timeline",
-      );
+    const storedEntries = async () => (await storage.get(agent.id))?.companionEntries ?? [];
+    const streamTexts = async () => (await streamEntries()).map((entry) => entry.text);
+    const storedTexts = async () => (await storedEntries()).map((entry) => entry.text);
+    const streamEntryWithText = async (text: string) =>
+      (await streamEntries()).find((entry) => entry.text === text);
+    const streamedTimelineSince = (from: number) =>
+      collector.messages
+        .slice(from)
+        .find(
+          (outbound) =>
+            outbound.type === "agent_stream" &&
+            outbound.payload.agentId === agent.id &&
+            outbound.payload.event.type === "timeline",
+        );
     try {
-      for (const [code, message] of [
-        ["ENOSPC", "No space left on device"],
-        ["EIO", "I/O error"],
+      for (const [code, message, content] of [
+        ["ENOSPC", "No space left on device", "ENOSPC turn content"],
+        ["EIO", "I/O error", "EIO turn content"],
       ] as const) {
+        const collectorStart = collector.messages.length;
         const failuresBeforeTurn = captureFailures;
-        const injected = Object.assign(new Error(message), { code });
         hold = createHold();
-        pendingFault = injected;
-        await ctx.client.sendMessage(agent.id, "Write a note");
+        pendingFault = Object.assign(new Error(message), { code });
+        // The prompt names this turn's provider content, so the Stream entry the
+        // daemon captures from it is identifiable and unique per errno.
+        await ctx.client.sendMessage(agent.id, `respond with exactly: ${content}`);
         await hold.reached;
 
         // Degradation is visible on the wire, and it came from capture failing
@@ -574,23 +579,33 @@ describe("stream durability daemon", () => {
         expect(await storedTexts()).toContain("Kept across the fault");
 
         // Subsequent provider events still stream to the client while capture
-        // is degraded: the held turn already emitted its timeline chunks, and
-        // the daemon dispatches them regardless of the failed capture.
+        // is degraded, scoped to messages received since this iteration began.
         const streamedTimeline = await waitFor(
-          streamedTimelineEvent,
+          () => streamedTimelineSince(collectorStart),
           "streamed timeline event while capture is degraded",
         );
         expect(streamedTimeline.type).toBe("agent_stream");
 
-        // Clear the fault while the turn is still live, then let it finish. The
-        // turn's own `turn_completed` triggers a background persist
-        // (finalizeForegroundTurn → emitState); no client mutation is involved.
+        // Release the held turn with the fault still active: its `turn_completed`
+        // creates this turn's outcome entry in memory, but the capture write for
+        // that entry fails.
+        hold.release();
+        const turnEntry = await waitFor(
+          () => streamEntryWithText(content),
+          `turn entry "${content}" readable while storage is degraded`,
+        );
+        // The entry the daemon captured from this turn is its outcome card.
+        expect(turnEntry).toMatchObject({ kind: "outcome", status: "completed", text: content });
+        // It exists only in memory: the capture write never reached storage.
+        expect(await storedTexts()).not.toContain(content);
+
+        // Clear the fault and run a covering background persist with no client
+        // mutation: notifyAgentState takes the daemon's own
+        // emitState -> enqueueBackgroundPersist path.
         const failuresAtRecovery = captureFailures;
         fault = null;
         pendingFault = null;
-        hold.release();
-        const finished = await ctx.client.waitForFinish(agent.id, 60000);
-        expect(finished.status).toBe("idle");
+        ctx.daemon.daemon.agentManager.notifyAgentState(agent.id);
         const recovered = await ctx.client.waitForAgentUpsert(
           agent.id,
           (snapshot) => snapshot.captureDegraded !== true,
@@ -598,9 +613,19 @@ describe("stream durability daemon", () => {
         );
         expect(recovered.captureDegraded).toBeUndefined();
         expect(captureFailures).toBe(failuresAtRecovery);
+        const finished = await ctx.client.waitForFinish(agent.id, 60000);
+        expect(finished.status).toBe("idle");
 
-        // The covering background persist stored the retained history.
+        // The covering background persist stored this turn's entry and the
+        // seeded entry.
+        const storedTurnEntry = (await storedEntries()).find((entry) => entry.text === content);
+        expect(storedTurnEntry).toMatchObject({
+          kind: "outcome",
+          status: "completed",
+          text: content,
+        });
         expect(await storedTexts()).toContain("Kept across the fault");
+        expect(await streamTexts()).toContain(content);
       }
     } finally {
       collector.unsubscribe();
