@@ -18,6 +18,7 @@ export function normalizeForgeSearchKinds(
 }
 
 export interface PullRequestSummary {
+  checks?: PullRequestCheck[];
   number: number;
   title: string;
   url: string;
@@ -384,6 +385,7 @@ export interface CheckDetails {
 
 export interface SearchResult {
   items: Array<{
+    checks?: PullRequestCheck[];
     kind: "issue" | "change_request";
     forge?: string;
     number: number;

@@ -1417,7 +1417,7 @@ describe("ForgeService", () => {
     service.dispose?.();
   });
 
-  it("redirects a fork poll to its parent and reuses that batch address", async () => {
+  it("redirects a fork poll to its parent when the fork has no matching PR", async () => {
     let now = 0;
     const parent = { owner: { login: "upstream" }, name: "widgets" };
     const forkPr = batchPollPrNodeJson({
@@ -1435,6 +1435,9 @@ describe("ForgeService", () => {
         t0: batchPollChecksAliasJson([
           { __typename: "StatusContext", context: "ci", state: "SUCCESS" },
         ]),
+      }),
+      batchPollStatusJson({
+        t0: batchPollRepositoryJson([], { isFork: true, parent }),
       }),
       batchPollStatusJson({ t0: batchPollRepositoryJson([forkPr]) }),
     ]);
@@ -1472,9 +1475,151 @@ describe("ForgeService", () => {
     await vi.advanceTimersByTimeAsync(EXPECTED_GITHUB_SLOW_POLL_MS);
     await flushMicrotasks();
 
+    // The redirect is decided per tick: the fork is asked again first, so a PR
+    // it later opens against itself is picked up without restarting the daemon.
     expect(runner.calls[3]?.args[3]).toContain(
+      't0: repository(owner: "forkowner", name: "widgets")',
+    );
+    expect(runner.calls[4]?.args[3]).toContain(
       't0: repository(owner: "upstream", name: "widgets")',
     );
+
+    subscription?.unsubscribe();
+    service.dispose?.();
+  });
+
+  it("resolves a PR the fork opened against itself without redirecting to the parent", async () => {
+    let now = 0;
+    const parent = { owner: { login: "upstream" }, name: "widgets" };
+    const forkLocalPr = batchPollPrNodeJson({
+      number: 7,
+      url: "https://github.com/forkowner/widgets/pull/7",
+      state: "OPEN",
+      mergedAt: null,
+      baseRefName: "customizations",
+      headRefName: "feat-a",
+      headRefOid: "oid-a",
+      headRepositoryOwner: { login: "forkowner" },
+    });
+    const runner = createScriptedRunner([
+      batchPollStatusJson({
+        t0: batchPollRepositoryJson([forkLocalPr], {
+          isFork: true,
+          parent,
+          owner: { login: "forkowner" },
+        }),
+      }),
+      batchPollStatusJson({
+        t0: batchPollChecksAliasJson([
+          { __typename: "StatusContext", context: "ci", state: "SUCCESS" },
+        ]),
+      }),
+    ]);
+    const service = createGitHubService({
+      ttlMs: 0,
+      runner: runner.runner,
+      resolveGhPath: async () => "/usr/bin/gh",
+      resolveRepoHost: async () => null,
+      resolveRepoSlug: async () => "forkowner/widgets",
+      now: () => now,
+    });
+    const statuses: Array<CurrentPullRequestStatus | null> = [];
+
+    const subscription = service.retainCurrentPullRequestStatusPoll?.({
+      cwd: "/ws-a",
+      headRef: "feat-a",
+      headSha: "oid-a",
+      onStatus: (status) => statuses.push(status),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(currentPullRequestStatusCalls(runner.calls)).toHaveLength(0);
+    expect(runner.calls).toHaveLength(2);
+    expect(runner.calls[0]?.args[3]).toContain(
+      't0: repository(owner: "forkowner", name: "widgets")',
+    );
+    expect(runner.calls[1]?.args[3]).toContain('owner: "forkowner", name: "widgets"');
+    expect(runner.calls.some((call) => call.args[3]?.includes('owner: "upstream"'))).toBe(false);
+    expect(statuses).toEqual([
+      expect.objectContaining({
+        number: 7,
+        state: "open",
+        repoOwner: "forkowner",
+        repoName: "widgets",
+        baseRefName: "customizations",
+        checksStatus: "success",
+      }),
+    ]);
+
+    subscription?.unsubscribe();
+    service.dispose?.();
+  });
+
+  it("finds a fork-local PR crowded out of a full batch candidate page", async () => {
+    const parent = { owner: { login: "upstream" }, name: "widgets" };
+    const crowdedNodes = Array.from({ length: 10 }, (_, index) =>
+      batchPollPrNodeJson({
+        number: 100 + index,
+        url: `https://github.com/forkowner/widgets/pull/${100 + index}`,
+        state: "OPEN",
+        mergedAt: null,
+        headRefName: "feat-a",
+        headRepositoryOwner: { login: "stranger" },
+      }),
+    );
+    const crowdedCliCandidates = crowdedNodes.map((node) => ({
+      ...node,
+      statusCheckRollup: [],
+    }));
+    const runner = createScriptedRunner([
+      batchPollStatusJson({
+        t0: batchPollRepositoryJson(crowdedNodes, {
+          isFork: true,
+          owner: { login: "forkowner" },
+          parent,
+        }),
+      }),
+      { error: noPullRequestError() },
+      JSON.stringify({ owner: { login: "forkowner" }, name: "widgets", parent }),
+      JSON.stringify(crowdedCliCandidates),
+      JSON.stringify([{ number: 7, head: { sha: "oid-a" } }]),
+      currentPullRequestJson({
+        number: 7,
+        url: "https://github.com/forkowner/widgets/pull/7",
+        headRefName: "feat-a",
+        headRefOid: "oid-a",
+        headRepositoryOwner: { login: "forkowner" },
+      }),
+      currentPullRequestGithubFactsJson(),
+    ]);
+    const service = createGitHubService({
+      ttlMs: 0,
+      runner: runner.runner,
+      resolveGhPath: async () => "/usr/bin/gh",
+      resolveRepoHost: async () => null,
+      resolveRepoSlug: async () => "forkowner/widgets",
+      now: () => 0,
+    });
+    const statuses: Array<CurrentPullRequestStatus | null> = [];
+
+    const subscription = service.retainCurrentPullRequestStatusPoll?.({
+      cwd: "/ws-a",
+      headRef: "feat-a",
+      headSha: "oid-a",
+      onStatus: (status) => statuses.push(status),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(statuses).toEqual([
+      expect.objectContaining({ number: 7, repoOwner: "forkowner", state: "open" }),
+    ]);
+    expect(runner.calls[4]?.args).toEqual([
+      "api",
+      "repos/forkowner/widgets/pulls?state=all&per_page=100&head=forkowner%3Afeat-a",
+    ]);
+    expect(runner.calls.some((call) => call.args[3]?.includes('owner: "upstream"'))).toBe(false);
 
     subscription?.unsubscribe();
     service.dispose?.();
@@ -3325,6 +3470,7 @@ describe("ForgeService", () => {
         name: "parentRepo",
         parent: { owner: { login: "parentOwner" }, name: "parentRepo" },
       }),
+      "[]",
       JSON.stringify([{ number: 41 }, { number: 42 }]),
       JSON.stringify({
         number: 41,
@@ -3371,9 +3517,23 @@ describe("ForgeService", () => {
       title: "Real fork PR",
       headRefName: "feature/fork",
     });
-    expect(runner.calls.slice(0, 5).map((call) => call.args)).toEqual([
+    expect(runner.calls.slice(0, 6).map((call) => call.args)).toEqual([
       ["pr", "view", "--json", CURRENT_PR_STATUS_FIELDS],
       ["repo", "view", "--json", "owner,name,parent"],
+      [
+        "pr",
+        "list",
+        "--repo",
+        "forkOwner/parentRepo",
+        "--state",
+        "all",
+        "--head",
+        "feature/fork",
+        "--limit",
+        "10",
+        "--json",
+        CURRENT_PR_STATUS_FIELDS,
+      ],
       ["api", `repos/parentOwner/parentRepo/pulls?${FORK_PR_QUERY}`],
       ["pr", "view", "41", "--repo", "parentOwner/parentRepo", "--json", CURRENT_PR_STATUS_FIELDS],
       ["pr", "view", "42", "--repo", "parentOwner/parentRepo", "--json", CURRENT_PR_STATUS_FIELDS],
@@ -3559,6 +3719,7 @@ describe("ForgeService", () => {
         name: "parentRepo",
         parent: { owner: { login: "parentOwner" }, name: "parentRepo" },
       }),
+      "[]",
       JSON.stringify([{ number: 42 }]),
       {
         error: statusCheckRollupPermissionError([
@@ -3603,9 +3764,23 @@ describe("ForgeService", () => {
       checks: [],
       checksStatus: "none",
     });
-    expect(runner.calls.slice(0, 5).map((call) => call.args)).toEqual([
+    expect(runner.calls.slice(0, 6).map((call) => call.args)).toEqual([
       ["pr", "view", "--json", CURRENT_PR_STATUS_FIELDS],
       ["repo", "view", "--json", "owner,name,parent"],
+      [
+        "pr",
+        "list",
+        "--repo",
+        "forkOwner/parentRepo",
+        "--state",
+        "all",
+        "--head",
+        "feature/fork",
+        "--limit",
+        "10",
+        "--json",
+        CURRENT_PR_STATUS_FIELDS,
+      ],
       ["api", `repos/parentOwner/parentRepo/pulls?${FORK_PR_QUERY}`],
       ["pr", "view", "42", "--repo", "parentOwner/parentRepo", "--json", CURRENT_PR_STATUS_FIELDS],
       [
@@ -3761,6 +3936,7 @@ describe("ForgeService", () => {
         name: "repo",
         parent: { owner: { login: "parentOwner" }, name: "repo" },
       }),
+      "[]",
       JSON.stringify([{ number: 88 }]),
       JSON.stringify({
         number: 88,
@@ -3793,7 +3969,8 @@ describe("ForgeService", () => {
       repoName: "repo",
       headRefName: "feature/fork",
     });
-    expect(runner.calls[2]?.args).toEqual(["api", `repos/parentOwner/repo/pulls?${FORK_PR_QUERY}`]);
+    expect(runner.calls[2]?.args).toContain("forkOwner/repo");
+    expect(runner.calls[3]?.args).toEqual(["api", `repos/parentOwner/repo/pulls?${FORK_PR_QUERY}`]);
   });
 
   it("propagates DNS errors while resolving the current PR view", async () => {
@@ -3826,6 +4003,7 @@ describe("ForgeService", () => {
         name: "repo",
         parent: { owner: { login: "parentOwner" }, name: "repo" },
       }),
+      "[]",
       "[]",
     ]);
     const service = createGitHubService({
@@ -3986,6 +4164,93 @@ describe("ForgeService", () => {
     expect(runner.calls).toHaveLength(1);
   });
 
+  it("lists bounded open PRs with normalized CI facts in one command", async () => {
+    const runner = createRunner([
+      JSON.stringify([
+        {
+          number: 42,
+          title: "CI list",
+          url: "https://github.com/acme/repo/pull/42",
+          state: "OPEN",
+          body: null,
+          labels: [],
+          baseRefName: "main",
+          headRefName: "feature",
+          updatedAt: "2026-01-01T00:00:00Z",
+          statusCheckRollup: [
+            {
+              __typename: "CheckRun",
+              name: "lint",
+              workflowName: "CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/acme/repo/actions/runs/1",
+            },
+          ],
+        },
+      ]),
+    ]);
+    const service = createGitHubService({
+      runner: runner.runner,
+      resolveGhPath: async () => "/usr/bin/gh",
+      resolveRepoSlug: async () => "fork/repo",
+    });
+    const result = await service.searchIssuesAndPrs({
+      cwd: "/repo",
+      query: "",
+      kinds: ["change_request"],
+      limit: 20,
+    });
+
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        kind: "change_request",
+        number: 42,
+        checks: [
+          {
+            name: "lint",
+            workflow: "CI",
+            status: "failure",
+            url: "https://github.com/acme/repo/actions/runs/1",
+          },
+        ],
+      }),
+    ]);
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]?.args).toEqual([
+      "pr",
+      "list",
+      "--repo",
+      "fork/repo",
+      "--search",
+      "",
+      "--json",
+      "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
+      "--limit",
+      "20",
+    ]);
+  });
+
+  it("keeps PR listing available when the token cannot read checks", async () => {
+    const runner = createScriptedRunner([
+      { error: statusCheckRollupPermissionError(["pr", "list"]) },
+      pullRequestJson("Visible without checks"),
+    ]);
+    const service = createGitHubService({
+      runner: runner.runner,
+      resolveGhPath: async () => "/usr/bin/gh",
+      resolveRepoSlug: async () => "fork/repo",
+    });
+
+    const items = await service.listPullRequests({ cwd: "/repo", limit: 20 });
+    expect(items).toEqual([expect.objectContaining({ title: "Visible without checks" })]);
+    expect(items[0]?.checks).toBeUndefined();
+    expect(runner.calls.map((call) => call.args[call.args.indexOf("--json") + 1])).toEqual([
+      "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
+      "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
+    ]);
+  });
+
   it("refreshes cached results after the TTL expires", async () => {
     let now = 100;
     const runner = createRunner([
@@ -4015,6 +4280,7 @@ describe("ForgeService", () => {
       runner: runner.runner,
       resolveGhPath: async () => "/usr/bin/gh",
       resolveRepoHost: async () => null,
+      resolveRepoSlug: async () => null,
       now: () => 100,
     });
 
@@ -4148,7 +4414,7 @@ describe("ForgeService", () => {
         "--search",
         "",
         "--json",
-        "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
+        "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
         "--limit",
         "20",
       ],
@@ -4222,7 +4488,7 @@ describe("ForgeService", () => {
           "--search",
           "cache",
           "--json",
-          "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
+          "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
           "--limit",
           "5",
         ],
@@ -4261,7 +4527,7 @@ describe("ForgeService", () => {
         "--search",
         "793",
         "--json",
-        "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
+        "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
         "--limit",
         "5",
       ],
@@ -4300,7 +4566,7 @@ describe("ForgeService", () => {
         "--search",
         "https://gitlab.com/getpaseo/paseo/issues/793",
         "--json",
-        "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
+        "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
         "--limit",
         "5",
       ],
@@ -4339,7 +4605,7 @@ describe("ForgeService", () => {
         "--search",
         "793",
         "--json",
-        "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
+        "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
         "--limit",
         "5",
       ],
@@ -4390,7 +4656,7 @@ describe("ForgeService", () => {
           "--search",
           "cache",
           "--json",
-          "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
+          "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
           "--limit",
           "5",
         ],

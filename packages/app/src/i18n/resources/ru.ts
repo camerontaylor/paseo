@@ -556,6 +556,9 @@ export const ru: TranslationResources = {
       },
       errors: {
         failedToListDirectory: "Не удалось получить содержимое каталога",
+        pathUnavailable: "Не удаётся определить этот путь относительно рабочего каталога беседы.",
+        outsideWorkspaceDirectory:
+          "Эта папка находится вне текущего рабочего пространства. Откройте её в исходном рабочем пространстве.",
         createFailed: "Не удалось создать элемент",
         renameFailed: "Не удалось переименовать элемент",
         duplicateFailed: "Не удалось создать копию элемента",
@@ -778,6 +781,8 @@ export const ru: TranslationResources = {
       },
     },
     scripts: {
+      rootPackage: "Корень",
+      searchPlaceholder: "Поиск скриптов или пакетов…",
       title: "Скрипты",
       actions: {
         chooseUrl: "Выбрать URL",
@@ -805,6 +810,8 @@ export const ru: TranslationResources = {
         direct: "Прямой адрес",
       },
       states: {
+        empty: "Скрипты не найдены",
+        noMatches: "Подходящие скрипты не найдены",
         exitCode: "Код выхода: {{code}}",
         startFailed: "Не удалось запустить скрипт {{scriptName}}",
         stopFailed: "Не удалось остановить скрипт {{scriptName}}",
@@ -1309,6 +1316,7 @@ export const ru: TranslationResources = {
     },
     workspace: {
       status: {
+        scriptRunning: "Скрипт {{name}} выполняется",
         serviceRunning: "Сервис {{name}} запущен",
         serviceUnhealthy: "Сервис {{name}} работает некорректно",
         creating: "Создание...",

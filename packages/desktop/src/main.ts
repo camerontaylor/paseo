@@ -16,6 +16,7 @@ import {
   BrowserWindow,
   ClipboardItem,
   clipboard,
+  dialog,
   Menu,
   ipcMain,
   nativeImage,
@@ -1020,11 +1021,16 @@ void runDesktopStartup({
   process.exit(1);
 });
 
-function showDaemonShutdownDialog(): void {
+function showDaemonShutdownFeedback(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send("paseo:event:quitting", {});
   }
 }
+
+const quitSignal = registerExternalQuitSignals({
+  signals: process,
+  quit: () => app.quit(),
+});
 
 const quitLifecycle = createQuitLifecycle({
   app,
@@ -1034,7 +1040,24 @@ const quitLifecycle = createQuitLifecycle({
       settingsStore: getDesktopSettingsStore(),
       isDesktopManagedDaemonRunning: isDesktopManagedDaemonRunningSync,
       stopDaemon: () => stopDesktopDaemonViaCli("quit"),
-      showShutdownFeedback: showDaemonShutdownDialog,
+      showShutdownFeedback: showDaemonShutdownFeedback,
+      quitSignal,
+      confirmStopDaemon: async (stopByDefault, signal) => {
+        const parentWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        if (!parentWindow) return stopByDefault;
+        const { response } = await dialog.showMessageBox(parentWindow, {
+          type: "question",
+          title: "Quit Paseo",
+          message: "Stop the daemon before quitting?",
+          detail: "Just quit keeps the daemon and your agents running in the background.",
+          buttons: ["Stop daemon and quit", "Just quit"],
+          defaultId: stopByDefault ? 0 : 1,
+          cancelId: 1,
+          noLink: true,
+          signal,
+        });
+        return response === 0;
+      },
     }),
   installAppUpdateOnQuit: async (signal) => {
     const settings = await getDesktopSettingsStore().get();
@@ -1059,7 +1082,6 @@ electronAutoUpdater.on("before-quit-for-update", () => {
   quitLifecycle.handleBeforeQuitForUpdate();
 });
 app.on("before-quit", quitLifecycle.handleBeforeQuit);
-registerExternalQuitSignals({ signals: process, quit: () => app.quit() });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

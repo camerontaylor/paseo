@@ -270,6 +270,7 @@ const StoredAgentSchema = z.strictObject({
 
 const WorkspaceScriptSchema = z.strictObject({
   scriptName: z.string(),
+  packageJson: z.object({ path: z.string(), script: z.string() }).optional(),
   type: z.enum(["script", "service"]),
   hostname: z.string(),
   port: z.number().int().positive().nullable(),
@@ -707,6 +708,7 @@ function serializeWorkspace(workspace: WorkspaceDescriptor): StoredWorkspace {
     diffStat: workspace.diffStat,
     scripts: workspace.scripts.map((script) => ({
       scriptName: script.scriptName,
+      packageJson: script.packageJson,
       type: script.type,
       hostname: script.hostname,
       port: script.port,

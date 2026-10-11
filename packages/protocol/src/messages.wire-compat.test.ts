@@ -3,7 +3,9 @@ import { z } from "zod";
 import {
   AgentSnapshotPayloadSchema,
   AgentTimelineItemPayloadSchema,
+  BranchSuggestionsResponseSchema,
   ServerInfoStatusPayloadSchema,
+  SessionInboundMessageSchema,
   SessionOutboundMessageSchema,
   WSHelloMessageSchema,
   WorkspaceSetupSnapshotSchema,
@@ -138,6 +140,70 @@ describe("wire schema compatibility", () => {
       version: null,
       features: { agentTurnIdentity: true },
     });
+  });
+
+  test("base ref mutation capability is optional for older daemons", () => {
+    const legacy = ServerInfoStatusPayloadSchema.parse({
+      status: "server_info",
+      serverId: "legacy-server",
+      features: {},
+    });
+    const capable = ServerInfoStatusPayloadSchema.parse({
+      status: "server_info",
+      serverId: "capable-server",
+      features: { checkoutBaseRefSet: true },
+    });
+
+    expect(legacy.features.checkoutBaseRefSet).toBeUndefined();
+    expect(capable.features.checkoutBaseRefSet).toBe(true);
+  });
+
+  test("base ref mutation uses a correlated request and response", () => {
+    const request = {
+      type: "checkout.base_ref.set.request",
+      cwd: "/repo",
+      baseRef: "develop",
+      requestId: "base-1",
+    };
+    const response = {
+      type: "checkout.base_ref.set.response",
+      payload: {
+        cwd: "/repo",
+        success: true,
+        baseRef: "develop",
+        error: null,
+        requestId: "base-1",
+      },
+    };
+
+    expect(SessionInboundMessageSchema.parse(request)).toEqual(request);
+    expect(SessionOutboundMessageSchema.parse(response)).toEqual(response);
+  });
+
+  test("branch suggestions accept optional qualified ref identities", () => {
+    const payload = {
+      branches: ["foo"],
+      branchDetails: [{ name: "foo", committerDate: 1, hasLocal: true, hasRemote: true }],
+      error: null,
+      requestId: "branches-1",
+    };
+    const legacy = { type: "branch_suggestions_response", payload };
+    const capable = {
+      type: "branch_suggestions_response",
+      payload: {
+        ...payload,
+        branchDetails: [
+          {
+            ...payload.branchDetails[0],
+            localRefs: ["refs/heads/foo", "refs/heads/origin/foo"],
+            remoteRefs: ["refs/remotes/origin/foo"],
+          },
+        ],
+      },
+    };
+
+    expect(BranchSuggestionsResponseSchema.parse(legacy)).toEqual(legacy);
+    expect(BranchSuggestionsResponseSchema.parse(capable)).toEqual(capable);
   });
 
   test("assistant timeline message ids are optional on the wire", () => {

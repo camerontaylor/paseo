@@ -2413,6 +2413,18 @@ export const CheckoutRenameBranchRequestSchema = z.object({
   requestId: z.string(),
 });
 
+/**
+ * Change the branch a checkout is compared with. Paseo-owned worktrees persist it in
+ * worktree.json; plain checkouts persist it in the repository's git config, where every
+ * comparison against that repository reads it.
+ */
+export const CheckoutBaseRefSetRequestSchema = z.object({
+  type: z.literal("checkout.base_ref.set.request"),
+  cwd: z.string(),
+  baseRef: z.string(),
+  requestId: z.string(),
+});
+
 export const StashSaveRequestSchema = z.object({
   type: z.literal("stash_save_request"),
   cwd: z.string(),
@@ -2446,6 +2458,16 @@ export const BranchSuggestionsRequestSchema = z.object({
 });
 
 export const GitHubSearchItemSchema = z.object({
+  checks: z
+    .array(
+      z.object({
+        name: z.string(),
+        status: z.string(),
+        url: z.string().nullable(),
+        workflow: z.string().optional(),
+      }),
+    )
+    .optional(),
   kind: z.enum(["issue", "pr"]),
   forge: z.string().optional(),
   number: z.number(),
@@ -3335,6 +3357,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   PullRequestTimelineRequestSchema,
   CheckoutSwitchBranchRequestSchema,
   CheckoutRenameBranchRequestSchema,
+  CheckoutBaseRefSetRequestSchema,
   StashSaveRequestSchema,
   StashPopRequestSchema,
   StashListRequestSchema,
@@ -3604,6 +3627,10 @@ export const ServerInfoStatusPayloadSchema = z
         workspaceSetupRun: z.boolean().optional(),
         // COMPAT(workspaceTerminals): added in v0.8.0, remove gate after 2027-09-05.
         workspaceTerminals: z.boolean().optional(),
+        // COMPAT(packageJsonScripts): added in fork v0.10.1, remove gate after 2027-04-01.
+        packageJsonScripts: z.boolean().optional(),
+        // COMPAT(checkoutBaseRefSet): added in fork v0.10.1, remove after 2027-09-30 when the supported daemon floor advertises it.
+        checkoutBaseRefSet: z.boolean().optional(),
         // COMPAT(checkoutForgeSetAutoMerge): added in v0.2.0-beta.1. Remove the
         // feature gate and checkoutGithubSetAutoMerge fallback after 2027-01-17
         // once the supported daemon floor is >= v0.2.0.
@@ -3624,6 +3651,8 @@ export const ServerInfoStatusPayloadSchema = z
         // and github_search fallback after 2027-01-17 once the supported daemon
         // floor is >= v0.2.0.
         forgeSearch: z.boolean().optional(),
+        // COMPAT(forgeSearchChecks): added in v0.10.1-fork, remove after 2027-09-30.
+        forgeSearchChecks: z.boolean().optional(),
         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
         daemonStatusRpc: z.boolean().optional(),
         // COMPAT(daemonConfigReload): added in v0.4.0, remove gate after 2027-02-14.
@@ -3955,6 +3984,7 @@ export const WorkspaceScriptHealthSchema = z.enum(["healthy", "unhealthy"]);
 
 export const WorkspaceScriptPayloadSchema = z.object({
   scriptName: z.string(),
+  packageJson: z.object({ path: z.string(), script: z.string() }).optional(),
   type: z.enum(["script", "service"]).optional().default("service"),
   hostname: z.string(),
   port: z.number().int().positive().nullable(),
@@ -5917,6 +5947,18 @@ export const CheckoutRenameBranchResponseSchema = z.object({
   }),
 });
 
+export const CheckoutBaseRefSetResponseSchema = z.object({
+  type: z.literal("checkout.base_ref.set.response"),
+  payload: z.object({
+    requestId: z.string(),
+    success: z.boolean(),
+    cwd: z.string(),
+    /** Display name of the base now in effect, null when the request failed. */
+    baseRef: z.string().nullable(),
+    error: CheckoutErrorSchema.nullable(),
+  }),
+});
+
 const StashEntrySchema = z.object({
   index: z.number().int().min(0),
   message: z.string(),
@@ -5976,6 +6018,8 @@ export const BranchSuggestionsResponseSchema = z.object({
           committerDate: z.number(),
           hasLocal: z.boolean().optional(),
           hasRemote: z.boolean().optional(),
+          localRefs: z.array(z.string()).optional(),
+          remoteRefs: z.array(z.string()).optional(),
           localAhead: z.number().int().nonnegative().optional(),
           localBehind: z.number().int().nonnegative().optional(),
         }),
@@ -7101,6 +7145,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   PullRequestTimelineResponseSchema,
   CheckoutSwitchBranchResponseSchema,
   CheckoutRenameBranchResponseSchema,
+  CheckoutBaseRefSetResponseSchema,
   StashSaveResponseSchema,
   StashPopResponseSchema,
   StashListResponseSchema,
@@ -7505,6 +7550,8 @@ export type CheckoutSwitchBranchRequest = z.infer<typeof CheckoutSwitchBranchReq
 export type CheckoutSwitchBranchResponse = z.infer<typeof CheckoutSwitchBranchResponseSchema>;
 export type CheckoutRenameBranchRequest = z.infer<typeof CheckoutRenameBranchRequestSchema>;
 export type CheckoutRenameBranchResponse = z.infer<typeof CheckoutRenameBranchResponseSchema>;
+export type CheckoutBaseRefSetRequest = z.infer<typeof CheckoutBaseRefSetRequestSchema>;
+export type CheckoutBaseRefSetResponse = z.infer<typeof CheckoutBaseRefSetResponseSchema>;
 export type StashSaveRequest = z.infer<typeof StashSaveRequestSchema>;
 export type StashSaveResponse = z.infer<typeof StashSaveResponseSchema>;
 export type StashPopRequest = z.infer<typeof StashPopRequestSchema>;

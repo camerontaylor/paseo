@@ -548,6 +548,9 @@ export const en = {
       },
       errors: {
         failedToListDirectory: "Failed to list directory",
+        pathUnavailable: "This path cannot be resolved from the conversation's working directory.",
+        outsideWorkspaceDirectory:
+          "This folder is outside the current workspace. Open it from its source workspace.",
         createFailed: "Failed to create entry",
         renameFailed: "Failed to rename entry",
         duplicateFailed: "Failed to duplicate entry",
@@ -765,6 +768,8 @@ export const en = {
       },
     },
     scripts: {
+      rootPackage: "Root",
+      searchPlaceholder: "Search scripts or packages…",
       title: "Scripts",
       actions: {
         chooseUrl: "Choose URL",
@@ -792,6 +797,8 @@ export const en = {
         direct: "Direct",
       },
       states: {
+        empty: "No scripts found",
+        noMatches: "No matching scripts",
         exitCode: "exit {{code}}",
         startFailed: "Failed to start {{scriptName}}",
         stopFailed: "Failed to stop {{scriptName}}",
@@ -1299,6 +1306,7 @@ export const en = {
     },
     workspace: {
       status: {
+        scriptRunning: "Script {{name}} running",
         serviceRunning: "Service {{name}} running",
         serviceUnhealthy: "Service {{name}} unhealthy",
         creating: "Creating...",
