@@ -1,68 +1,136 @@
-# Per-chat companion stream
+# Companion and global Stream
 
-The managed-agent panel offers **Chat / Stream / Find in chat**. Stream is a quiet review surface
-for the current conversation. The compact workspace tab menu also offers **View stream**.
-The internal `artifacts` view identifier is retained so existing client-local tab actions keep working.
+Every managed conversation has Chat / Stream / Find in chat. The sidebar also opens
+**Stream**, a private review feed across saved conversations on the app's paired hosts.
+It is not a public/social feed and does not start agents, run models, or replay transcripts.
 
-The design borrows OpenChat's chat-scoped Thoughts idea: keep questions and useful context alongside
-the conversation, with an obvious way back to it. V1 automatically captures moments; it does not
-add manual notes, message pinning, model-generated summaries, or another agent execution loop.
+Global Stream interleaves questions, decisions, outcomes, pins and file references newest
+first. Each card identifies its conversation, workspace path and host; opening it navigates
+to that source chat through the existing workspace navigation owner. Per-chat Stream and
+its file previews remain available. All / Needs a reply / Pinned, text search, host filtering,
+and an explicit archived-chat toggle narrow the global feed. Internal agents are excluded.
+The daemon reads its stored registry plus current live snapshots, so dormant conversations
+participate without loading their providers. Pages use stable timestamp + identity cursors.
+The app refreshes while the screen is focused and offers manual Refresh/Load more.
+Offline host caches remain visible with a stale-data notice; failures and unsupported hosts
+are named rather than silently treated as empty. Client caching is in-memory, not an offline
+archive. Paired hosts are combined on the client; no additional cloud copy is made.
 
-## Contents and meaning
+## Questions and pins
 
-- Structured question and permission events appear immediately. Plan approvals are decision cards.
-  A provider resolution marks the request accepted or declined. Failed/interrupted turns and session
-  recreation expire requests that can no longer be answered. Reading Stream never answers a request.
-- The final contiguous assistant response at a terminal turn becomes a review card. Intermediate tool
-  narration, tool logs, and reasoning do not become cards. A final prose response ending in a question
-  mark becomes a question card (code spans, fenced code, and URLs are excluded from this heuristic).
-  A subsequent user message labels a prose question **Reply sent**, not “resolved”. Structured
-  questions stay pending until the provider resolves them.
-- Completed, failed, and canceled turns have distinct outcome cards. **Turn ended** is a lifecycle
-  fact, not certification that the requested task succeeded. Failure/interruption includes the reason.
-- Existing file artifacts retain their cards, previews, and workspace-file open behavior. They still
-  represent the latest collected version of each path, not an immutable file history.
+All captured entries are retained, including completed questions and old outcomes. Persisting
+that history deliberately grows the agent record on disk. The 50-item bound applies only to
+wire snapshots and default read pages, never storage. Text remains bounded to **4,000**
+characters; Chat holds full context. Sending an unrelated message never changes another
+question's status. Open, Reviewed and legacy Reply sent questions remain unresolved until
+explicitly marked Done. Each item can be resolved or reopened independently, including from
+global Stream. Pin removal is explicit. A turn ending is not evidence its work shipped.
 
-Cards interleave by timestamp, newest first. **Needs a reply** filters unresolved questions and
-requests without changing the chat. **Read** expands text in place. **Reply in chat** returns to
-Chat's current bottom and its existing permission/composer controls; **Back to chat** preserves
-its reading position. The mounted chat and composer survive view switches. New entries do not
-switch tabs, focus the composer, prompt for approval, or add notification behavior.
+New pins and Q&A are refused past **100** manual entries — an explicit bound where nothing is
+silently dropped; edits to an existing pin stay possible at capacity. Captured entries never
+consume that budget.
 
-## Data and compatibility
+Agents should use **set_stream_question** for each needed input, with one stable questionId
+per item. Reusing it edits the same entry, and status=done resolves only that question. This
+tool defaults to the calling conversation and never approves a permission or sends a prompt.
+Users can also add a question in the per-chat queue or a note in Pinned. Saves await an
+acknowledged response, show failures, and preserve unsaved input after a failed save.
+An acknowledgement follows durable storage. Manual question and pin drafts, including
+artifact pins, retain their IDs across failed retries so a lost acknowledgement does not
+create a second entry. Cached cards cannot be changed while their host is offline or lacks
+the write capability.
 
-`packages/protocol/src/companion-stream.ts` owns the structural wire schema. The optional
-`companionEntries` agent snapshot field is persisted with the ordinary agent record. The server
-collector in `packages/server/src/server/agent/companion-stream.ts` sees accepted live events after
-coalescing; provider history replay does not invent past turn outcomes or pending decisions.
+When the host cannot persist a snapshot (ENOSPC/EIO), capture keeps entries in memory and
+marks the conversation's snapshot `captureDegraded`; the panel shows a warning until a newer
+successful write covers the failure. Nothing is evicted to make room and the session keeps
+running.
 
-Capture starts after upgrading the host. V1 retains the most recent 50 moments with at most 4,000
-characters per entry. Longer content is explicitly marked as an excerpt; full context remains in
-Chat. The bounded snapshot is independent of how much chat history the phone has paged in.
-It survives reconnects and host reloads; an unfinished final response is not yet a captured moment.
+Automatic capture is deliberately limited: final prose lines ending in a question mark,
+and bullets beneath explicit English headings such as "Still need your input" or "Open
+questions", become separately identified questions. Recognition ignores code and URLs;
+captured prose preserves inline code and URL context. Fenced code and standalone code or
+URL examples are excluded. This syntax heuristic is not a semantic inventory of every
+unanswered question. The explicit tool is the reliable path, including other languages. No
+historical transcript backfill is claimed. Existing retained Reply sent questions become
+visible again; previously evicted content cannot be reconstructed by this change.
 
-`server_info.features.companionStreamPortV1` gates the new feature once in the panel. Older hosts show an
-upgrade message while preserving their existing file-artifact view. The client does not reconstruct
-an approximate stream from legacy RPCs. Cached cards remain reviewable while disconnected, with a
-notice that pending statuses may be stale.
+Structured provider questions and permission requests are captured immediately. Provider
+resolution updates their status. When a provider request expires on interruption/recreation,
+tool/plan approvals expire and cannot be granted from Stream. Needed input from an expired
+question request remains as a manual open question that can be revisited in Chat.
+
+Codex foreground turn IDs include a fresh UUID. A recreated provider cannot restart its
+counter at the same ID and suppress new Stream outcomes. Duplicate delivery of the same turn
+still deduplicates. This does not repair previously missing historical cards.
+
+## Durable ask checklist
+
+Per-chat Stream opens on **Checklist**, showing unresolved explicitly tracked asks first.
+Use **Show completed too** to include completed work, and **Load more** to read older pages.
+Queue and Pinned retain their existing meanings. Refresh and reconnect reread durable records;
+offline pages remain readable with a stale-data notice. Cached data is not an offline archive.
+
+Use the existing agent MCP interface:
+
+1. `set_stream_ask` with a stable `askId`, `expectedRevision: 0`, the request `text`, and an
+   `ask` object containing `state`, `remaining`, and `evidence` creates an ask.
+2. `list_stream_asks` defaults to the caller's conversation. Follow `nextCursor` until null;
+   use `unresolvedOnly: true` when reviewing outstanding work. Read the revision before editing.
+3. Reuse the same ID and current `expectedRevision` with the full updated ask. States are
+   `open`, `in_progress`, `blocked`, and `done`. Repeating an identical write after a lost
+   acknowledgement is safe; a stale differing update returns a conflict rather than overwriting.
+4. Record a blocker in `remaining`. Done requires nonempty evidence, empty remaining work,
+   and every supplied subtask done. Reopen or correct the same ask with a new revision.
+
+The ask belongs to its source conversation. Include `sourceMessageId` when known and
+`delegatedAgentId` for a managed Paseo child; the card opens that session. Provider-native child
+IDs are not Paseo IDs and must not be passed as delegatedAgentId. Optional subtasks each have a
+stable ID, text, and explicit done boolean. A partial task remains in progress. No percentage is
+invented when subtasks are absent. Evidence is an agent/user assertion, not independent verification.
+
+Orchestrators should create one ask per request before delegation, keep IDs on the parent
+conversation, and revise each ask when evidence or blockers change. Read unresolved asks on
+resume. This is an explicit tool contract, not automatic semantic extraction: natural-language
+requests are not guaranteed to be inventoried unless the orchestrator records them. No background
+model, paid API, agent execution loop, provider-history edit, or transcript backfill is added.
+Automatic question cards remain distinct from explicit asks. Neither a turn ending, a child
+becoming idle, nor all subtasks being checked automatically completes an ask.
+
+Users can add an open ask in Checklist, reopen it or mark it in progress. Detailed progress,
+blockers, corrections and completion evidence use `set_stream_ask` in v1; ask Done cannot bypass
+that evidence contract through the old question status buttons. Completed asks stay accessible.
+This change preserves history present at upgrade and subsequent captured entries. It does not
+recover previously pruned records. Original provider history remains untouched.
+
+Persistence remains in the existing atomic agent JSON record. Reads page the response; the
+host still loads the complete per-agent metadata and sorts matching feed rows in memory. This
+avoids a storage migration but is not a disk-indexed archive for unlimited scale. Entry excerpts
+remain 4,000 characters. A refresh restarts pagination so state changes during browsing are visible.
+
+## Protocol and ownership
+
+`packages/protocol/src/companion-stream.ts` defines the existing entry shapes;
+`global-stream.ts` defines additive `stream.list.request/response` and
+`stream.entry.update.request/response` RPCs. `server_info.features.globalStream` gates global
+reads and acknowledged writes; `trackedAsks` gates ask mutations and the per-chat checklist.
+Older hosts need updating. The carried `agent.companion.update_entry.request/response` mutation
+RPC remains accepted for old clients. Existing entry kinds/statuses and snapshot fields are
+unchanged. Ask data is optional metadata on the existing question shape, with open/done
+mirrored for older readers; no new entry kind or legacy status is emitted. New list scoping and
+mutation fields are additive and only used on capable hosts. New response types are sent only
+when requested. Read/write permissions match other workspace metadata operations. Mutation
+serialization prevents concurrent question/pin writes from replacing each other, and missing
+items return errors rather than silent success.
+
+The UI reuses Paseo theme tokens, headers, host picker, buttons and existing Stream cards.
+No dependency update or new inference provider is needed.
 
 ## Verification
 
-Focused tests cover collection/deduplication, split response chunks, agent isolation, question and
-permission transitions, interruption, response bounds, coalescer integration, stored/wire snapshot
-round-trips, old snapshot compatibility, file/moment ordering, pending filtering, and locale parity.
-
-For a prepared isolated phone build, verify the following without relaunching a shared app:
-
-1. Open a managed chat in compact layout; Chat, Stream and Find remain visible and tappable at large
-   text sizes. Stream is also available from the workspace tab menu.
-2. Leave a composer draft, scroll up in Chat, open Stream, expand a response and return. The draft
-   and reading position remain. New incoming cards do not navigate or submit a response.
-3. Trigger a structured question or plan approval. It appears under Needs a reply. Reply in chat
-   reaches the existing controls; accepting/declining updates the same card rather than duplicating it.
-4. Finish, fail, or interrupt a turn; review the distinct outcome and generated file cards. Open a
-   Markdown/image artifact and return through the existing workspace navigation.
-5. Disconnect and reconnect. Cached cards remain visible; reconnection refreshes status. Reopen the
-   conversation and verify saved moments. An older host shows its upgrade message and file artifacts.
-
-Provider-owned child timelines remain separate read-only panels, as before.
+Collector, provider, manager, protocol and feed tests cover retention, unrelated replies,
+per-item status, explicit lists, ID collisions, duplicate outcomes, pagination, filters,
+internal/archived visibility and snapshot compatibility. The browser suite exercises the
+connected global feed and the durable checklist at desktop/phone widths, mutations,
+revision conflicts and source-chat navigation. Browser phone-width evidence is not native
+iPhone acceptance. Installing a new shared daemon must follow the existing coordinated
+handoff procedure; do not restart the daemon hosting active agents from a coding session.
