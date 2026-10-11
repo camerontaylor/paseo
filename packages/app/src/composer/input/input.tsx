@@ -147,6 +147,12 @@ export interface MessageInputProps {
   voiceAgentId?: string;
   /** When true and there's sendable content, calls onQueue instead of onSubmit */
   isAgentRunning?: boolean;
+  /** Daemon supports voice attached while the agent works; voice may start mid-turn. */
+  supportsVoiceConcurrentInput?: boolean;
+  /** True while the agent cancellation issued from the voice overlay is in flight. */
+  isCancellingAgent?: boolean;
+  /** Explicit interrupt for the running agent, surfaced separately from Stop voice. */
+  onCancelAgent?: () => void;
   /** Controls what the default send action (Enter, send button, dictation) does when the agent is
    *  running. "interrupt" and "steer" send immediately, "queue" queues. Required so the default
    *  lives only in DEFAULT_CLIENT_SETTINGS. */
@@ -553,6 +559,9 @@ function MessageInputOverlay({
   onRetryFailedRecording,
   onDiscardFailedRecording,
   onRealtimeVoiceStop,
+  isAgentRunning,
+  isCancellingAgent,
+  onCancelAgent,
 }: {
   showDictationOverlay: boolean;
   showRealtimeOverlay: boolean;
@@ -560,6 +569,8 @@ function MessageInputOverlay({
     | {
         isMuted: boolean;
         isVoiceSwitching: boolean;
+        failure: import("@/voice/voice-failure").VoiceFailureKind | null;
+        lastInputStatus: import("@/voice/voice-runtime").VoiceInputStatus | null;
         toggleMute: () => void;
       }
     | null
@@ -576,6 +587,9 @@ function MessageInputOverlay({
   onRetryFailedRecording: () => void;
   onDiscardFailedRecording: () => void;
   onRealtimeVoiceStop: () => void;
+  isAgentRunning?: boolean;
+  isCancellingAgent?: boolean;
+  onCancelAgent?: () => void;
 }) {
   if (showDictationOverlay) {
     return (
@@ -599,8 +613,13 @@ function MessageInputOverlay({
       <RealtimeVoiceOverlay
         isMuted={voice.isMuted}
         isSwitching={voice.isVoiceSwitching}
+        failure={voice.failure}
+        lastInputStatus={voice.lastInputStatus}
+        isAgentRunning={isAgentRunning}
+        isCancellingAgent={isCancellingAgent}
         onToggleMute={voice.toggleMute}
         onStop={onRealtimeVoiceStop}
+        onCancelAgent={onCancelAgent}
       />
     );
   }
@@ -840,6 +859,7 @@ interface ToggleRealtimeVoiceContext {
   isConnected: boolean;
   disabled: boolean;
   isAgentRunning: boolean;
+  supportsVoiceConcurrentInput: boolean;
   handleStopRealtimeVoice: () => Promise<unknown> | void;
   toast: { error: (msg: string) => void };
   interruptBeforeVoiceMessage: string;
@@ -854,7 +874,7 @@ function toggleRealtimeVoiceImpl(ctx: ToggleRealtimeVoiceContext): void {
     void ctx.handleStopRealtimeVoice();
     return;
   }
-  if (ctx.isAgentRunning) {
+  if (ctx.isAgentRunning && !ctx.supportsVoiceConcurrentInput) {
     ctx.toast.error(ctx.interruptBeforeVoiceMessage);
     return;
   }
@@ -1070,6 +1090,9 @@ interface ResolvedMessageInputProps {
   voiceServerId: string | undefined;
   voiceAgentId: string | undefined;
   isAgentRunning: boolean;
+  supportsVoiceConcurrentInput: boolean;
+  isCancellingAgent: boolean | undefined;
+  onCancelAgent: (() => void) | undefined;
   defaultSendBehavior: "interrupt" | "steer" | "queue";
   onQueue: ((payload: MessagePayload) => void) | undefined;
   onSubmitLoadingPress: (() => void) | undefined;
@@ -1117,6 +1140,9 @@ function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInpu
     voiceServerId: props.voiceServerId,
     voiceAgentId: props.voiceAgentId,
     isAgentRunning: props.isAgentRunning ?? false,
+    supportsVoiceConcurrentInput: props.supportsVoiceConcurrentInput ?? false,
+    isCancellingAgent: props.isCancellingAgent,
+    onCancelAgent: props.onCancelAgent,
     defaultSendBehavior: props.defaultSendBehavior,
     onQueue: props.onQueue,
     onSubmitLoadingPress: props.onSubmitLoadingPress,
@@ -1172,6 +1198,9 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       voiceServerId,
       voiceAgentId,
       isAgentRunning,
+      supportsVoiceConcurrentInput,
+      isCancellingAgent,
+      onCancelAgent,
       defaultSendBehavior,
       onQueue,
       onSubmitLoadingPress,
@@ -1461,9 +1490,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         await stopRealtimeVoice({
           voice,
           isRealtimeVoiceForCurrentAgent,
-          isAgentRunning,
-          client,
-          voiceAgentId,
         });
       } catch (error) {
         console.error("[MessageInput] Failed to stop realtime voice", error);
@@ -1472,7 +1498,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           toast.error(message);
         }
       }
-    }, [client, isAgentRunning, isRealtimeVoiceForCurrentAgent, toast, voice, voiceAgentId]);
+    }, [isRealtimeVoiceForCurrentAgent, toast, voice]);
 
     const handleToggleRealtimeVoiceShortcut = useCallback(() => {
       toggleRealtimeVoiceImpl({
@@ -1482,6 +1508,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         isConnected,
         disabled,
         isAgentRunning,
+        supportsVoiceConcurrentInput,
         handleStopRealtimeVoice,
         toast,
         interruptBeforeVoiceMessage: t("composer.voice.interruptBeforeVoice"),
@@ -1491,6 +1518,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       handleStopRealtimeVoice,
       isAgentRunning,
       isConnected,
+      supportsVoiceConcurrentInput,
       t,
       toast,
       voice,
@@ -1901,6 +1929,9 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
             onRetryFailedRecording={handleRetryFailedRecording}
             onDiscardFailedRecording={handleDiscardFailedRecording}
             onRealtimeVoiceStop={handleRealtimeVoiceStop}
+            isAgentRunning={isAgentRunning}
+            isCancellingAgent={isCancellingAgent}
+            onCancelAgent={onCancelAgent}
           />
         </View>
       </View>

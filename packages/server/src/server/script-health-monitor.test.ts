@@ -68,6 +68,7 @@ function createStubTerminalManager(
         subscribe: () => () => {},
         onExit: () => () => {},
         onCommandFinished: () => () => {},
+        setActivity: () => {},
         getState: () => ({
           rows: 1,
           cols: 1,
