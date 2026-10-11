@@ -4,7 +4,7 @@ Authority: Cameron requested "Resume, deploy work that is available." See [execu
 
 ## Current delivery
 
-Publish A1 ACP diagnostics only, subject to exact-candidate checks and Sol's final release verdict. Hold C1 and C2 from publication while the new browser failures are investigated.
+A1 ACP diagnostics is published as `0.11.2-fork.2`. All seven `@camerontaylor/paseo-*` packages expose that version through npm `latest`; the GitHub release has all seven tarballs. Hold C1 and C2 from publication while their new browser failures are investigated.
 
 | Input | Pin |
 | --- | --- |
@@ -29,8 +29,10 @@ The candidate changes four A1 files only, 48 additions and 3 deletions. Its ACP 
 - [x] Finish exact-SHA remote CI `38153628787`: completed with five failed jobs, not green. Packaging dry-run `38153632643` passed all seven pack gates, staging `0.11.2-fork.2` without publishing.
 - [x] Classify every failure against current-release baseline. Sol accepts the reproduced baseline failures and observed flake differences as nonblocking for A1-only publication, not as a green matrix.
 - [x] Obtain Sol's final release verdict: **ADVANCE / APPROVE** exact `929d7427163474f5c0cbfc45192436d3de7540c6`. [Quoted ruling](logs/A1-release-verdict.md) explicitly accepts reproduced baseline failures and observed flake severity only for this narrow fork publication.
-- [x] Recheck remote `mine`, then fast-forward without force: `d62ed60c8` remained unchanged and advanced to exact `929d74271` on 2026-10-12. Automatic publication run [38156081965](https://github.com/camerontaylor/paseo/actions/runs/38156081965) is in progress.
-- [ ] Verify publication and registry version.
+- [x] Recheck remote `mine`, then fast-forward without force: `d62ed60c8` remained unchanged and advanced to exact `929d74271` on 2026-10-12. Automatic publication run [38156081965](https://github.com/camerontaylor/paseo/actions/runs/38156081965) completed successfully.
+- [x] Verify publication and registry version: workflow success at exact `929d74271`; all seven packages and `latest` verified as `0.11.2-fork.2` on 2026-10-12. Tag `fork/v0.11.2-fork.2` resolves directly to the candidate; [GitHub release](https://github.com/camerontaylor/paseo/releases/tag/fork/v0.11.2-fork.2) is published with seven uploaded tarballs.
+
+Publication evidence: `/home/ctaylor/.jcode/scratch/a1-publication.log` and `a1-registry-verification.log`. The trusted publisher cannot manage the optional npm `fork` dist-tag and emitted expected 403 warnings; `latest` and explicit versions are verified. Do not claim `@fork` was updated. This delivery publishes packages only; no production daemon was installed, restarted or activated.
 
 ## A1-only remote evidence
 
