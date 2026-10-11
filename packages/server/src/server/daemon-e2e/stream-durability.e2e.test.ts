@@ -375,4 +375,172 @@ describe("stream durability daemon", () => {
       await fresh?.close().catch(() => undefined);
     }
   });
+
+  test("two clients: a stale differing ask update conflicts and never replaces the winner", async () => {
+    const agent = await ctx.client.createAgent({ provider: "codex", cwd: "/tmp" });
+    const clientB = new DaemonClient({ url: `ws://127.0.0.1:${ctx.daemon.port}/ws` });
+    await clientB.connect();
+    await clientB.fetchAgents({ subscribe: {} });
+    const readAsk = async (client: DaemonClient) => {
+      const page = await client.listGlobalStream({ agentId: agent.id, asksOnly: true });
+      const row = page.rows.find(
+        (candidate): candidate is StreamRow & { item: { kind: "entry" } } =>
+          candidate.item.kind === "entry" && candidate.item.entry.id === "ask:deploy",
+      );
+      const ask = row?.item.entry.ask;
+      if (!ask) throw new Error("ask row missing from the stream page");
+      return ask;
+    };
+    try {
+      await ctx.client.updateStreamEntry({
+        agentId: agent.id,
+        action: "set_ask",
+        entryId: "deploy",
+        expectedRevision: 0,
+        text: "Deploy the release",
+        ask: { state: "open", remaining: "", evidence: "" },
+      });
+      // Both clients read one revision.
+      const readA = await readAsk(ctx.client);
+      const readB = await readAsk(clientB);
+      expect(readA.revision).toBe(1);
+      expect(readB.revision).toBe(1);
+
+      // A wins with a differing update at that revision.
+      await ctx.client.updateStreamEntry({
+        agentId: agent.id,
+        action: "set_ask",
+        entryId: "deploy",
+        expectedRevision: readA.revision,
+        text: "Deploy the release",
+        ask: { state: "in_progress", remaining: "Ship it", evidence: "Draft ready" },
+      });
+
+      // B's differing stale update at the same revision conflicts.
+      await expect(
+        clientB.updateStreamEntry({
+          agentId: agent.id,
+          action: "set_ask",
+          entryId: "deploy",
+          expectedRevision: readB.revision,
+          text: "Deploy the release",
+          ask: { state: "done", remaining: "", evidence: "B wins" },
+        }),
+      ).rejects.toThrow(/Ask revision conflict/);
+
+      // Persisted state is A's winner on both live connections.
+      const winner = {
+        state: "in_progress",
+        remaining: "Ship it",
+        evidence: "Draft ready",
+        revision: 2,
+      };
+      expect(await readAsk(ctx.client)).toMatchObject(winner);
+      expect(await readAsk(clientB)).toMatchObject(winner);
+
+      // A fresh connection reads the same winner.
+      const clientC = new DaemonClient({ url: `ws://127.0.0.1:${ctx.daemon.port}/ws` });
+      await clientC.connect();
+      try {
+        await clientC.fetchAgents({ subscribe: {} });
+        expect(await readAsk(clientC)).toMatchObject(winner);
+      } finally {
+        await clientC.close();
+      }
+    } finally {
+      await clientB.close();
+    }
+  });
+
+  test("degraded capture: ENOSPC/EIO refuse the ack, keep capture and the session, then recover", async () => {
+    const agent = await ctx.client.createAgent({ provider: "codex", cwd: "/tmp" });
+    await ctx.client.updateStreamEntry({
+      agentId: agent.id,
+      action: "add_question",
+      entryId: "kept",
+      text: "Kept across the fault",
+    });
+    // Fault injection at the daemon's own persistence boundary: wrap the
+    // isolated instance's storage methods; restore them in finally so nothing
+    // leaks across tests (no global monkeypatching).
+    const storage = ctx.daemon.daemon.agentStorage;
+    const originalApplySnapshot = storage.applySnapshot;
+    const originalUpsert = storage.upsert;
+    let fault: NodeJS.ErrnoException | null = null;
+    storage.applySnapshot = (async (...args: Parameters<typeof originalApplySnapshot>) => {
+      if (fault) throw fault;
+      return originalApplySnapshot.apply(storage, args);
+    }) as typeof storage.applySnapshot;
+    storage.upsert = (async (...args: Parameters<typeof originalUpsert>) => {
+      if (fault) throw fault;
+      return originalUpsert.apply(storage, args);
+    }) as typeof storage.upsert;
+    const streamTexts = async () => {
+      const page = await ctx.client.listGlobalStream({ agentId: agent.id });
+      return page.rows.flatMap((row) => (row.item.kind === "entry" ? [row.item.entry.text] : []));
+    };
+    try {
+      fault = Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
+      await expect(
+        ctx.client.updateStreamEntry({
+          agentId: agent.id,
+          action: "add_question",
+          entryId: "during-enospc",
+          text: "Refused by ENOSPC",
+        }),
+      ).rejects.toThrow(/No space left on device/);
+      // No eviction: prior capture is still served.
+      expect(await streamTexts()).toContain("Kept across the fault");
+      // Degradation is visible on the wire.
+      const degraded = await ctx.client.waitForAgentUpsert(
+        agent.id,
+        (snapshot) => snapshot.captureDegraded === true,
+        15000,
+      );
+      expect(degraded.captureDegraded).toBe(true);
+
+      // EIO is treated the same way.
+      fault = Object.assign(new Error("I/O error"), { code: "EIO" });
+      await expect(
+        ctx.client.updateStreamEntry({
+          agentId: agent.id,
+          action: "add_question",
+          entryId: "during-eio",
+          text: "Refused by EIO",
+        }),
+      ).rejects.toThrow(/I\/O error/);
+      expect(await streamTexts()).toContain("Kept across the fault");
+
+      // The failed capture write does not take the session down: the agent is
+      // still live and idle while the fault is active. (A further client turn
+      // cannot run yet because message delivery is itself durable and refuses
+      // the same failed storage — the correct behavior.)
+      const listed = await ctx.client.fetchAgents({ subscribe: {} });
+      const live = listed.entries.find((entry) => entry.agent.id === agent.id)?.agent;
+      expect(live?.status).toBe("idle");
+
+      // Recovery: once storage works, the same session completes a further turn
+      // and capture writes again, clearing the degraded flag.
+      fault = null;
+      await ctx.client.sendMessage(agent.id, "Continue the work");
+      const finished = await ctx.client.waitForFinish(agent.id, 60000);
+      expect(finished.status).toBe("idle");
+      await ctx.client.updateStreamEntry({
+        agentId: agent.id,
+        action: "add_question",
+        entryId: "after-recovery",
+        text: "After recovery",
+      });
+      const recovered = await ctx.client.waitForAgentUpsert(
+        agent.id,
+        (snapshot) => snapshot.captureDegraded !== true,
+        15000,
+      );
+      expect(recovered.captureDegraded).toBeUndefined();
+      expect(await streamTexts()).toContain("After recovery");
+    } finally {
+      storage.applySnapshot = originalApplySnapshot;
+      storage.upsert = originalUpsert;
+    }
+  }, 60000);
 });
