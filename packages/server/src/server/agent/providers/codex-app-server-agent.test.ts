@@ -5882,6 +5882,9 @@ describe("Codex app-server provider", () => {
       type: "permission_resolved",
       provider: "codex",
       requestId: pendingPlan!.id,
+      // C2-GATE-EXC-2: superseding a pending plan is lifecycle expiry, so the
+      // event carries disposition "expired" (codex-app-server-agent.ts:4841).
+      disposition: "expired",
       resolution: {
         behavior: "deny",
         message: "Dismissed by a new prompt",
