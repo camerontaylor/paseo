@@ -563,10 +563,14 @@ export function selectProjectedTimelinePage(input: {
   direction: TimelineLimitDirection;
   cursorSeq?: number;
   limit?: number;
+  // Optional pre-projected entries so byte-bounded paging can project the store
+  // once and reuse it across every candidate limit instead of re-projecting.
+  projectedEntries?: TimelineProjectionEntry[];
 }): ProjectedTimelinePageSelection {
   const limit = input.limit === undefined ? 0 : Math.max(0, Math.floor(input.limit));
   const bounds = input.bounds ?? getTimelineBounds(input.rows);
-  const projectedAll = projectTimelineRows({ rows: input.rows, mode: "projected" });
+  const projectedAll =
+    input.projectedEntries ?? projectTimelineRows({ rows: input.rows, mode: "projected" });
   if (!bounds) {
     return {
       entries: [],
