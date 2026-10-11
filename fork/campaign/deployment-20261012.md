@@ -26,11 +26,24 @@ The candidate changes four A1 files only, 48 additions and 3 deletions. Its ACP 
 - [x] Assemble and preserve the A1-only candidate.
 - [x] Obtain narrowed-release preflight: Sol approved exact candidate `929d74271`; publication remains pending. C1/C2 publication is explicitly held for dedicated browser investigation.
 - [x] Finish local build, format, typecheck, lint, and full affected files: all passed on `929d74271`; ACP 143/143, creation 12/12, diagnostics 15/15. Typecheck ran after fresh server declarations.
-- [ ] Finish exact-SHA remote CI. Packaging dry-run `38153632643` passed all seven pack gates, staging `0.11.2-fork.2` without publishing.
-- [ ] Classify every failure against current-release baseline.
-- [ ] Obtain Sol's final release verdict.
-- [ ] Recheck remote `mine`, then fast-forward without force.
+- [x] Finish exact-SHA remote CI `38153628787`: completed with five failed jobs, not green. Packaging dry-run `38153632643` passed all seven pack gates, staging `0.11.2-fork.2` without publishing.
+- [x] Classify every failure against current-release baseline. Sol accepts the reproduced baseline failures and observed flake differences as nonblocking for A1-only publication, not as a green matrix.
+- [x] Obtain Sol's final release verdict: **ADVANCE / APPROVE** exact `929d7427163474f5c0cbfc45192436d3de7540c6`. [Quoted ruling](logs/A1-release-verdict.md) explicitly accepts reproduced baseline failures and observed flake severity only for this narrow fork publication.
+- [x] Recheck remote `mine`, then fast-forward without force: `d62ed60c8` remained unchanged and advanced to exact `929d74271` on 2026-10-12. Automatic publication run [38156081965](https://github.com/camerontaylor/paseo/actions/runs/38156081965) is in progress.
 - [ ] Verify publication and registry version.
+
+## A1-only remote evidence
+
+CI `38153628787` at exact `929d74271` completed with five failed jobs. Makemake, Linux server, macOS file observation, app, SDK, all CLI shards, relay, both desktop platforms, typecheck, lint and formatting passed. The failing Windows job has exactly the baseline nested-package-script temp-path mismatch. All ten final browser-failure cases appear in the independently run current-release baseline:
+
+| Shard | Cases | Baseline comparison |
+| --- | --- | --- |
+| 1 | First-prompt hydration, slow upward scrolling | Hydration also hard-fails at baseline. The identical scrolling assertion fails baseline first attempt and passes retry, but fails both candidate attempts. Preserve this severity difference as a limitation. |
+| 2 | Chat find | Same duplicate `Prompt number 5` locator failure. |
+| 3 | Pinned prompt, archived side conversation | Same hard failures. Provider-refresh age flakes then passes in both runs. |
+| 4 | Four viewed-timeline cases, nested package scripts | Same five hard failures. Candidate additionally flakes on old-daemon prompt visibility, then passes retry. That flow runs published daemon 0.2.5 and unchanged app code, not the modified A1 server. |
+
+The baseline's bottom-sheet and creation-idempotency flakes passed in this candidate. All app/desktop files and worktree-bootstrap implementation/tests are byte-identical to baseline. Full logs: `/home/ctaylor/.jcode/scratch/a1-ci-failed.log`, `partial-deploy-baseline-failed.log`. Sol inspected these logs and approved this narrow release despite inherited failures. The scrolling instability and newly observed old-daemon retry-pass remain limitations. Broad CI is failed.
 
 ## Held three-package candidate
 
@@ -61,7 +74,7 @@ One isolated DeepSeek worker may make separate package commits on `fork/refresh-
 
 ## Campaign continuation and safety
 
-A2 worker `3af10474-80e6-4085-8371-62a4d4b7b062`, DeepSeek V4.1 Flash via Jcode, obtained read-only s0 ADVANCE on frozen backend. Implementation is held during release checks and release-regression work. C2 follow-up worker `ab0168d1` is investigating both held browser failures read-only from source and logs, with no local builds/tests or edits authorized. Keep one implementation worker active and local builds/tests serial.
+A2 worker `3af10474-80e6-4085-8371-62a4d4b7b062`, DeepSeek V4.1 Flash via Jcode, obtained read-only s0 ADVANCE on frozen backend. A2 implementation stays held. Worker `ab0168d1` completed source/log-only diagnosis; sole active implementation worker `99388f8a-3c03-4b92-817b-9f5e46f6351b` is on isolated branch `fork/refresh-browser-repair-20261012`, workspace `wks_7dfe3f6b186c871b`. Local release validation has completed, so its serial install/build and targeted checks are released. Keep one implementation worker active and local builds/tests serial.
 
 The coordinator resumed as Jcode on uranus. Persistent Sol `3f2c7ea5` resumed with its existing context. No frozen campaign ref was repinned. Current custom `a4d6922874fb68fa5cab2ffa946a80baf8c441e4` belongs only to release-history investigation, not campaign baskets.
 
