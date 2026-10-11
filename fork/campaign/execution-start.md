@@ -81,3 +81,7 @@ Deviation recorded: during C2 s4 browser acceptance the GLM worker ran `sudo apt
 ### Carry-test exception C2-GATE-EXC-1 (2026-10-11)
 
 Coordinator basket run found `codex-app-server-agent.test.ts` "discovers a MultiAgentV2 child from a legacy-only lifecycle notification" failing on C2 (`codex-turn-0` expected; C2 s4 emits `codex-turn-<uuid>`, an approved s4 behavior). Sol approved the fix route for coordinator sign-off: keep production UUIDs; adapt only the two `turnId` assertions (`:4194,4204`) to the observed foreground turn id with child/spawn correlation asserted; no production id factory. **Signed off by the Opus 5.5 coordinator**, not Cameron: Sol approved it, it is the direct consequence of an already-approved behavior, and the handover reserves Cameron for exceptions the advisor will not sign. Cameron can overturn it.
+
+### Carry-test exception C2-GATE-EXC-2 (2026-10-11)
+
+`codex-app-server-agent.test.ts` "dismisses a pending synthetic plan approval after a new prompt is accepted" (`:5881–5889`) lacks `disposition: "expired"`, which approved s4 expiry semantics now emit (`codex-app-server-agent.ts:4841`). Sol: APPROVE for coordinator sign-off — add only that field; preserve the empty-pending-permissions assertion, request identity, denial behavior, dismissal message; production unchanged. **Signed off by the Opus 5.5 coordinator** on the same basis as EXC-1.
