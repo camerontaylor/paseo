@@ -42,11 +42,12 @@ describe("resolveSidebarNavItems", () => {
       { key: "new-workspace", visible: true },
       { key: "history", visible: true },
       { key: "search", visible: true },
+      { key: "stream", visible: true },
       { key: "schedules", visible: true },
       { key: kanbanKey, visible: true },
       { key: notesKey, visible: true },
     ]);
-    expect(items[4]).toEqual({ kind: "plugin", key: kanbanKey, group: kanban, visible: true });
+    expect(items[5]).toEqual({ kind: "plugin", key: kanbanKey, group: kanban, visible: true });
     expect(items[0]).toEqual({
       kind: "builtin",
       key: "new-workspace",
@@ -72,6 +73,7 @@ describe("resolveSidebarNavItems", () => {
       { key: "new-workspace", visible: false },
       { key: "history", visible: true },
       { key: "search", visible: true },
+      { key: "stream", visible: true },
       { key: notesKey, visible: true },
     ]);
   });
@@ -91,6 +93,7 @@ describe("resolveSidebarNavItems", () => {
       "history",
       "new-workspace",
       "search",
+      "stream",
       "schedules",
     ]);
   });
@@ -109,6 +112,7 @@ describe("resolveSidebarNavItems", () => {
       { key: "history", visible: false },
       { key: "new-workspace", visible: true },
       { key: "search", visible: true },
+      { key: "stream", visible: true },
       { key: "schedules", visible: true },
     ]);
   });
@@ -138,6 +142,7 @@ describe("setSidebarNavItemVisible", () => {
       { key: "new-workspace", visible: true },
       { key: "history", visible: true },
       { key: "search", visible: false },
+      { key: "stream", visible: true },
       { key: "schedules", visible: true },
       { key: kanbanKey, visible: true },
     ]);
@@ -161,6 +166,7 @@ describe("setSidebarNavItemVisible", () => {
       { key: "history", visible: false },
       { key: "new-workspace", visible: true },
       { key: "search", visible: true },
+      { key: "stream", visible: true },
       { key: "schedules", visible: true },
     ]);
   });
@@ -187,6 +193,7 @@ describe("setSidebarNavItemVisible", () => {
       { key: "history", visible: false },
       { key: "search", visible: true },
       { key: "schedules", visible: true },
+      { key: "stream", visible: true },
     ]);
     expect(
       summarize(
@@ -226,6 +233,7 @@ describe("moveSidebarNavItem", () => {
       "new-workspace",
       "search",
       "history",
+      "stream",
       "schedules",
       kanbanKey,
     ]);
@@ -238,6 +246,7 @@ describe("moveSidebarNavItem", () => {
       "new-workspace",
       "history",
       "search",
+      "stream",
       kanbanKey,
       "schedules",
     ]);

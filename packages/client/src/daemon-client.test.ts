@@ -1038,6 +1038,7 @@ test("advertises client capabilities in hello", async () => {
       terminal_reflowable_snapshot: true,
       timeline_notifications: true,
       companion_stream_port_v1: true,
+      global_stream: true,
       durable_agent_queue: true,
       durable_voice_input_v1: true,
       plugin_timeline_items: true,
