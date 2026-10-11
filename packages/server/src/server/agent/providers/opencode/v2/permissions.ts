@@ -12,6 +12,8 @@ export class SessionPermissions {
   private readonly pending = new Map<string, AgentPermissionRequest>();
   private readonly permissionOwners = new Map<string, string>();
   private readonly forms = new Map<string, FormInfo>();
+  private readonly expiring = new Set<string>();
+  private readonly cancelling = new Set<string>();
   constructor(
     private readonly getClient: () => V2Api,
     private readonly id: string,
@@ -25,9 +27,12 @@ export class SessionPermissions {
       });
     }
     if (event.type === "form.replied" || event.type === "form.cancelled") {
-      this.resolvePending(event.data.id, {
-        behavior: event.type === "form.cancelled" ? "deny" : "allow",
-      });
+      this.resolvePending(
+        event.data.id,
+        { behavior: event.type === "form.cancelled" ? "deny" : "allow" },
+        this.expiring.has(event.data.id) ||
+          (event.type === "form.cancelled" && !this.cancelling.has(event.data.id)),
+      );
     }
   }
   list() {
@@ -42,8 +47,7 @@ export class SessionPermissions {
   async respondToPermission(requestId: string, response: AgentPermissionResponse) {
     const form = this.forms.get(requestId);
     if (form) {
-      if (response.behavior === "deny")
-        await this.getClient().session.form.cancel({ sessionID: form.sessionID, formID: form.id });
+      if (response.behavior === "deny") await this.cancelForm(form);
       else {
         const raw = response.updatedInput?.answers;
         const answer: Record<string, FormValue> = {};
@@ -70,6 +74,28 @@ export class SessionPermissions {
       });
     }
     this.resolvePending(requestId, response);
+  }
+
+  /** Lifecycle cleanup: expire every pending request instead of denying it. */
+  async expireAll() {
+    for (const request of this.list()) {
+      this.expiring.add(request.id);
+      try {
+        await this.respondToPermission(request.id, { behavior: "deny" });
+      } finally {
+        this.expiring.delete(request.id);
+      }
+    }
+  }
+
+  private async cancelForm(form: FormInfo) {
+    this.cancelling.add(form.id);
+    try {
+      await this.getClient().session.form.cancel({ sessionID: form.sessionID, formID: form.id });
+    } catch (error) {
+      this.cancelling.delete(form.id);
+      throw error;
+    }
   }
   async reconcile(sessionID: string) {
     const [permissions, forms] = await Promise.all([
@@ -119,11 +145,22 @@ export class SessionPermissions {
       this.emit({ type: "permission_requested", provider: "opencode", request: pending });
     }
   }
-  resolvePending(requestId: string, resolution: AgentPermissionResponse) {
+  resolvePending(
+    requestId: string,
+    resolution: AgentPermissionResponse,
+    expired = this.expiring.has(requestId),
+  ) {
     if (!this.pending.delete(requestId)) return;
+    this.cancelling.delete(requestId);
     this.forms.delete(requestId);
     this.permissionOwners.delete(requestId);
-    this.emit({ type: "permission_resolved", provider: "opencode", requestId, resolution });
+    this.emit({
+      type: "permission_resolved",
+      provider: "opencode",
+      requestId,
+      ...(expired ? { disposition: "expired" as const } : {}),
+      resolution,
+    });
   }
 }
 function permissionReply(response: AgentPermissionResponse): "reject" | "once" | "always" {

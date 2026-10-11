@@ -254,6 +254,7 @@ const StoredAgentSnapshotSchema = z.strictObject({
   archivedAt: IsoDateSchema.nullable().optional(),
   artifacts: z.array(AgentArtifactSchema).optional(),
   companionEntries: z.array(CompanionEntrySchema).optional(),
+  captureDegraded: z.boolean().optional(),
 });
 
 const StoredAgentSchema = z.strictObject({
@@ -611,10 +612,11 @@ function serializeAgentTurn(agent: Agent): NonNullable<StoredAgent["turn"]> {
 
 function serializeStreamStateFields(
   agent: Agent,
-): Pick<StoredAgent["snapshot"], "artifacts" | "companionEntries"> {
+): Pick<StoredAgent["snapshot"], "artifacts" | "companionEntries" | "captureDegraded"> {
   return {
     ...(agent.artifacts ? { artifacts: agent.artifacts } : {}),
     ...(agent.companionEntries ? { companionEntries: agent.companionEntries } : {}),
+    ...(agent.captureDegraded ? { captureDegraded: agent.captureDegraded } : {}),
   };
 }
 

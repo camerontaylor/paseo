@@ -87,6 +87,7 @@ import { CodexAppServerClient } from "./codex/app-server-transport.js";
 import {
   createFakeCodexAppServer,
   type FakeCodexAppServer,
+  waitForNextEvent,
   waitForNextPermission,
   waitForNextTimelineItem,
   waitForProviderSubagent,
@@ -1688,6 +1689,43 @@ describe("Codex app-server provider", () => {
         detail: { type: "plain_text", text: "git push\n" },
       });
       appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("expires an MCP elicitation canceled by the server", async () => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    await session.connect();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      const requested = waitForNextPermission(session);
+      appServer.requestMcpElicitation({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "browser",
+        message: "Open page?",
+        requestedSchema: { type: "object", properties: {} },
+      });
+      const permission = await requested;
+      appServer.resolvesMcpElicitation();
+      await vi.waitFor(() =>
+        expect(events).toContainEqual({
+          type: "permission_resolved",
+          provider: "codex",
+          requestId: permission.request.id,
+          resolution: { behavior: "deny", interrupt: true },
+          disposition: "expired",
+        }),
+      );
+      expect(session.getPendingPermissions()).toEqual([]);
     } finally {
       await session.close();
     }
@@ -4139,6 +4177,7 @@ describe("Codex app-server provider", () => {
     );
 
     try {
+      const foregroundTurnStarted = waitForNextEvent(session, "turn_started");
       const resultPromise = session.run("Delegate the investigation.");
       await appServer.waitForTurnStart();
       const child = waitForProviderSubagent(session, "legacy-only-child-thread");
@@ -4151,20 +4190,29 @@ describe("Codex app-server provider", () => {
         agentPath: "/root/legacy-only-child",
       });
 
-      await expect(child).resolves.toMatchObject({
+      const childEvent = await child;
+      const spawnEvent = await spawn;
+      // C2-GATE-EXC-1: C2 makes foreground turn ids unique (codex-turn-<uuid>),
+      // so the obsolete ordinal cannot be hardcoded. The reference is the turn id
+      // the session itself reports when the foreground turn starts, obtained
+      // independently of both events under test; child and spawn must both carry
+      // it. Discovery assertions are unchanged.
+      const foregroundTurnId = (await foregroundTurnStarted).turnId;
+      expect(foregroundTurnId).toBeDefined();
+      expect(childEvent.turnId).toBe(foregroundTurnId);
+      expect(spawnEvent.turnId).toBe(foregroundTurnId);
+      expect(childEvent).toMatchObject({
         type: "provider_subagent",
         provider: "codex",
-        turnId: "codex-turn-0",
         event: {
           type: "upsert",
           id: "legacy-only-child-thread",
           status: "running",
         },
       });
-      await expect(spawn).resolves.toMatchObject({
+      expect(spawnEvent).toMatchObject({
         type: "timeline",
         provider: "codex",
-        turnId: "codex-turn-0",
         item: {
           type: "tool_call",
           callId: "spawn-legacy-only-child",
@@ -5841,6 +5889,9 @@ describe("Codex app-server provider", () => {
       type: "permission_resolved",
       provider: "codex",
       requestId: pendingPlan!.id,
+      // C2-GATE-EXC-2: superseding a pending plan is lifecycle expiry, so the
+      // event carries disposition "expired" (codex-app-server-agent.ts:4841).
+      disposition: "expired",
       resolution: {
         behavior: "deny",
         message: "Dismissed by a new prompt",
@@ -7075,4 +7126,32 @@ describe("Codex denied plan approvals", () => {
       metadata: { approved: false },
     });
   });
+});
+
+test("new provider instances produce distinct turn identities for restored Stream records", async () => {
+  const turnIds: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "turn_completed" && event.turnId) turnIds.push(event.turnId);
+    });
+    try {
+      const result = session.run("Continue the same work");
+      await appServer.waitForTurnStart();
+      appServer.startsTurn({ threadId: "thread-1", turnId: "native-turn" });
+      appServer.completeTurn();
+      await result;
+    } finally {
+      unsubscribe();
+      await session.close();
+    }
+  }
+  expect(turnIds).toHaveLength(2);
+  expect(new Set(turnIds).size).toBe(2);
 });

@@ -12582,3 +12582,230 @@ test("usage session is a pure read of the live adapter and disappears on close",
   }
   expect(manager.usageSession(agent.id)).toBeNull();
 });
+
+test("a dormant stream mutation rejects on storage failure and recovers on retry", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-dormant-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  await manager.updateCompanionEntry({
+    agentId: agent.id,
+    action: "add_question",
+    entryId: "seeded",
+    text: "Seeded question",
+  });
+  await manager.closeAgent(agent.id);
+  expect(manager.getAgent(agent.id)).toBeNull();
+
+  const write = vi
+    .spyOn(storage, "upsert")
+    .mockRejectedValueOnce(Object.assign(new Error("No space left on device"), { code: "ENOSPC" }));
+  try {
+    await expect(
+      manager.updateCompanionEntry({
+        agentId: agent.id,
+        action: "add_pin",
+        entryId: "dormant-pin",
+        text: "Dormant note",
+      }),
+    ).rejects.toThrow("No space left on device");
+    write.mockRestore();
+    // Retry through the same manager settles the retained entries.
+    await manager.updateCompanionEntry({
+      agentId: agent.id,
+      action: "add_pin",
+      entryId: "dormant-pin",
+      text: "Dormant note",
+    });
+    const stored = await storage.get(agent.id);
+    const ids = stored?.companionEntries?.map((entry) => entry.id);
+    expect(ids).toContain("question:seeded");
+    expect(ids).toContain("pin:dormant-pin");
+    // No diagnostic bookkeeping ever reached storage: the record carries only
+    // the entries (and the record's own fields), never a degraded flag.
+    expect(Object.keys(stored ?? {})).not.toContain("captureDegraded");
+    expect(JSON.stringify(stored)).not.toContain("captureDegraded");
+    // Lifecycle cleanup: discarding the agent state drops the dormant
+    // bookkeeping maps for the agent (fresh generations on any later write).
+    await manager.deleteAgentState(agent.id);
+    const internals = manager as unknown as {
+      dormantPersistSeq: Map<string, number>;
+      dormantDegradedSeq: Map<string, number>;
+    };
+    expect(internals.dormantPersistSeq.has(agent.id)).toBe(false);
+    expect(internals.dormantDegradedSeq.has(agent.id)).toBe(false);
+    // A new dormant failure after cleanup behaves as a fresh generation.
+    const writeAgain = vi
+      .spyOn(storage, "upsert")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("No space left on device"), { code: "ENOSPC" }),
+      );
+    try {
+      await expect(
+        manager.updateCompanionEntry({
+          agentId: agent.id,
+          action: "add_pin",
+          entryId: "post-cleanup",
+          text: "Post cleanup",
+        }),
+      ).rejects.toThrow("No space left on device");
+      expect(internals.dormantDegradedSeq.has(agent.id)).toBe(true);
+    } finally {
+      writeAgain.mockRestore();
+    }
+  } finally {
+    write.mockRestore();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("deletion cleanup is serialized against in-flight dormant writes", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "stream-dormant-lane-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  await manager.updateCompanionEntry({
+    agentId: agent.id,
+    action: "add_question",
+    entryId: "seeded",
+    text: "Seeded",
+  });
+  await manager.closeAgent(agent.id);
+  const internals = manager as unknown as {
+    dormantPersistSeq: Map<string, number>;
+    dormantDegradedSeq: Map<string, number>;
+  };
+  let releaseWrite!: () => void;
+  const writeGate = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const upsert = storage.upsert.bind(storage);
+  const write = vi.spyOn(storage, "upsert").mockImplementationOnce(async (record) => {
+    await writeGate;
+    await upsert(record);
+  });
+  try {
+    // The dormant write enters the lane first and blocks inside persistence.
+    const mutation = manager
+      .updateCompanionEntry({
+        agentId: agent.id,
+        action: "add_pin",
+        entryId: "in-flight",
+        text: "In flight",
+      })
+      .then(
+        () => "settled" as const,
+        () => "settled" as const,
+      );
+    await vi.waitFor(() => {
+      expect(write.mock.calls.length).toBe(1);
+    });
+    // Deletion queues behind the same lane while the write is in flight.
+    let deletionDone = false;
+    const deletion = manager.deleteAgentState(agent.id).then(() => {
+      deletionDone = true;
+      return undefined;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deletionDone).toBe(false);
+    // The write completes and repopulates its bookkeeping; only THEN does
+    // the serialized cleanup run — the late completion cannot resurrect the
+    // maps afterwards.
+    releaseWrite();
+    await mutation;
+    await deletion;
+    expect(deletionDone).toBe(true);
+    expect(internals.dormantPersistSeq.has(agent.id)).toBe(false);
+    expect(internals.dormantDegradedSeq.has(agent.id)).toBe(false);
+    // Subsequent dormant writes recover normally after the cleanup.
+    await manager.updateCompanionEntry({
+      agentId: agent.id,
+      action: "add_pin",
+      entryId: "after-delete",
+      text: "After delete",
+    });
+    const stored = await storage.get(agent.id);
+    expect(stored?.companionEntries?.map((entry) => entry.id)).toContain("pin:after-delete");
+  } finally {
+    write.mockRestore();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("durable Stream pages and asks survive manager recreation with bounded wire snapshots", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "durable-stream-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  try {
+    for (let i = 0; i < 63; i++)
+      await manager.updateCompanionEntry({
+        agentId: agent.id,
+        action: "set_ask",
+        entryId: `request-${i}`,
+        expectedRevision: 0,
+        text: `Request ${i}`,
+        ask: {
+          state: i === 0 ? "blocked" : "done",
+          remaining: i === 0 ? "Awaiting approval" : "",
+          evidence: i === 0 ? "" : "Verified",
+        },
+      });
+    expect(toAgentPayload(manager.getAgent(agent.id)!).companionEntries).toHaveLength(50);
+    await manager.closeAgent(agent.id);
+    await manager.flush();
+    const stored = await storage.get(agent.id);
+    expect(stored?.companionEntries).toHaveLength(63);
+    const restored = new AgentManager({
+      clients: { codex: new TestAgentClient() },
+      registry: new AgentStorage(join(workdir, "agents"), logger),
+      logger,
+    });
+    const first = await restored.listGlobalStream({ agentId: agent.id, asksOnly: true, limit: 50 });
+    const second = await restored.listGlobalStream({
+      agentId: agent.id,
+      asksOnly: true,
+      limit: 50,
+      cursor: first.nextCursor!,
+    });
+    expect(first.rows).toHaveLength(50);
+    expect(second.rows).toHaveLength(13);
+    expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.rows, ...second.rows].map((row) => row.id)).size).toBe(63);
+    expect(
+      (await restored.listGlobalStream({ agentId: agent.id, asksOnly: true, filter: "pending" }))
+        .rows,
+    ).toHaveLength(1);
+    await restored.updateCompanionEntry({
+      agentId: agent.id,
+      action: "set_ask",
+      entryId: "request-0",
+      expectedRevision: 1,
+      text: "Request 0",
+      ask: { state: "in_progress", remaining: "Finish rollout", evidence: "Approved" },
+    });
+    expect(
+      (
+        await new AgentStorage(join(workdir, "agents"), logger).get(agent.id)
+      )?.companionEntries?.find((entry) => entry.id === "ask:request-0")?.ask?.state,
+    ).toBe("in_progress");
+    expect(restored.getAgent(agent.id)).toBeNull();
+    await restored.flush();
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

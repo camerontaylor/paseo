@@ -9,6 +9,7 @@ import {
   CalendarClock,
   Gauge,
   History,
+  ListFilter,
   Plus,
   Search,
   type LucideIcon,
@@ -43,6 +44,7 @@ const BUILTIN_ICONS: Record<BuiltinSidebarItemId, LucideIcon> = {
   "new-workspace": Plus,
   history: History,
   search: Search,
+  stream: ListFilter,
   schedules: CalendarClock,
   usage: Gauge,
 };

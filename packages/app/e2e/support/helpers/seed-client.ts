@@ -52,6 +52,30 @@ export interface SeedDaemonClient {
     assigned: boolean;
   }): Promise<unknown>;
   listProjects(): Promise<{ projects: SeedProjectDescriptor[] }>;
+  listGlobalStream(options?: {
+    agentId?: string;
+    asksOnly?: boolean;
+    filter?: "all" | "pending" | "pinned";
+    search?: string;
+    includeArchived?: boolean;
+    cursor?: string;
+    limit?: number;
+  }): Promise<{
+    requestId: string;
+    rows: import("@getpaseo/protocol/global-stream").StreamRow[];
+    nextCursor: string | null;
+  }>;
+  updateStreamEntry(input: {
+    agentId: string;
+    entryId?: string;
+    action: "update_status" | "add_pin" | "remove_pin" | "add_q_and_a" | "add_question" | "set_ask";
+    status?: "open" | "reviewed" | "done";
+    text?: string;
+    ask?: Record<string, unknown>;
+    expectedRevision?: number;
+    answerText?: string;
+    sourceId?: string;
+  }): Promise<void>;
   createWorkspace(input: {
     source:
       | { kind: "directory"; path: string; projectId?: string }
