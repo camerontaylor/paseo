@@ -107,6 +107,8 @@ A steering adapter also owes its interrupt: stopping a turn must discard the ste
 
 `SteerActiveTurnOptions.clearPendingPermissions` makes permission release part of the provider contract. A provider that accepts such a steer queues it first, denies permissions blocking its delivery, and stops once the steer is read. Steers without the flag leave permissions open. A denied plan remains in the timeline because the pending card was the only other copy of its text.
 
+Emit `permission_resolved` with `disposition: "expired"` when lifecycle cleanup or provider cancellation clears a request, even if the upstream transport requires a deny response. An explicit user denial leaves the disposition absent. OpenCode form cancellation events must retain that distinction until the pending request resolves. [Stream](companion-stream.md#questions-and-pins) uses expiry to preserve needed input without reviving approvals.
+
 Rewind accepts the canonical wire `messageId` and resolves it to the provider identity before calling the adapter. A submitted prompt cannot be rewound until its provider echo supplies that identity.
 
 Submitted user-message wire items carry the same Paseo ID in `messageId` and `clientMessageId`. Provider adapters attach `clientMessageId` only to the echo for that foreground submission; provider history and externally initiated user rows do not have a Paseo client ID.
