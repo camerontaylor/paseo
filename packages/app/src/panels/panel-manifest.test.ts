@@ -10,6 +10,8 @@ describe("panel manifest", () => {
   it("answers host support without React panel registration", () => {
     expect(panelSupportsHost("agent", "main")).toBe(true);
     expect(panelSupportsHost("agent", "explorer")).toBe(true);
+    expect(panelSupportsHost("side_conversation", "main")).toBe(true);
+    expect(panelSupportsHost("side_conversation", "explorer")).toBe(true);
     expect(panelSupportsHost("file", "explorer")).toBe(true);
     expect(panelSupportsHost("working_diff", "explorer")).toBe(true);
     expect(panelSupportsHost("new_tab", "explorer")).toBe(true);
@@ -22,6 +24,7 @@ describe("panel manifest", () => {
     expect(getPanelManifest("files").showCloseButton).toBe(false);
     expect(getPanelManifest("changes_tree").showCloseButton).toBe(false);
     expect(getPanelManifest("agent").showCloseButton).toBe(true);
+    expect(getPanelManifest("side_conversation").showCloseButton).toBe(true);
     expect(getPanelManifest("terminal").showCloseButton).toBe(true);
     expect(getPanelManifest("file").showCloseButton).toBe(true);
     expect(getPanelManifest("working_diff").showCloseButton).toBe(true);
@@ -33,6 +36,7 @@ describe("panel manifest", () => {
     expect(panelCanLaunchInPane("files", ["changes_tree"])).toBe(true);
     expect(panelCanLaunchInPane("files", [])).toBe(true);
     expect(panelCanLaunchInPane("terminal", ["terminal"])).toBe(true);
+    expect(panelCanLaunchInPane("side_conversation", ["side_conversation"])).toBe(true);
   });
 
   it("keeps durable resource identity separate from transient target input", () => {

@@ -43,6 +43,13 @@ const manifests = {
     singleton: false,
     resourceKey: (target) => `${target.parentAgentId}:${target.subagentId}`,
   },
+  side_conversation: {
+    kind: "side_conversation",
+    supportedHosts: ["main", "explorer"],
+    showCloseButton: true,
+    singleton: false,
+    resourceKey: (target) => `${target.parentAgentId}:${target.threadId}`,
+  },
   terminal: {
     kind: "terminal",
     supportedHosts: ["main", "explorer"],

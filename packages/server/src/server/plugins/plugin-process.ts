@@ -160,6 +160,7 @@ export function createPluginWorker(options: {
       iconPath: provider.icon,
       hasCatalogCacheKey: provider.getCatalogCacheKey !== undefined,
       hasStatus: provider.status !== undefined,
+      supportsSystemPrompt: provider.supportsSystemPrompt,
       command: provider.command,
     };
   }

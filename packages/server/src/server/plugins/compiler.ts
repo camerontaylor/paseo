@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
+import { pluginSdkEntry } from "@getpaseo/plugin";
 import { createPluginImportReader, type PluginImportKind } from "./compiler-imports.js";
 import type { Metafile, OnResolveResult, Plugin } from "esbuild";
 import {
@@ -315,10 +316,9 @@ function runtimeSpecifierError(
   importer: string,
 ): OnResolveResult | null {
   let kind: string | null = null;
-  if (specifier === "@getpaseo/plugin/client/host") kind = "host-private";
+  if (pluginSdkEntry(specifier) === "/client/host") kind = "host-private";
   else if (
-    (specifier === "@getpaseo/plugin" ||
-      specifier.startsWith("@getpaseo/plugin/") ||
+    (pluginSdkEntry(specifier) !== null ||
       specifier === "@paseo/plugin" ||
       specifier.startsWith("@paseo/plugin/")) &&
     !(PLUGIN_SDK_SPECIFIERS as readonly string[]).includes(specifier)

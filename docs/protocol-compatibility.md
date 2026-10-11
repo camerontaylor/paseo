@@ -74,6 +74,19 @@ The adapter keys legacy slots by physical socket, so an old connection cannot re
 sibling's observation even when both use the same logical client ID. Optional wire IDs stay accepted
 for parsing compatibility; modern requests cannot select their subscription ID.
 
+## Usage report delivery
+
+Usage streaming requires `server_info.features.usageReportsStreaming` and an explicit
+`streaming: true` request. Unmarked requests receive terminal `reports` and existing
+`rpc_error` failures. Older validators reject unknown update messages, so preserving the
+terminal array alone is insufficient.
+
+The client accepts beta.3 terminal reports and beta.4–0.11.1 update-only responses at its
+request boundary. Stock beta.4–0.11.1 clients did not advertise streaming support and ignore
+terminal reports; they need an app update to show Usage against a repaired daemon. Their
+responses remain parseable. Do not infer support from `usageSources`, which all these hosts
+advertise.
+
 ## Every shim is tagged and dated
 
 A shim that exists for old-app or old-daemon support carries a comment naming it, the version it arrived in, and when it can go:
@@ -86,6 +99,7 @@ A shim that exists for old-app or old-daemon support carries a comment naming it
 
 - One tag per shim, at the site that has to be deleted.
 - Give it a name, a version, and a removal condition or date. Six months out is the usual default.
+- A fork-only capability has no upstream version to pin. Tag it with the fork release that first ships it, and state the real removal condition: if stock peers can never gain the capability, the gate lasts as long as stock peers are supported, and a date would claim a removal that cannot arrive.
 - Never bury compatibility in an untagged `??` fallback or an optional-chain tunnel. Untagged back-compat never gets removed, because nobody can find it.
 
 When a tag's condition is met, delete the shim and the tag in the same change.

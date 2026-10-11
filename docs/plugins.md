@@ -245,6 +245,12 @@ See `public-docs/plugins/reference.md`.
 
 ### SDK import boundaries
 
+The fork accepts both `@getpaseo/plugin/*` and `@camerontaylor/paseo-plugin/*` in plugin source.
+Both names resolve to the installed host SDK in the compiler and both runtime loaders. Keep
+upstream imports when installing an upstream plugin; rewriting its source or installing a second
+runtime SDK creates unnecessary dependency identity problems. Author SDK and Zod dependencies
+remain development dependencies for local typechecking; the host supplies their runtime modules.
+
 Classify every SDK export before adding it. All client entry points and implementations live under
 `client/`; all server entry points and implementations live under `server/`. The package root is shared code: plain data types,
 Zod schemas, and functions that run in both runtimes. A type-only import is still an architectural
@@ -465,6 +471,9 @@ It contains the provider defaults and per-agent overrides merged by the daemon.
 Validate and apply it inside the provider; core does not know your option shape.
 See [provider options](custom-providers.md#provider-options) for configuration and
 merge semantics.
+
+Declare native system instruction limitations through the
+[provider system instruction contract](../public-docs/plugins/providers.md#system-instructions).
 
 Agent refresh closes the current provider session and opens it again with current configuration and
 persistence. Re-read credentials and provider-owned configuration on `session.open`; consume the
