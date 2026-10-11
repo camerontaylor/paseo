@@ -114,8 +114,9 @@ remain 4,000 characters. A refresh restarts pagination so state changes during b
 `stream.entry.update.request/response` RPCs. `server_info.features.globalStream` gates global
 reads and acknowledged writes; `trackedAsks` gates ask mutations and the per-chat checklist.
 Older hosts need updating. The carried `agent.companion.update_entry.request/response` mutation
-RPC remains accepted for old clients. Existing entry kinds/statuses and snapshot fields are
-unchanged. Ask data is optional metadata on the existing question shape, with open/done
+RPC remains accepted for old clients. Existing entry kinds/statuses and the existing
+snapshot fields are preserved; this change adds only optional metadata (`captureDegraded`, the
+nested `ask`). Ask data is optional metadata on the existing question shape, with open/done
 mirrored for older readers; no new entry kind or legacy status is emitted. New list scoping and
 mutation fields are additive and only used on capable hosts. New response types are sent only
 when requested. Read/write permissions match other workspace metadata operations. Mutation
@@ -130,7 +131,9 @@ No dependency update or new inference provider is needed.
 Collector, provider, manager, protocol and feed tests cover retention, unrelated replies,
 per-item status, explicit lists, ID collisions, duplicate outcomes, pagination, filters,
 internal/archived visibility and snapshot compatibility. The browser suite exercises the
-connected global feed and the durable checklist at desktop/phone widths, mutations,
-revision conflicts and source-chat navigation. Browser phone-width evidence is not native
+connected global feed and the durable checklist at desktop/phone widths, mutations
+(including missing-pin rejection), pagination and source-chat navigation. Ask revision
+conflicts are covered by engine and component tests, not the browser suite. Browser
+phone-width evidence is not native
 iPhone acceptance. Installing a new shared daemon must follow the existing coordinated
 handoff procedure; do not restart the daemon hosting active agents from a coding session.

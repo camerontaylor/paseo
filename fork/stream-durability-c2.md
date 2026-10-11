@@ -10,8 +10,8 @@ This overlay carries the TMAD durable-Stream work (`51a57be66`, `0aded86cd`) ont
 
 Two fork-side divergences from upstream are deliberate and load-bearing:
 
-- **Retention is unbounded.** Upstream kept the most recent 50 captured entries.
-  This overlay persists all captured history; the 50-item bound survives only as a
+- **Retention is unbounded.** The carried Stream baseline kept the most recent 50 captured
+  entries. This overlay persists all captured history; the 50-item bound survives only as a
   wire/read-page bound. Disk growth is intentional, and an `ENOSPC`/`EIO` write
   failure never evicts, never acknowledges, and never stops the session — capture
   is marked degraded and shown to the user. Earlier pruned history is not
@@ -22,5 +22,6 @@ Two fork-side divergences from upstream are deliberate and load-bearing:
   draft retained. The question `kind`/`status` enums are unchanged; richer state
   lives only in the nested optional `ask` object.
 
-The coalescing capture path is unchanged: capture stays post-coalescer and
-fire-and-forget, so this overlay does not widen the collector's turn-time work.
+This overlay preserves the post-coalescer, fire-and-forget persistence boundary: capture
+still runs after coalescing and is not awaited by the turn, even though question extraction
+changed. It does not move capture ahead of the coalescer.
