@@ -8,7 +8,7 @@ export type SidebarSection = PluginSidebarSection;
  * (Add project and the Hosts, Help and support, Settings icons) is fixed.
  */
 export const BUILTIN_SIDEBAR_ITEM_IDS = {
-  header: ["new-workspace", "history", "search", "schedules"],
+  header: ["new-workspace", "history", "search", "stream", "schedules"],
   footer: ["usage"],
 } as const satisfies Record<SidebarSection, readonly string[]>;
 
@@ -44,6 +44,7 @@ const BUILTIN_LABEL_KEYS: Record<BuiltinSidebarItemId, string> = {
   "new-workspace": "sidebar.actions.newWorkspace",
   history: "sidebar.sections.sessions",
   search: "sidebar.sections.search",
+  stream: "globalStream.title",
   schedules: "sidebar.sections.schedules",
   usage: "sidebar.footer.usage",
 };
@@ -61,6 +62,7 @@ const BUILTIN_SHORTCUT_ACTIONS: Record<BuiltinSidebarItemId, string | null> = {
   "new-workspace": "new-workspace",
   history: null,
   search: "toggle-command-center",
+  stream: null,
   schedules: null,
   usage: null,
 };

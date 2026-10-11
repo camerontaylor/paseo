@@ -1962,6 +1962,14 @@ export class VoiceAssistantWebSocketServer {
         workspaceFileEditing: true,
         // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
         companionStreamPortV1: true,
+        // COMPAT(globalStream): added in v0.11.1-fork (C2), remove gate after 2027-04-06.
+        // Gates the stream.list/stream.entry.update RPC surface; per-chat and
+        // global feed reads.
+        globalStream: true,
+        // COMPAT(trackedAsks): added in v0.11.1-fork (C2), remove gate after 2027-04-07.
+        // Gates set_ask/expectedRevision mutations and the durable ask
+        // checklist. Deliberately not the source fork's `durableStream` name.
+        trackedAsks: true,
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: true,
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.

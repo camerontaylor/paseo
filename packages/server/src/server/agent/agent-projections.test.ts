@@ -528,3 +528,35 @@ describe("toRecentProviderSessionDescriptorPayload", () => {
     });
   });
 });
+
+it("bounds oversized companion entries on the snapshot payload and passes the degraded flag", () => {
+  const oversizedAnswer = "a".repeat(4200);
+  const agent = createManagedAgent({
+    companionEntries: [
+      {
+        id: "qa:legacy",
+        kind: "q_and_a",
+        timestamp: "2026-10-11T00:00:00.000Z",
+        text: "Question",
+        answer: oversizedAnswer,
+        truncated: false,
+      },
+    ],
+    streamCaptureDegraded: true,
+  });
+  const payload = toAgentPayload(agent);
+  const entry = payload.companionEntries?.[0];
+  expect(entry).toMatchObject({
+    text: "Question",
+    answer: "a".repeat(4000),
+    truncated: true,
+  });
+  expect(payload.captureDegraded).toBe(true);
+  // The projection is read-time only: the agent's own entry is untouched.
+  const storedEntry = agent.companionEntries?.[0] as Extract<
+    NonNullable<ReturnType<typeof toAgentPayload>["companionEntries"]>[number],
+    { kind: "q_and_a" }
+  >;
+  expect(storedEntry.answer).toBe(oversizedAnswer);
+  expect(storedEntry.truncated).toBe(false);
+});

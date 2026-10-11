@@ -450,6 +450,8 @@ export type AgentStreamEvent =
       provider: AgentProvider;
       requestId: string;
       resolution: AgentPermissionResponse;
+      /** Set when lifecycle cleanup or cancellation expired the request rather than the user denying it. */
+      disposition?: "expired";
       turnId?: string;
     }
   | {

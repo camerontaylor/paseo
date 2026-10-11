@@ -152,6 +152,10 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   [CLIENT_CAPS.explicitEventSubscriptions]: true,
   // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
   [CLIENT_CAPS.companionStreamPortV1]: true,
+  // COMPAT(globalStream): added in v0.11.1-fork (C2), remove after 2027-04-06.
+  // Clients declaring this may send stream.list/stream.entry.update requests and
+  // parse their correlated responses; the daemon serves the RPCs only to these.
+  [CLIENT_CAPS.globalStream]: true,
 } satisfies Record<Exclude<ClientCapability, typeof CLIENT_CAPS.browserHost>, true>;
 
 /** Calling releases demand; ready waits for membership, or local attachment on broadcast hosts. */
