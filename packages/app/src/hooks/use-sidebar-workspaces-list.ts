@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo } from "react";
+import { shallow } from "zustand/shallow";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { useSessionStore } from "@/stores/session-store";
@@ -12,15 +13,13 @@ import {
   buildSidebarWorkspacePlacementModel,
   computeSidebarOrderUpdates,
   createSidebarWorkspaceEntry,
-  deriveProjectStatusBucket,
+  deriveProjectStatus,
   deriveSidebarLoadingState,
   type ProjectStatusSession,
   type SidebarProjectEntry,
   type SidebarWorkspaceEntry,
   type SidebarWorkspacePlacement,
 } from "./sidebar-workspaces-view-model";
-import type { SidebarStateBucket } from "@/utils/sidebar-agent-state";
-
 export {
   appendMissingOrderKeys,
   applyStoredOrdering,
@@ -29,7 +28,7 @@ export {
   createSidebarWorkspaceEntry,
   buildSidebarWorkspacePlacementModel,
   computeSidebarOrderUpdates,
-  deriveProjectStatusBucket,
+  deriveProjectStatus,
   deriveSidebarLoadingState,
   shouldShowSidebarHostLabels,
   type SidebarLoadingState,
@@ -47,16 +46,16 @@ export {
  *
  * `SidebarProjectEntry` is structural — it carries workspace identity but no status — and
  * `ProjectBlock` is memoized on that stable reference, so the row can't learn about a
- * child's status without its own subscription. Returns a primitive, so status churn in a
- * project only re-renders the row when the aggregate actually moves.
+ * child's status without its own subscription. Compares the bucket and timestamp, so status
+ * churn in a project only re-renders the row when its aggregate status changes.
  *
  * Pass `enabled: false` while the project is expanded: the child rows show their own dots
  * and the selector is pure cost.
  */
-export function useSidebarProjectStatusBucket(input: {
+export function useSidebarProjectStatus(input: {
   workspaces: readonly SidebarWorkspacePlacement[];
   enabled: boolean;
-}): SidebarStateBucket | null {
+}): ReturnType<typeof deriveProjectStatus> | null {
   const { workspaces, enabled } = input;
   const pendingCreateAttempts = useStoreWithEqualityFn(
     useCreateFlowStore,
@@ -67,7 +66,7 @@ export function useSidebarProjectStatusBucket(input: {
   const selector = useCallback(
     (state: { sessions: Record<string, ProjectStatusSession | undefined> }) => {
       if (!enabled) return null;
-      return deriveProjectStatusBucket({
+      return deriveProjectStatus({
         workspaces,
         sessions: state.sessions,
         pendingCreateAttempts,
@@ -76,7 +75,7 @@ export function useSidebarProjectStatusBucket(input: {
     [enabled, pendingCreateAttempts, workspaces],
   );
 
-  return useStoreWithEqualityFn(useSessionStore, selector, Object.is);
+  return useStoreWithEqualityFn(useSessionStore, selector, shallow);
 }
 
 const EMPTY_ORDER: string[] = [];
