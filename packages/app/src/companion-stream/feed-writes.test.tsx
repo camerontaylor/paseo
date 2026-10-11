@@ -373,6 +373,47 @@ it("creates checklist asks with expectedRevision 0 and scopes retry identity per
   expect(state.updateStreamEntry.mock.calls[2]?.[0]?.entryId).not.toBe(askIdentity);
 });
 
+it("keeps a new checklist ask fenced when trackedAsks is absent at mount, retaining the draft", async () => {
+  state.durableSupported = false;
+  const rendered = render(<CompanionFeed {...baseProps} />);
+  // The view tab still defaults to Checklist, but its submit control is fenced.
+  expect((rendered.getByTestId("note-submit") as HTMLButtonElement).disabled).toBe(true);
+  typeNote("Ship the requested feature");
+  pressSubmit();
+  await Promise.resolve();
+  expect(state.updateStreamEntry).not.toHaveBeenCalled();
+  // The draft survives; restoring the capability submits the same text as a set_ask.
+  state.durableSupported = true;
+  rendered.rerender(<CompanionFeed {...baseProps} />);
+  pressSubmit();
+  await vi.waitFor(() => expect(state.updateStreamEntry).toHaveBeenCalledTimes(1));
+  expect(state.updateStreamEntry.mock.calls[0]?.[0]).toMatchObject({
+    action: "set_ask",
+    text: "Ship the requested feature",
+  });
+});
+
+it("fences a lost checklist ask with typed text, retaining the draft and sending zero calls", async () => {
+  const rendered = render(<CompanionFeed {...baseProps} />);
+  typeNote("Ship the requested feature");
+  // Losing trackedAsks while the typed draft is present fences the submit.
+  state.durableSupported = false;
+  rendered.rerender(<CompanionFeed {...baseProps} />);
+  expect((rendered.getByTestId("note-submit") as HTMLButtonElement).disabled).toBe(true);
+  pressSubmit();
+  await Promise.resolve();
+  expect(state.updateStreamEntry).not.toHaveBeenCalled();
+  // Restoration submits the retained draft, not a cleared one.
+  state.durableSupported = true;
+  rendered.rerender(<CompanionFeed {...baseProps} />);
+  pressSubmit();
+  await vi.waitFor(() => expect(state.updateStreamEntry).toHaveBeenCalledTimes(1));
+  expect(state.updateStreamEntry.mock.calls[0]?.[0]).toMatchObject({
+    action: "set_ask",
+    text: "Ship the requested feature",
+  });
+});
+
 function typeNote(text: string) {
   const input = state.textInputProps[state.textInputProps.length - 1];
   act(() => {

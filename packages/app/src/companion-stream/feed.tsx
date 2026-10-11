@@ -165,6 +165,11 @@ export function CompanionFeed({
         // Ask-bearing entries mutate only through the tracked-asks contract:
         // without the host's trackedAsks flag the write is refused before any
         // frame is sent (never a revision-less compatibility fallback).
+        // A brand-new ask has no cached target to inspect, so `set_ask` is
+        // guarded directly rather than through the entry lookup below.
+        if (input.action === "set_ask" && !supportsDurableStream) {
+          throw new Error(t("globalStream.writeUnavailable"));
+        }
         const target = items.find(
           (item) => item.kind === "entry" && item.entry.id === input.entryId,
         );
@@ -256,11 +261,17 @@ export function CompanionFeed({
   );
 
   const handleToggleOnlyOpen = useCallback(() => setOnlyOpen((v) => !v), []);
+  // The checklist submits through `set_ask`, which needs the host's
+  // trackedAsks capability. Fence it when the flag is absent or was lost: the
+  // typed draft stays put and no frame is sent (never fall back to another
+  // action that would mutate the stream under the user's feet).
+  const checklistFenced = viewTab === "checklist" && !supportsDurableStream;
   const handleSubmitPin = useCallback(() => {
     if (!pinText.trim() || saving) return;
     const action = ({ pinned: "add_pin", checklist: "set_ask", stream: "add_question" } as const)[
       viewTab
     ];
+    if (action === "set_ask" && !supportsDurableStream) return;
     const identityKey = JSON.stringify([serverId, agentId, action]);
     const entryId = draftEntryIds.current.get(identityKey) ?? globalThis.crypto.randomUUID();
     draftEntryIds.current.set(identityKey, entryId);
@@ -280,7 +291,7 @@ export function CompanionFeed({
         return;
       })
       .catch(() => undefined);
-  }, [save, agentId, serverId, pinText, viewTab, saving]);
+  }, [save, agentId, serverId, pinText, viewTab, saving, supportsDurableStream]);
 
   const inputPlaceholderKey = {
     checklist: "globalStream.askPlaceholder",
@@ -392,7 +403,7 @@ export function CompanionFeed({
             />
             <Button
               onPress={handleSubmitPin}
-              disabled={saving || connection !== "online" || !pinText.trim()}
+              disabled={saving || connection !== "online" || !pinText.trim() || checklistFenced}
               testID="note-submit"
             >
               {t(submitLabelKey)}
@@ -417,6 +428,7 @@ export function CompanionFeed({
       handleSubmitPin,
       supportsWrites,
       supportsDurableStream,
+      checklistFenced,
       saveError,
       saving,
       pinText,
