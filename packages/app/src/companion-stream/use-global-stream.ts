@@ -30,7 +30,10 @@ export function useGlobalStream(
   const availability = selected.map((host) => {
     if (!isHostRuntimeConnected(runtime.getSnapshot(host.serverId))) return "offline";
     // COMPAT(globalStream): added in v0.11.1-fork (C2), remove after 2027-04-06.
-    if (!sessions[host.serverId]?.serverInfo?.features?.globalStream) return "upgrade";
+    // Per-chat checklist reads key on trackedAsks; the global feed on globalStream.
+    // COMPAT(trackedAsks): added in v0.11.1-fork (C2), remove after 2027-04-07.
+    const required = options.agentId ? "trackedAsks" : "globalStream";
+    if (!sessions[host.serverId]?.serverInfo?.features?.[required]) return "upgrade";
     return "online";
   });
   const results = useFetchQueries<HostPage>(

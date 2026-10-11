@@ -164,6 +164,10 @@ export function GlobalStreamCard({ row, onSaved }: { row: GlobalStreamRow; onSav
   const supportsWrites = useSessionStore(
     (state) => state.sessions[row.serverId]?.serverInfo?.features?.globalStream === true,
   );
+  // COMPAT(trackedAsks): added in v0.11.1-fork (C2), remove after 2027-04-07.
+  const supportsAsks = useSessionStore(
+    (state) => state.sessions[row.serverId]?.serverInfo?.features?.trackedAsks === true,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const openChat = useCallback(() => {
@@ -172,6 +176,8 @@ export function GlobalStreamCard({ row, onSaved }: { row: GlobalStreamRow; onSav
   const update = useCallback(
     async (entryId: string, status?: "open" | "reviewed" | "done") => {
       if (!client || connection !== "online" || !supportsWrites || busy) return;
+      const entry = row.item.kind === "entry" ? row.item.entry : null;
+      if (entry?.ask && !supportsAsks) return;
       setBusy(true);
       setError(null);
       try {
@@ -179,6 +185,7 @@ export function GlobalStreamCard({ row, onSaved }: { row: GlobalStreamRow; onSav
           agentId: row.agentId,
           entryId,
           action: status ? "update_status" : "remove_pin",
+          expectedRevision: entry?.ask?.revision,
           status,
         });
         onSaved();
@@ -188,7 +195,7 @@ export function GlobalStreamCard({ row, onSaved }: { row: GlobalStreamRow; onSav
         setBusy(false);
       }
     },
-    [client, connection, supportsWrites, busy, row.agentId, onSaved, t],
+    [client, connection, supportsWrites, supportsAsks, busy, row.agentId, row.item, onSaved, t],
   );
   const updateStatus = useCallback(
     (id: string, status: "open" | "reviewed" | "done") => {
@@ -214,11 +221,17 @@ export function GlobalStreamCard({ row, onSaved }: { row: GlobalStreamRow; onSav
       {row.item.kind === "entry" ? (
         <EntryCard
           entry={row.item.entry}
+          serverId={row.serverId}
           onReturnToChat={openChat}
           onReplyInChat={openChat}
           onUpdateStatus={updateStatus}
           onRemovePin={removePin}
-          disabled={busy || connection !== "online" || !supportsWrites}
+          disabled={
+            busy ||
+            connection !== "online" ||
+            !supportsWrites ||
+            Boolean(row.item.kind === "entry" && row.item.entry.ask && !supportsAsks)
+          }
         />
       ) : (
         <View style={styles.artifact}>

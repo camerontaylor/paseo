@@ -302,6 +302,7 @@ it("tracks prose questions without claiming a reply resolved a decision", () => 
     },
     { id: "turn:q", kind: "outcome", timestamp, text: "", truncated: false, status: "completed" },
   ]);
+  // A user message is not evidence that any particular question was answered.
   expect(
     collector.observe(
       "a",
@@ -313,31 +314,85 @@ it("tracks prose questions without claiming a reply resolved a decision", () => 
       },
       timestamp,
     ),
-  ).toEqual([{ ...result[0], status: "reply_sent" }, result[1]]);
+  ).toBe(result);
 });
 
-it.each(["Example: `ready?`", "Example:\n```js\nready?\n```", "See https://example.com/?"])(
-  "does not turn code or URLs into open questions: %s",
-  (text) => {
-    const collector = new CompanionStreamCollector();
-    collector.observe(
-      "a",
-      [],
-      {
-        type: "timeline",
-        provider: "codex",
-        turnId: "r",
-        item: { type: "assistant_message", text },
-      },
-      timestamp,
-    );
-    expect(
-      collector
-        .observe("a", [], { type: "turn_completed", provider: "codex", turnId: "r" }, timestamp)
-        .map((entry) => entry.kind),
-    ).toEqual(["outcome"]);
+it.each([
+  "Example: `ready?`",
+  "Example:\n```js\nready?\n```",
+  "See https://example.com/?",
+  "`ready?`",
+  "https://example.com/?",
+  "Open questions:\n- `ready?`\n- https://example.com/?\n```text\n- Use production?\n```",
+])("does not turn code or URLs into open questions: %s", (text) => {
+  const collector = new CompanionStreamCollector();
+  collector.observe(
+    "a",
+    [],
+    {
+      type: "timeline",
+      provider: "codex",
+      turnId: "r",
+      item: { type: "assistant_message", text },
+    },
+    timestamp,
+  );
+  expect(
+    collector
+      .observe("a", [], { type: "turn_completed", provider: "codex", turnId: "r" }, timestamp)
+      .map((entry) => entry.kind),
+  ).toEqual(["outcome"]);
+});
+
+it.each([
+  {
+    text: "Use `staging`?\nUse `production`?\nUse `staging`?",
+    questions: ["Use `staging`?", "Use `production`?"],
   },
-);
+  {
+    text: "- Should we use https://staging.example.com/?preview=1 for preview?\n- Should we use https://production.example.com/?preview=1 for preview?",
+    questions: [
+      "Should we use https://staging.example.com/?preview=1 for preview?",
+      "Should we use https://production.example.com/?preview=1 for preview?",
+    ],
+  },
+  {
+    text: "**Still need your input:**\n1. Choose `staging` or `production`\n2. Confirm https://example.com/?preview=1 as the preview URL",
+    questions: [
+      "Choose `staging` or `production`",
+      "Confirm https://example.com/?preview=1 as the preview URL",
+    ],
+  },
+])("preserves original prose in separately captured questions: $text", ({ text, questions }) => {
+  const collector = new CompanionStreamCollector();
+  collector.observe(
+    "a",
+    [],
+    {
+      type: "timeline",
+      provider: "codex",
+      turnId: "preserved",
+      item: { type: "assistant_message", text },
+    },
+    timestamp,
+  );
+  const entries = collector.observe(
+    "a",
+    [],
+    { type: "turn_completed", provider: "codex", turnId: "preserved" },
+    timestamp,
+  );
+  expect(entries.filter((entry) => entry.kind === "question")).toEqual(
+    questions.map((question, index) => ({
+      id: `turn:preserved:question${index ? `:${index}` : ""}`,
+      kind: "question",
+      timestamp,
+      text: question,
+      truncated: false,
+      status: "open",
+    })),
+  );
+});
 
 it("retains structured questions after unrelated user messages and expires them on interruption", () => {
   const collector = new CompanionStreamCollector();
@@ -576,4 +631,291 @@ it("upserts durable questions by identity and resolves only the selected item", 
   expect(() => applyStreamEntryUpdate(entries, { ...base, entryId: "name", text: " " })).toThrow(
     "Enter between",
   );
+});
+
+it("captures each explicitly labelled needed input even without a final question mark", () => {
+  const collector = new CompanionStreamCollector();
+  collector.observe(
+    "a",
+    [],
+    {
+      type: "timeline",
+      provider: "codex",
+      turnId: "list",
+      item: {
+        type: "assistant_message",
+        text: "Progress is saved.\n\n**Still need your input:**\n1. Choose the name\n2. Pick a release channel\n\n## Completed\n- Tests passed",
+      },
+    },
+    timestamp,
+  );
+  const entries = collector.observe(
+    "a",
+    [],
+    { type: "turn_completed", provider: "codex", turnId: "list" },
+    timestamp,
+  );
+  expect(entries.filter((entry) => entry.kind === "question").map((entry) => entry.text)).toEqual([
+    "Choose the name",
+    "Pick a release channel",
+  ]);
+  expect(entries.at(-1)?.kind).toBe("outcome");
+});
+
+it("keeps needed input on provider recreation without reviving tool permissions", () => {
+  const base = {
+    id: "p",
+    kind: "permission" as const,
+    requestId: "q",
+    status: "pending" as const,
+    text: "Which channel?",
+    timestamp,
+    truncated: false,
+  };
+  expect(
+    restoreCompanionEntries({
+      companionEntries: [
+        { ...base, requestKind: "question" },
+        { ...base, id: "tool", requestKind: "tool" },
+      ],
+    }),
+  ).toEqual([
+    {
+      id: "p",
+      kind: "question",
+      status: "open",
+      text: "Which channel?",
+      timestamp,
+      truncated: false,
+    },
+    { ...base, id: "tool", requestKind: "tool", status: "expired" },
+  ]);
+});
+
+it.each(["interruption", "recreation"])(
+  "keeps structured questions independently resolvable after %s",
+  (expiry) => {
+    const collector = new CompanionStreamCollector();
+    const pending = collector.observe(
+      "a",
+      [],
+      {
+        type: "permission_requested",
+        provider: "codex",
+        request: {
+          id: "multi",
+          provider: "codex",
+          name: "request_user_input",
+          kind: "question",
+          input: {
+            questions: [
+              { id: "name", question: "Choose name" },
+              { id: "channel", question: "Choose channel" },
+            ],
+          },
+        },
+      },
+      timestamp,
+    );
+    expect(pending.map((entry) => entry.id)).toEqual([
+      "permission:multi",
+      "permission:multi:question:1",
+    ]);
+    expect(
+      pending.every((entry) => entry.kind === "permission" && entry.requestId === "multi"),
+    ).toBe(true);
+    const expired =
+      expiry === "recreation"
+        ? restoreCompanionEntries({ companionEntries: pending })
+        : collector.observe(
+            "a",
+            pending,
+            {
+              type: "permission_resolved",
+              provider: "codex",
+              requestId: "multi",
+              resolution: { behavior: "deny", message: "Interrupted" },
+              disposition: "expired",
+            },
+            timestamp,
+          );
+    const resolved = applyStreamEntryUpdate(expired, {
+      agentId: "a",
+      action: "update_status",
+      entryId: pending[0].id,
+      status: "done",
+    });
+    expect(resolved).toEqual([
+      expect.objectContaining({ kind: "question", text: "Choose name", status: "done" }),
+      expect.objectContaining({ kind: "question", text: "Choose channel", status: "open" }),
+    ]);
+    expect(
+      listStreamRows([{ id: "a", cwd: "/project", companionEntries: resolved }], {
+        filter: "pending",
+      }).rows,
+    ).toHaveLength(1);
+    const denied = collector.observe(
+      "a",
+      pending,
+      {
+        type: "permission_resolved",
+        provider: "codex",
+        requestId: "multi",
+        resolution: { behavior: "deny" },
+      },
+      timestamp,
+    );
+    expect(
+      restoreCompanionEntries({ companionEntries: denied }).every(
+        (entry) => entry.kind === "permission" && entry.status === "denied",
+      ),
+    ).toBe(true);
+  },
+);
+
+it("expires canceled approvals without reviving them as questions", () => {
+  const collector = new CompanionStreamCollector();
+  const pending = collector.observe(
+    "a",
+    [],
+    {
+      type: "permission_requested",
+      provider: "codex",
+      request: { id: "tool", provider: "codex", name: "shell", kind: "tool" },
+    },
+    timestamp,
+  );
+  expect(
+    collector.observe(
+      "a",
+      pending,
+      {
+        type: "permission_resolved",
+        provider: "codex",
+        requestId: "tool",
+        disposition: "expired",
+        resolution: { behavior: "deny" },
+      },
+      timestamp,
+    ),
+  ).toEqual([{ ...pending[0], status: "expired" }]);
+});
+
+it("tracks partial, blocked, done and reopened asks without deriving success from turn end", () => {
+  const input = {
+    agentId: "parent",
+    entryId: "deploy",
+    action: "set_ask" as const,
+    expectedRevision: 0,
+    text: "Ship the requested feature",
+    ask: {
+      state: "in_progress" as const,
+      remaining: "Review and install",
+      evidence: "Tests pass",
+      sourceMessageId: "user:12",
+      delegatedAgentId: "worker",
+      subtasks: [
+        { id: "code", text: "Implement", done: true },
+        { id: "ship", text: "Install", done: false },
+      ],
+    },
+  };
+  let entries = applyStreamEntryUpdate([], input);
+  expect(entries[0].ask?.revision).toBe(1);
+  expect(applyStreamEntryUpdate(entries, input)).toBe(entries);
+  entries = restoreCompanionEntries({ companionEntries: JSON.parse(JSON.stringify(entries)) });
+  expect(applyStreamEntryUpdate(entries, input)).toBe(entries);
+  expect(() => applyStreamEntryUpdate(entries, { ...input, text: "Stale replacement" })).toThrow(
+    "revision conflict",
+  );
+  entries = new CompanionStreamCollector().observe(
+    "parent",
+    entries,
+    { type: "turn_completed", provider: "codex", turnId: "end" },
+    timestamp,
+  );
+  expect(entries[0].ask?.state).toBe("in_progress");
+  entries = applyStreamEntryUpdate(entries, {
+    ...input,
+    expectedRevision: 1,
+    ask: { ...input.ask, state: "blocked", remaining: "Waiting for review" },
+  });
+  expect(entries[0].ask?.state).toBe("blocked");
+  expect(() =>
+    applyStreamEntryUpdate(entries, {
+      ...input,
+      expectedRevision: 2,
+      ask: { ...input.ask, state: "done" },
+    }),
+  ).toThrow("Done requires evidence");
+  const finished = {
+    ...input.ask,
+    state: "done" as const,
+    remaining: "",
+    evidence: "Installed build verified",
+    subtasks: input.ask.subtasks.map((task) => ({ ...task, done: true })),
+  };
+  entries = applyStreamEntryUpdate(entries, { ...input, expectedRevision: 2, ask: finished });
+  expect(entries[0].ask).toMatchObject({ state: "done", revision: 3 });
+  entries = applyStreamEntryUpdate(entries, {
+    ...input,
+    expectedRevision: 3,
+    ask: { ...finished, state: "open", remaining: "Correction: installation failed" },
+  });
+  expect(entries[0]).toMatchObject({
+    id: "ask:deploy",
+    status: "open",
+    ask: { revision: 4, state: "open", delegatedAgentId: "worker" },
+  });
+  expect(entries.filter((entry) => entry.ask)).toHaveLength(1);
+});
+
+it("orders unresolved asks before completed asks across cursor pages and rejects stale status updates", () => {
+  let entries: CompanionEntry[] = [];
+  for (let i = 0; i < 4; i++)
+    entries = applyStreamEntryUpdate(entries, {
+      agentId: "parent",
+      entryId: String(i),
+      action: "set_ask",
+      expectedRevision: 0,
+      text: String(i),
+      ask: { state: i % 2 === 0 ? "done" : "open", remaining: "", evidence: "Checked" },
+    });
+  const sources = [{ id: "parent", cwd: "/project", companionEntries: entries }];
+  const first = listStreamRows(sources, { asksOnly: true, limit: 2 });
+  expect(first.rows.map((row) => row.item.kind === "entry" && row.item.entry.ask?.state)).toEqual([
+    "open",
+    "open",
+  ]);
+  const second = listStreamRows(sources, { asksOnly: true, limit: 2, cursor: first.nextCursor! });
+  expect(second.rows.map((row) => row.item.kind === "entry" && row.item.entry.ask?.state)).toEqual([
+    "done",
+    "done",
+  ]);
+  expect(second.nextCursor).toBeNull();
+  entries = applyStreamEntryUpdate(entries, {
+    agentId: "parent",
+    entryId: "ask:0",
+    action: "update_status",
+    expectedRevision: 1,
+    status: "open",
+  });
+  expect(entries[0].ask?.state).toBe("open");
+  expect(() =>
+    applyStreamEntryUpdate(entries, {
+      agentId: "parent",
+      entryId: "ask:0",
+      action: "update_status",
+      expectedRevision: 1,
+      status: "reviewed",
+    }),
+  ).toThrow("revision conflict");
+  expect(() =>
+    applyStreamEntryUpdate(entries, {
+      agentId: "parent",
+      entryId: "ask:0",
+      action: "update_status",
+      status: "done",
+    }),
+  ).toThrow("completion evidence");
 });

@@ -161,6 +161,36 @@ it("parses the stream RPCs and keeps the question status enum closed", () => {
   ).toThrow();
 });
 
+it("an old daemon rejects the set_ask action its schema never knew", () => {
+  // The released inbound request schema (frozen independently) has no
+  // set_ask member and no ask/expectedRevision fields: a new client that
+  // bypassed its own gate would be rejected by the old daemon's validation
+  // rather than partially applied.
+  const ReleasedStreamUpdateRequest = z.object({
+    type: z.literal("stream.entry.update.request"),
+    requestId: z.string(),
+    agentId: z.string(),
+    entryId: z.string().optional(),
+    action: z.enum(["update_status", "add_pin", "remove_pin", "add_q_and_a", "add_question"]),
+    status: z.enum(["open", "reviewed", "done"]).optional(),
+    text: z.string().max(4000).optional(),
+    answerText: z.string().max(4000).optional(),
+    sourceId: z.string().optional(),
+  });
+  expect(() =>
+    ReleasedStreamUpdateRequest.parse({
+      type: "stream.entry.update.request",
+      requestId: "old-daemon",
+      agentId: "parent",
+      entryId: "deploy",
+      action: "set_ask",
+      text: "Deploy",
+      expectedRevision: 0,
+      ask: { state: "open", remaining: "", evidence: "" },
+    }),
+  ).toThrow();
+});
+
 it("gates the stream features on optional flags an old daemon never sets", () => {
   const oldDaemon = ServerInfoStatusPayloadSchema.parse({
     status: "server_info",

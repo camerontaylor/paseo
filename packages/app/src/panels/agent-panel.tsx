@@ -23,7 +23,6 @@ import { useStoreWithEqualityFn } from "zustand/traditional";
 import { AgentStreamView, type AgentStreamViewHandle } from "@/agent-stream/view";
 import { ArchivedAgentCallout } from "@/components/archived-agent-callout";
 import { CompanionFeed } from "@/companion-stream/feed";
-import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import {
@@ -1044,8 +1043,6 @@ function ChatAgentContent({
   );
 }
 
-const EMPTY_COMPANION_ENTRIES: readonly CompanionEntry[] = [];
-
 const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   serverId,
   workspaceId,
@@ -1280,7 +1277,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           agentId={agentId}
           cwd={cwd}
           captureDegraded={agentState.captureDegraded === true}
-          entries={agentState.companionEntries ?? EMPTY_COMPANION_ENTRIES}
           artifacts={agentState.artifacts ?? []}
           isSupported={companionStreamSupported}
           artifactsSupported={companionStreamSupported}

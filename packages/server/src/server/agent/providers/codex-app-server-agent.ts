@@ -3453,7 +3453,6 @@ export class CodexAppServerAgentSession implements AgentSession {
   private client: CodexAppServerClient | null = null;
   private threadRollbackAvailable = true;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
-  private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
   private activeClientMessageId: string | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
@@ -4672,8 +4671,16 @@ export class CodexAppServerAgentSession implements AgentSession {
     requestId: string,
     response: AgentPermissionResponse,
   ): Promise<AgentPermissionResult | void> {
+    return this.resolvePermission(requestId, response);
+  }
+
+  private async resolvePermission(
+    requestId: string,
+    response: AgentPermissionResponse,
+    disposition?: "expired",
+  ): Promise<AgentPermissionResult | void> {
     if (this.asyncQuestions.hasPending(requestId)) {
-      return this.respondToAsyncQuestion(requestId, response);
+      return this.respondToAsyncQuestion(requestId, response, disposition);
     }
     const pending = this.pendingPermissionHandlers.get(requestId);
     if (!pending) {
@@ -4682,7 +4689,13 @@ export class CodexAppServerAgentSession implements AgentSession {
     const pendingRequest = this.pendingPermissions.get(requestId) ?? null;
 
     if (pending.kind === "plan") {
-      return this.handlePlanPermissionResponse({ requestId, response, pending, pendingRequest });
+      return this.handlePlanPermissionResponse({
+        requestId,
+        response,
+        pending,
+        pendingRequest,
+        disposition,
+      });
     }
 
     this.pendingPermissionHandlers.delete(requestId);
@@ -4697,6 +4710,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       type: "permission_resolved",
       provider: CODEX_PROVIDER,
       requestId,
+      disposition,
       resolution: response,
     });
 
@@ -4771,6 +4785,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private async respondToAsyncQuestion(
     requestId: string,
     response: AgentPermissionResponse,
+    disposition?: "expired",
   ): Promise<AgentPermissionResult | void> {
     const prepared = this.asyncQuestions.prepareResponse(requestId, response);
     let followUpPrompt = prepared.prompt;
@@ -4790,6 +4805,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       type: "permission_resolved",
       provider: CODEX_PROVIDER,
       requestId,
+      ...(disposition ? { disposition } : {}),
       resolution: response,
     });
     return followUpPrompt ? { followUpPrompt } : undefined;
@@ -4800,8 +4816,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     response: AgentPermissionResponse;
     pending: CodexPendingPermissionHandler;
     pendingRequest: AgentPermissionRequest | null;
+    disposition?: "expired";
   }): AgentPermissionResult | void {
-    const { requestId, response, pending, pendingRequest } = params;
+    const { requestId, response, pending, pendingRequest, disposition } = params;
     let followUpPrompt: string | undefined;
     if (response.behavior === "allow") {
       followUpPrompt = this.preparePlanImplementation({
@@ -4809,7 +4826,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       });
     }
 
-    this.resolvePlanPermission(requestId, response);
+    this.resolvePlanPermission(requestId, response, disposition);
     if (followUpPrompt) {
       return { followUpPrompt };
     }
@@ -4821,7 +4838,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       .map(([requestId]) => requestId);
 
     for (const requestId of requestIds) {
-      this.resolvePlanPermission(requestId, { behavior: "deny", message });
+      this.resolvePlanPermission(requestId, { behavior: "deny", message }, "expired");
     }
   }
 
@@ -4836,7 +4853,11 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  private resolvePlanPermission(requestId: string, resolution: AgentPermissionResponse): void {
+  private resolvePlanPermission(
+    requestId: string,
+    resolution: AgentPermissionResponse,
+    disposition?: "expired",
+  ): void {
     this.recordPlanOutcome(requestId, resolution.behavior === "allow" ? "approved" : "rejected");
     this.pendingPermissionHandlers.delete(requestId);
     this.pendingPermissions.delete(requestId);
@@ -4845,6 +4866,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       type: "permission_resolved",
       provider: CODEX_PROVIDER,
       requestId,
+      ...(disposition ? { disposition } : {}),
       resolution,
     });
   }
@@ -5395,7 +5417,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private createTurnId(): string {
-    return `codex-turn-${this.nextTurnOrdinal++}`;
+    return `codex-turn-${randomUUID()}`;
   }
 
   private handleNotification(method: string, params: unknown): void {
@@ -5415,6 +5437,7 @@ export class CodexAppServerAgentSession implements AgentSession {
           type: "permission_resolved",
           provider: CODEX_PROVIDER,
           requestId,
+          disposition: "expired",
           resolution: { behavior: "deny", interrupt: true },
         });
       }
@@ -6518,6 +6541,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         type: "permission_resolved",
         provider: CODEX_PROVIDER,
         requestId: request.id,
+        disposition: "expired",
         resolution,
       });
     }
@@ -6534,6 +6558,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         type: "permission_resolved",
         provider: CODEX_PROVIDER,
         requestId,
+        disposition: "expired",
         resolution: { behavior: "deny", message: "Removed by rewind" },
       });
     }

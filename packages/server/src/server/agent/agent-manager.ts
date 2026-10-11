@@ -5165,6 +5165,7 @@ export class AgentManager {
           provider,
           requestId,
           resolution: { behavior: "deny", message },
+          disposition: "expired",
         });
       }
     }

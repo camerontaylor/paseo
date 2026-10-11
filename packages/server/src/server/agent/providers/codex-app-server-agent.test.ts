@@ -1693,6 +1693,43 @@ describe("Codex app-server provider", () => {
     }
   });
 
+  test("expires an MCP elicitation canceled by the server", async () => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    await session.connect();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      const requested = waitForNextPermission(session);
+      appServer.requestMcpElicitation({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "browser",
+        message: "Open page?",
+        requestedSchema: { type: "object", properties: {} },
+      });
+      const permission = await requested;
+      appServer.resolvesMcpElicitation();
+      await vi.waitFor(() =>
+        expect(events).toContainEqual({
+          type: "permission_resolved",
+          provider: "codex",
+          requestId: permission.request.id,
+          resolution: { behavior: "deny", interrupt: true },
+          disposition: "expired",
+        }),
+      );
+      expect(session.getPendingPermissions()).toEqual([]);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("surfaces an MCP elicitation and returns Codex's required approval action", async () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(
@@ -7072,4 +7109,32 @@ describe("Codex denied plan approvals", () => {
       metadata: { approved: false },
     });
   });
+});
+
+test("new provider instances produce distinct turn identities for restored Stream records", async () => {
+  const turnIds: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "turn_completed" && event.turnId) turnIds.push(event.turnId);
+    });
+    try {
+      const result = session.run("Continue the same work");
+      await appServer.waitForTurnStart();
+      appServer.startsTurn({ threadId: "thread-1", turnId: "native-turn" });
+      appServer.completeTurn();
+      await result;
+    } finally {
+      unsubscribe();
+      await session.close();
+    }
+  }
+  expect(turnIds).toHaveLength(2);
+  expect(new Set(turnIds).size).toBe(2);
 });

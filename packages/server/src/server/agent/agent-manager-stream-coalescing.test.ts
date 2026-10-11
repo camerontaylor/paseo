@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
-import { ReleasedAgentSnapshotSchema } from "../../test-utils/released-stream-schemas.js";
+import { ReleasedAgentSnapshotSchema } from "../test-utils/released-stream-schemas.js";
 import { AgentManager, type AgentManagerEvent } from "./agent-manager.js";
+import { toAgentPayload } from "./agent-projections.js";
 import { AgentStorage } from "./agent-storage.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS } from "./agent-stream-coalescer.js";
 import type { AgentTimelineRow } from "./agent-timeline-store-types.js";

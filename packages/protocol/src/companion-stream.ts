@@ -74,9 +74,11 @@ export const CompanionEntrySchema = z.discriminatedUnion("kind", [
 export type CompanionEntry = z.infer<typeof CompanionEntrySchema>;
 
 export function isCompanionEntryPending(entry: CompanionEntry): boolean {
+  // Reviewed and legacy reply-sent questions remain unresolved until an
+  // explicit Done; permission expiry and ask state are counted separately.
   return (
-    (entry.kind === "question" && entry.status === "open") ||
-    (entry.kind === "feature_request" && entry.status === "open") ||
+    (entry.kind === "question" && entry.status !== "done") ||
+    (entry.kind === "feature_request" && entry.status !== "done") ||
     (entry.kind === "permission" && entry.status === "pending")
   );
 }
