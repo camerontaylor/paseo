@@ -10,6 +10,7 @@ const SHELL_ROW_TEST_IDS = {
   "new-workspace": "sidebar-global-new-workspace",
   history: "sidebar-sessions",
   search: "sidebar-search",
+  stream: "sidebar-stream",
   schedules: "sidebar-schedules",
 } as const;
 
@@ -35,6 +36,7 @@ function itemLabel(key: SidebarNavKey): string {
     "new-workspace": "New workspace",
     history: "History",
     search: "Search",
+    stream: "Stream",
     schedules: "Schedules",
   }[key];
 }
