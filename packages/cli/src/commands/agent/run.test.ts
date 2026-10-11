@@ -4,6 +4,7 @@ import {
   resolveExistingRunWorkspace,
   resolveRunCallerAgentId,
   runRunCommand,
+  resolveRunThinkingOption,
   type AgentRunOptions,
 } from "./run";
 
@@ -154,5 +155,89 @@ describe("runRunCommand option validation", () => {
       { newWorkspace: "worktree", worktreeMode: "container" },
       /Unsupported worktree mode/,
     );
+  });
+});
+
+describe("run thinking defaults", () => {
+  const models = [
+    { id: "default-model", label: "Default", isDefault: true, defaultThinkingOptionId: "medium" },
+    {
+      id: "chosen-model",
+      label: "Chosen",
+      thinkingOptions: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High", isDefault: true },
+      ],
+    },
+  ];
+
+  it.each([
+    { model: "chosen-model", expected: "high" },
+    { model: undefined, expected: "medium" },
+    { model: "unlisted-model", expected: undefined },
+  ])("resolves the effort for $model", async ({ model, expected }) => {
+    const listProviderModels = vi.fn().mockResolvedValue({ models });
+    await expect(
+      resolveRunThinkingOption(
+        { listProviderModels },
+        {
+          provider: "custom",
+          model,
+          cwd: "/workspace",
+          thinking: undefined,
+        },
+      ),
+    ).resolves.toBe(expected);
+    expect(listProviderModels).toHaveBeenCalledWith("custom", { cwd: "/workspace" });
+  });
+
+  it("preserves explicit thinking without querying models", async () => {
+    const listProviderModels = vi.fn();
+    await expect(
+      resolveRunThinkingOption(
+        { listProviderModels },
+        {
+          provider: "custom",
+          model: "chosen-model",
+          cwd: "/workspace",
+          thinking: "low",
+        },
+      ),
+    ).resolves.toBe("low");
+    expect(listProviderModels).not.toHaveBeenCalled();
+  });
+
+  it("leaves effort unset when the chosen model has no default", async () => {
+    const listProviderModels = vi.fn().mockResolvedValue({
+      models: [
+        { id: "chosen-model", label: "Chosen", thinkingOptions: [{ id: "low", label: "Low" }] },
+      ],
+    });
+    await expect(
+      resolveRunThinkingOption(
+        { listProviderModels },
+        {
+          provider: "custom",
+          model: "chosen-model",
+          cwd: "/workspace",
+          thinking: undefined,
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("reports catalog errors instead of guessing a default", async () => {
+    const listProviderModels = vi.fn().mockResolvedValue({ error: "Catalog unavailable" });
+    await expect(
+      resolveRunThinkingOption(
+        { listProviderModels },
+        {
+          provider: "custom",
+          model: "chosen-model",
+          cwd: "/workspace",
+          thinking: undefined,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "PROVIDER_ERROR", message: "Catalog unavailable" });
   });
 });

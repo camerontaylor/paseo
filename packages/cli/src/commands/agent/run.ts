@@ -4,7 +4,7 @@ import {
   StructuredAgentResponseError,
 } from "@getpaseo/server/agent-response";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
-import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
+import { DaemonConnectionError, type DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { connectToDaemon } from "../../utils/client.js";
 import type {
   CommandOptions,
@@ -17,7 +17,7 @@ import { resolve } from "node:path";
 import { lookup } from "mime-types";
 import { parseDuration } from "../../utils/duration.js";
 import { collectMultiple } from "../../utils/command-options.js";
-import { resolveProviderAndModel } from "../../utils/provider-model.js";
+import { resolveProviderAndModel, type ResolvedProviderModel } from "../../utils/provider-model.js";
 import { buildWorkspaceSource } from "../workspace/create.js";
 
 export { resolveProviderAndModel } from "../../utils/provider-model.js";
@@ -576,6 +576,29 @@ async function resolveRunWorkspace(
   return { id: result.workspace.id, cwd: result.workspace.workspaceDirectory ?? cwd };
 }
 
+interface ResolveRunThinkingOptionInput extends ResolvedProviderModel {
+  cwd: string;
+  thinking: string | undefined;
+}
+
+export async function resolveRunThinkingOption(
+  client: Pick<DaemonClient, "listProviderModels">,
+  input: ResolveRunThinkingOptionInput,
+): Promise<string | undefined> {
+  if (input.thinking !== undefined) return input.thinking;
+  const result = await client.listProviderModels(input.provider, { cwd: input.cwd });
+  if (result.error) {
+    throw { code: "PROVIDER_ERROR", message: result.error } satisfies CommandError;
+  }
+  const models = result.models ?? [];
+  const model = input.model
+    ? models.find((candidate) => candidate.id === input.model)
+    : (models.find((candidate) => candidate.isDefault) ?? models[0]);
+  return (
+    model?.defaultThinkingOptionId ?? model?.thinkingOptions?.find((option) => option.isDefault)?.id
+  );
+}
+
 export async function runRunCommand(
   prompt: string,
   options: AgentRunOptions,
@@ -594,8 +617,8 @@ export async function runRunCommand(
   try {
     // Resolve working directory
     const cwd = options.cwd ?? process.cwd();
-    const thinkingOptionId = options.thinking?.trim();
-    if (options.thinking !== undefined && !thinkingOptionId) {
+    const requestedThinkingOptionId = options.thinking?.trim();
+    if (options.thinking !== undefined && !requestedThinkingOptionId) {
       const error: CommandError = {
         code: "INVALID_THINKING_OPTION",
         message: "--thinking cannot be empty",
@@ -615,6 +638,11 @@ export async function runRunCommand(
     const workspace = await resolveRunWorkspace(client, options, cwd, callerAgentId);
     const workspaceId = workspace.id;
     const runCwd = workspace.cwd;
+    const thinkingOptionId = await resolveRunThinkingOption(client, {
+      ...resolvedProviderModel,
+      cwd: runCwd,
+      thinking: requestedThinkingOptionId,
+    });
 
     if (outputSchema) {
       let structuredAgent: AgentSnapshotPayload | null = null;
