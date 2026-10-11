@@ -6,7 +6,7 @@ One row per schedule slot (plan §4). Sol verdicts are quoted in the linked pack
 | - | -- | ------ | -------------------- | ------ | ------------ | ------------ | ---------- | ------ |
 | 0 | baseline/equivalence (§5.3 + A1 s0) | — (control) | — | coordinator | — | — | — | DONE — see baseline-equivalence.md |
 | 1 | C1 queue durability | `fork/tmad-refresh-queue-durability-0.11.1` @ `8468e7f55` | `139e0c81e8eb51b0f97551171b2217838c3ebab5` | neptune `24636e40-…` (s1) → uranus `c4cb3dd7-39ca-448d-a16b-abd2b512925e` (s2, s3, gate test) (glm-5.3-flash) | s1 PF APPROVE + ADVANCE `db54e7d71`; s2 PF APPROVE + ADVANCE `272c640d9`; s3 PF APPROVE + ADVANCE `16d04acff` — see logs/C1.log.md | ITERATE → ADVANCE `8468e7f55` | `1e4a4f1039fbdf09df0b59830e8c6d69d23f6b80` (`fork/refresh-basket-c1`; Sol ADVANCE) | DONE 2026-10-11 — open: browser/platform proof, remote CI, s1 drain key-only assertion, legacy `queued: true` unreachable, uncertain case via seeded residue |
-| 2 | C2 Stream durability | `fork/tmad-refresh-stream-durability-0.11.1` | tmad `139e0c81e8eb51b0f97551171b2217838c3ebab5` | uranus `7bca4486-de51-42df-961f-09553825a941` (glm-5.3-flash) | pending (PF s2, s4) | pending | pending | IN PROGRESS — dispatched 2026-10-11 |
+| 2 | C2 Stream durability | `fork/tmad-refresh-stream-durability-0.11.1` | tmad `139e0c81e8eb51b0f97551171b2217838c3ebab5` | uranus GLM `7bca4486-…` (s1–s4) → DeepSeek `a6214735-52a4-43d5-a0b6-a8ec61cfeaa6` (s4 ITERATE onward) | s1 ADVANCE `49a16f058`; s2 PF APPROVE + ADVANCE `c9fef7739`; s3 ADVANCE `2afcbc82e`; s4 PF APPROVE, stage ITERATE at `707f800f9` | pending | pending | IN PROGRESS |
 | 3 | A1 ACP diagnostics | `fork/acp-diagnostics-0.11.1` | custom `cbc2017186b980e7928bc376cfdeabb90ef56aa2` | — | — | — | — | PENDING |
 | 4 | A2 quit dialog | `fork/infi-refresh-quit-dialog-0.11.1` | infi-backend `1dd375931a0c4de5e930abb4b2cf2dc52d9cbcc5` | — | — | — | — | PENDING |
 | 5 | B9 diff-stat | `fork/infi-refresh-diff-stat-0.11.1` | infi-backend | — | — | — | — | PENDING |
@@ -34,3 +34,4 @@ One row per schedule slot (plan §4). Sol verdicts are quoted in the linked pack
 - Broader remote-CI / platform-hardware QA evidence is recorded PENDING per package until a real run exists; never claimed green.
 - 2026-10-10: host migration neptune → uranus; new Sol `3f2c7ea5-1328-4cd7-85c3-8c3d3ddbe4ff`; Opus 5.5 coordinator. See the re-pin record in execution-start.md. C1 s1 CLOSED (ADVANCE at `db54e7d71`); s2 resumes from `handover/c1-s2-wip-20261010`. Package logs are mirrored under `logs/`.
 - 2026-10-11: C1 CLOSED. Package gate ADVANCE at `8468e7f55`; basket `1e4a4f103` ADVANCE; custom re-pin ruling: retain `cbc201718`.
+- 2026-10-11: workers switched to DeepSeek V4.1 Flash via jcode (Cameron). C2 handed over mid s4.

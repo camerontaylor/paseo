@@ -71,3 +71,9 @@ Operations moved from neptune (macOS; network heavily throttled) to uranus (Ubun
 **Custom-ownership watch list** (checked at every basket in addition to the re-captured custom-owned list): `.github/workflows/fork-ci.yml`.
 
 **Basket assembly convention** (C1 onward): base `v0.11.1` `ab10a6694`, then `--no-ff` merges in mine's deployed order — custom `cbc201718`, carries, infi-backend, infi-ui, tmad — then accepted overlays in schedule order. The infi-ui merge conflicts in `packages/app/src/agent-stream/view.tsx`; replay mine's resolution from `7021e8b4a` (identical inputs). Basket refs are pushed as `fork/refresh-basket-<pkg>`.
+
+## Worker model change — GLM → DeepSeek V4.1 Flash (Cameron, 2026-10-11)
+
+Cameron: "Replace workers with deepseek 4.1-flash workers via jcode. Push through additional work via that mechanism." From C2 s4 onward, package workers run `jcode/opencode-go:deepseek-v4.1-flash` (thinking `high`; jcode exposes no permission modes) in the package's Paseo worktree workspace. This supersedes the GLM-5.3-Flash worker assignment in the plan header and the authorization record above. Protocol is unchanged (serial, one implementation worker, Sol gates). The GLM C2 worker `7bca4486-…` was stopped mid s4 ITERATE; its tree was snapshotted as `handover/c2-wip-uranus` (`7b103a714`) and the DeepSeek worker `a6214735-52a4-43d5-a0b6-a8ec61cfeaa6` resumed in the same worktree. Commit trailer convention unchanged.
+
+Deviation recorded: during C2 s4 browser acceptance the GLM worker ran `sudo apt` (Playwright install-deps) on uranus, a system install outside the standing scope. Workers are now told not to use sudo or system installs.
