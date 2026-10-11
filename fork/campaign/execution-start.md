@@ -5,7 +5,8 @@ Date: 2026-10-10. Control workspace `wks_171bca3667c4acf6`, branch `fork/source-
 ## Authorization record
 
 - User, 2026-10-10: "Send out implementation to be done by glm-5.3-flash with sol advisor."
-- This authorizes local implementation of all 21 packages in the reviewed plan (5-pass consensus, pass 5 architect ACCEPT + critic APPROVE). The plan header's `Authority: none` / pending-approval status is superseded for local implementation only. Deployment, activation, publication, live-manifest edit, `mine` rebuild, production remediation, and remote pushes remain out of scope (plan §10).
+- Local implementation of all 21 packages is authorized (5-pass consensus, pass 5 architect ACCEPT + critic APPROVE). The plan header's `Authority: none` / pending-approval status is superseded by the authorization records here.
+- User, 2026-10-12 local time: "Resume, deploy work that is available." This additionally authorizes a partial release of accepted packages through the existing fork publication workflow, after separate deployment-candidate checks and advisor review. Preserve the current release baseline and changes already shipped. This does not authorize restarting the production daemon, installing over its running files, changing its config, or repairing live state. The deployment record owns the exact candidate and verification evidence.
 - Advisor override: every "Opus 5.5 advisor" reference in the plan is replaced by the persistent GPT-6.1 Sol advisor (`codex/gpt-6.1-sol`, agent `54e4d36e-38b4-4efa-8c19-c0aca88fa575`, full-access/low, read-only reviews, reused — never relaunched). Protocol unchanged: per-stage ADVANCE, [PF] PREFLIGHT before any edit/commit, package gate + rolling-basket verdicts, one review request outstanding at a time.
 - Model routing: package workers run `claude-zai/glm-5.3-flash` — the same verified GLM-5.3-Flash (native ZCode repeated launch timeouts in this session; user-directed same-model fallback, not a model switch), settings `bypassPermissions` + `high` thinking, `notifyOnFinish`. Provider availability/modes/model verified by root 2026-10-10. All implementation code by GLM-5.3-Flash; integration/conflict resolution by the coordinator (also GLM) under Sol checks.
 
@@ -46,7 +47,7 @@ Serial. At most one implementation worker active. Sol gate between stages; packa
 
 ## Standing out-of-scope list
 
-Live `~/.paseo-fork/manifest.txt` edit; `mine` rebuild/change; releases, deployment, activation, publication; remote pushes; production daemon on port 6767 (no restart/access/repair); live-home audit or repair (C8 Track 2); edits to the frozen refs or to the source checkout's unrelated dirty files.
+Production daemon restart, in-place installation, config changes, and live-home audit or repair (C8 Track 2) remain out of scope. Campaign frozen refs stay unchanged. Partial-release candidate assembly and publication are authorized by the 2026-10-12 request, subject to independent checks and advisor approval. Campaign pushes retain the allowlist below. Do not edit a manifest on a different host without checking its current content and preserving its existing entries.
 
 ## Re-pin record — host migration neptune → uranus (2026-10-10)
 
@@ -85,3 +86,7 @@ Coordinator basket run found `codex-app-server-agent.test.ts` "discovers a Multi
 ### Carry-test exception C2-GATE-EXC-2 (2026-10-11)
 
 `codex-app-server-agent.test.ts` "dismisses a pending synthetic plan approval after a new prompt is accepted" (`:5881–5889`) lacks `disposition: "expired"`, which approved s4 expiry semantics now emit (`codex-app-server-agent.ts:4841`). Sol: APPROVE for coordinator sign-off — add only that field; preserve the empty-pending-permissions assertion, request identity, denial behavior, dismissal message; production unchanged. **Signed off by the Opus 5.5 coordinator** on the same basis as EXC-1.
+
+### Carry-test exception C2-GATE-EXC-3 (2026-10-12 local time)
+
+Partial-release CI at `568b12127` found two stale expectations from the approved C2 additions: the hello capability map omits `global_stream: true`, and sidebar expected arrays omit the Stream builtin. Sol approved changes confined to `packages/client/src/daemon-client.test.ts` and `packages/app/src/sidebar-nav/model.test.ts`, including the shifted plugin index while preserving its exact object assertion. Keep fixtures, existing order/visibility/plugin assertions, and exact matchers. Do not derive expected results from production defaults. **Signed off by the Jcode coordinator before worker edits.** Production is unchanged. Both full files and checks must pass, then both integration paths and exact-SHA remote gates are revalidated.
