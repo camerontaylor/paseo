@@ -145,6 +145,17 @@ test("a failed agent startup retries only that stage with the reserved IDs", asy
   expect(attempts).toBe(2);
 });
 
+test("creation reports structured provider errors without object coercion", async () => {
+  const f = await fixture();
+  f.input.createAgent = async () => {
+    throw { code: "-32603", data: { details: "Workspace is not trusted" } };
+  };
+  const result = await f.service.create(f.input);
+  expect(result).toMatchObject({ phase: "failed", failedStage: "agent" });
+  expect(result.error).toContain("Workspace is not trusted");
+  expect(result.error).not.toBe("[object Object]");
+});
+
 test("an uncertain prompt outcome never resends or removes its workspace and agent", async () => {
   const f = await fixture();
   let prompts = 0;

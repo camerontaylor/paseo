@@ -1003,6 +1003,29 @@ describe("ACP selection validity helpers", () => {
 });
 
 describe("ACPAgentSession Zed parity", () => {
+  test("reports ACP mode rejection details during startup", async () => {
+    const session = createSessionWithConfig({ modeId: "yolo" });
+    const rejected = prepareConfiguredOverrideSession(session, {
+      currentMode: "default",
+      availableModes: [
+        { id: "default", label: "Default" },
+        { id: "yolo", label: "YOLO" },
+      ],
+      connection: {
+        setSessionMode: vi.fn(async () => {
+          throw {
+            code: -32603,
+            message: "Internal error",
+            data: { details: "Cannot enable privileged approval modes in an untrusted folder." },
+          };
+        }),
+      },
+    });
+    await expect(rejected.internals.applyConfiguredOverrides()).rejects.toThrow(
+      "Internal error: Cannot enable privileged approval modes in an untrusted folder.",
+    );
+  });
+
   test("applies valid stored values and mode updates, warns for invalid modes, and rejects invalid models", async () => {
     const validSession = createSessionWithConfig({ modeId: "plan", model: "sonnet" });
     const valid = prepareConfiguredOverrideSession(validSession, {
@@ -2621,6 +2644,16 @@ describe("ACPAgentSession", () => {
     });
     expect(summary.message).not.toContain("[object Object]");
     expect(summary.diagnostic).toContain("Droid process exited unexpectedly");
+  });
+
+  test("preserves details from nonstandard ACP rejection objects", () => {
+    // A JSON-RPC rejection envelope without a top-level message is not an ACP error and
+    // not an Error, so it must be serialized rather than coerced to "[object Object]".
+    const summary = summarizeACPRequestError({
+      error: { code: -32603, data: { details: "Workspace is not trusted" } },
+    });
+    expect(summary.message).toContain("Workspace is not trusted");
+    expect(summary.message).not.toBe("[object Object]");
   });
 
   test("accepts ACP extension notifications without failing the JSON-RPC connection", async () => {
