@@ -4188,20 +4188,27 @@ describe("Codex app-server provider", () => {
         agentPath: "/root/legacy-only-child",
       });
 
-      await expect(child).resolves.toMatchObject({
+      const childEvent = await child;
+      const spawnEvent = await spawn;
+      // C2-GATE-EXC-1: C2 makes foreground turn ids unique (codex-turn-<uuid>),
+      // so correlate on the observed foreground turn id instead of the obsolete
+      // ordinal. Child and spawn must share it; discovery assertions are unchanged.
+      const foregroundTurnId = childEvent.turnId;
+      expect(foregroundTurnId).toBeDefined();
+      expect(childEvent).toMatchObject({
         type: "provider_subagent",
         provider: "codex",
-        turnId: "codex-turn-0",
+        turnId: foregroundTurnId,
         event: {
           type: "upsert",
           id: "legacy-only-child-thread",
           status: "running",
         },
       });
-      await expect(spawn).resolves.toMatchObject({
+      expect(spawnEvent).toMatchObject({
         type: "timeline",
         provider: "codex",
-        turnId: "codex-turn-0",
+        turnId: foregroundTurnId,
         item: {
           type: "tool_call",
           callId: "spawn-legacy-only-child",
