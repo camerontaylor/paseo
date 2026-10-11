@@ -438,6 +438,12 @@ describe("stream durability daemon", () => {
       expect(await readAsk(ctx.client)).toMatchObject(winner);
       expect(await readAsk(clientB)).toMatchObject(winner);
 
+      // Storage-level proof, not just live reads: the record on the daemon's own
+      // persistence boundary holds A's winner.
+      const stored = await ctx.daemon.daemon.agentStorage.get(agent.id);
+      const storedAsk = stored?.companionEntries?.find((entry) => entry.id === "ask:deploy")?.ask;
+      expect(storedAsk).toMatchObject(winner);
+
       // A fresh connection reads the same winner.
       const clientC = new DaemonClient({ url: `ws://127.0.0.1:${ctx.daemon.port}/ws` });
       await clientC.connect();
@@ -452,7 +458,48 @@ describe("stream durability daemon", () => {
     }
   });
 
-  test("degraded capture: ENOSPC/EIO refuse the ack, keep capture and the session, then recover", async () => {
+  test("degraded capture during a live provider turn: events keep streaming, retained history survives, a background persist clears the flag", async () => {
+    // This test needs a provider turn it can hold at its completion boundary, so
+    // it runs its own daemon with a controllable fake provider instead of the
+    // shared context.
+    interface Hold {
+      reached: Promise<void>;
+      released: Promise<void>;
+      markReached: () => void;
+      release: () => void;
+    }
+    const createHold = (): Hold => {
+      let markReached!: () => void;
+      let release!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        markReached = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { reached, released, markReached, release };
+    };
+    let hold: Hold | null = null;
+    let pendingFault: NodeJS.ErrnoException | null = null;
+    let fault: NodeJS.ErrnoException | null = null;
+    await ctx.cleanup();
+    ctx = await createDaemonTestContext({
+      agentClients: createTestAgentClients({
+        // Arm the fault at the turn's own admission boundary: the prompt is
+        // accepted while storage is healthy, then every capture of this turn's
+        // events fails until the test clears it.
+        onStartTurn: () => {
+          fault = pendingFault;
+        },
+        // Deterministic mid-turn barrier: the provider holds just before
+        // `turn_completed`, so the fault lands on the turn's own capture and the
+        // test can clear it while the turn is still live.
+        beforeTurnCompletion: () => {
+          hold?.markReached();
+          return hold?.released;
+        },
+      }),
+    });
     const agent = await ctx.client.createAgent({ provider: "codex", cwd: "/tmp" });
     await ctx.client.updateStreamEntry({
       agentId: agent.id,
@@ -460,13 +507,123 @@ describe("stream durability daemon", () => {
       entryId: "kept",
       text: "Kept across the fault",
     });
+
     // Fault injection at the daemon's own persistence boundary: wrap the
     // isolated instance's storage methods; restore them in finally so nothing
     // leaks across tests (no global monkeypatching).
     const storage = ctx.daemon.daemon.agentStorage;
     const originalApplySnapshot = storage.applySnapshot;
     const originalUpsert = storage.upsert;
-    let fault: NodeJS.ErrnoException | null = null;
+    let captureFailures = 0;
+    storage.applySnapshot = (async (...args: Parameters<typeof originalApplySnapshot>) => {
+      if (fault) {
+        captureFailures += 1;
+        throw fault;
+      }
+      return originalApplySnapshot.apply(storage, args);
+    }) as typeof storage.applySnapshot;
+    storage.upsert = (async (...args: Parameters<typeof originalUpsert>) => {
+      if (fault) throw fault;
+      return originalUpsert.apply(storage, args);
+    }) as typeof storage.upsert;
+
+    const collector = createMessageCollector(ctx.client);
+    // A real client subscribes to the agent's timeline; without this the daemon
+    // delivers only state updates, not `agent_stream` events.
+    const timelineObservation = ctx.client.observeTimeline([agent.id]);
+    await timelineObservation.ready;
+    const streamTexts = async () => {
+      const page = await ctx.client.listGlobalStream({ agentId: agent.id });
+      return page.rows.flatMap((row) => (row.item.kind === "entry" ? [row.item.entry.text] : []));
+    };
+    const storedTexts = async () => {
+      const record = await storage.get(agent.id);
+      return (record?.companionEntries ?? []).map((entry) => entry.text);
+    };
+    const streamedTimelineEvent = () =>
+      collector.messages.find(
+        (outbound) =>
+          outbound.type === "agent_stream" &&
+          outbound.payload.agentId === agent.id &&
+          outbound.payload.event.type === "timeline",
+      );
+    try {
+      for (const [code, message] of [
+        ["ENOSPC", "No space left on device"],
+        ["EIO", "I/O error"],
+      ] as const) {
+        const failuresBeforeTurn = captureFailures;
+        const injected = Object.assign(new Error(message), { code });
+        hold = createHold();
+        pendingFault = injected;
+        await ctx.client.sendMessage(agent.id, "Write a note");
+        await hold.reached;
+
+        // Degradation is visible on the wire, and it came from capture failing
+        // during this turn (not from a client mutation).
+        const degraded = await ctx.client.waitForAgentUpsert(
+          agent.id,
+          (snapshot) => snapshot.captureDegraded === true,
+          15000,
+        );
+        expect(degraded.captureDegraded).toBe(true);
+        expect(captureFailures).toBeGreaterThan(failuresBeforeTurn);
+
+        // Already-captured entries remain readable, live and from storage.
+        expect(await streamTexts()).toContain("Kept across the fault");
+        expect(await storedTexts()).toContain("Kept across the fault");
+
+        // Subsequent provider events still stream to the client while capture
+        // is degraded: the held turn already emitted its timeline chunks, and
+        // the daemon dispatches them regardless of the failed capture.
+        const streamedTimeline = await waitFor(
+          streamedTimelineEvent,
+          "streamed timeline event while capture is degraded",
+        );
+        expect(streamedTimeline.type).toBe("agent_stream");
+
+        // Clear the fault while the turn is still live, then let it finish. The
+        // turn's own `turn_completed` triggers a background persist
+        // (finalizeForegroundTurn → emitState); no client mutation is involved.
+        const failuresAtRecovery = captureFailures;
+        fault = null;
+        pendingFault = null;
+        hold.release();
+        const finished = await ctx.client.waitForFinish(agent.id, 60000);
+        expect(finished.status).toBe("idle");
+        const recovered = await ctx.client.waitForAgentUpsert(
+          agent.id,
+          (snapshot) => snapshot.captureDegraded !== true,
+          15000,
+        );
+        expect(recovered.captureDegraded).toBeUndefined();
+        expect(captureFailures).toBe(failuresAtRecovery);
+
+        // The covering background persist stored the retained history.
+        expect(await storedTexts()).toContain("Kept across the fault");
+      }
+    } finally {
+      collector.unsubscribe();
+      await timelineObservation.release();
+      storage.applySnapshot = originalApplySnapshot;
+      storage.upsert = originalUpsert;
+    }
+  }, 60000);
+
+  test("a failed capture write is never acknowledged and never evicts", async () => {
+    const agent = await ctx.client.createAgent({ provider: "codex", cwd: "/tmp" });
+    await ctx.client.updateStreamEntry({
+      agentId: agent.id,
+      action: "add_question",
+      entryId: "kept",
+      text: "Kept across the fault",
+    });
+    const storage = ctx.daemon.daemon.agentStorage;
+    const originalApplySnapshot = storage.applySnapshot;
+    const originalUpsert = storage.upsert;
+    let fault: NodeJS.ErrnoException | null = Object.assign(new Error("No space left on device"), {
+      code: "ENOSPC",
+    });
     storage.applySnapshot = (async (...args: Parameters<typeof originalApplySnapshot>) => {
       if (fault) throw fault;
       return originalApplySnapshot.apply(storage, args);
@@ -475,12 +632,7 @@ describe("stream durability daemon", () => {
       if (fault) throw fault;
       return originalUpsert.apply(storage, args);
     }) as typeof storage.upsert;
-    const streamTexts = async () => {
-      const page = await ctx.client.listGlobalStream({ agentId: agent.id });
-      return page.rows.flatMap((row) => (row.item.kind === "entry" ? [row.item.entry.text] : []));
-    };
     try {
-      fault = Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
       await expect(
         ctx.client.updateStreamEntry({
           agentId: agent.id,
@@ -489,17 +641,6 @@ describe("stream durability daemon", () => {
           text: "Refused by ENOSPC",
         }),
       ).rejects.toThrow(/No space left on device/);
-      // No eviction: prior capture is still served.
-      expect(await streamTexts()).toContain("Kept across the fault");
-      // Degradation is visible on the wire.
-      const degraded = await ctx.client.waitForAgentUpsert(
-        agent.id,
-        (snapshot) => snapshot.captureDegraded === true,
-        15000,
-      );
-      expect(degraded.captureDegraded).toBe(true);
-
-      // EIO is treated the same way.
       fault = Object.assign(new Error("I/O error"), { code: "EIO" });
       await expect(
         ctx.client.updateStreamEntry({
@@ -509,38 +650,27 @@ describe("stream durability daemon", () => {
           text: "Refused by EIO",
         }),
       ).rejects.toThrow(/I\/O error/);
-      expect(await streamTexts()).toContain("Kept across the fault");
 
-      // The failed capture write does not take the session down: the agent is
-      // still live and idle while the fault is active. (A further client turn
-      // cannot run yet because message delivery is itself durable and refuses
-      // the same failed storage — the correct behavior.)
+      // No eviction: prior capture is still served live. The refused writes were
+      // never acknowledged and never reached storage — they exist only as
+      // optimistic in-memory state until a persist succeeds. The session stays
+      // live and idle.
+      const page = await ctx.client.listGlobalStream({ agentId: agent.id });
+      const liveTexts = page.rows.flatMap((row) =>
+        row.item.kind === "entry" ? [row.item.entry.text] : [],
+      );
+      expect(liveTexts).toContain("Kept across the fault");
+      const record = await storage.get(agent.id);
+      const storedTexts = (record?.companionEntries ?? []).map((entry) => entry.text);
+      expect(storedTexts).toContain("Kept across the fault");
+      expect(storedTexts).not.toContain("Refused by ENOSPC");
+      expect(storedTexts).not.toContain("Refused by EIO");
       const listed = await ctx.client.fetchAgents({ subscribe: {} });
       const live = listed.entries.find((entry) => entry.agent.id === agent.id)?.agent;
       expect(live?.status).toBe("idle");
-
-      // Recovery: once storage works, the same session completes a further turn
-      // and capture writes again, clearing the degraded flag.
-      fault = null;
-      await ctx.client.sendMessage(agent.id, "Continue the work");
-      const finished = await ctx.client.waitForFinish(agent.id, 60000);
-      expect(finished.status).toBe("idle");
-      await ctx.client.updateStreamEntry({
-        agentId: agent.id,
-        action: "add_question",
-        entryId: "after-recovery",
-        text: "After recovery",
-      });
-      const recovered = await ctx.client.waitForAgentUpsert(
-        agent.id,
-        (snapshot) => snapshot.captureDegraded !== true,
-        15000,
-      );
-      expect(recovered.captureDegraded).toBeUndefined();
-      expect(await streamTexts()).toContain("After recovery");
     } finally {
       storage.applySnapshot = originalApplySnapshot;
       storage.upsert = originalUpsert;
     }
-  }, 60000);
+  });
 });

@@ -59,12 +59,19 @@ interface FakeAgentSessionOptions {
   memoryMarker?: string | null;
   closeSession?: () => Promise<void>;
   onStartTurn?: (prompt: AgentPromptInput) => void;
+  beforeTurnCompletion?: () => Promise<void> | void;
 }
 
 export interface TestAgentClientOptions {
   beforeCreateSession?: () => Promise<void>;
   closeSession?: () => Promise<void>;
   onStartTurn?: (prompt: AgentPromptInput) => void;
+  /**
+   * Optional barrier awaited just before the fake provider reports
+   * `turn_completed`. Tests hold a turn open here to inject storage faults or
+   * assert mid-turn state deterministically, without sleeps.
+   */
+  beforeTurnCompletion?: () => Promise<void> | void;
   supportsMcpServers?: boolean;
 }
 
@@ -338,6 +345,7 @@ class FakeAgentSession implements AgentSession {
 
   private readonly closeSession: (() => Promise<void>) | undefined;
   private readonly onStartTurn: ((prompt: AgentPromptInput) => void) | undefined;
+  private readonly beforeTurnCompletion: (() => Promise<void> | void) | undefined;
 
   constructor(options: FakeAgentSessionOptions) {
     this.capabilities = {
@@ -350,6 +358,7 @@ class FakeAgentSession implements AgentSession {
     this.memoryMarker = options.memoryMarker ?? null;
     this.closeSession = options.closeSession;
     this.onStartTurn = options.onStartTurn;
+    this.beforeTurnCompletion = options.beforeTurnCompletion;
     this.historyPath = path.join(
       tmpdir(),
       "paseo-fake-provider-history",
@@ -799,6 +808,7 @@ class FakeAgentSession implements AgentSession {
         this.notifySubscribers(assistantChunkB);
       }
 
+      await this.beforeTurnCompletion?.();
       const completed: AgentStreamEvent = {
         type: "turn_completed",
         provider: this.providerName,
@@ -1220,6 +1230,7 @@ class FakeAgentClient implements AgentClient {
       supportsMcpServers: this.options.supportsMcpServers,
       closeSession: this.options.closeSession,
       onStartTurn: this.options.onStartTurn,
+      beforeTurnCompletion: this.options.beforeTurnCompletion,
     });
   }
 
@@ -1245,6 +1256,7 @@ class FakeAgentClient implements AgentClient {
       memoryMarker: typeof marker === "string" ? marker : null,
       closeSession: this.options.closeSession,
       onStartTurn: this.options.onStartTurn,
+      beforeTurnCompletion: this.options.beforeTurnCompletion,
     });
   }
 

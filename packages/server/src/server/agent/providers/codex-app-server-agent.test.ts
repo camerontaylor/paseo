@@ -87,6 +87,7 @@ import { CodexAppServerClient } from "./codex/app-server-transport.js";
 import {
   createFakeCodexAppServer,
   type FakeCodexAppServer,
+  waitForNextEvent,
   waitForNextPermission,
   waitForNextTimelineItem,
   waitForProviderSubagent,
@@ -4176,6 +4177,7 @@ describe("Codex app-server provider", () => {
     );
 
     try {
+      const foregroundTurnStarted = waitForNextEvent(session, "turn_started");
       const resultPromise = session.run("Delegate the investigation.");
       await appServer.waitForTurnStart();
       const child = waitForProviderSubagent(session, "legacy-only-child-thread");
@@ -4191,14 +4193,17 @@ describe("Codex app-server provider", () => {
       const childEvent = await child;
       const spawnEvent = await spawn;
       // C2-GATE-EXC-1: C2 makes foreground turn ids unique (codex-turn-<uuid>),
-      // so correlate on the observed foreground turn id instead of the obsolete
-      // ordinal. Child and spawn must share it; discovery assertions are unchanged.
-      const foregroundTurnId = childEvent.turnId;
+      // so the obsolete ordinal cannot be hardcoded. The reference is the turn id
+      // the session itself reports when the foreground turn starts, obtained
+      // independently of both events under test; child and spawn must both carry
+      // it. Discovery assertions are unchanged.
+      const foregroundTurnId = (await foregroundTurnStarted).turnId;
       expect(foregroundTurnId).toBeDefined();
+      expect(childEvent.turnId).toBe(foregroundTurnId);
+      expect(spawnEvent.turnId).toBe(foregroundTurnId);
       expect(childEvent).toMatchObject({
         type: "provider_subagent",
         provider: "codex",
-        turnId: foregroundTurnId,
         event: {
           type: "upsert",
           id: "legacy-only-child-thread",
@@ -4208,7 +4213,6 @@ describe("Codex app-server provider", () => {
       expect(spawnEvent).toMatchObject({
         type: "timeline",
         provider: "codex",
-        turnId: foregroundTurnId,
         item: {
           type: "tool_call",
           callId: "spawn-legacy-only-child",
