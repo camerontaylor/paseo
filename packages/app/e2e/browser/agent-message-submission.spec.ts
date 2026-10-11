@@ -9,7 +9,10 @@ import {
   expectRunningAgentChrome,
   expectVisibleAgentSurfacesIdle,
 } from "../support/helpers/agent-stream";
-import { gateNextAgentMessage } from "../support/helpers/agent-message-gate";
+import {
+  gateNextAgentMessage,
+  type QueueEnqueueResponse,
+} from "../support/helpers/agent-message-gate";
 import {
   attachImageFromMenu,
   expectComposerDraft,
@@ -385,6 +388,123 @@ async function expectQueuedSendFailuresRestored(page: Page, prompts: string[]): 
   for (const prompt of prompts) {
     await expect(page.getByTestId("user-message").filter({ hasText: prompt })).toHaveCount(0);
   }
+}
+
+/** One durable outbox entry as the browser persisted it. */
+interface PersistedQueueOutboxEntry {
+  agentId: string;
+  itemId: string;
+  text: string;
+  intent: string;
+  createdAt: number;
+  attempts: number;
+}
+
+/** The queue outbox's zustand persist key (see stores/queue-outbox-store). */
+const QUEUE_OUTBOX_STORAGE_KEY = "paseo-queue-outbox";
+
+/**
+ * The durable outbox copy, read from storage rather than from rendered text.
+ * This is what proves the two un-acked sends survived the dropped connection.
+ */
+async function readPersistedQueueOutbox(page: Page): Promise<PersistedQueueOutboxEntry[]> {
+  return page.evaluate((storageKey) => {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as {
+      state?: { entries?: Record<string, PersistedQueueOutboxEntry> };
+    };
+    const entries = (parsed.state?.entries ?? {}) as Record<string, PersistedQueueOutboxEntry>;
+    return Object.values(entries);
+  }, QUEUE_OUTBOX_STORAGE_KEY);
+}
+
+function ackedQueueItems(ack: QueueEnqueueResponse): Array<[string, string]> {
+  return (ack.payload.queue?.items ?? []).map((item) => [item.id, item.text]);
+}
+
+/**
+ * The state the dropped connection leaves behind: both sends durable in the
+ * outbox under distinct ids, and two rendered rows waiting for the host with
+ * no actionable control yet. Nothing here is a canonical user message.
+ */
+async function expectQueuedSendsDurableWhileDisconnected(input: {
+  page: Page;
+  agentId: string;
+  prompts: string[];
+}): Promise<PersistedQueueOutboxEntry[]> {
+  const { page, agentId, prompts } = input;
+  const persisted = [...(await readPersistedQueueOutbox(page))].sort(
+    (left, right) => left.createdAt - right.createdAt,
+  );
+  expect(persisted.map((entry) => entry.text)).toEqual(prompts);
+  expect(persisted.map((entry) => entry.agentId)).toEqual([agentId, agentId]);
+  // Two distinct item identities, not one row overwritten by the other.
+  expect(new Set(persisted.map((entry) => entry.itemId)).size).toBe(2);
+  // Two rows render from the outbox, both waiting for the host. The storage
+  // reads above, not the rendered text, are the durability evidence.
+  await expect(page.getByText("Waiting to sync with host", { exact: true })).toHaveCount(2);
+  for (const prompt of prompts) {
+    await expect(page.getByText(prompt, { exact: true })).toHaveCount(1);
+  }
+  await expect(page.getByRole("button", { name: "Send queued message now" })).toHaveCount(0);
+  return persisted;
+}
+
+/**
+ * Reconnects for real, holds the host's acknowledgements, and proves each entry
+ * recovers under its own id and payload, then that both acks are durable.
+ */
+async function expectQueuedSendsRecoveredByHostAck(input: {
+  page: Page;
+  gate: Awaited<ReturnType<typeof gateNextAgentMessage>>;
+  agentId: string;
+  prompts: string[];
+  entries: [PersistedQueueOutboxEntry, PersistedQueueOutboxEntry];
+  enqueuesBeforeReconnect: number;
+}): Promise<void> {
+  const { page, gate, agentId, prompts, entries, enqueuesBeforeReconnect } = input;
+  const [firstEntry, secondEntry] = entries;
+  await gate.allowReconnect();
+  await gate.waitForReconnect();
+
+  await expect
+    .poll(() => gate.getQueueEnqueueRequests().length, {
+      message: "the reconnected client must re-send the durable outbox entries",
+      timeout: 25_000,
+    })
+    .toBe(enqueuesBeforeReconnect + 2);
+
+  const firstAck = await gate.waitForQueueEnqueueResponse(1);
+  expect(firstAck.payload.error).toBeNull();
+  expect(firstAck.payload.agentId).toBe(agentId);
+  // The host acknowledged the first durable entry under its own id.
+  expect(ackedQueueItems(firstAck)).toEqual([[firstEntry.itemId, prompts[0]]]);
+  // The ack is still held, so nothing has been acknowledged yet.
+  await expect(page.getByText("Waiting to sync with host", { exact: true })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Send queued message now" })).toHaveCount(0);
+  gate.releaseQueueEnqueueResponse();
+
+  const secondAck = await gate.waitForQueueEnqueueResponse(2);
+  expect(secondAck.payload.error).toBeNull();
+  expect(ackedQueueItems(secondAck)).toEqual([
+    [firstEntry.itemId, prompts[0]],
+    [secondEntry.itemId, prompts[1]],
+  ]);
+  gate.releaseQueueEnqueueResponse();
+
+  // Both entries were re-sent verbatim: same distinct ids, same payloads.
+  expect(gate.getQueueEnqueueRequests()).toEqual([
+    expect.objectContaining({ agentId, itemId: firstEntry.itemId, text: prompts[0] }),
+    expect.objectContaining({ agentId, itemId: secondEntry.itemId, text: prompts[1] }),
+  ]);
+  // The held legacy sends died with the connection: never forwarded, never
+  // replayed.
+  expect(gate.getDiscardedHeldSendRequestCount()).toBe(2);
+  expect(gate.getForwardedSendRequestCount()).toBe(0);
+
+  // The acknowledgements are durable: both entries left the outbox.
+  await expect.poll(async () => (await readPersistedQueueOutbox(page)).length).toBe(0);
 }
 
 async function expectFailedSubmissionRestored(page: Page, prompt: string): Promise<void> {
@@ -1311,7 +1431,31 @@ test.describe("Agent message submission", () => {
       await gate.waitForRequest(1);
       await page.getByRole("button", { name: "Send queued message now" }).first().click();
       await gate.waitForRequest(2);
+
+      // Refuse reconnects until the durable state has been asserted: no host
+      // acknowledgement can land before then. The held host acks stay the
+      // barrier for the recovery itself.
+      await gate.blockReconnect();
       await gate.disconnect();
+      await gate.holdQueueEnqueueResponses();
+      const enqueuesBeforeReconnect = gate.getQueueEnqueueRequests().length;
+
+      const durableEntries = await expectQueuedSendsDurableWhileDisconnected({
+        page,
+        agentId: agent.agentId,
+        prompts,
+      });
+      const [firstEntry, secondEntry] = durableEntries;
+      if (!firstEntry || !secondEntry) throw new Error("Both durable outbox entries are required");
+      await expectQueuedSendsRecoveredByHostAck({
+        page,
+        gate,
+        agentId: agent.agentId,
+        prompts,
+        enqueuesBeforeReconnect,
+        entries: [firstEntry, secondEntry],
+      });
+
       await expectQueuedSendFailuresRestored(page, prompts);
     } finally {
       await agent.cleanup();
