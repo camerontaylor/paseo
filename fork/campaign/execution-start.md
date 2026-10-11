@@ -69,6 +69,24 @@ Operations moved from neptune (macOS; network heavily throttled) to uranus (Ubun
 >
 > Record this ruling: all campaign baskets continue using frozen custom `cbc201718`. Add `.github/workflows/fork-ci.yml` to the prospective custom-ownership watch list; any overlay touching it requires a **[PF] stop**, even while the newer custom remains excluded. Re-evaluate the move at final rehearsal before any manifest proposal. This resolves the moved-head stop without changing the campaign baseline.
 
+### Local custom drift ruling (Sol, 2026-10-12)
+
+An external actor advanced uranus local `custom` from `cbc201718` to `268be1c4b7af16787d920e74b3eed6a564932c8a`. Reflog records commit `81dcdbce8` at 02:51:35 +11 and its amend at 02:52:00 +11. Only `fork/README.md`, `fork/fork-survey-2026-10-12.md` and `fork/upstream-prs-2026-10-12.md` changed. Remote custom is separately `a4d692287`; the other four campaign refs are unchanged.
+
+The coordinator detected the drift in the delivery close-out audit, stopped browser worker `99388f8a`, and preserved its four uncommitted test files. Sol reviewed the refs, diff and reflog, then ruled:
+
+> **APPROVE — retain campaign custom pin `cbc2017186b980e7928bc376cfdeabb90ef56aa2`; no campaign re-pin.**
+>
+> Assemble baskets using frozen **full SHAs**, never mutable `custom`.
+>
+> Leave local `custom` and `origin/custom` untouched.
+>
+> Resume the interrupted browser worker on held release base `568b12127`, incorporating approved EXC-3 as planned; preserve its uncommitted work. No rebase onto moved `custom`.
+>
+> Published A1 ancestry is unaffected: `929d74271` has parents `d62ed60c8` and `831f6a858`. Publication success and seven-package verification are accepted on coordinator report. No additional Cameron sign-off is required to retain the existing pin.
+
+Full verdict: [local custom drift](logs/local-custom-drift-verdict.md). The stop is resolved without changing the campaign baseline or either custom branch. Check full pinned object identities, not mutable branch names, at subsequent baskets.
+
 **Custom-ownership watch list** (checked at every basket in addition to the re-captured custom-owned list): `.github/workflows/fork-ci.yml`.
 
 **Basket assembly convention** (C1 onward): base `v0.11.1` `ab10a6694`, then `--no-ff` merges in mine's deployed order — custom `cbc201718`, carries, infi-backend, infi-ui, tmad — then accepted overlays in schedule order. The infi-ui merge conflicts in `packages/app/src/agent-stream/view.tsx`; replay mine's resolution from `7021e8b4a` (identical inputs). Basket refs are pushed as `fork/refresh-basket-<pkg>`.

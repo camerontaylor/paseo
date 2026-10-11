@@ -78,7 +78,7 @@ One isolated DeepSeek worker may make separate package commits on `fork/refresh-
 
 A2 worker `3af10474-80e6-4085-8371-62a4d4b7b062`, DeepSeek V4.1 Flash via Jcode, obtained read-only s0 ADVANCE on frozen backend. A2 implementation stays held. Worker `ab0168d1` completed source/log-only diagnosis; sole active implementation worker `99388f8a-3c03-4b92-817b-9f5e46f6351b` is on isolated branch `fork/refresh-browser-repair-20261012`, workspace `wks_7dfe3f6b186c871b`. Local release validation has completed, so its serial install/build and targeted checks are released. Keep one implementation worker active and local builds/tests serial.
 
-The coordinator resumed as Jcode on uranus. Persistent Sol `3f2c7ea5` resumed with its existing context. No frozen campaign ref was repinned. Current custom `a4d6922874fb68fa5cab2ffa946a80baf8c441e4` belongs only to release-history investigation, not campaign baskets.
+The coordinator resumed as Jcode on uranus. Persistent Sol `3f2c7ea5` resumed with its existing context. No campaign pin changed. Close-out detected an externally advanced local custom branch, briefly paused browser repair, and obtained [Sol's original-pin retention ruling](execution-start.md#local-custom-drift-ruling-sol-2026-10-12). Both mutable custom branches remain untouched; published A1 ancestry is unaffected.
 
 No production restart, installation, config change, or live-home repair. The live Desvio directory is absent on uranus, so no live manifest is edited. A future Desvio rebuild needs the accepted overlays added to the owning host's manifest or it will drop them.
 
