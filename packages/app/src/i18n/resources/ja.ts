@@ -50,6 +50,10 @@ export const ja: TranslationResources = {
     retentionDurable:
       "All captured Stream history is kept. Pages load 50 items at a time. Earlier pruned entries are not restored.",
   },
+  changeStats: {
+    code: "コード",
+    total: "合計",
+  },
   paneFind: {
     connectionFailure:
       "このチャットを検索できませんでした。ホストへの接続を確認して再試行してください。",

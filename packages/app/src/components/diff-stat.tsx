@@ -1,3 +1,4 @@
+import React from "react";
 import { View, Text } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { formatDiffCount } from "@/git/file-header-presentation";
@@ -6,18 +7,20 @@ interface DiffStatProps {
   additions: number;
   deletions: number;
   testID?: string;
+  muted?: boolean;
 }
 
-export function DiffStat({ additions, deletions, testID }: DiffStatProps) {
+export function DiffStat({ additions, deletions, testID, muted = false }: DiffStatProps) {
   return (
     <View style={styles.row} testID={testID}>
-      <Text style={styles.additions}>+{formatDiffCount(additions)}</Text>
-      <Text style={styles.deletions}>-{formatDiffCount(deletions)}</Text>
+      <Text style={[styles.additions, muted && styles.muted]}>+{formatDiffCount(additions)}</Text>
+      <Text style={[styles.deletions, muted && styles.muted]}>-{formatDiffCount(deletions)}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
+  muted: { color: theme.colors.foregroundMuted },
   row: {
     flexDirection: "row",
     alignItems: "center",

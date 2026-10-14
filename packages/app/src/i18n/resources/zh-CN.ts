@@ -50,6 +50,10 @@ export const zhCN: TranslationResources = {
     retentionDurable:
       "All captured Stream history is kept. Pages load 50 items at a time. Earlier pruned entries are not restored.",
   },
+  changeStats: {
+    code: "代码",
+    total: "总计",
+  },
   paneFind: {
     connectionFailure: "无法搜索此聊天。请检查主机连接后重试。",
     historyChangedFailure: "搜索期间聊天已更改。请重新搜索。",

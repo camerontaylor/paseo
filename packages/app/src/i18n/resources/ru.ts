@@ -50,6 +50,10 @@ export const ru: TranslationResources = {
     retentionDurable:
       "All captured Stream history is kept. Pages load 50 items at a time. Earlier pruned entries are not restored.",
   },
+  changeStats: {
+    code: "Код",
+    total: "Всего",
+  },
   paneFind: {
     connectionFailure:
       "Не удалось выполнить поиск в чате. Проверьте подключение к хосту и повторите попытку.",

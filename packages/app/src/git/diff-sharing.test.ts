@@ -1,4 +1,5 @@
 import type { ParsedDiffFile } from "@getpaseo/protocol/messages";
+import { emptyChangeBreakdown } from "@getpaseo/protocol/diff-stat";
 import { describe, expect, it } from "vitest";
 import { retainDiffFiles, shareCheckoutDiff, shareCommitFileDiff } from "./diff-sharing";
 
@@ -55,6 +56,9 @@ const fileChanges = {
   },
   hunks: (value) => {
     value.hunks = [];
+  },
+  breakdown: (value) => {
+    value.breakdown = emptyChangeBreakdown();
   },
 } satisfies Record<keyof ParsedDiffFile, (value: ParsedDiffFile) => void>;
 type Hunk = ParsedDiffFile["hunks"][number];
@@ -144,5 +148,24 @@ describe("diff sharing", () => {
     expect(shareCommitFileDiff(previous, structuredClone(previous))).toBe(previous);
     expect(shareCommitFileDiff(previous, { file: null })).toEqual({ file: null });
     expect(shareCommitFileDiff({ file: null }, previous)).toBe(previous);
+  });
+  it("retains the previous file when the breakdown is deep-equal", () => {
+    const withBreakdown = { ...structuredClone(file), breakdown: emptyChangeBreakdown() };
+    withBreakdown.breakdown.code.additions = 2;
+    expect(retainDiffFiles([withBreakdown], [structuredClone(withBreakdown)])[0]).toBe(
+      withBreakdown,
+    );
+  });
+  it("replaces the file when a breakdown category changes", () => {
+    const withBreakdown = { ...structuredClone(file), breakdown: emptyChangeBreakdown() };
+    const next = structuredClone(withBreakdown);
+    next.breakdown.code.additions = 1;
+    expect(retainDiffFiles([withBreakdown], [next])[0]).toBe(next);
+  });
+  it("replaces the file when the breakdown is removed", () => {
+    const withBreakdown = { ...structuredClone(file), breakdown: emptyChangeBreakdown() };
+    const next: ParsedDiffFile = structuredClone(withBreakdown);
+    delete next.breakdown;
+    expect(retainDiffFiles([withBreakdown], [next])[0]).toBe(next);
   });
 });

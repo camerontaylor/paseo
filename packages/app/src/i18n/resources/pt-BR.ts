@@ -50,6 +50,10 @@ export const ptBR: TranslationResources = {
     retentionDurable:
       "All captured Stream history is kept. Pages load 50 items at a time. Earlier pruned entries are not restored.",
   },
+  changeStats: {
+    code: "Código",
+    total: "Total",
+  },
   paneFind: {
     connectionFailure:
       "Não foi possível pesquisar nesta conversa. Verifique a conexão com o host e tente novamente.",

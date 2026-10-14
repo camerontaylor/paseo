@@ -1,3 +1,4 @@
+import { DiffStatSchema, ChangeBreakdownSchema } from "./diff-stat.js";
 import { PluginRegistryIdentitySchema } from "./plugin-registry.js";
 import { AgentProfileSchema, AgentSkillSelectionSchema } from "./agent-profile.js";
 export {
@@ -3133,6 +3134,8 @@ const ParsedDiffFileSchema = z.object({
   isDeleted: z.boolean(),
   additions: z.number(),
   deletions: z.number(),
+  // COMPAT(changeBreakdown): added in v0.11.1-fork (B9), remove optional after 2027-04-14.
+  breakdown: ChangeBreakdownSchema.optional(),
   hunks: z.array(DiffHunkSchema),
   status: z.enum(["ok", "too_large", "binary"]).optional(),
 });
@@ -4024,6 +4027,8 @@ export const ServerInfoStatusPayloadSchema = z
         creationLifecycle: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
+        // COMPAT(changeBreakdown): added in v0.11.1-fork (B9), remove gate after 2027-04-14.
+        changeBreakdown: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
         usageSources: z.boolean().optional(),
         usageReportsStreaming: z.boolean().optional(),
@@ -4536,13 +4541,7 @@ export const WorkspaceDescriptorPayloadSchema = z
       .nullish()
       .transform((value) => value ?? null),
     activityAt: z.string().nullable(),
-    diffStat: z
-      .object({
-        additions: z.number(),
-        deletions: z.number(),
-      })
-      .nullable()
-      .optional(),
+    diffStat: DiffStatSchema.nullable().optional(),
     scripts: z.array(WorkspaceScriptPayloadSchema).default([]),
     gitRuntime: WorkspaceGitRuntimePayloadSchema,
     // COMPAT(githubRuntimeName): legacy wire-field name now carries

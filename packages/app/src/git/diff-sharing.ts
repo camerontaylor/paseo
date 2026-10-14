@@ -57,7 +57,10 @@ function equalFile(left: ParsedDiffFile, right: ParsedDiffFile): boolean {
     left.isDeleted !== right.isDeleted ||
     left.additions !== right.additions ||
     left.deletions !== right.deletions ||
-    left.hunks.length !== right.hunks.length
+    left.hunks.length !== right.hunks.length ||
+    // A changed breakdown is a changed record even when the text model is
+    // identical: the daemon can classify the same text differently.
+    replaceEqualDeep(left.breakdown, right.breakdown) !== left.breakdown
   )
     return false;
   for (let h = 0; h < left.hunks.length; h++) {

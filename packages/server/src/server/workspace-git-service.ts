@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import type { DiffStat } from "@getpaseo/protocol/diff-stat";
 import { LRUCache } from "lru-cache";
 import { CheckoutDiffCache } from "./checkout-diff-cache.js";
 import pLimit from "p-limit";
@@ -169,7 +170,7 @@ export interface WorkspaceGitRuntimeSnapshot {
     aheadOfOrigin: number | null;
     behindOfOrigin: number | null;
     hasRemote: boolean;
-    diffStat: { additions: number; deletions: number } | null;
+    diffStat: DiffStat | null;
   };
   forge: {
     featuresEnabled: boolean;

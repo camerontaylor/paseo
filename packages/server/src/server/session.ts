@@ -1,5 +1,6 @@
 import { TIMELINE_PAGE_BYTE_BUDGET } from "./websocket/physical-socket.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
+import type { DiffStat } from "@getpaseo/protocol/diff-stat";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type {
@@ -265,6 +266,19 @@ import {
 import { archiveByScope, type ActiveWorkspaceRef } from "./workspace-archive-service.js";
 import { WorkspaceSetupRuntime } from "./workspace-setup-runtime.js";
 import { SessionAuthorization, type DaemonPermission } from "./authorization/index.js";
+
+/**
+ * A descriptor identical to the last one emitted is not re-sent. The comparison is
+ * whole-descriptor, so a breakdown-only change is a change and must be emitted.
+ */
+export function isDuplicateWorkspaceUpdate(
+  lastEmitted: WorkspaceUpdatePayload | undefined,
+  nextWorkspace: WorkspaceDescriptorPayload,
+): boolean {
+  return Boolean(
+    lastEmitted && lastEmitted.kind === "upsert" && equal(lastEmitted.workspace, nextWorkspace),
+  );
+}
 
 function resolveWorkspaceSetupRuntime(
   runtime: WorkspaceSetupRuntime | undefined,
@@ -5759,7 +5773,7 @@ export class Session {
     const resolvedProjectRecord =
       projectRecord ?? (await this.projectRegistry.get(workspace.projectId));
 
-    let diffStat: { additions: number; deletions: number } | null = null;
+    let diffStat: DiffStat | null = null;
     const snapshot = this.workspaceGitService.peekSnapshot(workspace.cwd);
     if (snapshot?.git.diffStat) {
       diffStat = snapshot.git.diffStat;
@@ -6264,11 +6278,7 @@ export class Session {
         subscription.syncEnabled === true,
       );
 
-      if (
-        lastEmitted &&
-        lastEmitted.kind === "upsert" &&
-        equal(lastEmitted.workspace, nextWorkspace)
-      ) {
+      if (isDuplicateWorkspaceUpdate(lastEmitted, nextWorkspace)) {
         continue;
       }
 
