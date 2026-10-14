@@ -44,9 +44,9 @@ Neptune worker `6c40a390-094c-4695-9de9-d0317be2c17c` (DeepSeek V4.1 Flash via j
 It then renames the APK and sends it with `tailscale file cp` to `camerons-s24`. It does not install it. Delivery is confirmed by the phone notification, not by the command's exit code.
 
 - [x] Resolve published source and unique phone target.
-- [ ] Build on neptune (worker `6c40a390`).
-- [ ] Verify applicationId, versionCode, ABI, bundle, signer, hash, typecheck and lint.
-- [ ] Taildrop to `camerons-s24`, then record the transfer result and the APK path.
+- [x] Build on neptune (worker `6c40a390`): new detached worktree `/Volumes/offload/neptune/repos/paseo-android-0.11.2-fork.2` at `929d74271`, clean. The older `paseo-android-20261011` tree was not clean, so it was left untouched. Toolchain: mise android-sdk 21.0, JDK 21.0.2, build-tools 36.0.0. Gradle `BUILD SUCCESSFUL` in 14m49s.
+- [x] Verify: applicationId `sh.paseo.debug`; versionCode `11002`, versionName `0.11.2`; only `lib/arm64-v8a`; `assets/index.android.bundle` is Hermes bytecode v96 (38.7 MB); `apksigner` passes (v2). Signer SHA-256 `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c` matches the earlier neptune APKs. APK SHA-256 `63580d33cae6db60f8a08aa054d97de0ebfbe61a961dd00499c213883ab74e6a`, 138,317,374 bytes. Typecheck exits 0 after `build:server` regenerated declarations; lint 0/0.
+- [x] Taildrop: `tailscale file cp /tmp/paseo-mine-0.11.2-fork.2-vc11002-arm64-929d74271.apk camerons-s24:` exited 0. Delivery still needs confirming from the phone notification. Nothing was installed and no phone settings changed. A copy is kept at `~/.paseo-fork/paseo-mine-0.11.2-fork.2-vc11002-arm64-929d74271.apk` on neptune; logs are in `~/.jcode/scratch/fork2/` on neptune.
 
 ## Delivery checklist
 
