@@ -1,4 +1,8 @@
 export const en = {
+  changeStats: {
+    code: "Code",
+    total: "Total",
+  },
   paneFind: {
     connectionFailure: "Could not search this chat. Check the host connection and retry.",
     historyChangedFailure: "The chat changed while searching. Search again.",
