@@ -395,3 +395,81 @@ it("refuses a patch record with equal counts but a different path", async () => 
   expect(breakdown.comments).toEqual({ additions: 0, deletions: 0 });
   expect(breakdown.code).toEqual({ additions: 1, deletions: 1 });
 });
+
+it("keeps identity under diff.noprefix when paths are named like prefixes", async () => {
+  const cwd = await repository();
+  // The comparison patch forces its own `a/`/`b/` prefixes, so this config may not
+  // change what the reader parses even though `b/` is a real directory here.
+  await runGitCommand(["config", "diff.noprefix", "true"], { cwd });
+  await mkdir(join(cwd, "b"));
+  await writeFile(join(cwd, "foo.ts"), "// before\n");
+  await writeFile(join(cwd, "b/foo.ts"), "const x = 1;\n");
+  await runGitCommand(["add", "."], { cwd });
+  await runGitCommand(["commit", "-m", "initial"], { cwd });
+  await writeFile(join(cwd, "foo.ts"), "// after\n");
+  await writeFile(join(cwd, "b/foo.ts"), "const x = 2;\n");
+  const logger = recordingLogger();
+  const breakdown = await readComparisonBreakdown({
+    cwd,
+    baseRef: "HEAD",
+    total: { additions: 2, deletions: 2 },
+    largeDiffPathThreshold: 0,
+    logger: logger.logger,
+  });
+  expect(logger.infoPayload()).toMatchObject({
+    pathCount: 2,
+    patchMatched: 2,
+    patchUnmatched: 0,
+  });
+  // Each file keeps its own hunks: only foo.ts changed a comment.
+  expect(breakdown.comments).toEqual({ additions: 1, deletions: 1 });
+  expect(breakdown.code).toEqual({ additions: 1, deletions: 1 });
+  expect(breakdown.other).toEqual({ additions: 0, deletions: 0 });
+});
+
+it("never strips a prefix-looking directory from a stream without forced prefixes", async () => {
+  const git: RunGitCommand = async (args) => {
+    if (args.includes("--numstat")) return gitResult("1\t1\tfoo.ts\0");
+    // A stream that did not go through the forced prefix pair, e.g. a noprefix
+    // patch for the real path `b/foo.ts`.
+    if (args[0] === "diff")
+      return gitResult(
+        "diff --git b/foo.ts b/foo.ts\n--- b/foo.ts\n+++ b/foo.ts\n@@ -1 +1 @@\n-// before\n+const beta = 1;\n",
+      );
+    if (args[0] === "show") return gitResult("// before\n");
+    if (args[0] === "ls-files") return gitResult("");
+    throw new Error(`unexpected git call: ${args.join(" ")}`);
+  };
+  const logger = recordingLogger();
+  const breakdown = await readComparisonBreakdown({
+    cwd: "/nonexistent",
+    baseRef: "HEAD",
+    total: { additions: 1, deletions: 1 },
+    runGit: git,
+    largeDiffPathThreshold: 0,
+    logger: logger.logger,
+  });
+  // `b/foo.ts` must not be reduced to `foo.ts` and attached to a different file.
+  expect(logger.infoPayload()).toMatchObject({ patchMatched: 0, patchUnmatched: 1 });
+  expect(breakdown.comments).toEqual({ additions: 0, deletions: 0 });
+  expect(breakdown.code).toEqual({ additions: 1, deletions: 1 });
+});
+
+it("matches quoted non-ASCII paths against raw numstat paths", async () => {
+  const cwd = await repository();
+  const path = "café-☕.ts";
+  await writeFile(join(cwd, path), "const value = 1; // before\n");
+  await runGitCommand(["add", "."], { cwd });
+  await runGitCommand(["commit", "-m", "initial"], { cwd });
+  await writeFile(join(cwd, path), "const value = 1; // after\n");
+  const logger = recordingLogger();
+  const breakdown = await readComparisonBreakdown({
+    cwd,
+    baseRef: "HEAD",
+    total: { additions: 1, deletions: 1 },
+    largeDiffPathThreshold: 0,
+    logger: logger.logger,
+  });
+  expect(logger.infoPayload()).toMatchObject({ patchMatched: 1, patchUnmatched: 0 });
+  expect(breakdown.comments).toEqual({ additions: 1, deletions: 1 });
+});

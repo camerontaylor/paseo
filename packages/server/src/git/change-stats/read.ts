@@ -175,67 +175,111 @@ function splitNulDelimited(text: string): string[] {
   return fields.filter(Boolean);
 }
 
-// Git's prefix letters: a/b by default, c/i/o/w with diff.mnemonicPrefix, 1/2 for
-// combined diffs. `--numstat -z` always reports raw paths, so a patch path only
-// identifies the same file after the prefix (if any) and git's C-quoting are
-// removed. Quoting appears for tabs, quotes and non-ASCII paths.
-const GIT_PATH_PREFIX_LETTERS = "abciow12";
+// The comparison patch is requested with a forced `a/`/`b/` prefix pair, so a
+// section header identifies its two paths without guessing. The prefix letters
+// cannot be confused with directories named `a/` or `b/` in the repository, and
+// the user's diff.noprefix / diff.mnemonicPrefix cannot change what is parsed.
+const PATCH_OLD_PREFIX = "a/";
+const PATCH_NEW_PREFIX = "b/";
+const PATCH_PREFIX_ARGS = [`--src-prefix=${PATCH_OLD_PREFIX}`, `--dst-prefix=${PATCH_NEW_PREFIX}`];
 
+const GIT_SIMPLE_ESCAPES: Record<string, string> = {
+  n: "\n",
+  t: "\t",
+  r: "\r",
+  v: "\v",
+  f: "\f",
+  b: "\b",
+  a: "\u0007",
+};
+
+// Git C-quotes paths containing tabs, quotes or non-ASCII bytes. Octal escapes
+// are bytes, so they are collected and decoded together with the rest as UTF-8.
 function unquoteGitPath(path: string): string {
   if (path.length < 2 || !path.startsWith('"') || !path.endsWith('"')) return path;
   const body = path.slice(1, -1);
-  let result = "";
+  const bytes: number[] = [];
+  const pushText = (text: string) => {
+    for (const byte of Buffer.from(text, "utf8")) bytes.push(byte);
+  };
   for (let index = 0; index < body.length; index++) {
-    const char = body[index];
+    const char = body[index]!;
     if (char !== "\\") {
-      result += char;
+      pushText(char);
       continue;
     }
     const escaped = body[++index];
     if (escaped === undefined) break;
-    if (escaped === "n") result += "\n";
-    else if (escaped === "t") result += "\t";
-    else if (escaped === "r") result += "\r";
-    else if (escaped === "v") result += "\v";
-    else if (escaped === "f") result += "\f";
-    else if (escaped === "b") result += "\b";
-    else if (escaped === "a") result += "\u0007";
-    else if (/[0-7]/.test(escaped)) {
+    const replacement = GIT_SIMPLE_ESCAPES[escaped];
+    if (replacement !== undefined) {
+      pushText(replacement);
+      continue;
+    }
+    if (/[0-7]/.test(escaped)) {
       let octal = escaped;
-      while (octal.length < 3 && index + 1 < body.length && /[0-7]/.test(body[index + 1])) {
-        octal += body[++index];
+      while (octal.length < 3 && index + 1 < body.length && /[0-7]/.test(body[index + 1]!)) {
+        octal += body[++index]!;
       }
-      result += String.fromCharCode(Number.parseInt(octal, 8));
-    } else result += escaped;
+      bytes.push(Number.parseInt(octal, 8));
+      continue;
+    }
+    pushText(escaped);
   }
-  return result;
+  return Buffer.from(bytes).toString("utf8");
 }
 
-function normalizedPatchPath(path: string, sibling: string): string {
-  const unquoted = unquoteGitPath(path);
-  // A header that repeats one path on both sides carries no prefix.
-  if (unquoted === sibling) return unquoted;
-  if (unquoted.length < 3 || unquoted[1] !== "/" || !GIT_PATH_PREFIX_LETTERS.includes(unquoted[0]))
-    return unquoted;
-  return unquoted.slice(2);
+function stripPatchPrefix(path: string, prefix: string): string {
+  return path.startsWith(prefix) && path.length > prefix.length ? path.slice(prefix.length) : path;
+}
+
+// Our own patch stream is requested with the forced `a/`/`b/` pair; a stream that
+// does not carry both halves keeps its raw paths, which is what `--numstat -z`
+// reports. This is a check on the delimiter pair, not a guess from filenames.
+function hasForcedPrefixPair(sectionHeader: string): boolean {
+  return (
+    sectionHeader.startsWith(PATCH_OLD_PREFIX) && sectionHeader.includes(` ${PATCH_NEW_PREFIX}`)
+  );
+}
+
+// Git appends a tab to `---`/`+++` when the path contains a space, and writes
+// `/dev/null` for the side that does not exist, so the metadata line -- not the
+// `diff --git` line -- is the exact source for a path containing spaces.
+function sectionMetadataPath(
+  section: string,
+  marker: "--- " | "+++ ",
+  stripPrefix: boolean,
+): string | null {
+  const line = section.split("\n").find((candidate) => candidate.startsWith(marker));
+  if (!line) return null;
+  const raw = line.slice(marker.length).replace(/\t.*$/, "").trimEnd();
+  if (!raw || raw === "/dev/null") return null;
+  const path = unquoteGitPath(raw);
+  if (!stripPrefix) return path;
+  return stripPatchPrefix(path, marker === "+++ " ? PATCH_NEW_PREFIX : PATCH_OLD_PREFIX);
 }
 
 function patchSectionPaths(
-  sectionHeader: string,
+  section: string,
   parsedPath: string,
 ): { oldPath: string | null; path: string } {
+  const sectionHeader = section.split("\n")[0] ?? "";
   const quoted = sectionHeader.match(/"(?:[^"\\]|\\.)*"/g);
   if (quoted && quoted.length >= 2) {
-    const oldPath = normalizedPatchPath(quoted[0], unquoteGitPath(quoted[1]));
-    const path = normalizedPatchPath(quoted[1], oldPath);
+    const quotedOld = unquoteGitPath(quoted[0]!);
+    const quotedNew = unquoteGitPath(quoted[1]!);
+    const stripPrefix =
+      quotedOld.startsWith(PATCH_OLD_PREFIX) && quotedNew.startsWith(PATCH_NEW_PREFIX);
+    const oldPath = stripPrefix ? stripPatchPrefix(quotedOld, PATCH_OLD_PREFIX) : quotedOld;
+    const path = stripPrefix ? stripPatchPrefix(quotedNew, PATCH_NEW_PREFIX) : quotedNew;
     return { oldPath: oldPath === path ? null : oldPath, path };
   }
-  const prefixed = new RegExp(
-    `^[${GIT_PATH_PREFIX_LETTERS}]\\/(.*) [${GIT_PATH_PREFIX_LETTERS}]\\/(.*)$`,
-  ).exec(sectionHeader);
-  if (!prefixed) return { oldPath: null, path: parsedPath };
-  if (prefixed[1] === prefixed[2]) return { oldPath: null, path: prefixed[2] };
-  return { oldPath: prefixed[1], path: prefixed[2] };
+  const stripPrefix = hasForcedPrefixPair(sectionHeader);
+  const newSide = sectionMetadataPath(section, "+++ ", stripPrefix);
+  const oldSide = sectionMetadataPath(section, "--- ", stripPrefix);
+  // A metadata-only section (a pure rename) has neither line; parseDiff consumed
+  // the new-side prefix when it resolved the header, so its path is used as-is.
+  const path = newSide ?? oldSide ?? unquoteGitPath(parsedPath);
+  return { oldPath: oldSide === null || oldSide === path ? null : oldSide, path };
 }
 
 export function parseNumstat(text: string): ParsedDiffFile[] {
@@ -289,10 +333,13 @@ export async function readComparisonBreakdown(
   }
   const files = parseNumstat(result.stdout);
   const trackedConsidered = files.length;
-  const patch = await git(["diff", "--no-ext-diff", "--no-textconv", "--unified=0", ...refs], {
-    cwd: input.cwd,
-    envOverlay: READ_ONLY_GIT_ENV,
-  });
+  const patch = await git(
+    ["diff", "--no-ext-diff", "--no-textconv", "--unified=0", ...PATCH_PREFIX_ARGS, ...refs],
+    {
+      cwd: input.cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+    },
+  );
   const attachment = patch.truncated
     ? { matched: 0, unmatched: 0, truncated: true }
     : { ...attachPatchHunks(files, patch.stdout), truncated: false };
@@ -336,7 +383,7 @@ function attachPatchHunks(
   let unmatched = 0;
   const byPath = new Map<string, Array<{ record: ParsedDiffFile; oldPath: string | null }>>();
   for (let index = 0; index < records.length; index++) {
-    const sides = patchSectionPaths(sections[index].split("\n")[0] ?? "", records[index].path);
+    const sides = patchSectionPaths(sections[index]!, records[index]!.path);
     const entry = { record: records[index], oldPath: sides.oldPath };
     const bucket = byPath.get(sides.path);
     if (bucket) bucket.push(entry);
