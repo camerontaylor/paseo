@@ -455,6 +455,35 @@ it("never strips a prefix-looking directory from a stream without forced prefixe
   expect(breakdown.code).toEqual({ additions: 1, deletions: 1 });
 });
 
+it("keeps a trailing space in a filename out of another file's identity", async () => {
+  const cwd = await repository();
+  await writeFile(join(cwd, "foo.ts"), "// before\n");
+  await writeFile(join(cwd, "foo.ts "), "const x = 1;\n");
+  await runGitCommand(["add", "."], { cwd });
+  await runGitCommand(["commit", "-m", "initial"], { cwd });
+  await writeFile(join(cwd, "foo.ts"), "// after\n");
+  await writeFile(join(cwd, "foo.ts "), "const x = 2;\n");
+  const logger = recordingLogger();
+  const breakdown = await readComparisonBreakdown({
+    cwd,
+    baseRef: "HEAD",
+    total: { additions: 2, deletions: 2 },
+    largeDiffPathThreshold: 0,
+    logger: logger.logger,
+  });
+  // `foo.ts ` is a different file from `foo.ts`; trimming the path would merge
+  // them at equal counts. The trailing space also keeps the path category at
+  // `other` (no `.ts` extension match), which is what proves the attribution.
+  expect(logger.infoPayload()).toMatchObject({
+    pathCount: 2,
+    patchMatched: 2,
+    patchUnmatched: 0,
+  });
+  expect(breakdown.comments).toEqual({ additions: 1, deletions: 1 });
+  expect(breakdown.other).toEqual({ additions: 1, deletions: 1 });
+  expect(breakdown.code).toEqual({ additions: 0, deletions: 0 });
+});
+
 it("matches quoted non-ASCII paths against raw numstat paths", async () => {
   const cwd = await repository();
   const path = "café-☕.ts";

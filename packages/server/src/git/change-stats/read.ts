@@ -241,9 +241,11 @@ function hasForcedPrefixPair(sectionHeader: string): boolean {
   );
 }
 
-// Git appends a tab to `---`/`+++` when the path contains a space, and writes
-// `/dev/null` for the side that does not exist, so the metadata line -- not the
-// `diff --git` line -- is the exact source for a path containing spaces.
+// Git appends a tab to `---`/`+++` when the path contains a space (and after a
+// quoted path), and writes `/dev/null` for the side that does not exist, so the
+// metadata line -- not the `diff --git` line -- is the exact source for a path
+// containing spaces. Only the delimiter tab is removed: whitespace inside a
+// filename (including a trailing space) is part of the path.
 function sectionMetadataPath(
   section: string,
   marker: "--- " | "+++ ",
@@ -251,7 +253,7 @@ function sectionMetadataPath(
 ): string | null {
   const line = section.split("\n").find((candidate) => candidate.startsWith(marker));
   if (!line) return null;
-  const raw = line.slice(marker.length).replace(/\t.*$/, "").trimEnd();
+  const raw = line.slice(marker.length).replace(/\t.*$/, "");
   if (!raw || raw === "/dev/null") return null;
   const path = unquoteGitPath(raw);
   if (!stripPrefix) return path;
