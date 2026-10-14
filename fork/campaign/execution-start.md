@@ -130,3 +130,19 @@ Cameron: "Do NOT run builds on uranus … Hand the APK build to neptune (or CI) 
 - **B9-S1-EXC-1 (sharing policy).** Sol: APPROVE, subject to coordinator sign-off recorded before edits. Scope: in `packages/app/src/git/diff-sharing.ts` `equalFile`, add `replaceEqualDeep(left.breakdown, right.breakdown) !== left.breakdown`. In `diff-sharing.test.ts`, add a `breakdown` key to the exhaustive `fileChanges` record and three focused cases: a deep-equal breakdown keeps the previous file reference; changed category counts replace the file; breakdown removal replaces the file. All existing assertions are preserved. Cause: the approved `messages.ts` hunk adds `breakdown` to `ParsedDiffFileSchema`. **Signed off by the Opus 5.5 coordinator.**
 - **B9-HOOK-EXC-1 (`LEFTHOOK=0` for B9 stage commits).** Sol: APPROVE. The frozen infi-backend base `1dd375931` already fails whole-workspace typecheck at `packages/app/src/panels/panel-manifest.ts(46,3)` TS2739, so `lefthook.yml:16–17` blocks every commit. Before each B9 commit the worker must show: `npm run typecheck:server` green; whole-workspace typecheck with **only** that unchanged baseline error; `npm run lint` and format clean. Each stage report records the exception and the actual checks. No new failure is waived, and `panel-manifest.ts` stays outside B9. **Signed off by the Opus 5.5 coordinator.**
 - **Baseline recorded:** frozen infi-backend `1dd375931` fails whole-workspace typecheck at `panel-manifest.ts(46,3)`. This is pre-campaign. Packages based on infi-backend must report it as baseline and never claim whole-workspace typecheck green.
+- **B9-S3-EXC-1 (five carry-suite edits).** Scope:
+  - `checkout-git.test.ts`: an exact-preserving helper, plus destructuring of the structured `files`.
+  - An additive `commit-file-diff` test.
+  - `ref-derived`: exact totals plus command accounting.
+  - The browser seed helper, plus the code/config totals fixture.
+
+  Exact totals, existing file fields, command accounting, and navigation/layout assertions are preserved. Breakdown assertions are additive only, and no matcher is weakened. Sol: advisor-approved. **Signed off by the Opus 5.5 coordinator (2026-10-15).**
+
+### Standing coordinator sign-off rule (2026-10-15)
+
+To cut round-trips, the coordinator pre-signs carry-suite or out-of-allowlist test edits that Sol approves **and** explicitly classifies as purely additive or exact-preserving. Such an edit adds assertions, cases or fixtures; removes or changes no existing assertion or expected value; and weakens no matcher. The worker quotes Sol's classification in its log and proceeds. Explicit coordinator sign-off is still required, before edits, for:
+
+- any edit that changes an existing expected value, removes an assertion, or loosens a matcher;
+- any production-code change outside the package allowlist;
+- any hook bypass beyond B9-HOOK-EXC-1's terms;
+- anything Sol flags as a behavioral carry-test exception.
