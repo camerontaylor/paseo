@@ -108,3 +108,14 @@ Coordinator basket run found `codex-app-server-agent.test.ts` "discovers a Multi
 ### Carry-test exception C2-GATE-EXC-3 (2026-10-12 local time)
 
 Partial-release CI at `568b12127` found two stale expectations from the approved C2 additions: the hello capability map omits `global_stream: true`, and sidebar expected arrays omit the Stream builtin. Sol approved changes confined to `packages/client/src/daemon-client.test.ts` and `packages/app/src/sidebar-nav/model.test.ts`, including the shifted plugin index while preserving its exact object assertion. Keep fixtures, existing order/visibility/plugin assertions, and exact matchers. Do not derive expected results from production defaults. **Signed off by the Jcode coordinator before worker edits.** Production is unchanged. Both full files and checks must pass, then both integration paths and exact-SHA remote gates are revalidated.
+
+## Host split — no builds on uranus (Cameron, 2026-10-14)
+
+Cameron: "Do NOT run builds on uranus … Hand the APK build to neptune (or CI) instead, and continue the rest of the fork refresh from here." The Hosts rule in `~/.claude/CLAUDE.md` forbids builds on uranus: APK/Gradle/Hermes, desktop packaging, `npm run build*`, and full suites. One APK build exhausted RAM and swap there and dropped the daemon. From B9 onward:
+
+- **Package workers run on neptune** (`ssh neptune paseo run …`, DeepSeek V4.1 Flash via jcode, high), in Paseo worktrees of `/Volumes/offload/neptune/repos/paseo`. `npm ci`, `build:server`, typecheck, lint and tests all run there.
+- **Rolling baskets are built on neptune** in a dedicated basket worktree. The coordinator drives them over ssh.
+- **Sol `3f2c7ea5` and the coordinator stay on uranus.** Sol only reads code. Workers push their branch, then reach Sol through `ssh uranus` (fetch the branch into `/home/ctaylor/repos/paseo`, then `paseo send 3f2c7ea5 --prompt-file`).
+- Uranus keeps editing, git, and at most targeted single-file tests.
+- Neptune's local `custom` has drifted again (now `a4d692287`). Workers and baskets name frozen heads by full SHA, never by branch name. The campaign pin stays `cbc201718`.
+- B9 s2 source `8e6473ee316aa7a0b62df0366470ee13bdbd52ff` (infi-pc/paseo, "Exclude config changes from production counters") was fetched and pinned on uranus as `refs/research/infi-diff-exclusion-8e6473ee`. Sol verifies it before any worker reads it.
