@@ -264,6 +264,19 @@ import { archiveByScope, type ActiveWorkspaceRef } from "./workspace-archive-ser
 import { WorkspaceSetupRuntime } from "./workspace-setup-runtime.js";
 import { SessionAuthorization, type DaemonPermission } from "./authorization/index.js";
 
+/**
+ * A descriptor identical to the last one emitted is not re-sent. The comparison is
+ * whole-descriptor, so a breakdown-only change is a change and must be emitted.
+ */
+export function isDuplicateWorkspaceUpdate(
+  lastEmitted: WorkspaceUpdatePayload | undefined,
+  nextWorkspace: WorkspaceDescriptorPayload,
+): boolean {
+  return Boolean(
+    lastEmitted && lastEmitted.kind === "upsert" && equal(lastEmitted.workspace, nextWorkspace),
+  );
+}
+
 function resolveWorkspaceSetupRuntime(
   runtime: WorkspaceSetupRuntime | undefined,
 ): WorkspaceSetupRuntime {
@@ -6071,11 +6084,7 @@ export class Session {
         subscription.syncEnabled === true,
       );
 
-      if (
-        lastEmitted &&
-        lastEmitted.kind === "upsert" &&
-        equal(lastEmitted.workspace, nextWorkspace)
-      ) {
+      if (isDuplicateWorkspaceUpdate(lastEmitted, nextWorkspace)) {
         continue;
       }
 
