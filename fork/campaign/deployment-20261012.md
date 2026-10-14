@@ -19,6 +19,35 @@ The candidate changes four A1 files only, 48 additions and 3 deletions. Its ACP 
 - Packaging dry-run: https://github.com/camerontaylor/paseo/actions/runs/38153632643
 - Local build/check logs: `/home/ctaylor/.jcode/scratch/a1-release-*.log`.
 
+## Android APK and Taildrop
+
+Cameron requested "Please build the apk and push to phone with taildrop" on 2026-10-12. Build exact published source `929d7427163474f5c0cbfc45192436d3de7540c6`, not the held C1/C2 candidate. Target is Taildrop peer `camerons-s24` (`100.85.200.18`). Transfer the APK only: do not install it or change phone settings.
+
+**The build moved to neptune on 2026-10-14.** Builds are forbidden on uranus (Hosts rule in `~/.claude/CLAUDE.md`). Three uranus attempts in `/home/ctaylor/.jcode/scratch/paseo-apk-0.11.2-fork.2` all failed:
+
+1. Oct 12: Metro died at 85% with a 2048 MB heap. Its exit file falsely recorded `0`.
+2. Oct 14: the bundle completed with a 6144 MB heap, then the Hermes compile was OOM-killed. That build ran inside the `paseo-daemon.service` cgroup (MemoryHigh 8G / MemoryMax 10G), so it was competing with the production daemon for memory.
+3. Oct 14: the rerun ran in a separate user unit but still exhausted host RAM and swap, and the daemon stopped answering clients. Cameron had it killed.
+
+No APK was produced on uranus. The scratch tree and Android tooling there are abandoned. Do not reuse them.
+
+**Correction to the uranus setup:** the uranus attempts used `APP_VARIANT=production` (`sh.paseo`). Neptune's `~/.paseo-fork/README.md` ("The Android APK") owns the procedure. The phone runs `sh.paseo.debug`, built with `APP_VARIANT=development` for both prebuild and Gradle. A `production` build installs beside the fork app instead of upgrading it. Building on neptune also keeps the signing keystore the phone's existing install uses.
+
+Neptune worker `6c40a390-094c-4695-9de9-d0317be2c17c` (DeepSeek V4.1 Flash via jcode) builds a detached worktree at `929d74271`, following the README. Before sending it verifies:
+
+- applicationId `sh.paseo.debug` and the versionCode
+- arm64-v8a-only native libraries and the embedded Hermes bundle
+- the signer certificate, which must match the earlier neptune APK; a mismatch stops the job
+- the APK's SHA-256
+- typecheck and lint
+
+It then renames the APK and sends it with `tailscale file cp` to `camerons-s24`. It does not install it. Delivery is confirmed by the phone notification, not by the command's exit code.
+
+- [x] Resolve published source and unique phone target.
+- [ ] Build on neptune (worker `6c40a390`).
+- [ ] Verify applicationId, versionCode, ABI, bundle, signer, hash, typecheck and lint.
+- [ ] Taildrop to `camerons-s24`, then record the transfer result and the APK path.
+
 ## Delivery checklist
 
 - [x] Resume persistent Sol and requested DeepSeek workers.
@@ -83,3 +112,12 @@ The coordinator resumed as Jcode on uranus. Persistent Sol `3f2c7ea5` resumed wi
 No production restart, installation, config change, or live-home repair. The live Desvio directory is absent on uranus, so no live manifest is edited. A future Desvio rebuild needs the accepted overlays added to the owning host's manifest or it will drop them.
 
 Integration merge hooks were skipped, with checks after assembly. Docs-only control commits skip hooks in the dependency-free worktree. The formatter runs before commits, but repo config explicitly excludes `fork/**/*.md`. C1/C2 native, locale, and real disk-full gaps remain in the ledger.
+
+## Browser repair review, 2026-10-14
+
+Sol reviewed branch `fork/refresh-browser-repair-20261012` at `d2407b79b` read-only, with no builds or tests. [Verbatim verdict](logs/browser-repair-review-20261014.md).
+
+- **C2-BROWSER-EXC-1 `d2407b79b`: ADVANCE.** Sol accepted the per-test `120_000` timeout, which matches sibling flows and changes no assertion. This advances the C2 repair only. It is not yet transplanted into the C2 package branch, the basket, or a release candidate.
+- **C1-BROWSER-EXC-1 `30e6769e8`: still BLOCKED, pending Cameron's production-design decision.** After a reconnect on an owned-subscription host, the untagged handshake `server_info` never reaches the app's `onFeed("status")` outbox flush handler. Owned routes are cleared on disconnect (`connection/owned.ts:213–217`), and the app's snapshot callback is empty (`session-context.tsx:567`). Durable entries are kept but are not sent automatically. They flush only on a later routed server-info update, another queue submission, or explicit retry. App restart is not a guaranteed remedy. The trigger gap predates C1 and the release integration: frozen tmad's carried queue already has it. It is not an upstream 0.11.2 interaction. Sol's preferred fix belongs to C1: an app-level reconciliation when the runtime becomes connected and the current handshake confirms `durableAgentQueueV1`. It would reuse the existing adapter and flush, with tests for already-connected mount and reconnect during a flush. No production change is authorized.
+- **`30e6769e8` test orchestration is also defective.** Same-agent dispatch is serialized, so the test must release the first acknowledgement before the second enqueue. The held-response index also shifts after a release. Correct this alongside any production fix, and keep the durable-storage proof and the original two-control acceptance.
+- **Duplicate canonical row in "makes the next queued turn interruptible" stays unclassified.** It failed 3/3 on the branch and passed 1/1 at base. Settle it with repeated isolated runs on both SHAs, correlating rows with message, client-message, and queue identities. Keep the one-row assertion.
