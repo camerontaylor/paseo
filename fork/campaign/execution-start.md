@@ -119,3 +119,8 @@ Cameron: "Do NOT run builds on uranus … Hand the APK build to neptune (or CI) 
 - Uranus keeps editing, git, and at most targeted single-file tests.
 - Neptune's local `custom` has drifted again (now `a4d692287`). Workers and baskets name frozen heads by full SHA, never by branch name. The campaign pin stays `cbc201718`.
 - B9 s2 source `8e6473ee316aa7a0b62df0366470ee13bdbd52ff` (infi-pc/paseo, "Exclude config changes from production counters") was fetched and pinned on uranus as `refs/research/infi-diff-exclusion-8e6473ee`. Sol verifies it before any worker reads it.
+
+### Neptune worker hazards (2026-10-14)
+
+- Paseo worktrees on neptune come with `packages/*/node_modules` symlinked into the shared main checkout `/Volumes/offload/neptune/repos/paseo`. `npm ci` then fails with ENOTDIR and creates empty directories in the main checkout. The B9 worker hit this. It verified that no file was written and nothing tracked changed, removed the 7 empty directories it had created, and removed its worktree's symlinks before reinstalling. Every neptune brief now says: remove only your worktree's `packages/*/node_modules` symlinks before `npm ci`.
+- jcode does not re-invoke a worker when its background command finishes. Workers must wait for Sol sends in the foreground rather than end their turn with `WAITING`.
