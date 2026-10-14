@@ -4,6 +4,17 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## Tool call display defaults to Summary — 2026-10-15
+
+`Settings → Chat → Tool call display` now defaults to **Summary**, for new installs
+and for existing ones. Existing installs are switched to Summary once, because a
+stored level cannot be told apart from the old materialized default; a choice made
+after the update (Summary, Quiet, or Full detail) persists. **Quiet** is new: it
+hides routine tool calls and keeps failures, nonzero shell exits, plans, questions,
+and approvals visible. Timeline history is never deleted.
+
+Adopted from TMAD #34; the one-time migration id is `summary-tool-calls`.
+
 ## 0.11.1 base decision — 2026-10-08
 
 Advance `custom` to upstream `v0.11.1`. Preserve cancellation ownership,

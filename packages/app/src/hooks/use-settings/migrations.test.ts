@@ -25,6 +25,13 @@ function storedContentFontSize(storage: Storage): number | undefined {
   return raw === undefined ? undefined : JSON.parse(raw).contentFontSize;
 }
 
+function storedToolCallDetailLevel(
+  storage: Storage,
+): AppSettings["toolCallDetailLevel"] | undefined {
+  const raw = storage.entries.get(APP_SETTINGS_KEY);
+  return raw === undefined ? undefined : JSON.parse(raw).toolCallDetailLevel;
+}
+
 /** An in-memory storage whose write to `failingKey` always throws, as a full disk would. */
 function createFailingWriteStorage(failingKey: string): Storage {
   const storage = createInMemoryKeyValueStorage();
@@ -145,5 +152,36 @@ describe("migrateAppSettings", () => {
 
     expect(result.sendBehavior).toBe("steer");
     expect(appliedIds(recovered)).toEqual(["steer-default"]);
+  });
+
+  it("moves the old full-detail default to summary once while retaining later choices", async () => {
+    const storage = createInMemoryKeyValueStorage();
+    const oldSettings = { ...settingsWith("steer"), toolCallDetailLevel: "detailed" as const };
+
+    const migrated = await migrateAppSettings(oldSettings, storage);
+    expect(migrated.toolCallDetailLevel).toBe("overview");
+    expect(storedToolCallDetailLevel(storage)).toBe("overview");
+
+    const laterChoice = await migrateAppSettings(oldSettings, storage);
+    expect(laterChoice.toolCallDetailLevel).toBe("detailed");
+  });
+
+  it("moves a stored quiet default to summary and retains a later quiet choice", async () => {
+    const storage = createInMemoryKeyValueStorage({
+      [SETTINGS_MIGRATIONS_KEY]: JSON.stringify({ applied: ["quiet-tool-calls"] }),
+    });
+    const quietSettings = { ...settingsWith("steer"), toolCallDetailLevel: "quiet" as const };
+
+    const migrated = await migrateAppSettings(quietSettings, storage);
+    expect(migrated.toolCallDetailLevel).toBe("overview");
+    expect(storedToolCallDetailLevel(storage)).toBe("overview");
+    expect(appliedIds(storage)).toEqual([
+      "quiet-tool-calls",
+      "steer-default",
+      "summary-tool-calls",
+    ]);
+
+    const laterChoice = await migrateAppSettings(quietSettings, storage);
+    expect(laterChoice.toolCallDetailLevel).toBe("quiet");
   });
 });

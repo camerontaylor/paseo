@@ -13,6 +13,14 @@ const AppliedMigrationsSchema = z.strictObject({ applied: z.array(z.string()) })
  */
 const STEER_DEFAULT_MIGRATION = "steer-default";
 
+/**
+ * `toolCallDetailLevel` defaulted to "detailed" and defaults are materialized into storage on
+ * first load, so a stored "detailed" cannot be told apart from a deliberate choice. This switches
+ * every stored level to "overview" exactly once, which also overrides a deliberate earlier choice
+ * for the same reason; a choice made afterwards sticks.
+ */
+const SUMMARY_TOOL_CALLS_MIGRATION = "summary-tool-calls";
+
 /** Existing mobile installs materialized the old 15px content default in storage. */
 const MOBILE_CONTENT_16_MIGRATION = "mobile-content-16";
 
@@ -41,6 +49,15 @@ export async function migrateAppSettings(
     migrated =
       migrated.sendBehavior === "interrupt" ? { ...migrated, sendBehavior: "steer" } : migrated;
     applied.add(STEER_DEFAULT_MIGRATION);
+    addedMigration = true;
+  }
+
+  if (!applied.has(SUMMARY_TOOL_CALLS_MIGRATION)) {
+    migrated =
+      migrated.toolCallDetailLevel !== "overview"
+        ? { ...migrated, toolCallDetailLevel: "overview" }
+        : migrated;
+    applied.add(SUMMARY_TOOL_CALLS_MIGRATION);
     addedMigration = true;
   }
 

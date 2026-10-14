@@ -792,6 +792,16 @@ describe("appearance settings", () => {
     expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe("overview");
   });
 
+  it("defaults a disabled compact tool call preference to summary", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({ compactToolCalls: false }),
+      }),
+    });
+
+    expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe("overview");
+  });
+
   it("clears settings with an unrecognized tool call detail level", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
