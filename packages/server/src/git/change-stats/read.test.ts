@@ -8,7 +8,12 @@ import {
   type GitCommandResult,
   type RunGitCommand,
 } from "../../utils/run-git-command.js";
-import { parseNumstat, readComparisonBreakdown, readFileBreakdown } from "./read.js";
+import {
+  addFileBreakdowns,
+  parseNumstat,
+  readComparisonBreakdown,
+  readFileBreakdown,
+} from "./read.js";
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((cwd) => rm(cwd, { recursive: true, force: true })));
@@ -367,6 +372,23 @@ it("reports the reconciliation fallback when the worktree moved under Git's tota
     analyzedCount: 1,
   });
   expect(breakdown.other).toEqual({ additions: 1, deletions: 0 });
+});
+
+it("attaches a breakdown to every file it analyzes", async () => {
+  const files = parseNumstat("1\t1\ta.ts\0");
+  await addFileBreakdowns({
+    cwd: "/nonexistent",
+    baseRef: "HEAD",
+    files,
+    runGit: async (args) => {
+      if (args[0] === "show") return gitResult("// before\n");
+      throw new Error(`unexpected git call: ${args.join(" ")}`);
+    },
+  });
+
+  // Without patch hunks the changed lines reconcile into the path category.
+  expect(files[0]?.breakdown?.code).toEqual({ additions: 1, deletions: 1 });
+  expect(files[0]?.breakdown?.commentsIncluded).toEqual({ additions: 1, deletions: 1 });
 });
 
 it("refuses a patch record with equal counts but a different path", async () => {

@@ -1,4 +1,5 @@
 import { searchTimeline } from "./agent/chat-search/index.js";
+import type { DiffStat } from "@getpaseo/protocol/diff-stat";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type {
@@ -5565,7 +5566,7 @@ export class Session {
     const resolvedProjectRecord =
       projectRecord ?? (await this.projectRegistry.get(workspace.projectId));
 
-    let diffStat: { additions: number; deletions: number } | null = null;
+    let diffStat: DiffStat | null = null;
     const snapshot = this.workspaceGitService.peekSnapshot(workspace.cwd);
     if (snapshot?.git.diffStat) {
       diffStat = snapshot.git.diffStat;

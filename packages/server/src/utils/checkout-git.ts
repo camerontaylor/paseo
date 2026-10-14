@@ -1,3 +1,9 @@
+import type { DiffStat } from "@getpaseo/protocol/diff-stat";
+import {
+  addFileBreakdowns,
+  readComparisonBreakdown,
+  readFileBreakdown,
+} from "../git/change-stats/read.js";
 import { resolve, dirname, basename } from "path";
 import { existsSync, realpathSync } from "fs";
 import { open as openFile, readFile, stat as statFile } from "fs/promises";
@@ -920,7 +926,7 @@ export interface MergeFromBaseOptions {
 export interface CheckoutContext {
   paseoHome?: string;
   worktreesRoot?: string;
-  logger?: Pick<Logger, "trace" | "warn">;
+  logger?: Pick<Logger, "trace" | "info" | "warn">;
   facts?: CheckoutSnapshotFacts | null;
   runGitCommand?: RunGitCommand;
 }
@@ -2755,13 +2761,11 @@ export async function getCommitFileDiff({
     return null;
   }
 
+  file.breakdown = await readFileBreakdown({ cwd, baseRef: `${sha}^`, targetRef: sha, file });
   return file;
 }
 
-export interface CheckoutShortstat {
-  additions: number;
-  deletions: number;
-}
+export type CheckoutShortstat = DiffStat;
 
 function parseCheckoutShortstat(text: string): CheckoutShortstat | null {
   const trimmed = text.trim();
@@ -2839,6 +2843,30 @@ function handleShortstatGitError(error: unknown, throwOnGitError = false): null 
   return null;
 }
 
+// Git totals plus the classified breakdown; classification adds wire data after the
+// initial shortstat accounting, so this is the producer's classification entry point.
+async function buildShortstatWithBreakdown(
+  cwd: string,
+  context: CheckoutContext | undefined,
+  mergeBase: string,
+  stdout: string,
+  untrackedAdditions: number,
+): Promise<CheckoutShortstat | null> {
+  const tracked = parseCheckoutShortstat(stdout);
+  const total = tracked
+    ? { additions: tracked.additions + untrackedAdditions, deletions: tracked.deletions }
+    : { additions: untrackedAdditions, deletions: 0 };
+  if (total.additions + total.deletions === 0) return null;
+  const breakdown = await readComparisonBreakdown({
+    cwd,
+    baseRef: mergeBase,
+    total,
+    runGit: getRunGitCommand(context),
+    logger: context?.logger,
+  });
+  return { ...total, breakdown };
+}
+
 async function getCheckoutShortstatUncached(
   cwd: string,
   context?: CheckoutContext,
@@ -2892,15 +2920,7 @@ async function getCheckoutShortstatUncached(
       countUntrackedAdditions(cwd, context, options?.throwOnGitError),
     ]);
 
-    const tracked = parseCheckoutShortstat(stdout);
-
-    if (tracked) {
-      return { additions: tracked.additions + untrackedAdditions, deletions: tracked.deletions };
-    }
-    if (untrackedAdditions > 0) {
-      return { additions: untrackedAdditions, deletions: 0 };
-    }
-    return null;
+    return await buildShortstatWithBreakdown(cwd, context, mergeBase, stdout, untrackedAdditions);
   } catch (error) {
     return handleShortstatGitError(error, options?.throwOnGitError);
   }
@@ -3589,6 +3609,20 @@ export async function getCheckoutDiff(
   }
 
   if (compare.includeStructured) {
+    await addFileBreakdowns({
+      cwd,
+      baseRef: effectiveRefsForDiff.baseRef,
+      targetRef: effectiveRefsForDiff.targetRef,
+      files: structured.files,
+      loadPatch: true,
+    });
+    // Classification adds wire data after the initial diff-size accounting.
+    if (
+      Buffer.byteLength(JSON.stringify(structured.files), "utf8") >
+      CHECKOUT_DIFF_MAX_STRUCTURED_BYTES
+    ) {
+      return { diff: "", structured: [], diffTooLarge: true };
+    }
     return { diff: diffText, structured: structured.files };
   }
   return { diff: diffText };
