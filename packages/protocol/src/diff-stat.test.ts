@@ -47,6 +47,20 @@ it("does not present a partial folder breakdown as complete", () => {
   expect(sum).toEqual({ additions: 1, deletions: 0 });
 });
 
+it("counts config separately from production while retaining it in totals", () => {
+  const breakdown = emptyChangeBreakdown();
+  breakdown.code = { additions: 2, deletions: 1 };
+  breakdown.config = { additions: 7, deletions: 3 };
+  const sum = sumDiffStats([{ additions: 9, deletions: 4, breakdown }]);
+  expect(sum).toMatchObject({
+    additions: 9,
+    deletions: 4,
+    breakdown: { config: { additions: 7, deletions: 3 } },
+  });
+  expect(sum.breakdown!.code).toEqual({ additions: 2, deletions: 1 });
+  expect(productionStat(sum.breakdown!)).toEqual({ additions: 2, deletions: 1 });
+});
+
 it("retains the code breakdown when a binary file has no changed lines", () => {
   const breakdown = emptyChangeBreakdown();
   breakdown.code.additions = 1;

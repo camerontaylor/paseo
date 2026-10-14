@@ -5,12 +5,12 @@ export const PRODUCTION_CATEGORIES = [
   "components",
   "styles",
   "ci",
-  "config",
   "tooling",
   "otherCode",
 ] as const;
 export const CHANGE_CATEGORIES = [
   ...PRODUCTION_CATEGORIES,
+  "config",
   "comments",
   "docs",
   "tests",
