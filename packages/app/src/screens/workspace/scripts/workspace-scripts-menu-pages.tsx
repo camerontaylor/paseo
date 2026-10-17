@@ -132,6 +132,9 @@ export function useWorkspaceScriptsMenuPages({
     );
     return [...configured, ...discovered.map((script) => live.get(script.scriptName) ?? script)];
   }, [packageQuery.data, workspaceScripts]);
+  const retryDiscovery = useCallback(() => {
+    void packageQuery.refetch();
+  }, [packageQuery]);
   const actions = useWorkspaceScriptActions({
     serverId,
     workspaceId,
@@ -147,14 +150,29 @@ export function useWorkspaceScriptsMenuPages({
   );
 
   const pages = useMemo<MenuPageDefinition[]>(() => {
-    if (scripts.length === 0) return [];
     const liveTerminalIdSet = new Set(liveTerminalIds);
-    return [
-      {
+    const entries: MenuPageDefinition[] = [];
+    // The trigger shows on a capable host even before discovery returns, so the Scripts page has
+    // to exist too; its own loading, error and empty rows keep the target valid and the failure
+    // visible.
+    if (scripts.length > 0 || supportsPackages) {
+      entries.push({
         id: SCRIPTS_PAGE_ID,
         title: t("workspace.scripts.title"),
-        content: <ScriptsPage scripts={scripts} actions={actions} />,
-      },
+        content: (
+          <ScriptsPage
+            scripts={scripts}
+            actions={actions}
+            discovery={{
+              fetching: packageQuery.isFetching,
+              error: packageQuery.isError ? packageQuery.error.message : null,
+            }}
+            onRetryDiscovery={retryDiscovery}
+          />
+        ),
+      });
+    }
+    entries.push(
       ...scripts.map((script) => ({
         id: scriptPageId(script.scriptName),
         title: scriptLabel(script),
@@ -172,8 +190,21 @@ export function useWorkspaceScriptsMenuPages({
           />
         ),
       })),
-    ];
-  }, [actions, liveTerminalIds, onOpenUrlInBrowserTab, onViewTerminal, scripts, t]);
+    );
+    return entries;
+  }, [
+    actions,
+    liveTerminalIds,
+    onOpenUrlInBrowserTab,
+    onViewTerminal,
+    packageQuery.error,
+    packageQuery.isError,
+    packageQuery.isFetching,
+    retryDiscovery,
+    scripts,
+    supportsPackages,
+    t,
+  ]);
 
   return { trigger, pages, needsAttention: summary.tone === "unhealthy" };
 }
@@ -211,10 +242,15 @@ function ScriptsMenuTrigger({ summary }: { summary: ScriptsSummary }): ReactElem
 function ScriptsPage({
   scripts,
   actions,
+  discovery,
+  onRetryDiscovery,
 }: {
   scripts: WorkspaceDescriptor["scripts"];
   actions: WorkspaceScriptActions;
+  discovery: { fetching: boolean; error: string | null };
+  onRetryDiscovery: () => void;
 }): ReactElement {
+  const { t } = useTranslation();
   return (
     <>
       {scripts.map((script) =>
@@ -224,6 +260,20 @@ function ScriptsPage({
           <StoppedScriptRow key={script.scriptName} script={script} actions={actions} />
         ),
       )}
+      {discovery.fetching ? <DropdownMenuLabel>{t("common.loading")}</DropdownMenuLabel> : null}
+      {discovery.error ? (
+        <DropdownMenuItem
+          description={discovery.error}
+          closeOnSelect={false}
+          onSelect={onRetryDiscovery}
+          testID="workspace-scripts-discovery-retry"
+        >
+          {t("common.actions.retry")}
+        </DropdownMenuItem>
+      ) : null}
+      {scripts.length === 0 && !discovery.fetching && !discovery.error ? (
+        <DropdownMenuLabel>{t("workspace.scripts.states.empty")}</DropdownMenuLabel>
+      ) : null}
     </>
   );
 }

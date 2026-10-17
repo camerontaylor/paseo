@@ -208,7 +208,14 @@ async function runDiscoveredScriptFromCompactHeader(page: Page): Promise<void> {
   const row = page.getByTestId(`workspace-scripts-row-${scriptId}`);
   await expect(row).toContainText("dev", { timeout: 15_000 });
   await row.click();
-  await expect(page.locator('[data-testid^="workspace-tab-terminal_"]').first()).toBeAttached({
-    timeout: 20_000,
+  // Starting the script closes the sheet and opens its own terminal.
+  await expect(page.getByTestId("workspace-header-menu")).not.toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("terminal-surface").first()).toBeVisible({ timeout: 30_000 });
+  // The selected script is the one running: reopening the menu reports its row as running.
+  await page.getByTestId("workspace-header-menu-trigger").click();
+  await expect(page.getByTestId("workspace-header-menu")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("workspace-header-scripts").click();
+  await expect(page.getByTestId(`workspace-scripts-row-${scriptId}`)).toContainText("Running", {
+    timeout: 15_000,
   });
 }
