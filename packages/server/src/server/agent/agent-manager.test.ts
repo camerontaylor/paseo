@@ -8562,12 +8562,13 @@ test("same-reason attention refreshes only on a new edge and stays read after cl
     };
     await expect(manager.runAgent(agent.id, "first failure")).rejects.toThrow("edge failure");
     await manager.flush();
+    await storage.flush();
     const first = readAttention();
     expect(first.attentionReason).toBe("error");
     expect(lifecycles).toContain("running");
     lifecycles.length = 0;
     expect(callbacks).toEqual([expectedCallback]);
-    expect(await storage.get(agent.id)).toMatchObject({
+    expect(await new AgentStorage(join(workdir, "agents"), logger).get(agent.id)).toMatchObject({
       lastStatus: "error",
       requiresAttention: true,
       attentionReason: "error",
@@ -8577,19 +8578,21 @@ test("same-reason attention refreshes only on a new edge and stays read after cl
     manager.notifyAgentState(agent.id);
     manager.notifyAgentState(agent.id);
     await manager.flush();
+    await storage.flush();
     expect(readAttention()).toEqual(first);
     expect(callbacks).toEqual([expectedCallback]);
-    expect((await storage.get(agent.id))?.attentionTimestamp).toBe(
-      first.attentionTimestamp.toISOString(),
-    );
+    expect(
+      (await new AgentStorage(join(workdir, "agents"), logger).get(agent.id))?.attentionTimestamp,
+    ).toBe(first.attentionTimestamp.toISOString());
     await expect(manager.runAgent(agent.id, "second failure")).rejects.toThrow("edge failure");
     await manager.flush();
+    await storage.flush();
     const second = readAttention();
     expect(second.attentionReason).toBe("error");
     expect(second.attentionTimestamp.getTime()).toBeGreaterThan(first.attentionTimestamp.getTime());
     expect(callbacks).toEqual([expectedCallback, expectedCallback]);
     expect(lifecycles).toContain("running");
-    expect(await storage.get(agent.id)).toMatchObject({
+    expect(await new AgentStorage(join(workdir, "agents"), logger).get(agent.id)).toMatchObject({
       lastStatus: "error",
       requiresAttention: true,
       attentionReason: "error",
@@ -8604,9 +8607,10 @@ test("same-reason attention refreshes only on a new edge and stays read after cl
     manager.notifyAgentState(agent.id);
     manager.notifyAgentState(agent.id);
     await manager.flush();
+    await storage.flush();
     expect(manager.getAgent(agent.id)!.attention).toEqual({ requiresAttention: false });
     expect(callbacks).toEqual([expectedCallback, expectedCallback]);
-    expect(await storage.get(agent.id)).toMatchObject({
+    expect(await new AgentStorage(join(workdir, "agents"), logger).get(agent.id)).toMatchObject({
       lastStatus: "error",
       requiresAttention: false,
       attentionReason: null,

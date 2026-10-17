@@ -4491,6 +4491,7 @@ describe("send_agent_prompt MCP tool", () => {
         await vi.waitFor(() => expect(parentSession.prompts).toHaveLength(cycle + 1));
         await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
         await agentManager.flush();
+        await storage.flush();
         const attention = agentManager.getAgent(child.id)!.attention;
         if (!attention.requiresAttention) throw new Error("Expected unread recovery attention");
         expect(attention.attentionReason).toBe(reason);
@@ -4506,23 +4507,27 @@ describe("send_agent_prompt MCP tool", () => {
             reason: index < 2 ? "error" : "finished",
           })),
         );
-        expect(await storage.get(child.id)).toMatchObject({
-          lastStatus: lifecycle,
-          requiresAttention: true,
-          attentionReason: reason,
-          attentionTimestamp: attention.attentionTimestamp.toISOString(),
-        });
+        expect(await new AgentStorage(join(workdir, "agents"), logger).get(child.id)).toMatchObject(
+          {
+            lastStatus: lifecycle,
+            requiresAttention: true,
+            attentionReason: reason,
+            attentionTimestamp: attention.attentionTimestamp.toISOString(),
+          },
+        );
         expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toEqual(
           expectedNotifications.slice(0, cycle + 1),
         );
         agentManager.notifyAgentState(child.id);
         agentManager.notifyAgentState(child.id);
         await agentManager.flush();
+        await storage.flush();
         expect(agentManager.getAgent(child.id)!.attention).toEqual(attention);
         expect(childCallbacks()).toHaveLength(cycle + 1);
-        expect((await storage.get(child.id))?.attentionTimestamp).toBe(
-          attention.attentionTimestamp.toISOString(),
-        );
+        expect(
+          (await new AgentStorage(join(workdir, "agents"), logger).get(child.id))
+            ?.attentionTimestamp,
+        ).toBe(attention.attentionTimestamp.toISOString());
         expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toEqual(
           expectedNotifications.slice(0, cycle + 1),
         );
