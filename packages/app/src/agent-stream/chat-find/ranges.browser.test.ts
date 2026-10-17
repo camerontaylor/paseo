@@ -76,3 +76,12 @@ it("keeps semantic Markdown paragraphs separate while finding inline matches", (
   ]);
   expect(findRenderedMatches(row, ".another")).toEqual([]);
 });
+
+it("finds wide-character text across inline formatting", () => {
+  const row = content(
+    '<div data-paseo-markdown-tag="p">통합 <strong>구현은</strong> 전체 테스트</div>',
+  );
+  expect(findRenderedMatches(row, "구현은 전체").map((range) => range.toString())).toEqual([
+    "구현은 전체",
+  ]);
+});
