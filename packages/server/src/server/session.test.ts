@@ -6640,10 +6640,13 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
       socket,
     );
 
-    const response = targetedMessages.find(
-      ({ source, message }) =>
-        source === socket && message.type === "agent.queue.enqueue.response",
-    ) as Extract<SessionOutboundMessage, { type: "agent.queue.enqueue.response" }>;
+    const response = [
+      ...targetedMessages.filter(({ source }) => source === socket).map(({ message }) => message),
+      ...messages,
+    ].find((message) => message.type === "agent.queue.enqueue.response") as Extract<
+      SessionOutboundMessage,
+      { type: "agent.queue.enqueue.response" }
+    >;
     expect(response.payload.error).toBeNull();
     expect(response.payload.queue?.items[0]).toMatchObject({
       id: "item-1",
@@ -6654,9 +6657,13 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
 
     // The mutation broadcast reaches the capability-advertising client, independently of the
     // response above.
-    const broadcast = targetedMessages.find(
-      ({ message }) => message.type === "agent.queue.update",
-    )?.message as Extract<SessionOutboundMessage, { type: "agent.queue.update" }>;
+    const broadcast = [
+      ...targetedMessages.filter(({ source }) => source === socket).map(({ message }) => message),
+      ...messages,
+    ].find((message) => message.type === "agent.queue.update") as Extract<
+      SessionOutboundMessage,
+      { type: "agent.queue.update" }
+    >;
     expect(broadcast.payload.items.map((item) => item.id)).toEqual(["item-1"]);
   } finally {
     rmSync(queueDir, { recursive: true, force: true });
