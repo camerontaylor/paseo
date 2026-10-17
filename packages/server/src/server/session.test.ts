@@ -6660,6 +6660,7 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
         targeted: targetedMessages.map(({ source, message }) => [
           message.type,
           source === socket ? "socket" : "other",
+          message.type === "rpc_error" ? message.payload.error : undefined,
         ]),
         broadcast: messages.map((message) => message.type),
       }),
