@@ -479,6 +479,37 @@ test("a child that recovers from an error still notifies its finish", async () =
   expect(scenario.parentPrompts()).toHaveLength(2);
 });
 
+test("finish notifications report each recovered error cycle before the final finish", async () => {
+  const finalText = "Completed the recovery task.";
+  const scenario = createFinishNotificationScenario({ childLastAssistantMessage: finalText });
+  scenario.startWatchingChild();
+
+  for (const count of [1, 2]) {
+    scenario.failChild();
+    await vi.waitFor(() => expect(scenario.parentPrompts()).toHaveLength(count));
+    expect(parseAgentMessage(scenario.parentPrompts()[count - 1]!)).toEqual({
+      id: expect.any(String),
+      source: {
+        kind: "agent-notification",
+        agentId: "child-agent",
+        title: "Child Agent",
+        event: "errored",
+      },
+      text: `Agent child-agent (Child Agent) errored.\n\n<agent-response>\n${finalText}\n</agent-response>`,
+    });
+  }
+
+  scenario.finishChild();
+  await vi.waitFor(() => expect(scenario.parentPrompts()).toHaveLength(3));
+  expect(scenario.parentPrompts().map((prompt) => parseAgentMessage(prompt))).toEqual(
+    ["errored", "errored", "finished"].map((event) => ({
+      id: expect.any(String),
+      source: { kind: "agent-notification", agentId: "child-agent", title: "Child Agent", event },
+      text: `Agent child-agent (Child Agent) ${event}.\n\n<agent-response>\n${finalText}\n</agent-response>`,
+    })),
+  );
+});
+
 test("closing a child after it errored does not notify again", async () => {
   const scenario = createFinishNotificationScenario();
 

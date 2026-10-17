@@ -4316,6 +4316,96 @@ describe("send_agent_prompt MCP tool", () => {
     }
   });
 
+  it("notifies every autonomous recovery error before the child finally finishes", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "mcp-repeated-recovery-notification-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const parentClient = new HeldTurnAgentClient("claude", false);
+    const childClient = new HeldTurnAgentClient("codex", true);
+    const agentManager = new AgentManager({
+      clients: { claude: parentClient, codex: childClient },
+      registry: storage,
+      logger,
+    });
+    try {
+      const parent = await agentManager.createAgent(
+        { provider: "claude", cwd: existingCwd, title: "Recovery parent" },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      const child = await agentManager.createAgent(
+        { provider: "codex", cwd: existingCwd, title: "Recovering child" },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        callerAgentId: parent.id,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+      const tool = registeredTool(server, "send_agent_prompt");
+      await invokeToolWithParsedInput(tool, { agentId: child.id, prompt: "Do the recovery task" });
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
+      const childSession = childClient.sessions[0]!;
+      const parentSession = parentClient.sessions[0]!;
+
+      for (const count of [1, 2]) {
+        if (count === 2) {
+          childSession.startOwnTurn();
+          await vi.waitFor(() =>
+            expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"),
+          );
+        }
+        childSession.failTurn(`Synthetic recovery error ${count}`);
+        await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("error"));
+        await vi.waitFor(() => expect(parentSession.prompts).toHaveLength(count));
+        await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
+        expect(parseAgentMessage(parentSession.prompts[count - 1]!)).toEqual({
+          id: expect.any(String),
+          source: {
+            kind: "agent-notification",
+            agentId: child.id,
+            title: "Recovering child",
+            event: "errored",
+          },
+          text: `Agent ${child.id} (Recovering child) errored.\n\n<agent-response>\n[System Error] Synthetic recovery error ${count}\n</agent-response>`,
+        });
+      }
+
+      childSession.startOwnTurn();
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
+      const finalText = "Completed the autonomous recovery task.";
+      childSession.finishTurn(finalText);
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("idle"));
+      await vi.waitFor(() => expect(parentSession.prompts).toHaveLength(3));
+      await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
+      expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toEqual(
+        ["errored", "errored", "finished"].map((event, index) => ({
+          id: expect.any(String),
+          source: {
+            kind: "agent-notification",
+            agentId: child.id,
+            title: "Recovering child",
+            event,
+          },
+          text:
+            event === "finished"
+              ? `Agent ${child.id} (Recovering child) finished.\n\n<agent-response>\n${finalText}\n</agent-response>`
+              : `Agent ${child.id} (Recovering child) errored.\n\n<agent-response>\n[System Error] Synthetic recovery error ${index + 1}\n</agent-response>`,
+        })),
+      );
+      expect(childSession.prompts).toHaveLength(1);
+      expect(parseAgentMessage(childSession.prompts[0]!)).toEqual({
+        id: expect.any(String),
+        source: { kind: "agent-message", agentId: parent.id, title: "Recovery parent" },
+        text: "Do the recovery task",
+      });
+    } finally {
+      await removeAgentStateDir(agentManager, storage, workdir);
+    }
+  });
+
   it.each(["out_of_band", "startup_failure"] as const)(
     "preserves %s dispatch notification semantics",
     async (scenario) => {
