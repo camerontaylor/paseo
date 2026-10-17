@@ -13,6 +13,7 @@ test("changing thinking then mode preserves a foreground Claude command", async 
   const logger = pino({ level: "silent" });
   const cwd = await mkdtemp(path.join(tmpdir(), "claude-settings-mid-turn-"));
   const cleanups: Array<() => Promise<unknown>> = [() => rm(cwd, { recursive: true, force: true })];
+  const cleanupFailures: unknown[] = [];
   let testFailed = false;
   try {
     const daemon = await createTestPaseoDaemon({
@@ -61,7 +62,6 @@ test("changing thinking then mode preserves a foreground Claude command", async 
     testFailed = true;
     throw error;
   } finally {
-    const cleanupFailures: unknown[] = [];
     for (const cleanup of cleanups) {
       try {
         await cleanup();
@@ -69,10 +69,12 @@ test("changing thinking then mode preserves a foreground Claude command", async 
         cleanupFailures.push(error);
       }
     }
-    if (cleanupFailures.length > 0) {
+    if (testFailed && cleanupFailures.length > 0) {
       const failure = new AggregateError(cleanupFailures, "Claude mid-turn test cleanup failed");
-      if (testFailed) process.stderr.write(`${inspect(failure)}\n`);
-      else throw failure;
+      process.stderr.write(`${inspect(failure)}\n`);
     }
+  }
+  if (cleanupFailures.length > 0) {
+    throw new AggregateError(cleanupFailures, "Claude mid-turn test cleanup failed");
   }
 }, 180_000);
