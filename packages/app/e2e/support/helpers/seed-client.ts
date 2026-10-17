@@ -123,6 +123,7 @@ export interface SeedDaemonClient {
         workspaceId?: string;
         model: string | null;
         currentModeId: string | null;
+        thinkingOptionId?: string | null;
         status: string;
         title?: string | null;
       };
