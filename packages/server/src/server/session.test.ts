@@ -6618,6 +6618,14 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
       clientCapabilities: { [CLIENT_CAPS.durableAgentQueue]: true },
       agentManager: {
         listAgents: vi.fn(() => [{ id: agentId }]),
+        // The enqueue path looks the agent up before admitting; without this the handler cannot
+        // reach its response construction.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
       },
       agentStorage: {
         get: vi.fn().mockResolvedValue(undefined),
