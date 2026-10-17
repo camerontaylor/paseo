@@ -47,9 +47,10 @@ repositories are gone: `amitbtcai/paseo`, `alnimra/paseo`, `JLarky/paseo` all
 return 404. `hinneslung`'s VS Code extension, the most credible fork product in
 the old survey, has not pushed since 2026-09-21.
 
-**The infi-pc intake source is exhausted.** `infi-pc/paseo` is now **0 ahead, 239
-behind** upstream: its commits are upstream changes already in our base. The
-ledger's four infi features have nothing further to port. Stop checking it at sync.
+**The infi-pc exhaustion conclusion is withdrawn.** The 0-ahead/239-behind
+comparison checked the upstream mirror `main`, not the customization branch.
+Use the [current infi intake](intakes/2026-10-17/infi-pc.md) for source identity
+and outstanding work; keep checking that source at sync.
 
 **`colonelpanic8/paseo` needs care.** Its default `main` is dormant since August,
 which reads as zero in both this sweep and the old one. Its previously surveyed
@@ -167,7 +168,8 @@ conclusion is evidence the gap is real.
 
 ## Verification
 
-Hand-checked here: `infi-pc/paseo` compare is 0 ahead / 239 behind;
+Hand-checked here: `infi-pc/paseo:main` compare was 0 ahead / 239 behind
+(the mirror, not the intake source; correction above);
 `amitbtcai`, `alnimra`, `JLarky` return 404; the papag00se, zeyugao and fiuhq
 commits exist with the stated file scopes (`diff-highlighter.ts`,
 `persisted-config.ts` + `private-files.ts`, `run-git-command.ts` +
