@@ -6761,16 +6761,16 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
     const queueUpdates = () =>
       targetedMessages.filter(({ message }) => message.type === "agent.queue.update");
     // Read the subscribe acknowledgement before the list is cleared for the delivery assertions.
-    const subscribedSubscriptionId = (
-      targetedMessages.find(
-        ({ source: owner, message }) =>
-          owner === subscribed &&
-          message.type === "session.events.set_subscription.response",
-      )?.message as Extract<
-        SessionOutboundMessage,
-        { type: "session.events.set_subscription.response" }
-      >
-    ).payload.subscriptionId;
+    const acknowledgement = targetedMessages.find(
+      ({ source: owner, message }) =>
+        owner === subscribed &&
+        message.type === "session.events.set_subscription.response" &&
+        message.payload.requestId === "queue-subscription-0",
+    )?.message;
+    if (acknowledgement?.type !== "session.events.set_subscription.response") {
+      throw new Error("Missing queue-subscription-0 acknowledgement");
+    }
+    const subscribedSubscriptionId = acknowledgement.payload.subscriptionId;
 
     // The owner principal is permitted to have these delivered; the queue update is not a
     // privileged message that a narrower principal would be denied.

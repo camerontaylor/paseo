@@ -174,6 +174,14 @@ await the real first flush promise before resetting the enqueue spy; retain the 
 incapable-transport subscription for absence of the queue selector. Existing assertions and product
 code remain unchanged. Only the changed reconnect files are rerun after this strengthening.
 
+At `f605c8dd0`, the strengthened handler passes 3/3 and the selector case passes 1/1. Exact-SHA
+static checks found the mock's inferred empty argument tuple, an unsafe acknowledgement cast in the
+existing queue subscription case, and formatter whitespace in `session.test.ts` and `session.ts`.
+Before the carry-test edit, the advisor and coordinator approved: reuse the real enqueue signature;
+find the acknowledgement by type and request ID and throw if missing; preserve every assertion;
+format through npm with the `session.ts` change confirmed whitespace-only. These are test harness,
+test safety and formatting corrections, with no production behavior change.
+
 ### The queue enqueue case: attribution corrected, not a product defect
 
 The first gate run showed the carry's enqueue case failing, and an early reading called it a

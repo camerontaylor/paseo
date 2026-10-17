@@ -9300,8 +9300,7 @@ const DIRECT_EVENT_CATEGORIES: ReadonlySet<string> = new Set([
 function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubscription | null {
   if (SIDE_CONVERSATION_EVENT_TYPES.has(message.type))
     return message.type as SessionEventSubscription;
-  if (DIRECT_EVENT_CATEGORIES.has(message.type))
-    return message.type as SessionEventSubscription;
+  if (DIRECT_EVENT_CATEGORIES.has(message.type)) return message.type as SessionEventSubscription;
   switch (message.type) {
     case "status":
       switch (message.payload.status) {

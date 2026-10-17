@@ -9,10 +9,11 @@ import React from "react";
 import { act } from "@testing-library/react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { QueueOutboxFlushClient } from "@/stores/queue-outbox-store/model";
 
 const harness = vi.hoisted(() => ({
   feedHandlers: new Map<string, (message: unknown) => void>(),
-  enqueueAgentMessage: vi.fn(async () => ({
+  enqueueAgentMessage: vi.fn<QueueOutboxFlushClient["enqueueAgentMessage"]>(async () => ({
     agentId: "agent-1",
     revision: 1,
     items: [],
