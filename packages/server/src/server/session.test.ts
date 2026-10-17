@@ -6596,7 +6596,7 @@ test("a legacy send_agent_message_request never reaches the queue service", asyn
   }
 });
 
-test("agent.queue.enqueue.request admits through the queue service and mirrors the broadcast", async () => {
+test("agent.queue.enqueue.request admits through the queue service and mirrors the update on the subscribed lane", async () => {
   const agentId = "11111111-1111-4111-8111-111111111111";
   const messages: SessionOutboundMessage[] = [];
   const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
@@ -6618,82 +6618,48 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
       clientCapabilities: { [CLIENT_CAPS.durableAgentQueue]: true },
       agentManager: {
         listAgents: vi.fn(() => [{ id: agentId }]),
-        // The enqueue path looks the agent up before admitting; without this the handler cannot
-        // reach its response construction.
-        getAgent: vi.fn(() => ({
-          id: agentId,
-          provider: "codex",
-          lifecycle: "idle",
-          pendingPermissions: new Set<string>(),
-        })),
       },
       agentStorage: {
         get: vi.fn().mockResolvedValue(undefined),
         list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
       },
     });
-    // A real client always sends through its socket; the response is addressed back to it.
+    // The shipped client advertises owned subscriptions and asks for the queue selector, so the
+    // response is correlated back to it and the update travels on the same proof-carrying lane.
     const socket = {};
     session.updateClientCapabilities(
       { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.durableAgentQueue]: true },
       socket,
     );
-
-    // OBSERVE-ONLY diagnostics for the lane contract; removed before final receipts.
-    const deliveryForObservation = (
-      session as unknown as {
-        delivery: {
-          reply: (message: SessionOutboundMessage) => boolean;
-          sendOwned: (owner: unknown, message: SessionOutboundMessage) => void;
-        };
-      }
-    ).delivery;
-    const replySpy = vi.spyOn(deliveryForObservation, "reply");
-    const sendOwnedSpy = vi.spyOn(deliveryForObservation, "sendOwned");
-    let observedError: string | null = null;
-    try {
-      await session.handleMessage(
-        {
-          type: "agent.queue.enqueue.request",
-          requestId: "q-1",
-          agentId,
-          itemId: "item-1",
-          text: "queued from the phone",
-          intent: "queue",
-        },
-        socket,
-      );
-    } catch (error) {
-      observedError = error instanceof Error ? error.message : String(error);
-    }
-    console.log(
-      "OBSERVE",
-      JSON.stringify({
-        observedError,
-        replyCalls: replySpy.mock.calls.map(([message]) => message.type),
-        replyResults: replySpy.mock.results.map((result) => result.value),
-        sendOwnedCalls: sendOwnedSpy.mock.calls.map(([, message]) => message.type),
-        broadcast: messages.map((message) => message.type),
-        targeted: targetedMessages.map(({ message }) => message.type),
-        responseSourceIsSocket: targetedMessages.some(
-          ({ source, message }) =>
-            message.type === "agent.queue.enqueue.response" && source === socket,
-        ),
-        responseSources: targetedMessages
-          .filter(({ message }) => message.type === "agent.queue.enqueue.response")
-          .map(({ source }) => (source === socket ? "socket" : "other")),
-      }),
+    await session.handleMessage(
+      {
+        type: "session.events.set_subscription.request",
+        requestId: "queue-subscription",
+        events: ["agent.queue.update"],
+      },
+      socket,
     );
-    replySpy.mockRestore();
-    sendOwnedSpy.mockRestore();
+    targetedMessages.length = 0;
 
-    const response = [
-      ...targetedMessages.filter(({ source }) => source === socket).map(({ message }) => message),
-      ...messages,
-    ].find((message) => message.type === "agent.queue.enqueue.response") as Extract<
-      SessionOutboundMessage,
-      { type: "agent.queue.enqueue.response" }
-    >;
+    await session.handleMessage(
+      {
+        type: "agent.queue.enqueue.request",
+        requestId: "q-1",
+        agentId,
+        itemId: "item-1",
+        text: "queued from the phone",
+        intent: "queue",
+      },
+      socket,
+    );
+
+    const delivered = targetedMessages
+      .filter(({ source }) => source === socket)
+      .map(({ message }) => message);
+    const response = delivered.find(
+      (message) => message.type === "agent.queue.enqueue.response",
+    ) as Extract<SessionOutboundMessage, { type: "agent.queue.enqueue.response" }>;
+    expect(response.payload.requestId).toBe("q-1");
     expect(response.payload.error).toBeNull();
     expect(response.payload.queue?.items[0]).toMatchObject({
       id: "item-1",
@@ -6702,16 +6668,13 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
       deliveryState: "pending",
     });
 
-    // The mutation broadcast reaches the capability-advertising client, independently of the
-    // response above.
-    const broadcast = [
-      ...targetedMessages.filter(({ source }) => source === socket).map(({ message }) => message),
-      ...messages,
-    ].find((message) => message.type === "agent.queue.update") as Extract<
+    // The update is the subscribed, proof-carrying copy, asserted independently of the response.
+    const update = delivered.find((message) => message.type === "agent.queue.update") as Extract<
       SessionOutboundMessage,
       { type: "agent.queue.update" }
     >;
-    expect(broadcast.payload.items.map((item) => item.id)).toEqual(["item-1"]);
+    expect(update.payload.items.map((item) => item.id)).toEqual(["item-1"]);
+    expect(update.payload.subscriptionId).toEqual(expect.any(String));
   } finally {
     rmSync(queueDir, { recursive: true, force: true });
   }
@@ -6846,6 +6809,60 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
     targetedMessages.length = 0;
     await enqueue("q-5");
     expect(queueUpdates().map(({ source }) => source)).toEqual([later]);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("a legacy client receives the queue update through its capability alone", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-legacy-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      targetedMessages,
+      agentQueueService: queueService,
+      agentManager: { listAgents: vi.fn(() => [{ id: agentId }]) },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue(undefined),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+    // No ownedSubscriptions: this is the pre-owned-subscription client shape, so the update
+    // reaches it through the capability-gated broadcast lane instead of a subscription.
+    const legacyCapable = {};
+    const legacyIncapable = {};
+    session.updateClientCapabilities({ [CLIENT_CAPS.durableAgentQueue]: true }, legacyCapable);
+    session.updateClientCapabilities({}, legacyIncapable);
+
+    await session.handleMessage(
+      {
+        type: "agent.queue.enqueue.request",
+        requestId: "q-legacy",
+        agentId,
+        itemId: "item-legacy",
+        text: "queued from a legacy client",
+        intent: "queue",
+      },
+      legacyCapable,
+    );
+
+    const updates = targetedMessages.filter(({ message }) => message.type === "agent.queue.update");
+    expect(updates.map(({ source }) => source)).toEqual([legacyCapable]);
+    expect(updates[0]?.message).toMatchObject({
+      payload: { items: [expect.objectContaining({ id: "item-legacy" })] },
+    });
   } finally {
     rmSync(queueDir, { recursive: true, force: true });
   }
