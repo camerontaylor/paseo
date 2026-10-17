@@ -1236,6 +1236,30 @@ describe("session authorization permissions", () => {
     ]);
   });
 
+  test("rejects a base-ref change without workspace.write", async () => {
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({ permissions: ["hub.execute"], messages });
+
+    await session.handleMessage({
+      type: "checkout.base_ref.set.request",
+      requestId: "base-ref-denied",
+      cwd: "/tmp/repo",
+      baseRef: "origin/main",
+    });
+
+    expect(messages).toEqual([
+      {
+        type: "rpc_error",
+        payload: {
+          requestId: "base-ref-denied",
+          requestType: "checkout.base_ref.set.request",
+          error: "Session is not authorized for checkout.base_ref.set.request",
+          code: "access_denied",
+        },
+      },
+    ]);
+  });
+
   test("replaces a session's permissions without reconstructing the session", async () => {
     const messages: SessionOutboundMessage[] = [];
     const session = createSessionForTest({ permissions: ["hub.execute"], messages });

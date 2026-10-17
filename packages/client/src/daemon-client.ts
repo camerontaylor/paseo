@@ -4645,6 +4645,7 @@ export class DaemonClient {
   }
 
   async setCheckoutBaseRef(input: SetCheckoutBaseRefInput): Promise<SetCheckoutBaseRefResult> {
+    this.requireCheckoutBaseRefSupport();
     return this.sendCorrelatedSessionRequest({
       requestId: input.requestId,
       message: {
@@ -6432,6 +6433,14 @@ export class DaemonClient {
     // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
     if (this.lastServerInfoMessage?.features?.sideConversations !== true) {
       throw new Error("Update the host to use side conversations.");
+    }
+  }
+
+  private requireCheckoutBaseRefSupport(): void {
+    // COMPAT(checkoutBaseRefSet): added in fork v0.10.1, remove after 2027-09-30. An older
+    // daemon cannot parse the request, so the client must not send it.
+    if (this.lastServerInfoMessage?.features?.checkoutBaseRefSet !== true) {
+      throw new Error("Update the host to change the comparison base.");
     }
   }
 

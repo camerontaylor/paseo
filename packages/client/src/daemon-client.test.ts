@@ -5069,7 +5069,7 @@ test("sets a checkout base ref via RPC", async () => {
   clients.push(client);
 
   const connectPromise = client.connect();
-  mock.triggerOpen();
+  mock.triggerOpen({ features: { checkoutBaseRefSet: true } });
   await connectPromise;
 
   const promise = client.setCheckoutBaseRef({
@@ -5101,6 +5101,27 @@ test("sets a checkout base ref via RPC", async () => {
     }),
   );
   await expect(promise).resolves.toEqual(payload);
+});
+
+test("refuses to set a checkout base ref when the host lacks the feature", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen();
+  await connectPromise;
+
+  await expect(
+    client.setCheckoutBaseRef({ cwd: "/tmp/project", baseRef: "origin/develop" }),
+  ).rejects.toThrow("Update the host to change the comparison base.");
+  expect(mock.sent).toHaveLength(0);
 });
 
 test("returns renameBranch business failures", async () => {
