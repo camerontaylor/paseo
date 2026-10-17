@@ -4,12 +4,59 @@ import {
   AgentSnapshotPayloadSchema,
   AgentTimelineItemPayloadSchema,
   ServerInfoStatusPayloadSchema,
+  SessionEventsSetSubscriptionRequestSchema,
   SessionOutboundMessageSchema,
   WSHelloMessageSchema,
   WorkspaceSetupSnapshotSchema,
   WorkspaceSetupProgressMessageSchema,
   AgentTimelineEntryPayloadSchema,
 } from "./messages.js";
+
+test("side conversation events parse with and without the owned proof tag", () => {
+  const removed = {
+    type: "agent.side_conversation.removed",
+    payload: { parentAgentId: "agent", threadId: "thread" },
+  };
+  expect(SessionOutboundMessageSchema.parse(removed)).toEqual(removed);
+  const ownedRemoved = {
+    ...removed,
+    payload: { ...removed.payload, subscriptionId: "sub-1" },
+  };
+  expect(SessionOutboundMessageSchema.parse(ownedRemoved)).toEqual(ownedRemoved);
+
+  const update = {
+    type: "agent.side_conversation.update",
+    payload: {
+      parentAgentId: "agent",
+      threadId: "thread",
+      items: [],
+      pendingQuestion: null,
+      lastAnswer: null,
+    },
+  };
+  expect(SessionOutboundMessageSchema.parse(update)).toEqual(update);
+  const ownedUpdate = { ...update, payload: { ...update.payload, subscriptionId: "sub-1" } };
+  expect(SessionOutboundMessageSchema.parse(ownedUpdate)).toEqual(ownedUpdate);
+});
+
+test("side conversation selectors and the handshake feature parse", () => {
+  const selectors = ["agent.side_conversation.update", "agent.side_conversation.removed"];
+  expect(
+    SessionEventsSetSubscriptionRequestSchema.parse({
+      type: "session.events.set_subscription.request",
+      requestId: "request",
+      events: selectors,
+    }).events,
+  ).toEqual(selectors);
+
+  expect(
+    ServerInfoStatusPayloadSchema.parse({
+      status: "server_info",
+      serverId: "server",
+      features: { sideConversations: true, sideConversationEvents: true },
+    }).features,
+  ).toEqual({ sideConversations: true, sideConversationEvents: true });
+});
 
 test("terminal listings accept older rows and retain new per-terminal directories", () => {
   const response = {

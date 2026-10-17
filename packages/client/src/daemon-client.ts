@@ -1231,6 +1231,19 @@ export function supportsUsageReports(features: ServerInfoStatusPayload["features
   return features?.usageSources === true || features?.providerUsageList === true;
 }
 
+/**
+ * Event selectors a host only understands behind a handshake feature. Anything absent from this
+ * map is part of the base protocol and always sent. The client drops mapped selectors the
+ * connected host does not advertise, so an older daemon never parses a selector it does not know.
+ */
+const EVENT_SELECTOR_FEATURES: Partial<
+  Record<SessionEventSubscription, keyof NonNullable<ServerInfoStatusPayload["features"]>>
+> = {
+  // COMPAT(sideConversationEvents): added in 0.12.0-beta.1.fork.1.
+  "agent.side_conversation.update": "sideConversationEvents",
+  "agent.side_conversation.removed": "sideConversationEvents",
+};
+
 function buildFetchAgentsRequest(
   options: FetchAgentsOptions | undefined,
   requestId: string,
@@ -2322,7 +2335,15 @@ export class DaemonClient {
   private observe<T extends CorrelatedResponseType>(
     responseType: T,
     message: { type: SessionInboundMessage["type"] } & Record<string, unknown>,
-    options?: { requestId?: string; timeout?: number; signal?: AbortSignal },
+    options?: {
+      requestId?: string;
+      timeout?: number;
+      signal?: AbortSignal;
+      /** Rewrites the request on every send, including restores after a reconnect. */
+      prepare?: (message: { type: SessionInboundMessage["type"] } & Record<string, unknown>) => {
+        type: SessionInboundMessage["type"];
+      } & Record<string, unknown>;
+    },
   ): OwnedSubscription<CorrelatedResponsePayload<T>> {
     let resetSource = false;
     return this.owned.observeRequest<CorrelatedResponsePayload<T>>(
@@ -2330,7 +2351,8 @@ export class DaemonClient {
       async (query, accept) => {
         resetSource = false;
         const requestId = this.createRequestId(options?.requestId);
-        const request = SessionInboundMessageSchema.parse({ ...query, requestId });
+        const prepared = options?.prepare ? options.prepare({ ...query }) : query;
+        const request = SessionInboundMessageSchema.parse({ ...prepared, requestId });
         try {
           return await this.sendCorrelatedRequest<T, CorrelatedResponsePayload<T>>({
             message: request,
@@ -2391,8 +2413,25 @@ export class DaemonClient {
         events,
         notifications: options?.notifications,
       },
-      options,
+      {
+        signal: options?.signal,
+        prepare: (message) => ({
+          ...message,
+          // Re-evaluated on every send, including the restore after a reconnect, so a downgrade
+          // to a host without the feature never sees the selector.
+          events: this.filterSupportedEventSelectors(message.events as SessionEventSubscription[]),
+        }),
+      },
     );
+  }
+
+  private filterSupportedEventSelectors(
+    events: readonly SessionEventSubscription[],
+  ): SessionEventSubscription[] {
+    return events.filter((event) => {
+      const feature = EVENT_SELECTOR_FEATURES[event];
+      return feature === undefined || this.lastServerInfoMessage?.features?.[feature] === true;
+    });
   }
 
   observeAgents(

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
-import { AgentManager } from "../agent-manager.js";
+import { AgentManager, type AgentManagerEvent } from "../agent-manager.js";
+import { AgentStorage } from "../agent-storage.js";
 import type {
   AgentClient,
   AgentSession,
@@ -79,5 +83,36 @@ describe("AgentManager side-conversation seam", () => {
       { type: "user_message", text: "follow-up?" },
       { type: "assistant_message", text: "answer 2" },
     ]);
+  });
+
+  it("dispatches a removal when the parent is archived", async () => {
+    const workdir = mkdtempSync(join(tmpdir(), "side-conversation-archive-"));
+    try {
+      const session = new SideQuestionSession();
+      const logger = createTestLogger();
+      const manager = new AgentManager({
+        clients: { claude: new SideQuestionClient(session) },
+        registry: new AgentStorage(join(workdir, "agents"), logger),
+        logger,
+        idFactory: () => "00000000-0000-4000-8000-000000000912",
+      });
+      const agent = await manager.createAgent({ provider: "claude", cwd: workdir }, undefined, {
+        workspaceId: undefined,
+      });
+      const events: AgentManagerEvent[] = [];
+      manager.subscribe((event) => {
+        events.push(event);
+      });
+
+      await manager.askSideQuestion(agent.id, "thread", "first?");
+      await manager.archiveAgent(agent.id);
+
+      expect(events).toContainEqual({
+        type: "side_conversation",
+        event: { type: "remove", parentAgentId: agent.id, threadId: "thread" },
+      });
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
   });
 });

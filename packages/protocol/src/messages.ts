@@ -3177,6 +3177,8 @@ export const SessionEventSubscriptionSchema = z.enum([
   "script_status_update",
   "workspace_setup_progress",
   "agent.provider_subagents.update",
+  "agent.side_conversation.update",
+  "agent.side_conversation.removed",
   "terminal_attention_required",
   "status.server_info",
   "status.daemon_config_changed",
@@ -3720,6 +3722,11 @@ export const ServerInfoStatusPayloadSchema = z
         providerSubagentNesting: z.boolean().optional(),
         // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
         sideConversations: z.boolean().optional(),
+        // COMPAT(sideConversationEvents): added in 0.12.0-beta.1.fork.1 — session event
+        // subscriptions can carry the side-conversation update/removal stream, so a modern
+        // (owned-subscription) client can receive proofs for those events. Older fork daemons
+        // advertise sideConversations without this selector support, so clients gate on it.
+        sideConversationEvents: z.boolean().optional(),
         // COMPAT(workspacePinning): added in v0.1.107, remove gate after 2027-01-12.
         workspacePinning: z.boolean().optional(),
         // COMPAT(workspaceMarkUnread): added in v0.5.0, remove after 2027-08-20.
@@ -4889,7 +4896,8 @@ export const SideConversationTimelineGetResponseMessageSchema = z.object({
 
 export const SideConversationUpdateMessageSchema = z.object({
   type: z.literal("agent.side_conversation.update"),
-  payload: SideConversationSnapshotPayloadSchema,
+  // subscriptionId is the owned-delivery proof tag; it stays optional for legacy broadcasts.
+  payload: SideConversationSnapshotPayloadSchema.extend({ subscriptionId: z.string().optional() }),
 });
 
 export const SideConversationListResponseMessageSchema = z.object({
@@ -4907,6 +4915,7 @@ export const SideConversationRemovedMessageSchema = z.object({
   payload: z.object({
     parentAgentId: z.string(),
     threadId: z.string(),
+    subscriptionId: z.string().optional(),
   }),
 });
 

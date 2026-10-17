@@ -293,6 +293,188 @@ test("side conversation manager events stay off the wire for clients without the
   expect(messages).toEqual([]);
 });
 
+const SIDE_CONVERSATION_REMOVAL = {
+  type: "side_conversation" as const,
+  event: {
+    type: "remove" as const,
+    parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+    threadId: SIDE_CONVERSATION_RECORD.threadId,
+  },
+};
+
+test("side conversation updates and removals reach a subscribed modern source", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    targetedMessages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  const socket = {};
+  session.updateClientCapabilities(
+    { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.sideConversations]: true },
+    socket,
+  );
+  await session.handleMessage(
+    {
+      type: "session.events.set_subscription.request",
+      requestId: "side-conversation-events",
+      events: ["agent.side_conversation.update", "agent.side_conversation.removed"],
+    },
+    socket,
+  );
+  targetedMessages.length = 0;
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  events.dispatch(SIDE_CONVERSATION_REMOVAL);
+
+  expect(targetedMessages).toEqual([
+    {
+      source: socket,
+      message: {
+        type: "agent.side_conversation.update",
+        payload: { ...SIDE_CONVERSATION_SNAPSHOT, subscriptionId: expect.any(String) },
+      },
+    },
+    {
+      source: socket,
+      message: {
+        type: "agent.side_conversation.removed",
+        payload: {
+          parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+          threadId: SIDE_CONVERSATION_RECORD.threadId,
+          subscriptionId: expect.any(String),
+        },
+      },
+    },
+  ]);
+  // The proof is the same mechanism every modern outbound message uses; subscriptionId alone is
+  // not delivery authority.
+  for (const entry of targetedMessages) {
+    expect(session.delivery.permits(socket, entry.message)).toBe(true);
+  }
+  // The proof-carrying lane replaces the legacy broadcast for modern sources.
+  expect(messages).toEqual([]);
+});
+
+test("side conversation removals skip a subscribed modern source without the capability", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    targetedMessages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  const socket = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, socket);
+  await session.handleMessage(
+    {
+      type: "session.events.set_subscription.request",
+      requestId: "side-conversation-events-uncapable",
+      events: ["agent.side_conversation.update", "agent.side_conversation.removed"],
+    },
+    socket,
+  );
+  targetedMessages.length = 0;
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  events.dispatch(SIDE_CONVERSATION_REMOVAL);
+
+  expect(targetedMessages).toEqual([]);
+  expect(messages).toEqual([]);
+  expect(
+    session.delivery.permits(socket, {
+      type: "agent.side_conversation.removed",
+      payload: {
+        parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+        threadId: SIDE_CONVERSATION_RECORD.threadId,
+      },
+    }),
+  ).toBe(false);
+});
+
+test("side conversation removals reach a capable legacy source only", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    targetedMessages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  const capableLegacySocket = {};
+  const incapableModernSocket = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true }, capableLegacySocket);
+  session.updateClientCapabilities(
+    { [CLIENT_CAPS.ownedSubscriptions]: true },
+    incapableModernSocket,
+  );
+  targetedMessages.length = 0;
+
+  events.dispatch(SIDE_CONVERSATION_REMOVAL);
+
+  expect(targetedMessages).toEqual([
+    {
+      source: capableLegacySocket,
+      message: {
+        type: "agent.side_conversation.removed",
+        payload: {
+          parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+          threadId: SIDE_CONVERSATION_RECORD.threadId,
+        },
+      },
+    },
+  ]);
+});
+
+test("a released side conversation subscription stops receiving removals", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    targetedMessages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  const socket = {};
+  session.updateClientCapabilities(
+    { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.sideConversations]: true },
+    socket,
+  );
+  await session.handleMessage(
+    {
+      type: "session.events.set_subscription.request",
+      requestId: "side-conversation-events-release",
+      events: ["agent.side_conversation.removed"],
+    },
+    socket,
+  );
+  const subscriptionId = targetedMessages
+    .map((entry) => entry.message)
+    .find(
+      (message): message is Extract<SessionOutboundMessage, { type: "session.events.set_subscription.response" }> =>
+        message.type === "session.events.set_subscription.response",
+    )?.payload.subscriptionId;
+  if (!subscriptionId) throw new Error("subscription id missing");
+  await session.handleMessage(
+    { type: "subscription.release.request", requestId: "release-side-conversation", subscriptionId },
+    socket,
+  );
+  targetedMessages.length = 0;
+
+  events.dispatch(SIDE_CONVERSATION_REMOVAL);
+
+  expect(targetedMessages).toEqual([]);
+});
+
 test("side conversation ask leaves the update broadcast to the manager", async () => {
   const agentId = SIDE_CONVERSATION_RECORD.parentAgentId;
   const messages: SessionOutboundMessage[] = [];

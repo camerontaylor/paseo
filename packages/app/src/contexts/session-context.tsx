@@ -508,6 +508,10 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         "agent_permission_request",
         "agent_permission_resolved",
         "agent.provider_subagents.update",
+        // The client drops these selectors against a host that does not advertise
+        // features.sideConversationEvents, so a shared list stays honest across versions.
+        "agent.side_conversation.update",
+        "agent.side_conversation.removed",
         "checkout_status_update",
         "workspace_setup_progress",
         "status.server_info",

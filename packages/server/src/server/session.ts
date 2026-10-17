@@ -1664,6 +1664,18 @@ export class Session {
   /**
    * Subscribe to AgentManager events and forward them to the client
    */
+  private hasSideConversationEventSubscription(): boolean {
+    for (const subscription of this.eventSubscriptions.values()) {
+      if (
+        subscription.events.has("agent.side_conversation.update") ||
+        subscription.events.has("agent.side_conversation.removed")
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private refreshObservationProducers(): void {
     const legacy = this.delivery.hasLegacySources();
     const workspaces =
@@ -1672,6 +1684,7 @@ export class Session {
       workspaces ||
       this.delivery.hasDemand("agents") ||
       this.delivery.hasDemand("timelines") ||
+      this.hasSideConversationEventSubscription() ||
       this.voiceSessions.hasDemand ||
       this.wantsEvent("agent_attention_required") ||
       this.wantsEvent("agent_permission_request") ||
@@ -1943,20 +1956,51 @@ export class Session {
   private forwardSideConversationUpdate(
     update: Extract<AgentManagerEvent, { type: "side_conversation" }>["event"],
   ): void {
-    if (!this.supports(CLIENT_CAPS.sideConversations)) {
+    const message: SessionOutboundMessage =
+      update.type === "update"
+        ? {
+            type: "agent.side_conversation.update",
+            payload: sideConversationSnapshot(update.record),
+          }
+        : {
+            type: "agent.side_conversation.removed",
+            payload: { parentAgentId: update.parentAgentId, threadId: update.threadId },
+          };
+    if (!this.authorization.allowsOutbound(message)) return;
+    // Modern sources only accept proof-carrying messages, so the events travel through the
+    // session event subscription that asked for them. The owner must also be capable: the
+    // selector is fork-only, and a stock source never subscribes to it anyway.
+    const delivered = new Set<object>();
+    for (const subscription of this.eventSubscriptions.values()) {
+      if (!subscription.events.has(message.type)) continue;
+      if (
+        !this.clientSources
+          .get(subscription.owner.source)
+          ?.capabilities.has(CLIENT_CAPS.sideConversations)
+      )
+        continue;
+      subscription.owner.emit(message);
+      delivered.add(subscription.owner.source);
+    }
+    // COMPAT(sideConversations): legacy clients keep receiving the broadcast, gated by the
+    // capability they advertise. Modern clients need the subscription above.
+    if (this.clientSources.size === 0 || !this.onMessageToSource) {
+      if (this.supports(CLIENT_CAPS.sideConversations) && delivered.size === 0) {
+        // Not `emit`: that would re-enter emitSubscribedEvent's owner loop, which does not check
+        // the per-owner capability and would leak the event to an incapable subscription.
+        this.onMessage(message);
+      }
       return;
     }
-    if (update.type === "update") {
-      this.emit({
-        type: "agent.side_conversation.update",
-        payload: sideConversationSnapshot(update.record),
-      });
-      return;
+    for (const [source, { capabilities }] of this.clientSources) {
+      if (
+        delivered.has(source) ||
+        this.delivery.isModern(source) ||
+        !capabilities.has(CLIENT_CAPS.sideConversations)
+      )
+        continue;
+      this.onMessageToSource(source, message);
     }
-    this.emit({
-      type: "agent.side_conversation.removed",
-      payload: { parentAgentId: update.parentAgentId, threadId: update.threadId },
-    });
   }
 
   private subscribeToAgentEvents(): void {
@@ -8801,6 +8845,8 @@ function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubs
     case "script_status_update":
     case "workspace_setup_progress":
     case "agent.provider_subagents.update":
+    case "agent.side_conversation.update":
+    case "agent.side_conversation.removed":
     case "terminal_attention_required":
     case "activity_log":
     case "hub.execution.agent.update":
@@ -8839,6 +8885,9 @@ function legacyWantsEvent(
       return !capabilities.has(CLIENT_CAPS.explicitEventSubscriptions);
     case "agent.provider_subagents.update":
       return capabilities.has(CLIENT_CAPS.providerSubagents);
+    case "agent.side_conversation.update":
+    case "agent.side_conversation.removed":
+      return capabilities.has(CLIENT_CAPS.sideConversations);
     default:
       return true;
   }
