@@ -22,6 +22,9 @@ test.describe("Plan card markdown", () => {
       repoPrefix: "plan-card-markdown-",
       title: "Plan card markdown e2e",
       initialPrompt: "Emit synthetic plan approval.",
+      // A model with thinking levels, so the handoff's effort has something to carry.
+      model: "ten-second-stream",
+      thinkingOptionId: "high",
     });
 
     try {
@@ -41,26 +44,6 @@ test.describe("Plan card markdown", () => {
       await expect.poll(readClipboard).toContain("(c)");
       await planCard.getByTestId("plan-copy-link").click();
       await expect.poll(readClipboard).toContain(`/agent/${session.agentId}`);
-
-      // The source agent's setup, which the handoff draft has to inherit.
-      const visibleSetup = async () => ({
-        provider: await page
-          .getByTestId("agent-provider-selector")
-          .filter({ visible: true })
-          .first()
-          .innerText(),
-        model: await page
-          .getByTestId("combined-model-selector")
-          .filter({ visible: true })
-          .first()
-          .innerText(),
-        thinking: await page
-          .getByTestId("agent-thinking-selector")
-          .filter({ visible: true })
-          .first()
-          .innerText(),
-      });
-      const sourceSetup = await visibleSetup();
 
       // A draft that already holds text and an attachment. Handing off must open its own draft and
       // leave this one alone.
@@ -103,12 +86,11 @@ test.describe("Plan card markdown", () => {
       await expect(composer).toHaveValue(/Implement the following proposed plan\./);
       await expect(composer).toHaveValue(/Add the \(c\) README note/);
       await expect(composer).toHaveValue(new RegExp(session.agentId));
-      // Provider (and its account), model and thinking option come across unchanged.
-      expect(await visibleSetup()).toEqual(sourceSetup);
       const sourceAgent = (await session.client.fetchAgents({ scope: "active" })).entries.find(
         ({ agent }) => agent.id === session.agentId,
       )?.agent;
       expect(sourceAgent).toBeDefined();
+      expect(sourceAgent!.thinkingOptionId).toBe("high");
       const agents = await session.client.fetchAgents({ scope: "active" });
       expect(
         agents.entries.filter(({ agent }) => agent.workspaceId === session.workspaceId),
@@ -143,6 +125,7 @@ test.describe("Plan card markdown", () => {
       // The created agent runs on the provider the source agent used, account included.
       expect(destination!.provider).toBe(sourceAgent!.provider);
       expect(destination!.model).toBe(sourceAgent!.model);
+      expect(destination!.thinkingOptionId).toBe(sourceAgent!.thinkingOptionId);
       const timelineClient = session.client as typeof session.client & {
         fetchAgentTimeline(agentId: string): Promise<{
           entries: Array<{ item: { type: string; text?: string } }>;
