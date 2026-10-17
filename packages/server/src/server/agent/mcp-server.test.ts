@@ -4278,6 +4278,59 @@ describe("update_agent MCP tool", () => {
     expect(response.structuredContent).toEqual({ success: true });
   });
 
+  it("returns provider notices from runtime settings as structured and readable content", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const modeNotice = { type: "info", message: "Mode applied with provider restrictions." };
+    const thinkingNotice = {
+      type: "warning",
+      message: "Changing effort may re-read approximately 18,340 cached input tokens.",
+    };
+    spies.agentManager.setAgentMode.mockResolvedValue(modeNotice);
+    spies.agentManager.setAgentThinkingOption.mockResolvedValue(thinkingNotice);
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger,
+    });
+    const tool = registeredTool(server, "update_agent");
+
+    const response = await tool.handler({
+      agentId: "agent-1",
+      settings: { modeId: "full-access", thinkingOptionId: "low" },
+    });
+
+    expect(response.structuredContent).toEqual({
+      success: true,
+      notices: [modeNotice, thinkingNotice],
+    });
+    expect(response.content).toEqual([
+      { type: "text", text: modeNotice.message },
+      { type: "text", text: thinkingNotice.message },
+    ]);
+  });
+
+  it("returns a thinking warning when no mode setting is supplied", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const notice = { type: "warning", message: "Effort changed; the next request may miss cache." };
+    spies.agentManager.setAgentThinkingOption.mockResolvedValue(notice);
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger,
+    });
+
+    const response = await registeredTool(server, "update_agent").handler({
+      agentId: "agent-1",
+      settings: { thinkingOptionId: "low" },
+    });
+
+    expect(response.structuredContent).toEqual({ success: true, notices: [notice] });
+    expect(response.content).toEqual([{ type: "text", text: notice.message }]);
+    expect(spies.agentManager.setAgentMode).not.toHaveBeenCalled();
+  });
+
   it("reports success for a no-op update with neither metadata nor settings", async () => {
     const { agentManager, agentStorage, spies } = createTestDeps();
     const server = await createAgentMcpServer({

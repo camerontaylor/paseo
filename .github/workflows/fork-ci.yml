@@ -124,6 +124,9 @@ jobs:
       - name: Typecheck all packages
         run: npm run typecheck
 
+      - name: Run fork tooling tests
+        run: npx vitest run fork/scripts --bail=1
+
       - name: Run protocol tests
         run: npm run test --workspace=@getpaseo/protocol
 

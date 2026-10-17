@@ -4,6 +4,14 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.11.2 base decision — 2026-10-11
+
+Advance `custom` and the Desvio base to upstream `v0.11.2`, the newest
+published release including betas. Preserve the six ordered carries and
+keep the ACP model-switch and CLI default-thinking fix as a separate carry.
+Rebuild and validate the complete basket before packaging; this cycle stops
+before publication and deployment.
+
 ## 0.11.1 base decision — 2026-10-08
 
 Advance `custom` to upstream `v0.11.1`. Preserve cancellation ownership,
