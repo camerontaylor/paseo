@@ -1754,24 +1754,6 @@ export class Session {
       : this.sideConversationDemandWithoutSource;
   }
 
-  private forwardSideConversationUpdate(
-    message: Extract<
-      SessionOutboundMessage,
-      { type: "agent.side_conversation.update" | "agent.side_conversation.removed" }
-    >,
-  ): void {
-    if (!this.authorization.allowsOutbound(message)) return;
-    if (this.clientSources.size === 0 || !this.onMessageToSource) {
-      if (this.hasSideConversationDemand()) this.emit(message);
-      return;
-    }
-    for (const [source, { capabilities }] of this.clientSources) {
-      if (capabilities.has(CLIENT_CAPS.sideConversations)) {
-        this.onMessageToSource(source, message);
-      }
-    }
-  }
-
   private refreshWorkspaceProducers(observing: boolean): void {
     if (observing) {
       this.unsubscribeProjectMutations ??=

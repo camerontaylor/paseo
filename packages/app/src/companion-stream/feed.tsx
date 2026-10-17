@@ -378,11 +378,11 @@ function EntryCard({
   if (entry.text) {
     body = expanded ? (
       <View>
-        <MarkdownRenderer text={entry.text} compact enableHtmlish={false} />
+        <MarkdownRenderer text={entry.text} compact />
         {entry.kind === "q_and_a" && entry.answer && (
           <View style={styles.qaAnswerContainer}>
             <Text style={styles.qaAnswerLabel}>{t("agentPanel.stream.answerLabel")}</Text>
-            <MarkdownRenderer text={entry.answer} compact enableHtmlish={false} />
+            <MarkdownRenderer text={entry.answer} compact />
           </View>
         )}
       </View>

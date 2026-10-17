@@ -201,6 +201,16 @@ function buildStoredPersistenceHandle(
   return toAgentPersistenceHandle(validProviders, record.persistence);
 }
 
+/** Stream facts a stored record carries: artifacts always, companion entries when present. */
+function buildStoredStreamFacts(
+  record: StoredAgentRecord,
+): Pick<AgentSnapshotPayload, "artifacts" | "companionEntries"> {
+  return {
+    artifacts: record.artifacts ?? [],
+    companionEntries: restoreCompanionEntries(record),
+  };
+}
+
 export function buildStoredAgentPayload(
   record: StoredAgentRecord,
   validProviders: Iterable<AgentProvider>,
@@ -256,8 +266,7 @@ export function buildStoredAgentPayload(
     ...(record.internal ? { internal: true } : {}),
     labels: normalizeLabels(record.labels),
     ...(typeof record.lastError === "string" ? { lastError: record.lastError } : {}),
-    artifacts: record.artifacts ?? [],
-    companionEntries: restoreCompanionEntries(record),
+    ...buildStoredStreamFacts(record),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
   };
 }
