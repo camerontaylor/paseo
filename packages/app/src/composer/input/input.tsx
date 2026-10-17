@@ -2177,6 +2177,9 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         handleRetryFailedRecording,
         handleDiscardFailedRecording,
         handleRealtimeVoiceStop,
+        isAgentRunning,
+        isCancellingAgent,
+        onCancelAgent,
       ],
     );
     return (
