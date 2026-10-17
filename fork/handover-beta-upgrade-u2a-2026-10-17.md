@@ -16,6 +16,7 @@ worktree were not touched. Checks ran on Neptune in the shared private candidate
 | Capability-absent coverage | `f219e61842fb3b125d9e4065b9e9426ae39296e5` |
 | Rename ordering fix | `24dddacd4315f5a3ae5e4090444a2b14c1623063` |
 | Final source SHA | `05e01290fbde13058031d30775096bf950d8e042` |
+| Test-only drain correction | `46e14f12226658a669ba878170bd9736c736b8fd` |
 
 The carry manifest line owns accounts #2785, screenshots #2237, bounded byte hydration #2664,
 terminal flush #3545, structured finish reasons #3950, CJK #4101 and argument hints #3369 only.
@@ -142,9 +143,17 @@ republishes the superseded config once the final one is live; a close-drain case
 batch that leaves its record alone while the next change still migrates. Run against the pre-fix
 source, the ordering and drain cases fail (2 failed, 2 passed); with the fix all four pass.
 
-Receipts at the fix head `05e01290f`: `build:server`, `typecheck`, `lint`, `format:check` all exit
-0; the rename suite (4 tests), `mutable-provider-config-owner.test.ts` and
-`daemon-config-store.test.ts` pass.
+`46e14f122` corrects the ordering test to close the server first, since close awaits the rename
+tail, and only then assert the record, all three persisted references, the broadcast set and a
+second read. That makes the test prove the record stays at the final id after the queue drains
+instead of sampling while a migration may still run. The correction is test-only; production is
+unchanged from `05e01290f`, whose `build:server`, `typecheck`, `lint` and `format:check` receipts
+carry. Run again against the pre-fix production source, the ordering and drain cases still fail
+(2 failed, 2 passed).
+
+Receipts at `05e01290f`: `build:server`, `typecheck`, `lint`, `format:check` all exit 0; the
+rename suite (4 tests), `mutable-provider-config-owner.test.ts` and `daemon-config-store.test.ts`
+pass. At `46e14f122` the rename suite is 4 of 4 and `format:check`, `lint` and `typecheck` are 0.
 
 ## Gaps
 
