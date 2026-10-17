@@ -24,6 +24,7 @@ export interface RouteSelectionInput {
     name?: string | string[];
     projectId?: string | string[];
     draftId?: string | string[];
+    changeRequest?: string | string[];
   };
 }
 

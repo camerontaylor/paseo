@@ -127,8 +127,9 @@ export function classifyLocation(input: RouteSelectionInput): HistoryEntry | nul
   const path = normalizePathname(input.pathname);
   if (path === "/new") {
     // These are the route's screen inputs. Without them Back opens a blank creation form and
-    // loses the selected host, source directory, and draft context.
-    const keys = ["serverId", "dir", "name", "projectId", "draftId"] as const;
+    // loses the selected host, source directory, draft context, or the change request the form
+    // was seeded with.
+    const keys = ["serverId", "dir", "name", "projectId", "draftId", "changeRequest"] as const;
     const query = keys.flatMap((key) => {
       const value = input.params[key];
       return typeof value === "string"

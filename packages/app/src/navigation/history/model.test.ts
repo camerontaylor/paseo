@@ -189,13 +189,29 @@ describe("classifyLocation", () => {
           name: "Feature & fix",
           projectId: "project-1",
           draftId: "draft-1",
+          changeRequest: '{"kind":"change_request","number":7}',
         },
       }),
     ).toEqual(
       route(
-        "/new?serverId=host-1&dir=%2Fcode%2Fa%20b&name=Feature%20%26%20fix&projectId=project-1&draftId=draft-1",
+        "/new?serverId=host-1&dir=%2Fcode%2Fa%20b&name=Feature%20%26%20fix&projectId=project-1&draftId=draft-1&changeRequest=%7B%22kind%22%3A%22change_request%22%2C%22number%22%3A7%7D",
       ),
     );
+  });
+
+  // A selected change request is checkout context: two PR selections are two different places, and
+  // the same selection twice is one entry.
+  it("keeps distinct change requests as distinct history entries", () => {
+    const at = (changeRequest: string) =>
+      classifyLocation({ pathname: "/new", params: { serverId: "host-1", changeRequest } });
+
+    const seven = at('{"kind":"change_request","number":7}');
+    const eight = at('{"kind":"change_request","number":8}');
+
+    expect(seven).not.toBeNull();
+    expect(eight).not.toBeNull();
+    expect(entriesEqual(seven!, eight!)).toBe(false);
+    expect(entriesEqual(seven!, at('{"kind":"change_request","number":7}')!)).toBe(true);
   });
 });
 

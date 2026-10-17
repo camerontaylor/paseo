@@ -165,6 +165,24 @@ describe("goHistory", () => {
     expect(store.getState().index).toBe(1);
   });
 
+  // Selecting a PR, leaving, then stepping Back has to land on the creation form with the PR still
+  // selected, and Forward has to return to where the user went next.
+  it("restores a seeded creation route's change request through back and forward", () => {
+    const seededPath = `/new?serverId=srv&draftId=draft-1&changeRequest=${encodeURIComponent(
+      '{"kind":"change_request","number":7}',
+    )}`;
+    const store = storeWith([route(seededPath), route("/sessions")]);
+    const { deps, calls } = createFakeDeps();
+
+    expect(goHistory(-1, store, deps)).toBe(true);
+    expect(calls).toEqual([`route:${seededPath}`]);
+    expect(store.getState().index).toBe(0);
+
+    expect(goHistory(1, store, deps)).toBe(true);
+    expect(calls).toEqual([`route:${seededPath}`, "route:/sessions"]);
+    expect(store.getState().index).toBe(1);
+  });
+
   it("walks forward and back symmetrically", () => {
     const store = storeWith([ws("a", "t1"), ws("b", "t2"), ws("c", "t3")]);
     const { deps } = createFakeDeps();

@@ -109,8 +109,9 @@ hydrates. Browser back and forward remain owned by the browser; the desktop brac
 step the app history. A history step selects its index before navigating so the recorder does
 not append the landing location again.
 Record the `/new` route's query inputs with its path so Back restores the selected host, project,
-source directory, and draft. A reopened tab may select an existing duplicate with the same target;
-replay uses the tab that actually gained focus when reconciling the history entry.
+source directory, draft, and the change request the form was seeded with. A reopened tab may select
+an existing duplicate with the same target; replay uses the tab that actually gained focus when
+reconciling the history entry.
 
 An absent workspace still navigates to its workspace route. That screen asks the daemon for
 recovery state and offers Restore or Unarchive when appropriate. History does not change the

@@ -130,6 +130,35 @@ describe("NavigationHistoryRecorder", () => {
     ]);
   });
 
+  // A selected change request is checkout context the form was seeded with. It has to survive
+  // recording, and a swap to a different change request has to be a distinct entry rather than a
+  // no-op, which is what the recorder's memo dependencies decide.
+  it("records the creation route's change request and follows a swap to another one", () => {
+    const selectChangeRequest = (number: number) =>
+      navigate({
+        pathname: "/new",
+        params: {
+          serverId: "srv",
+          draftId: "draft-1",
+          changeRequest: `{"kind":"change_request","number":${number}}`,
+        },
+      });
+    const path = (number: number) =>
+      `/new?serverId=srv&draftId=draft-1&changeRequest=${encodeURIComponent(
+        `{"kind":"change_request","number":${number}}`,
+      )}`;
+
+    selectChangeRequest(7);
+    expect(history.getState().entries).toEqual([{ kind: "route", path: path(7) }]);
+
+    selectChangeRequest(8);
+    expect(history.getState().entries).toEqual([
+      { kind: "route", path: path(7) },
+      { kind: "route", path: path(8) },
+    ]);
+    expect(history.getState().index).toBe(1);
+  });
+
   it("records app-wide routes and workspaces as the pathname changes", () => {
     act(() => {
       layout().openTab({ workspaceKey: WS1, target: AGENT, intent: "reveal" });

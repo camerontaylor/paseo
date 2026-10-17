@@ -1,7 +1,15 @@
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "../support/fixtures";
+import { attachFileFromMenu } from "../support/helpers/composer";
 import { waitForPermissionPrompt } from "../support/helpers/permissions";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
+import { createAgentTabFromMenu } from "../support/helpers/workspace-tabs";
+
+const TEST_JSON = {
+  name: "handoff-draft.json",
+  mimeType: "application/json",
+  buffer: Buffer.from(JSON.stringify({ draft: "keep" })),
+};
 
 // Literal shell commands and copyright markers must survive Markdown rendering.
 test.describe("Plan card markdown", () => {
@@ -34,6 +42,49 @@ test.describe("Plan card markdown", () => {
       await planCard.getByTestId("plan-copy-link").click();
       await expect.poll(readClipboard).toContain(`/agent/${session.agentId}`);
 
+      // The source agent's setup, which the handoff draft has to inherit.
+      const visibleSetup = async () => ({
+        provider: await page
+          .getByTestId("agent-provider-selector")
+          .filter({ visible: true })
+          .first()
+          .innerText(),
+        model: await page
+          .getByTestId("combined-model-selector")
+          .filter({ visible: true })
+          .first()
+          .innerText(),
+        thinking: await page
+          .getByTestId("agent-thinking-selector")
+          .filter({ visible: true })
+          .first()
+          .innerText(),
+      });
+      const sourceSetup = await visibleSetup();
+
+      // A draft that already holds text and an attachment. Handing off must open its own draft and
+      // leave this one alone.
+      await createAgentTabFromMenu(page);
+      const existingDraftTab = page
+        .locator('[data-testid^="workspace-tab-draft_"][aria-selected="true"]')
+        .filter({ visible: true });
+      await expect(existingDraftTab).toHaveCount(1);
+      const existingDraftTabId = await existingDraftTab.getAttribute("data-testid");
+      expect(existingDraftTabId).not.toBeNull();
+      const existingDraftComposer = page
+        .getByRole("textbox", { name: "Message agent..." })
+        .filter({ visible: true });
+      await existingDraftComposer.fill("keep this draft");
+      await attachFileFromMenu(page, TEST_JSON);
+      await expect(page.getByTestId("composer-file-attachment-pill")).toContainText(TEST_JSON.name, {
+        timeout: 30_000,
+      });
+
+      // The plan card lives in the source agent's tab, so hand off from there.
+      await page
+        .getByTestId(`workspace-tab-agent_${session.agentId}`)
+        .filter({ visible: true })
+        .click();
       await planCard.getByTestId("permission-plan-handoff").click();
       const composer = page
         .getByRole("textbox", { name: "Message agent..." })
@@ -42,10 +93,24 @@ test.describe("Plan card markdown", () => {
       await expect(composer).toHaveValue(/Implement the following proposed plan\./);
       await expect(composer).toHaveValue(/Add the \(c\) README note/);
       await expect(composer).toHaveValue(new RegExp(session.agentId));
+      // Provider (and its account), model and thinking option come across unchanged.
+      expect(await visibleSetup()).toEqual(sourceSetup);
       const agents = await session.client.fetchAgents({ scope: "active" });
       expect(
         agents.entries.filter(({ agent }) => agent.workspaceId === session.workspaceId),
       ).toHaveLength(1);
+
+      // The draft that was already open still has its own text and attachment.
+      await page.getByTestId(existingDraftTabId!).click();
+      const restoredDraftComposer = page
+        .getByRole("textbox", { name: "Message agent..." })
+        .filter({ visible: true });
+      await expect(restoredDraftComposer).toHaveValue("keep this draft");
+      await expect(page.getByTestId("composer-file-attachment-pill")).toContainText(TEST_JSON.name);
+      await page
+        .getByTestId(`workspace-tab-agent_${session.agentId}`)
+        .filter({ visible: true })
+        .click();
 
       const handoffPrompt = await composer.inputValue();
       await page.getByRole("button", { name: "Send message" }).filter({ visible: true }).click();

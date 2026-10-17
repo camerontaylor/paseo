@@ -35,17 +35,18 @@ export function NavigationHistoryRecorder({
     name?: string | string[];
     projectId?: string | string[];
     draftId?: string | string[];
+    changeRequest?: string | string[];
   }>();
-  const { serverId, workspaceId, dir, name, projectId, draftId } = params;
+  const { serverId, workspaceId, dir, name, projectId, draftId, changeRequest } = params;
   const hydrated = useWorkspaceLayoutStoreHydrated();
 
   const location = useMemo(
     () =>
       classifyLocation({
         pathname,
-        params: { serverId, workspaceId, dir, name, projectId, draftId },
+        params: { serverId, workspaceId, dir, name, projectId, draftId, changeRequest },
       }),
-    [pathname, serverId, workspaceId, dir, name, projectId, draftId],
+    [pathname, serverId, workspaceId, dir, name, projectId, draftId, changeRequest],
   );
   const workspaceKey =
     location?.kind === "workspace" ? buildWorkspaceTabPersistenceKey(location) : null;

@@ -94,6 +94,9 @@ test("project PR shortcut opens a fullscreen list and hands the selected PR to w
       title: fixture.pr.title,
       headRef: fixture.pr.branch,
     });
+    // Precondition only: a seeded selection has to be in the route for history to replay it.
+    // Back/Forward restoration itself is proven in the navigation history suites.
+    await expect(page).toHaveURL(/changeRequest=/);
     await expect(page.getByTestId("project-pr-close")).toBeHidden();
     await expect(page.getByTestId("workspace-create-isolation-trigger")).toContainText(
       "New worktree",
