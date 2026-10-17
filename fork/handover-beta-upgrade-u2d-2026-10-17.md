@@ -166,6 +166,20 @@ artifacts view.
 
 ## Test-only changes, classified before editing
 
+### The queue enqueue case: attribution corrected, not a product defect
+
+The first gate run showed the carry's enqueue case failing, and an early reading called it a
+swallowed reply. Observation-only spies on the delivery lanes disproved that: `delivery.reply`
+returns true for the enqueue response and `sendOwned` delivers it to the targeted lane with the
+requesting socket as its source, and the queue update is not delivered to that socket because it
+advertises owned subscriptions, which means the modern lane and a subscription are required. The
+case's failure was a lane-model mismatch plus a missing harness stub, not a product defect.
+
+The instrumentation also proved the harness dependency: without `agentManager.getAgent` the enqueue
+path answers `rpc_error: Request failed: createStub: "getAgent" was called but not stubbed`, so every
+queue case that enqueues needs that stub. The spies were removed and the case now runs on the modern
+model with its payload expectations unchanged, alongside a separate legacy capability case.
+
 Recorded before any edit, per the sign-off. Every item below is a test or test-fixture change; no
 product behavior changes and no expectation is relaxed. If a new case exposes a defect, the cause and
 a repair design go to review before any product edit.
