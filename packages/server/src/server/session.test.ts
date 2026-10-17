@@ -6626,7 +6626,10 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
     });
     // A real client always sends through its socket; the response is addressed back to it.
     const socket = {};
-    session.updateClientCapabilities({ [CLIENT_CAPS.durableAgentQueue]: true }, socket);
+    session.updateClientCapabilities(
+      { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.durableAgentQueue]: true },
+      socket,
+    );
 
     await session.handleMessage(
       {
