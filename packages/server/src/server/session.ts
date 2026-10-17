@@ -1,4 +1,5 @@
 import { AgentDirectory } from "./agent/directory.js";
+import { TIMELINE_PAGE_BYTE_BUDGET } from "./websocket/physical-socket.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
@@ -7844,6 +7845,7 @@ export class Session {
         direction,
         cursor,
         limit: pageLimit,
+        byteBudget: TIMELINE_PAGE_BYTE_BUDGET,
       });
       const selectedTimeline = {
         timeline: fetchedControlTimeline,
