@@ -1,4 +1,6 @@
 import { test, expect } from "../support/fixtures";
+import type { Page } from "@playwright/test";
+import { installDaemonWebSocketGate } from "../support/helpers/daemon-websocket-gate";
 import {
   awaitAssistantMessage,
   expectAgentIdle,
@@ -26,6 +28,111 @@ import {
 } from "../support/helpers/mock-agent";
 
 const SCROLL_AWAY_MIN_SCROLLABLE_DISTANCE = 360;
+
+async function openCompactAgentMenu(page: Page) {
+  await page.getByTestId("workspace-tab-switcher-trigger").click();
+  await page
+    .locator('[data-testid^="workspace-tab-menu-"][data-testid$="-trigger"]')
+    .filter({ visible: true })
+    .first()
+    .click();
+}
+
+for (const width of [1280, 390]) {
+  test(`U2d populated artifacts use the canonical entry without artifact RPC at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 960 });
+    const wire = await installDaemonWebSocketGate(page);
+    const agent = await seedMockAgentWorkspace({
+      repoPrefix: `u2d-artifacts-${width}-`,
+      title: "U2d collected artifacts",
+      repo: {
+        files: [
+          {
+            path: "u2d-report.html",
+            content: "<!doctype html><title>U2d report</title><p>Collected file evidence</p>",
+          },
+        ],
+      },
+    });
+    try {
+      const collection = await agent.client.scanAgentArtifacts(agent.agentId);
+      expect(collection.addedOrUpdated).toBeGreaterThan(0);
+      await openAgentRoute(page, agent);
+      await expectComposerVisible(page);
+      const before = wire.getClientRequestCounts();
+      if (width === 390) {
+        await expect.soft(page.getByTestId("agent-view-switcher")).toHaveCount(0);
+        await openCompactAgentMenu(page);
+        await expect(page.getByText("Find in chat", { exact: true })).toBeVisible();
+        await page.getByText("View artifacts", { exact: true }).click();
+      } else {
+        await expect(page.getByTestId("agent-view-switcher")).toBeVisible();
+        await page.getByTestId("agent-view-artifacts").click();
+      }
+      await expect(page.getByTestId("artifact-card-u2d-report.html")).toBeVisible();
+      await expect(page.getByTestId("artifact-card-u2d-report.html")).toContainText(
+        "u2d-report.html",
+      );
+      const after = wire.getClientRequestCounts();
+      const artifactRequests = Object.fromEntries(
+        Object.entries(after).filter(([type]) => type.startsWith("agent.artifacts.")),
+      );
+      expect(artifactRequests).toEqual(
+        Object.fromEntries(
+          Object.entries(before).filter(([type]) => type.startsWith("agent.artifacts.")),
+        ),
+      );
+      expect(wire.getClientRequestCount("session.events.set_subscription.request")).toBeGreaterThan(
+        0,
+      );
+      await testInfo.attach("collected-artifacts-and-opening-wire", {
+        body: JSON.stringify({ collection, before, after, artifactRequests }, null, 2),
+        contentType: "application/json",
+      });
+      await page.screenshot({ path: testInfo.outputPath("populated-artifacts.png") });
+    } finally {
+      await agent.cleanup();
+    }
+  });
+
+  test(`U2d absent artifact capability suppresses the entry at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 960 });
+    const wire = await installDaemonWebSocketGate(page);
+    wire.setServerFeaturesStripped(["companionStreamPortV1"]);
+    const agent = await seedMockAgentWorkspace({
+      repoPrefix: `u2d-artifacts-absent-${width}-`,
+      title: "U2d absent artifacts",
+    });
+    try {
+      await openAgentRoute(page, agent);
+      await expectComposerVisible(page);
+      if (width === 390) {
+        await expect.soft(page.getByTestId("agent-view-switcher")).toHaveCount(0);
+        await openCompactAgentMenu(page);
+        await expect(page.getByText("Find in chat", { exact: true })).toBeVisible();
+        await expect.soft(page.getByText("View artifacts", { exact: true })).toHaveCount(0);
+      } else {
+        await expect.soft(page.getByTestId("agent-view-artifacts")).toHaveCount(0);
+      }
+      expect(
+        Object.keys(wire.getClientRequestCounts()).filter((type) =>
+          type.startsWith("agent.artifacts."),
+        ),
+      ).toEqual([]);
+      await testInfo.attach("absent-artifact-wire", {
+        body: JSON.stringify(wire.getClientRequestCounts(), null, 2),
+        contentType: "application/json",
+      });
+      await page.screenshot({ path: testInfo.outputPath("absent-artifacts-entry.png") });
+    } finally {
+      await agent.cleanup();
+    }
+  });
+}
 
 test.describe("Agent stream UI", () => {
   test("keeps running agent chrome after page refresh", async ({ page }) => {
