@@ -293,6 +293,7 @@ describe("provider rename migration ordering", () => {
     let closed = false;
     const closing = harness.wsServer.close().then(() => {
       closed = true;
+      return undefined;
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(closed).toBe(false);

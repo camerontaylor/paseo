@@ -2029,9 +2029,7 @@ export class VoiceAssistantWebSocketServer {
       });
   }
 
-  private async migrateRenamedProviders(
-    renames: readonly ProviderRename[],
-  ): Promise<void> {
+  private async migrateRenamedProviders(renames: readonly ProviderRename[]): Promise<void> {
     if (renames.length === 0) {
       return;
     }
