@@ -6708,16 +6708,7 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
       messages,
       targetedMessages,
       agentQueueService: queueService,
-      agentManager: {
-        listAgents: vi.fn(() => [{ id: agentId }]),
-        // Same proven dependency as the subscribed case: the enqueue path resolves the agent.
-        getAgent: vi.fn(() => ({
-          id: agentId,
-          provider: "codex",
-          lifecycle: "idle",
-          pendingPermissions: new Set<string>(),
-        })),
-      },
+      agentManager: { listAgents: vi.fn(() => [{ id: agentId }]) },
       agentStorage: {
         get: vi.fn().mockResolvedValue(undefined),
         list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
@@ -6759,16 +6750,17 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
       });
     const queueUpdates = () =>
       targetedMessages.filter(({ message }) => message.type === "agent.queue.update");
-    const subscriptionIdFor = (source: object) =>
-      (
-        targetedMessages.find(
-          ({ source: owner, message }) =>
-            owner === source && message.type === "session.events.set_subscription.response",
-        )?.message as Extract<
-          SessionOutboundMessage,
-          { type: "session.events.set_subscription.response" }
-        >
-      ).payload.subscriptionId;
+    // Read the subscribe acknowledgement before the list is cleared for the delivery assertions.
+    const subscribedSubscriptionId = (
+      targetedMessages.find(
+        ({ source: owner, message }) =>
+          owner === subscribed &&
+          message.type === "session.events.set_subscription.response",
+      )?.message as Extract<
+        SessionOutboundMessage,
+        { type: "session.events.set_subscription.response" }
+      >
+    ).payload.subscriptionId;
 
     // The owner principal is permitted to have these delivered; the queue update is not a
     // privileged message that a narrower principal would be denied.
@@ -6790,7 +6782,7 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
       {
         type: "subscription.release.request",
         requestId: "queue-release",
-        subscriptionId: subscriptionIdFor(subscribed),
+        subscriptionId: subscribedSubscriptionId,
       },
       subscribed,
     );
@@ -6851,7 +6843,16 @@ test("a legacy client receives the queue update through its capability alone", a
       messages,
       targetedMessages,
       agentQueueService: queueService,
-      agentManager: { listAgents: vi.fn(() => [{ id: agentId }]) },
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+        // Same proven dependency as the subscribed case: the enqueue path resolves the agent.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
+      },
       agentStorage: {
         get: vi.fn().mockResolvedValue(undefined),
         list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
