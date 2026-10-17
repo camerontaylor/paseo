@@ -4723,6 +4723,7 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
         expect(ompSession.prompts).toEqual([
           { message: "check the build", imageCount: 0, streamingBehavior },
         ]);
+        await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
         ompSession.emit({ ...rejection, id: "unrelated-request" });
         expect(agentManager.getAgent(childId)?.lifecycle).toBe("running");
         if (order === "before ack") ompSession.emit(rejection);

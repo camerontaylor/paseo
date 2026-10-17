@@ -171,7 +171,7 @@ async function withHarness(
     primaryFailed = true;
     throw error;
   } finally {
-    for (const cleanup of additionalCleanups.reverse()) {
+    for (const cleanup of additionalCleanups.toReversed()) {
       try {
         await cleanup();
       } catch (error) {
@@ -335,19 +335,66 @@ async function contextWindowUsedTokens(client: DaemonClient, agentId: string) {
   return result?.agent.lastUsage?.contextWindowUsedTokens;
 }
 
+async function idleFollowUp(harness: Harness): Promise<void> {
+  const agent = await createAgent(harness, "idle-follow-up");
+  await harness.client.sendMessage(agent.id, "/follow-up Reply exactly IDLE_FOLLOWUP_OK");
+  await expect
+    .poll(() => readAssistantText(harness, agent.id), { timeout: 30_000 })
+    .toContain("IDLE_FOLLOWUP_OK");
+  const finish = await harness.client.waitForFinish(agent.id, TIMEOUT_MS);
+  expect(finish.status).toBe("idle");
+}
+
+async function agentSentIdleFollowUp(
+  harness: Harness,
+  addCleanup: (cleanup: () => Promise<void>) => void,
+): Promise<void> {
+  const mcp = new Client({ name: "idle-follow-up-test", version: "1.0.0" });
+  addCleanup(() => mcp.close());
+  const parent = await createAgent(harness, "follow-up-parent");
+  const child = await createAgent(harness, "follow-up-child");
+  await mcp.connect(
+    new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${harness.daemon.port}/mcp/agents?callerAgentId=${parent.id}`),
+    ),
+  );
+  const response = await mcp.callTool({
+    name: "send_agent_prompt",
+    arguments: { agentId: child.id, prompt: "/follow-up Reply exactly MCP_IDLE_FOLLOWUP_OK" },
+  });
+  expect(response.isError).not.toBe(true);
+  expect(response.structuredContent).toMatchObject({
+    success: true,
+    disposition: "out_of_band",
+  });
+  await expect
+    .poll(() => readAssistantText(harness, child.id), { timeout: 30_000 })
+    .toContain("MCP_IDLE_FOLLOWUP_OK");
+  await expect
+    .poll(
+      async () => {
+        const items = await timeline(harness.client, parent.id);
+        let notifications = 0;
+        for (const item of items) {
+          if (
+            item.type === "tool_call" &&
+            item.agentMessage?.sender.id === child.id &&
+            item.agentMessage.event === "finished"
+          )
+            notifications++;
+        }
+        return notifications;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(1);
+}
+
 describe("daemon E2E (real OMP)", () => {
   test(
     "an idle out-of-band follow-up starts a turn",
     async () => {
-      await withHarness({}, async (harness) => {
-        const agent = await createAgent(harness, "idle-follow-up");
-        await harness.client.sendMessage(agent.id, "/follow-up Reply exactly IDLE_FOLLOWUP_OK");
-        await expect
-          .poll(() => readAssistantText(harness, agent.id), { timeout: 30_000 })
-          .toContain("IDLE_FOLLOWUP_OK");
-        const finish = await harness.client.waitForFinish(agent.id, TIMEOUT_MS);
-        expect(finish.status).toBe("idle");
-      });
+      await withHarness({}, idleFollowUp);
     },
     TIMEOUT_MS,
   );
@@ -355,49 +402,7 @@ describe("daemon E2E (real OMP)", () => {
   test(
     "an agent-sent idle follow-up starts a turn and notifies its parent",
     async () => {
-      await withHarness({}, async (harness, addCleanup) => {
-        const mcp = new Client({ name: "idle-follow-up-test", version: "1.0.0" });
-        addCleanup(() => mcp.close());
-        const parent = await createAgent(harness, "follow-up-parent");
-        const child = await createAgent(harness, "follow-up-child");
-        await mcp.connect(
-          new StreamableHTTPClientTransport(
-            new URL(
-              `http://127.0.0.1:${harness.daemon.port}/mcp/agents?callerAgentId=${parent.id}`,
-            ),
-          ),
-        );
-        const response = await mcp.callTool({
-          name: "send_agent_prompt",
-          arguments: { agentId: child.id, prompt: "/follow-up Reply exactly MCP_IDLE_FOLLOWUP_OK" },
-        });
-        expect(response.isError).not.toBe(true);
-        expect(response.structuredContent).toMatchObject({
-          success: true,
-          disposition: "out_of_band",
-        });
-        await expect
-          .poll(() => readAssistantText(harness, child.id), { timeout: 30_000 })
-          .toContain("MCP_IDLE_FOLLOWUP_OK");
-        await expect
-          .poll(
-            async () => {
-              const items = await timeline(harness.client, parent.id);
-              let notifications = 0;
-              for (const item of items) {
-                if (
-                  item.type === "tool_call" &&
-                  item.agentMessage?.sender.id === child.id &&
-                  item.agentMessage.event === "finished"
-                )
-                  notifications++;
-              }
-              return notifications;
-            },
-            { timeout: 15_000 },
-          )
-          .toBe(1);
-      });
+      await withHarness({}, agentSentIdleFollowUp);
     },
     TIMEOUT_MS,
   );
