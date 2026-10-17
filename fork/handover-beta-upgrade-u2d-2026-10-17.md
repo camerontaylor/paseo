@@ -207,6 +207,14 @@ Classification: access after explicit dismissal, not automatic dismissal. The in
 switcher failure remains. An isolated unsupported-destination observation is also authorized;
 owning-doc policy tension requires an explicit ruling before any visibility or expectation change.
 
+The `9b5a69159` focused run exposed a previously unreceipted old-host voice assertion: the real
+adapter deliberately receives exactly `(true, "agent-1")`, with no durable options, whereas the new
+test expected a third argument containing null. Advisor and coordinator approved the exact single
+two-argument assertion with capture, zero receipt reads and cleanup retained. Classification:
+absent durable options, not a transmitted null identity. The chooser's coordinate dismissal also
+hit the menu overlay; the approved canonical backdrop locator and position replace that click,
+preserving the closed-state assertion and every subsequent artifact assertion.
+
 ### The queue enqueue case: attribution corrected, not a product defect
 
 The first gate run showed the carry's enqueue case failing, and an early reading called it a

@@ -690,12 +690,8 @@ describe("voice runtime", () => {
     await runtime.startVoice("server-1", "agent-1");
 
     expect(engine.startCapture).toHaveBeenCalled();
-    // No attachment identity is minted, so a receipts read cannot be scoped to one.
-    expect(adapter.setVoiceMode).toHaveBeenCalledWith(
-      true,
-      "agent-1",
-      expect.objectContaining({ attachmentId: null }),
-    );
+    // An incapable host gets no durable transport options or receipt reads.
+    expect(adapter.setVoiceMode).toHaveBeenCalledExactlyOnceWith(true, "agent-1");
     expect(adapter.readVoiceInputReceipts).not.toHaveBeenCalled();
     await runtime.destroy();
   });
