@@ -199,6 +199,14 @@ card assertion. This proves the all-items view, not default visibility. Unsuppor
 and the compact switcher's presence remain independent failing assertions; no product fix is
 authorized by these adaptations.
 
+At `400dae50d`, both durable queue widths, compact local queue and desktop all-items artifacts
+pass. The compact artifact click is intercepted by the canonical chooser's bottom-sheet backdrop
+after View artifacts selects the view. Before editing, the advisor and coordinator approved an
+explicit chooser dismissal and closed-state assertion before the unchanged filter/card/wire steps.
+Classification: access after explicit dismissal, not automatic dismissal. The independent compact
+switcher failure remains. An isolated unsupported-destination observation is also authorized;
+owning-doc policy tension requires an explicit ruling before any visibility or expectation change.
+
 ### The queue enqueue case: attribution corrected, not a product defect
 
 The first gate run showed the carry's enqueue case failing, and an early reading called it a

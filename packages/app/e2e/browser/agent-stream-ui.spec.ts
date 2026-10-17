@@ -67,6 +67,8 @@ for (const width of [1280, 390]) {
         await openCompactAgentMenu(page);
         await expect(page.getByText("Find in chat", { exact: true })).toBeVisible();
         await page.getByText("View artifacts", { exact: true }).click();
+        await page.mouse.click(width / 2, 24);
+        await expect(page.getByTestId("workspace-tab-switcher-new-agent")).not.toBeVisible();
       } else {
         await expect(page.getByTestId("agent-view-switcher")).toBeVisible();
         await page.getByTestId("agent-view-artifacts").click();
