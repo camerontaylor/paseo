@@ -215,7 +215,7 @@ describe("opening beside", () => {
     });
   }
 
-  function paneIdHolding(tabId: string | null): string | undefined {
+  function paneIdHoldingInLayout(tabId: string | null): string | undefined {
     const root = useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY].root;
     return collectAllPanes(root).find((pane) => pane.tabIds.includes(tabId ?? ""))?.id;
   }
@@ -228,7 +228,7 @@ describe("opening beside", () => {
     const openedSidePaneId =
       useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY];
     expect(openedSidePaneId).toEqual(expect.any(String));
-    expect(paneIdHolding(tabId)).toBe(openedSidePaneId);
+    expect(paneIdHoldingInLayout(tabId)).toBe(openedSidePaneId);
   });
 
   it("keeps a single-pane workspace in one pane despite the side preference", () => {
@@ -241,7 +241,7 @@ describe("opening beside", () => {
     });
 
     expect(useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY]).toBeFalsy();
-    expect(paneIdHolding(preferredTabId)).toBe("main");
-    expect(paneIdHolding(besideTabId)).toBe("main");
+    expect(paneIdHoldingInLayout(preferredTabId)).toBe("main");
+    expect(paneIdHoldingInLayout(besideTabId)).toBe("main");
   });
 });

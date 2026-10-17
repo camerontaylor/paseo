@@ -1940,6 +1940,25 @@ export class Session {
     }
   }
 
+  private forwardSideConversationUpdate(
+    update: Extract<AgentManagerEvent, { type: "side_conversation" }>["event"],
+  ): void {
+    if (!this.supports(CLIENT_CAPS.sideConversations)) {
+      return;
+    }
+    if (update.type === "update") {
+      this.emit({
+        type: "agent.side_conversation.update",
+        payload: sideConversationSnapshot(update.record),
+      });
+      return;
+    }
+    this.emit({
+      type: "agent.side_conversation.removed",
+      payload: { parentAgentId: update.parentAgentId, threadId: update.threadId },
+    });
+  }
+
   private subscribeToAgentEvents(): void {
     if (this.unsubscribeAgentEvents) {
       this.unsubscribeAgentEvents();
@@ -1980,21 +1999,7 @@ export class Session {
         }
 
         if (event.type === "side_conversation") {
-          if (!this.supports(CLIENT_CAPS.sideConversations)) {
-            return;
-          }
-          const update = event.event;
-          if (update.type === "update") {
-            this.emit({
-              type: "agent.side_conversation.update",
-              payload: sideConversationSnapshot(update.record),
-            });
-          } else {
-            this.emit({
-              type: "agent.side_conversation.removed",
-              payload: { parentAgentId: update.parentAgentId, threadId: update.threadId },
-            });
-          }
+          this.forwardSideConversationUpdate(event.event);
           return;
         }
 

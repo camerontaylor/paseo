@@ -1007,6 +1007,8 @@ function isProcessExitEvent(
 function isPiAgentSessionEvent(event: PiRuntimeEvent): event is PiAgentSessionEvent {
   switch (event.type) {
     case "thinking_level_changed":
+      // The RPC level is a plain string at runtime, so an unknown value is not a session event
+      // this client can act on.
       return typeof event.level === "string" && normalizePiThinkingOption(event.level) !== null;
     case "agent_start":
     case "turn_start":
@@ -1021,7 +1023,6 @@ function isPiAgentSessionEvent(event: PiRuntimeEvent): event is PiAgentSessionEv
     case "agent_end":
     case "agent_settled":
     case "auto_retry_start":
-    case "thinking_level_changed":
       return true;
     default:
       return false;

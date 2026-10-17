@@ -5,17 +5,7 @@
   "published_fork": "929d7427163474f5c0cbfc45192436d3de7540c6",
   "custom_merge_conflicts": 29,
   "cumulative_clean_beta_patch_order": [
-    7179,
-    7169,
-    6762,
-    7057,
-    7062,
-    7146,
-    7106,
-    6978,
-    6264,
-    6402,
-    6165
+    7179, 7169, 6762, 7057, 7062, 7146, 7106, 6978, 6264, 6402, 6165
   ],
   "meaning": "Temporary-index patch applicability only. No application source changes, build, tests or runtime verification. Null means not checked. Recheck actual assembled candidate.",
   "prs": [
