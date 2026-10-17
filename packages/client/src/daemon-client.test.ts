@@ -7919,7 +7919,7 @@ test("the queue selector follows the host capability across one client's reconne
   capable.triggerOpen({ features: { ownedSubscriptions: true, durableAgentQueueV1: true } });
   await initialConnect;
 
-  const subscription = client.observeEvents(["agent.queue.update", "status.server_info"]);
+  client.observeEvents(["agent.queue.update", "status.server_info"]);
   expect(subscriptionSelectors(capable).at(-1)).toEqual([
     "agent.queue.update",
     "status.server_info",
@@ -7944,7 +7944,7 @@ test("the queue selector follows the host capability across one client's reconne
     ]),
   );
 
-  await subscription.release();
+  // The mock daemon never answers a release, so teardown closes the client instead.
   await client.close();
 });
 
