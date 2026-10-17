@@ -74,7 +74,9 @@ describe("PlanHandoffButton", () => {
   const agent = {
     id: "agent-1",
     workspaceId: "ws-1",
-    provider: "claude",
+    // A configured provider instance, not the bare provider name: the handoff has to carry the
+    // exact one the source agent runs on, account included.
+    provider: "claude-work",
     cwd: "/code/project",
     model: "opus",
     thinkingOptionId: "high",
@@ -98,9 +100,13 @@ describe("PlanHandoffButton", () => {
     harness.navigateToWorkspace.mockClear();
     harness.toastError.mockClear();
     harness.session = {
-      client: { sendMessage: harness.sendMessage },
-      agents: new Map([["agent-1", agent]]),
-      workspaces: new Map([["ws-1", { workspaceId: "ws-1" }]]),
+      sessions: {
+        "server-1": {
+          client: { sendMessage: harness.sendMessage },
+          agents: new Map([["agent-1", agent]]),
+          workspaces: new Map([["ws-1", { workspaceId: "ws-1" }]]),
+        },
+      },
     };
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -123,10 +129,16 @@ describe("PlanHandoffButton", () => {
   // The source agent's workspace can be gone by the time the plan is read. The button has to say so
   // and leave no trace: no draft, no navigation, and still usable afterwards.
   it("reports an unavailable source without saving a draft or navigating", () => {
+    // The host session is still there but the source agent's workspace is gone, which is the state
+    // the button has to detect rather than trust.
     harness.session = {
-      client: { sendMessage: harness.sendMessage },
-      agents: new Map(),
-      workspaces: new Map(),
+      sessions: {
+        "server-1": {
+          client: { sendMessage: harness.sendMessage },
+          agents: new Map([["agent-1", agent]]),
+          workspaces: new Map(),
+        },
+      },
     };
 
     press();
@@ -165,7 +177,7 @@ describe("PlanHandoffButton", () => {
     expect(navigation.target.kind).toBe("draft");
     expect(saved.draftKey).toBe(`draft:server-1:${navigation.target.draftId}`);
     expect(navigation.target.setup).toEqual({
-      provider: "claude",
+      provider: "claude-work",
       cwd: "/code/project",
       model: "opus",
       thinkingOptionId: "high",

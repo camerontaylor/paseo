@@ -89,6 +89,13 @@ test.describe("Plan card markdown", () => {
         .filter({ visible: true })
         .click();
       await planCard.getByTestId("permission-plan-handoff").click();
+      const handoffDraftTab = page
+        .locator('[data-testid^="workspace-tab-draft_"][aria-selected="true"]')
+        .filter({ visible: true });
+      await expect(handoffDraftTab).toHaveCount(1);
+      const handoffDraftTabId = await handoffDraftTab.getAttribute("data-testid");
+      expect(handoffDraftTabId).not.toBeNull();
+      expect(handoffDraftTabId).not.toBe(existingDraftTabId);
       const composer = page
         .getByRole("textbox", { name: "Message agent..." })
         .filter({ visible: true });
@@ -98,6 +105,10 @@ test.describe("Plan card markdown", () => {
       await expect(composer).toHaveValue(new RegExp(session.agentId));
       // Provider (and its account), model and thinking option come across unchanged.
       expect(await visibleSetup()).toEqual(sourceSetup);
+      const sourceAgent = (await session.client.fetchAgents({ scope: "active" })).entries.find(
+        ({ agent }) => agent.id === session.agentId,
+      )?.agent;
+      expect(sourceAgent).toBeDefined();
       const agents = await session.client.fetchAgents({ scope: "active" });
       expect(
         agents.entries.filter(({ agent }) => agent.workspaceId === session.workspaceId),
@@ -110,11 +121,10 @@ test.describe("Plan card markdown", () => {
         .filter({ visible: true });
       await expect(restoredDraftComposer).toHaveValue("keep this draft");
       await expect(page.getByTestId("composer-file-attachment-pill")).toContainText(TEST_JSON.name);
-      await page
-        .getByTestId(`workspace-tab-agent_${session.agentId}`)
-        .filter({ visible: true })
-        .click();
 
+      // Submit the handoff draft, not the one that was already open.
+      await page.getByTestId(handoffDraftTabId!).click();
+      await expect(composer).toHaveValue(/Implement the following proposed plan\./);
       const handoffPrompt = await composer.inputValue();
       await page.getByRole("button", { name: "Send message" }).filter({ visible: true }).click();
       await expect
@@ -130,6 +140,9 @@ test.describe("Plan card markdown", () => {
         ({ agent }) => agent.workspaceId === session.workspaceId && agent.id !== session.agentId,
       )?.agent;
       expect(destination).toBeDefined();
+      // The created agent runs on the provider the source agent used, account included.
+      expect(destination!.provider).toBe(sourceAgent!.provider);
+      expect(destination!.model).toBe(sourceAgent!.model);
       const timelineClient = session.client as typeof session.client & {
         fetchAgentTimeline(agentId: string): Promise<{
           entries: Array<{ item: { type: string; text?: string } }>;
