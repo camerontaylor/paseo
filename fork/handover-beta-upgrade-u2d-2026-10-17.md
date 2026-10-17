@@ -149,17 +149,90 @@ activated. The app's `pretypecheck` builds the native audio workspace first.
 
 ## Gates
 
-Neptune private candidate, exclusive build token, pinned Node 22.20.0. `build:client`,
-`build:server`, `typecheck`, `lint`, `format:check` at the integration SHA, then focused suites for
-the queue, receipts, artifacts, Find, voice and audio, side-conversations, protocol compatibility and
-the U1/U2a/U2b/U2c suites, then populated desktop and compact browser proof for the queue UI and the
-artifacts view.
+All execution uses Neptune's exclusive private candidate, Node 22.20.0. Receipt paths below are
+relative to `~/.paseo-fork/candidates/upgrade-0.12.0-beta.1/`. No build or test ran on Uranus.
+The retained-file code and corrected browser contracts are committed at
+`33e270f60987a29890039f1d619203e55ca27827`; later handover-only commits do not retimestamp tests.
+
+| Gate | Executed SHA | Result and receipt |
+| --- | --- | --- |
+| Client/server declaration stacks | `f2ded6715ecae81680f80c53a218977ed315bf74` | Both builds exit 0, `evidence/u2d/checks-f2ded6715.log`. Later server changes are the source-reviewed mechanical category extraction and whitespace; current retained-file repair is app-only. |
+| App focused baseline | `e63d7fa98085c4b9fbc5ba09464f8651daa1c6a1` | 21 files / 332 tests pass, `evidence/u2d/tests-app-e63d7fa98.log`: composer actions/state, outbox/sync/mirror, voice/audio, Find, companion model, locale parity, U2b scripts and U2c handoff/history/pin. |
+| Protocol queue and old/new parsing | `e63d7fa98085c4b9fbc5ba09464f8651daa1c6a1` | 2 files / 29 tests pass, `evidence/u2d/tests-protocol-e63d7fa98.log`. |
+| Protocol artifacts/companion/voice | `71dcafa6dc75b0d9735fd7043440049d33ce4f79` | 3 files / 11 tests pass, `evidence/u2d/protocol-remaining-71dcafa6d.log`. |
+| Server queue/receipts/collection | `71dcafa6dc75b0d9735fd7043440049d33ce4f79` | 7 files / 87 tests pass, `evidence/u2d/server-remaining-71dcafa6d.log`. This fills the suites not reached by the earlier bailed server batch. |
+| Merged prompt and MCP behavior | `71dcafa6dc75b0d9735fd7043440049d33ce4f79` | 2 files / 158 tests pass, `evidence/u2d/merged-agent-tests-71dcafa6d.log`. |
+| Session ownership and queue subscription suite | `17771efb2e6d2b1c109a2b86c6e0d46221ffdd81` | 170 tests pass, `evidence/u2d/session-final.log`; later ACK discriminant guard rerun alone at `71dcafa6d`, 1 pass / 169 skipped, `evidence/u2d/static-focused-71dcafa6d.log`. The production `session.ts` delta after this receipt is whitespace-only. |
+| Registered reconnect handler | `71dcafa6dc75b0d9735fd7043440049d33ce4f79` | 3 tests pass after typed-mock correction, `evidence/u2d/handler-corrected-71dcafa6d.log`. Initial 3/3 at `9ec641052f6ab92314e94a64372f12c5d57216ce` remains in `evidence/u2d/status-handler.log`. |
+| Strengthened reconnect selector | `f605c8dd0e49ab6a241cc634cd5a76e93bb94361` | Selector 1 pass and handler 3 pass, `evidence/u2d/reconnect-f605c8dd0.log`. Every incapable request excludes the selector; real completed flush precedes downgrade, exact pending item survives and dispatches once on restoration. Later static findings in that log were corrected separately. |
+| Old-host voice adapter | `5d9d91d4337b8e88895dd81e44ec008357bb1a7a` | Changed case 1 pass / 31 skipped, `evidence/u2d/voice-absent-5d9d91d43.log`: exactly two adapter arguments, zero receipt reads and cleanup retained. |
+| Unsupported retained-file rendering | `33e270f60987a29890039f1d619203e55ca27827` | New real-feed cases 2/2 pass, `evidence/u2d/retained-files-focused-33e270f60.log`: supplied card opens through workspace-file navigation; absent files use the ordinary empty state. Both keep the upgrade notice and avoid companion mutation calls. |
+| Exact retained-file static gates | `33e270f60987a29890039f1d619203e55ca27827` | Typecheck, repository lint and format check all exit 0, `evidence/u2d/static-33e270f60.log`. Advisor source-cleared this exact commit; final receipt review remains separate. |
+| U2a provider rename | `46e14f12226658a669ba878170bd9736c736b8fd` | Accepted 4/4 in `evidence/u2a/final-rename-owner.log`; that receipt also contains the owner/config-store cases. |
+| U2a mutable owner/config store | `05e01290fbde13058031d30775096bf950d8e042` | Accepted 4/4 and 40/40, `evidence/u2a/fix-owner.log`, `evidence/u2a/fix-config-store.log`. |
+
+Reuse is deliberate: since `e63d7fa98`, app production changes are restricted to the three
+retained-file rendering/plumbing files, now covered by the new focused cases and affected browser
+flow. Protocol/client/server behavior tested above is unchanged; added or strengthened tests are
+receipted separately. U2a test blobs are identical to their accepted heads, and beta's
+`components/markdown/**` remains byte-identical to the U2c base. No unchanged green suite was rerun.
+The earlier server batch `tests-server-e63d7fa98.log` stopped at its session failure; it is not a
+green receipt for later files. The first root-config handler invocation at `71dcafa6d` failed before
+collection (`__DEV__`); the app-workspace invocation above is the valid 3/3 receipt.
+
+### Browser evidence and classification
+
+| Flow | Executed SHA | Result and receipt |
+| --- | --- | --- |
+| Durable queue, desktop 1280 and compact 390 | `400dae50d694ab78a3571cb846f9cf1364c37a7d` | Both pass, `evidence/u2d/browser-adapters-400dae50d.log`: actual daemon/UI pending state, independent Send now and Delete items, promotion/deletion transitions and outbound capture. |
+| Queue flag absent, desktop 1280 | `71dcafa6dc75b0d9735fd7043440049d33ce4f79` | Pass, `evidence/u2d/browser-71dcafa6d.log`: local queue path with no durable queue RPC or daemon item. |
+| Queue flag absent, compact 390 | `400dae50d694ab78a3571cb846f9cf1364c37a7d` | Pass, `evidence/u2d/browser-adapters-400dae50d.log`, same local-path and zero-durable-RPC contract. |
+| Companion flag absent, desktop 1280 | `33e270f60987a29890039f1d619203e55ca27827` | Pass, `evidence/u2d/artifacts-33e270f60.log`: delivered absent flag and supplied snapshot, upgrade notice, file card and HTML preview, exact draft retained, mutation controls absent and both feature RPC families zero throughout. |
+
+Each browser output directory retains traces, screenshots and JSON attachments beside its named
+log. `browser-observations-71dcafa6d.json` and `browser-observations-400dae50d.json` summarize actual
+app outbound requests; they do not substitute fixture-client requests for browser traffic.
+
+Superseded failures remain in `browser-71dcafa6d.log`, `browser-compact-9b5a69159.log` and
+`browser-compact-5d9d91d43.log`, with their trace directories. They record the unhandled browser
+confirm, compact setup expecting a desktop tab, Show All not selected, chooser/menu dismissal
+interaction, and the explicitly retracted hidden-entry/no-compact-switcher expectations. The
+strict two-backdrop failure is a locator ambiguity; the approved canonical locator selects the
+first backdrop and retains its normal actionability and closed-state checks.
+
+The independent pre-repair file-loss observation is `unsupported-observe-9b5a69159.log` (desktop
+observation completed, compact observation blocked in dismissal), with
+`unsupported-outbound-9b5a69159.json` and `unsupported-snapshots-9b5a69159.json`. Both widths received
+real file snapshots; the completed desktop flow rendered zero cards and emitted zero feature RPCs.
+This product defect remains distinct from the superseded layout contract. The old-host voice
+third-argument failure remains in `voice-absent-9b5a69159.log`; its corrected receipt is above.
+
+At `33e270f60`, the other three artifact cases failed in new test assumptions, after reaching real
+cards. Both supported cases passed the first Show All/card and Chat/draft checks, then expected the
+Stream filter to persist. The panel conditionally mounts `CompanionFeed`, whose local filter starts
+pending-only, in both this integration and pinned `139e0c81e`; the owning doc promises Chat/draft
+retention, not Stream-filter persistence. Before editing, advisor and coordinator approved checking
+Show All on reentry, clicking it, checking Show Open Only and the same card, then preserving preview,
+return, draft and full-flow zero-RPC checks. Classification: unsupported test assumption, separate
+from the retained-file defect.
+
+The compact absent-host case passed the actual supplied card and iframe heading, then tried the tab
+chooser behind the file sheet's backdrop. Its page snapshot shows the preview dialog and preserved
+draft underneath. Beta's `SheetTabs` and existing compact sheet suite own file opening in a sheet.
+Before editing, advisor and coordinator approved the existing `closeSheet(page, "u2d-report.html")`
+adapter after the unchanged preview assertions, verifying sheet/preview closed and the same
+composer/draft/full-flow zero-RPC checks. Classification: harness file-tab assumption against beta
+compact sheet ownership. The original 60-second timeout and traces remain in
+`evidence/u2d/artifacts-33e270f60/`; no timeout or product change is made, and the green desktop
+absent-host case is not rerun.
 
 ## Gaps
 
 - Native Find is a native surface; the browser proof cannot reach it, so it stays an unverified
   device check rather than an implied pass.
 - Device audio capture and playback, packaged Electron and nine-locale visual checks remain U7 work.
+- Earlier upstream-beta environment failures involving the Claude provider/binary, packaged zsh
+  prompt and missing `gh` remain open; this layer does not waive them.
 - Capability flags (`durableAgentQueueV1`, `companionStreamPortV1`, `durableVoiceInputV1`) are
   recorded as source presence only. No activation is claimed, and C1, C2, A3 and the rest of T0-T10
   are out of this layer.
@@ -265,4 +338,4 @@ a repair design go to review before any product edit.
 | Registered status handler driven with a pending outbox through absent, capable and downgrade | New case in a new suite, because no existing suite mounts the session provider and a production extraction is not authorized | `packages/app/src/contexts/session-queue-resume.test.tsx` |
 | Voice runtime with the durable-voice feature absent mints no transport generation and sends no receipts read | New case | `packages/app/src/voice/voice-runtime.test.ts` |
 | Audio cancel-during-preparation, mic loss and stale-callback cases | Existing carry cases, run and cited, not duplicated | `packages/app/src/audio/*` |
-| Queue promotion and deletion with daemon and UI assertions; artifacts view and compact entry with outbound capture and capability-absent suppression | New cases | `packages/app/e2e/browser/agent-message-submission.spec.ts`, `packages/app/e2e/browser/agent-stream-ui.spec.ts` |
+| Queue promotion and deletion with daemon and UI assertions; artifacts view and compact entry with outbound capture; corrected old-host retained-file contract under the explicit ruling above | New cases and approved contract correction | `packages/app/e2e/browser/agent-message-submission.spec.ts`, `packages/app/e2e/browser/agent-stream-ui.spec.ts` |

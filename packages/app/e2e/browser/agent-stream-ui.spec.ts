@@ -20,6 +20,7 @@ import {
 import { delayCreatedAgentInitialTailResponse } from "../support/helpers/agent-timeline-gate";
 import { selectModel } from "../support/helpers/app";
 import { clickNewChat } from "../support/helpers/launcher";
+import { closeSheet } from "../support/helpers/sheet";
 import {
   expectComposerVisible,
   expectComposerDraft,
@@ -67,7 +68,7 @@ function featureRequestCounts(counts: Record<string, number>) {
   );
 }
 
-async function openArtifactAndReturn(page: Page, width: number, title: string, draft: string) {
+async function openArtifactAndReturn(page: Page, width: number, draft: string) {
   await page.getByTestId("artifact-card-u2d-report.html").click();
   await expect(page.getByTestId("file-html-preview")).toBeVisible();
   await expect(
@@ -77,9 +78,8 @@ async function openArtifactAndReturn(page: Page, width: number, title: string, d
     }),
   ).toBeVisible();
   if (width === 390) {
-    await page.getByTestId("workspace-tab-switcher-trigger").click();
-    await page.getByText(title, { exact: true }).click();
-    await expect(page.getByTestId("workspace-tab-switcher-new-agent")).not.toBeVisible();
+    await closeSheet(page, "u2d-report.html");
+    await expect(page.getByTestId("file-html-preview")).toHaveCount(0);
   }
   await expectComposerVisible(page);
   await expectComposerDraft(page, draft);
@@ -124,8 +124,11 @@ for (const width of [1280, 390]) {
       await page.getByTestId("agent-view-chat").click();
       await expectComposerDraft(page, draft);
       await page.getByTestId("agent-view-artifacts").click();
+      await expect(filter).toHaveText("Show All");
+      await filter.click();
       await expect(filter).toHaveText("Show Open Only");
-      await openArtifactAndReturn(page, width, "U2d collected artifacts", draft);
+      await expect(page.getByTestId("artifact-card-u2d-report.html")).toBeVisible();
+      await openArtifactAndReturn(page, width, draft);
       const after = wire.getClientRequestCounts();
       const artifactRequests = featureRequestCounts(after);
       expect(featureRequestCounts(before)).toEqual({});
@@ -206,7 +209,7 @@ for (const width of [1280, 390]) {
       await page.getByTestId("agent-view-chat").click();
       await expectComposerDraft(page, draft);
       await page.getByTestId("agent-view-artifacts").click();
-      await openArtifactAndReturn(page, width, "U2d absent artifacts", draft);
+      await openArtifactAndReturn(page, width, draft);
       const after = wire.getClientRequestCounts();
       expect(featureRequestCounts(before)).toEqual({});
       expect(featureRequestCounts(after)).toEqual({});
