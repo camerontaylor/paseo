@@ -666,6 +666,8 @@ test.each([true, false])(
         source,
       );
     }
+    // The subscription responses are not what this case asserts.
+    targetedMessages.length = 0;
 
     events.dispatch({
       type: "side_conversation",
