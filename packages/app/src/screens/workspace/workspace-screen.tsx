@@ -38,7 +38,10 @@ import {
   CompactWorkspaceHeader,
   MobileWorkspaceTabSwitcher,
 } from "@/screens/workspace/compact-workspace-header";
-import { WorkspaceHeaderProjectRow } from "@/screens/workspace/workspace-header-project-row";
+import {
+  WorkspaceHeaderProjectRow,
+  type WorkspaceHeaderBranchesModel,
+} from "@/screens/workspace/workspace-header-project-row";
 import { ScreenTitle } from "@/components/headers/screen-title";
 import {
   FloatingPanelPortalHost,
@@ -456,7 +459,10 @@ interface WorkspaceHeaderTitleBarProps {
   subtitle: string;
   isSubtitleDistinct: boolean;
   currentBranchName: string | null;
+  baseRefName: string | null;
+  workspaceDirectory: string | null;
   normalizedServerId: string;
+  normalizedWorkspaceId: string;
   showWorkspaceSetup: boolean;
   importAgentDisabled: boolean;
   copyPathDisabled: boolean;
@@ -472,7 +478,10 @@ function WorkspaceHeaderTitleBar({
   subtitle,
   isSubtitleDistinct,
   currentBranchName,
+  baseRefName,
+  workspaceDirectory,
   normalizedServerId,
+  normalizedWorkspaceId,
   showWorkspaceSetup,
   importAgentDisabled,
   copyPathDisabled,
@@ -481,6 +490,19 @@ function WorkspaceHeaderTitleBar({
   onCopyBranchName,
   onOpenSetupTab,
 }: WorkspaceHeaderTitleBarProps) {
+  const branches = useMemo<WorkspaceHeaderBranchesModel | null>(
+    () =>
+      currentBranchName
+        ? {
+            workspaceId: normalizedWorkspaceId,
+            workspaceDirectory,
+            currentBranchName,
+            baseRefName,
+            onCopyBranchName,
+          }
+        : null,
+    [baseRefName, currentBranchName, normalizedWorkspaceId, onCopyBranchName, workspaceDirectory],
+  );
   return (
     <View style={styles.headerTitleContainer}>
       {isLoading ? (
@@ -494,6 +516,7 @@ function WorkspaceHeaderTitleBar({
             subtitle={subtitle}
             isSubtitleDistinct={isSubtitleDistinct}
             serverId={normalizedServerId}
+            branches={branches}
           />
         </View>
       )}
@@ -607,6 +630,8 @@ interface WorkspaceHeaderFields {
   isWorkspaceHeaderSubtitleDistinct: boolean;
   isGitCheckout: boolean;
   currentBranchName: string | null;
+  /** Display name of the branch the checkout is compared with, when the daemon resolved one. */
+  baseRefName: string | null;
 }
 
 function buildWorkspaceHeaderCheckoutState(input: {
@@ -625,6 +650,7 @@ function buildWorkspaceHeaderCheckoutState(input: {
     checkout: {
       isGit: input.data.isGit,
       currentBranch: input.data.currentBranch,
+      baseRef: input.data.baseRef,
     },
   };
 }
@@ -642,6 +668,7 @@ function deriveWorkspaceHeaderFields(input: {
       isWorkspaceHeaderSubtitleDistinct: false,
       isGitCheckout: false,
       currentBranchName: null,
+      baseRefName: null,
     };
   }
   return {
@@ -651,6 +678,7 @@ function deriveWorkspaceHeaderFields(input: {
     isWorkspaceHeaderSubtitleDistinct: renderState.isSubtitleDistinct,
     isGitCheckout: renderState.isGitCheckout,
     currentBranchName: renderState.currentBranchName,
+    baseRefName: renderState.baseRefName,
   };
 }
 
@@ -1238,6 +1266,7 @@ function WorkspaceScreenContent({
     isWorkspaceHeaderSubtitleDistinct,
     isGitCheckout,
     currentBranchName,
+    baseRefName,
   } = deriveWorkspaceHeaderFields({
     workspace: workspaceDescriptor,
     checkoutState: workspaceHeaderCheckoutState,
@@ -3360,7 +3389,10 @@ function WorkspaceScreenContent({
                 subtitle={workspaceHeaderSubtitle}
                 isSubtitleDistinct={isWorkspaceHeaderSubtitleDistinct}
                 currentBranchName={currentBranchName}
+                baseRefName={baseRefName}
+                workspaceDirectory={workspaceDirectory}
                 normalizedServerId={normalizedServerId}
+                normalizedWorkspaceId={normalizedWorkspaceId}
                 showWorkspaceSetup={showWorkspaceSetup}
                 importAgentDisabled={!canOpenImportSheet}
                 copyPathDisabled={!workspaceDirectory}
@@ -3375,6 +3407,7 @@ function WorkspaceScreenContent({
         />
       ) : null,
     [
+      baseRefName,
       canOpenImportSheet,
       currentBranchName,
       handleCopyBranchName,

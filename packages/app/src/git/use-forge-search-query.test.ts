@@ -35,6 +35,28 @@ describe("forgeSearchQueryKey", () => {
 });
 
 describe("buildForgeSearchQueryOptions", () => {
+  it("lists a project's open change requests with a bounded blank query", async () => {
+    const requests: unknown[] = [];
+    const query = buildForgeSearchQueryOptions({
+      client: {
+        async searchForge(options) {
+          requests.push(options);
+          return { items: [], authState: "authenticated", error: null, requestId: "request-1" };
+        },
+      },
+      serverId: "server-1",
+      cwd: "/project",
+      query: "",
+      kinds: ["change_request"],
+      limit: 20,
+      enabled: true,
+      supportsForgeSearch: true,
+    });
+    await query.queryFn();
+    expect(requests).toEqual([
+      { cwd: "/project", query: "", limit: 20, kinds: ["change_request"] },
+    ]);
+  });
   it("forwards kinds to the forge search request when specified", async () => {
     const requests: unknown[] = [];
     const query = buildForgeSearchQueryOptions({
