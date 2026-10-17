@@ -1,0 +1,21 @@
+# Beta preservation candidate only. Never copy this over the live manifest.
+# Base: v0.12.0-beta.1 = e2f4948f92ce2fc3c4cfb7878f239a88034883de
+# Disposable assembly: upgrade/basket-0.12.0-beta.1
+# Verify each ref still equals its pinned head before assembly.
+# This order includes A1 explicitly. U3 and full fork intakes remain separate.
+
+# U1 head: 81831be87bfad35802f0a0bf0a90fc7183c4fc1c
+upgrade/custom-0.12.0-beta.1
+# U2a head: b02d333f729c02651659b3aba757da84312704d1
+fork/carries-0.12.0-beta.1
+# U2b head: d9e19ff7d5776fee993d93a354375b2a367bdafc
+fork/infi-backend-0.12.0-beta.1
+# U2c head: 84ba5a6916e9621f8975723ddee06626ca6a6546
+fork/infi-ui-0.12.0-beta.1
+# U2d head: 79422b485d7f68dfa24d36a81caa03ead5807992
+fork/tmad-baseline-0.12.0-beta.1
+# U2e head: 216eaa8fad88f4c09cf3479f73822f1d68e406e3
+fork/acp-model-switch-0.12.0-beta.1
+# U2f head: 6a2d930ee4845e121c718a143742b9d2cb8909c0
+# Published A1 diagnostic behavior has a separate owner after ACP model switching.
+fork/a1-diagnostics-0.12.0-beta.1
