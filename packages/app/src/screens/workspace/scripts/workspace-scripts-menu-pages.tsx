@@ -5,6 +5,7 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import {
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSubTrigger,
   type MenuPageDefinition,
@@ -135,6 +136,13 @@ export function useWorkspaceScriptsMenuPages({
   const retryDiscovery = useCallback(() => {
     void packageQuery.refetch();
   }, [packageQuery]);
+  const discovery = useMemo(
+    () => ({
+      fetching: packageQuery.isFetching,
+      error: packageQuery.isError ? packageQuery.error.message : null,
+    }),
+    [packageQuery.error, packageQuery.isError, packageQuery.isFetching],
+  );
   const actions = useWorkspaceScriptActions({
     serverId,
     workspaceId,
@@ -163,10 +171,7 @@ export function useWorkspaceScriptsMenuPages({
           <ScriptsPage
             scripts={scripts}
             actions={actions}
-            discovery={{
-              fetching: packageQuery.isFetching,
-              error: packageQuery.isError ? packageQuery.error.message : null,
-            }}
+            discovery={discovery}
             onRetryDiscovery={retryDiscovery}
           />
         ),
@@ -195,11 +200,9 @@ export function useWorkspaceScriptsMenuPages({
   }, [
     actions,
     liveTerminalIds,
+    discovery,
     onOpenUrlInBrowserTab,
     onViewTerminal,
-    packageQuery.error,
-    packageQuery.isError,
-    packageQuery.isFetching,
     retryDiscovery,
     scripts,
     supportsPackages,

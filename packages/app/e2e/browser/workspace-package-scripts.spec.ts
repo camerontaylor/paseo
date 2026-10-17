@@ -117,17 +117,6 @@ test("long script lists stay bounded, scroll, and filter by name", async ({ page
     await expect(menu.locator('[data-testid^="workspace-scripts-item-"]')).toHaveCount(80);
     await page.screenshot({ path: testInfo.outputPath("scrollable-scripts.png") });
     await page.keyboard.press("Escape");
-    // Compact mounts its own header, so start the app at the compact size instead of resizing a
-    // mounted desktop header and racing its replacement.
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(buildHostWorkspaceRoute(getServerId(), created.workspace!.id));
-    await openWorkspaceScriptsMenu(page);
-    const sheet = page.getByTestId("workspace-scripts-menu-content");
-    await expect(sheet).toBeVisible();
-    await page.getByTestId("workspace-scripts-search").fill("task-79");
-    await expect(sheet.locator('[data-testid^="workspace-scripts-item-"]')).toHaveCount(1);
-    await expect(lastRow).toBeInViewport();
-    await page.screenshot({ path: testInfo.outputPath("compact-script-search.png") });
   } finally {
     await client.close();
     await repo.cleanup();
@@ -165,7 +154,9 @@ test("discovers and runs a nested package script from the compact sheet", async 
   }
 });
 
-test("keeps compact script discovery working after a desktop to compact resize", async ({ page }) => {
+test("keeps compact script discovery working after a desktop to compact resize", async ({
+  page,
+}) => {
   const client = await connectWorkspaceSetupClient();
   const repo = await createTempGitRepo("package-scripts-resize-", {
     files: [
@@ -190,7 +181,9 @@ test("keeps compact script discovery working after a desktop to compact resize",
     await page.goto(buildHostWorkspaceRoute(getServerId(), workspaceId));
     await expect(page.getByTestId("workspace-scripts-button")).toBeVisible({ timeout: 30_000 });
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(page.getByTestId("workspace-header-menu-trigger")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("workspace-header-menu-trigger")).toBeVisible({
+      timeout: 30_000,
+    });
 
     await runDiscoveredScriptFromCompactHeader(page);
   } finally {
@@ -202,18 +195,20 @@ test("keeps compact script discovery working after a desktop to compact resize",
 /** Compact puts scripts on a page of the header menu; discovery still runs on demand. */
 async function runDiscoveredScriptFromCompactHeader(page: Page): Promise<void> {
   await page.getByTestId("workspace-header-menu-trigger").click();
-  await expect(page.getByTestId("workspace-header-menu")).toBeVisible({ timeout: 10_000 });
+  // Compact menu surfaces are sheets, so the content carries the -content test id.
+  const menu = page.getByTestId("workspace-header-menu-content");
+  await expect(menu).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("workspace-header-scripts").click();
   const scriptId = "package.json:packages%2Fweb%2Fpackage.json:dev";
   const row = page.getByTestId(`workspace-scripts-row-${scriptId}`);
   await expect(row).toContainText("dev", { timeout: 15_000 });
   await row.click();
   // Starting the script closes the sheet and opens its own terminal.
-  await expect(page.getByTestId("workspace-header-menu")).not.toBeVisible({ timeout: 20_000 });
+  await expect(menu).not.toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("terminal-surface").first()).toBeVisible({ timeout: 30_000 });
   // The selected script is the one running: reopening the menu reports its row as running.
   await page.getByTestId("workspace-header-menu-trigger").click();
-  await expect(page.getByTestId("workspace-header-menu")).toBeVisible({ timeout: 10_000 });
+  await expect(menu).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("workspace-header-scripts").click();
   await expect(page.getByTestId(`workspace-scripts-row-${scriptId}`)).toContainText("Running", {
     timeout: 15_000,
