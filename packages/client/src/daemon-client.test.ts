@@ -7944,7 +7944,7 @@ test("the queue selector follows the host capability across one client's reconne
     ]),
   );
 
-  subscription.dispose();
+  await subscription.release();
   await client.close();
 });
 
