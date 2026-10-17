@@ -85,7 +85,6 @@ import {
   type SideConversationRecord,
   type SideConversationStoreEvent,
 } from "./side-conversations/store.js";
-import { isSystemInjectedEnvelope } from "./agent-prompt.js";
 import { projectAgentMessage } from "./agent-messages/index.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import { stripInternalPaseoMcpServer, withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
