@@ -25,6 +25,9 @@ touched. Checks ran on Neptune in the shared private candidate.
 Merge base with the carry branch is `5c922d3d2`. The carry covers IP-05, IP-06, IP-08, IP-09, IP-10,
 IP-11 and IP-14.
 
+The ledger itself is a docs-only commit on top of the source head; `fork/**/*.md` is outside the
+formatter's scope (`.oxfmtrc.json`), so it carries no formatter pass.
+
 ## Footprint
 
 The merge touches `packages/app` and three docs only: 83 files, +5241/-99. `git diff --stat` over
