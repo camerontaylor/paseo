@@ -71,6 +71,10 @@ for (const width of [1280, 390]) {
         await expect(page.getByTestId("agent-view-switcher")).toBeVisible();
         await page.getByTestId("agent-view-artifacts").click();
       }
+      const filter = page.getByTestId("companion-stream-pending");
+      await expect(filter).toHaveText("Show All");
+      await filter.click();
+      await expect(filter).toHaveText("Show Open Only");
       await expect(page.getByTestId("artifact-card-u2d-report.html")).toBeVisible();
       await expect(page.getByTestId("artifact-card-u2d-report.html")).toContainText(
         "u2d-report.html",

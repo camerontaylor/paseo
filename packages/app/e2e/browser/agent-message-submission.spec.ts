@@ -102,9 +102,15 @@ for (const width of [1280, 390]) {
           await page.screenshot({ path: testInfo.outputPath(`queue-${action}-pending.png`) });
           if (action === "delete") {
             await page.getByRole("button", { name: "Queued message options" }).click();
-            await page.getByText("Delete", { exact: true }).click();
-            await expect(page.getByText("Delete queued message?", { exact: true })).toBeVisible();
-            await page.getByRole("button", { name: "Delete", exact: true }).click();
+            const confirmation = page.waitForEvent("dialog");
+            const deleting = page.getByText("Delete", { exact: true }).click();
+            const dialog = await confirmation;
+            expect(dialog.type()).toBe("confirm");
+            expect(dialog.message()).toBe(
+              "Delete queued message?\n\nIt will be removed for every device connected to this agent",
+            );
+            await dialog.accept();
+            await deleting;
             await expect(page.getByText(prompt, { exact: true })).toHaveCount(0);
             await expect(page.getByTestId("user-message").filter({ hasText: prompt })).toHaveCount(
               0,
@@ -184,15 +190,30 @@ async function seedRunningMockAgentWorkspaceForQueue(page: Page, width: number) 
     model: "five-minute-stream",
     initialPrompt: "Keep running while independent queue items are exercised.",
   });
-  await agent.client.waitForAgentUpsert(
-    agent.agentId,
-    (snapshot) => snapshot.status === "running",
-    15_000,
-  );
-  await openAgentRoute(page, agent);
-  await expectComposerVisible(page);
-  await expectRunningAgentChrome(page, `U2d queue ${width}`);
-  return agent;
+  try {
+    await agent.client.waitForAgentUpsert(
+      agent.agentId,
+      (snapshot) => snapshot.status === "running",
+      15_000,
+    );
+    await openAgentRoute(page, agent);
+    await expectComposerVisible(page);
+    if (width === 390) {
+      await page.getByTestId("workspace-tab-switcher-trigger").click();
+      await expect(page.getByText(`U2d queue ${width}`, { exact: true })).toBeVisible();
+      await expect(page.getByRole("progressbar", { name: "Agent running" })).toBeVisible();
+      await page.mouse.click(width / 2, 24);
+      await expect(page.getByTestId("workspace-tab-switcher-new-agent")).not.toBeVisible();
+      await expect(page.getByRole("button", { name: "Stop agent", exact: true })).toBeVisible();
+      await expectInlineWorkingIndicator(page);
+    } else {
+      await expectRunningAgentChrome(page, `U2d queue ${width}`);
+    }
+    return agent;
+  } catch (error) {
+    await agent.cleanup().catch(() => {});
+    throw error;
+  }
 }
 
 interface SubmissionScenario {

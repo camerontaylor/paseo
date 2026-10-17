@@ -182,6 +182,23 @@ find the acknowledgement by type and request ID and throw if missing; preserve e
 format through npm with the `session.ts` change confirmed whitespace-only. These are test harness,
 test safety and formatting corrections, with no production behavior change.
 
+At `71dcafa6d`, the desktop durable browser case reached a real pending daemon item and its UI,
+then failed because the test expected a DOM confirmation. The browser uses `window.confirm`,
+which Playwright dismissed without a listener. Classification: unhandled browser-confirm
+interaction. Before editing, the advisor and coordinator approved observing the actual dialog
+(waiter before Delete, exact localized type/text, accept), preserving all deletion, independent
+promotion, daemon and wire assertions. They also approved cleanup of only this helper's fixture on
+setup failure, preserving the original error and handing cleanup to the caller only on success.
+
+Both compact queue cases stopped in setup because the new helper expected an always-visible
+desktop title tab. Both populated artifact cases reached Stream but expected files under its
+default pending-only filter. Before editing, the advisor and coordinator approved two harness-only
+adaptations: verify compact title/running in beta's canonical chooser, dismiss it, then verify Stop
+and the working indicator; select Show All and verify Show Open Only before the same real artifact
+card assertion. This proves the all-items view, not default visibility. Unsupported-host exposure
+and the compact switcher's presence remain independent failing assertions; no product fix is
+authorized by these adaptations.
+
 ### The queue enqueue case: attribution corrected, not a product defect
 
 The first gate run showed the carry's enqueue case failing, and an early reading called it a
