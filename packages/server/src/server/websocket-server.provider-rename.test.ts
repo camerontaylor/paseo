@@ -242,6 +242,7 @@ function captureConfigBroadcasts(wsServer: VoiceAssistantWebSocketServer): Array
 describe("provider rename migration ordering", () => {
   it("keeps successive renames ordered when the first storage migration is delayed", async () => {
     const harness = await startHarness();
+    harnesses.splice(harnesses.indexOf(harness), 1);
     await harness.agentStorage.upsert(storedRecord({ id: "agent-renamed" }));
     const broadcasts = captureConfigBroadcasts(harness.wsServer);
     const gate = gateRenameProvider(harness.agentStorage);
@@ -262,12 +263,12 @@ describe("provider rename migration ordering", () => {
     const broadcastsBeforeRelease = broadcasts.length;
 
     gate.release();
-    await vi.waitFor(async () => {
-      const record = await harness.agentStorage.get("agent-renamed");
-      expect(record?.provider).toBe("claude-final");
-    });
+    // Drain the rename queue through the existing close path before asserting, so the record is
+    // checked after every queued migration has settled rather than while one is still in flight.
+    await harness.wsServer.close();
 
     const record = await harness.agentStorage.get("agent-renamed");
+    expect(record?.provider).toBe("claude-final");
     expect(record?.runtimeInfo?.provider).toBe("claude-final");
     expect(record?.persistence?.provider).toBe("claude-final");
 
@@ -275,6 +276,11 @@ describe("provider rename migration ordering", () => {
     const afterRelease = broadcasts.slice(broadcastsBeforeRelease);
     expect(afterRelease.some((config) => config.providers?.["claude-final"])).toBe(true);
     expect(afterRelease.every((config) => !config.providers?.["claude-job"])).toBe(true);
+
+    // A second read after the drain still reports the final id.
+    const afterDrain = await harness.agentStorage.get("agent-renamed");
+    expect(afterDrain?.provider).toBe("claude-final");
+    await new Promise<void>((resolve) => harness.httpServer.close(() => resolve()));
   });
 
   it("drains a queued rename migration before close resolves", async () => {
