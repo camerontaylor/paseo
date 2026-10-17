@@ -1200,8 +1200,8 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     streamViewRef.current?.scrollToBottom("jump-to-bottom");
   }, [handleReturnToChat, streamViewRef]);
   // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
-  // One gate covers the entry feed and the artifact list: both ship through this
-  // port's snapshot fields and its renamed companion RPC.
+  // Gate companion controls and mutations once. Supplied file snapshots remain
+  // readable on older hosts without reconstructing a companion stream.
   const companionStreamSupported = useHostFeature(serverId, "companionStreamPortV1");
   const isCompact = useIsCompactFormFactor();
   const subagentRows = useSubagentsForParent({ serverId, parentAgentId: agentId });
@@ -1365,7 +1365,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           entries={agentState.companionEntries ?? EMPTY_COMPANION_ENTRIES}
           artifacts={agentState.artifacts ?? []}
           isSupported={companionStreamSupported}
-          artifactsSupported={companionStreamSupported}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
           onReturnToChat={handleReturnToChat}
           onReplyInChat={handleReplyInChat}

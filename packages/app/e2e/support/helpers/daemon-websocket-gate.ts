@@ -337,6 +337,14 @@ export async function installDaemonWebSocketGate(page: Page) {
   const clientRequests = new Map<string, ClientRequest[]>();
   const timelineRequestCounts = new Map<string, number>();
   const serverMessageCounts = new Map<string, number>();
+  const deliveredServerMessages = new Map<string, ClientRequest[]>();
+  const recordDeliveredServerMessage = (message: string | Buffer): void => {
+    const delivered = readSessionMessage(message);
+    if (typeof delivered?.type !== "string") return;
+    const messages = deliveredServerMessages.get(delivered.type) ?? [];
+    messages.push(delivered);
+    deliveredServerMessages.set(delivered.type, messages);
+  };
   const agentStreamEventCounts = new Map<string, number>();
   const agentStreamItemCounts = new Map<string, number>();
   const serverMessageWaiters = new Set<() => void>();
@@ -548,6 +556,7 @@ export async function installDaemonWebSocketGate(page: Page) {
       if (holdReadyFileUpdate(ws, outboundMessage, fileMessage)) return;
       try {
         ws.send(outboundMessage);
+        recordDeliveredServerMessage(outboundMessage);
       } catch {
         activeSockets.delete(ws);
       }
@@ -857,6 +866,9 @@ export async function installDaemonWebSocketGate(page: Page) {
     },
     getClientRequestCounts(): Record<string, number> {
       return Object.fromEntries(clientRequestCounts);
+    },
+    getDeliveredServerMessages(type: string): ReadonlyArray<ClientRequest> {
+      return [...(deliveredServerMessages.get(type) ?? [])];
     },
     setServerFeaturesStripped(features: readonly string[]): void {
       strippedServerFeatures = [...features];

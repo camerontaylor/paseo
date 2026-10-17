@@ -19,7 +19,6 @@ interface ArtifactFeedProps {
   serverId: string;
   cwd: string;
   artifacts: readonly AgentArtifact[];
-  isSupported: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   onReturnToChat?: () => void;
   onPinArtifact?: (artifact: AgentArtifact) => void;
@@ -65,7 +64,6 @@ export function ArtifactFeed({
   serverId,
   cwd,
   artifacts,
-  isSupported,
   onOpenWorkspaceFile,
   onReturnToChat,
   onPinArtifact,
@@ -99,18 +97,6 @@ export function ArtifactFeed({
         <Text style={styles.emptyTitle}>{t("agentPanel.states.offline") || "Offline"}</Text>
         <Text style={styles.emptyDescription}>
           {t("agentPanel.states.offlineDescription") || "Cannot connect to the host."}
-        </Text>
-      </View>
-    );
-  }
-
-  if (!isSupported) {
-    return (
-      <View style={styles.emptyState} testID="artifact-feed-unsupported">
-        <ThemedArtifactKindIcon kind="html" size={22} uniProps={mutedIconMapping} />
-        <Text style={styles.emptyTitle}>{t("agentPanel.artifacts.updateHostTitle")}</Text>
-        <Text style={styles.emptyDescription}>
-          {t("agentPanel.artifacts.updateHostDescription")}
         </Text>
       </View>
     );

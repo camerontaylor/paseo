@@ -215,6 +215,30 @@ absent durable options, not a transmitted null identity. The chooser's coordinat
 hit the menu overlay; the approved canonical backdrop locator and position replace that click,
 preserving the closed-state assertion and every subsequent artifact assertion.
 
+### Retained-file defect and explicit contract ruling
+
+The pinned baseline's owning doc requires compact Chat/Stream navigation and an older-host
+upgrade notice with existing files retained. The advisor explicitly retracted its earlier hidden
+entry/no-compact-switcher requirements; the coordinator approved correcting those browser
+contracts as baseline preservation. Original suppression/layout failures remain recorded as
+superseded assertions, separately from the retained-file defect below.
+
+Before repair, `9b5a69159` trace observations prove that actual app-bound agent snapshots at both
+widths contain `README.md` and seeded `unsupported-report.html`. The completed desktop observation
+collects two files but renders zero cards, with both the Stream upgrade notice ("Your file artifacts
+are below") and an artifacts unsupported notice. Actual app outbound artifact and companion RPC
+counts are zero. The absent companion flag is passed again as `ArtifactFeed` support, whose early
+return suppresses supplied files. This contradiction also exists in the pinned carry; it is not an
+integration regression or a waiver.
+
+Before editing, advisor and coordinator approved removing that sole artifact support prop,
+plumbing and early return. The companion gate and upgrade notice, connection/empty states,
+supported-host mutations and file-opening behavior stay owned by their existing code. The
+unsupported branch receives no mutation callbacks. Focused with-files/without-files cases and
+corrected browser gates must prove supplied snapshots, upgrade notice, file card/open, retained
+draft, absent companion mutation controls and zero artifact/companion RPCs through the whole flow.
+Ordinary workspace-file reads and previews are allowed. No wider product change is authorized.
+
 ### The queue enqueue case: attribution corrected, not a product defect
 
 The first gate run showed the carry's enqueue case failing, and an early reading called it a

@@ -22,7 +22,6 @@ interface CompanionFeedProps {
   entries: readonly CompanionEntry[];
   artifacts: readonly AgentArtifact[];
   isSupported: boolean;
-  artifactsSupported: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   onReturnToChat: () => void;
   onReplyInChat: () => void;
@@ -44,7 +43,6 @@ export function CompanionFeed({
   entries,
   artifacts,
   isSupported,
-  artifactsSupported,
   onOpenWorkspaceFile,
   onReturnToChat,
   onReplyInChat,
@@ -282,7 +280,6 @@ export function CompanionFeed({
           serverId={serverId}
           cwd={cwd}
           artifacts={artifacts}
-          isSupported={artifactsSupported}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
           onReturnToChat={onReturnToChat}
         />
