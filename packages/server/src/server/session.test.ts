@@ -24,7 +24,11 @@ import {
   type FileTransferFrame,
 } from "@getpaseo/protocol/binary-frames/index";
 import { Session } from "./session.js";
-import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
+import {
+  OWNER_PERMISSIONS,
+  SessionAuthorization,
+  type DaemonPermission,
+} from "./authorization/index.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
 import { StructuredAgentFallbackError } from "./agent/agent-response-loop.js";
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
@@ -6595,6 +6599,7 @@ test("a legacy send_agent_message_request never reaches the queue service", asyn
 test("agent.queue.enqueue.request admits through the queue service and mirrors the broadcast", async () => {
   const agentId = "11111111-1111-4111-8111-111111111111";
   const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
   const { AgentQueueService } = await import("./agent-queue/service.js");
   const { AgentQueueStore } = await import("./agent-queue/store.js");
   const queueDir = mkdtempSync(join(tmpdir(), "session-queue-rpc-"));
@@ -6608,6 +6613,7 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
     });
     const session = createSessionForTest({
       messages,
+      targetedMessages,
       agentQueueService: queueService,
       clientCapabilities: { [CLIENT_CAPS.durableAgentQueue]: true },
       agentManager: {
@@ -6618,18 +6624,25 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
         list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
       },
     });
+    // A real client always sends through its socket; the response is addressed back to it.
+    const socket = {};
+    session.updateClientCapabilities({ [CLIENT_CAPS.durableAgentQueue]: true }, socket);
 
-    await session.handleMessage({
-      type: "agent.queue.enqueue.request",
-      requestId: "q-1",
-      agentId,
-      itemId: "item-1",
-      text: "queued from the phone",
-      intent: "queue",
-    });
+    await session.handleMessage(
+      {
+        type: "agent.queue.enqueue.request",
+        requestId: "q-1",
+        agentId,
+        itemId: "item-1",
+        text: "queued from the phone",
+        intent: "queue",
+      },
+      socket,
+    );
 
-    const response = messages.find(
-      (message) => message.type === "agent.queue.enqueue.response",
+    const response = targetedMessages.find(
+      ({ source, message }) =>
+        source === socket && message.type === "agent.queue.enqueue.response",
     ) as Extract<SessionOutboundMessage, { type: "agent.queue.enqueue.response" }>;
     expect(response.payload.error).toBeNull();
     expect(response.payload.queue?.items[0]).toMatchObject({
@@ -6639,11 +6652,11 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
       deliveryState: "pending",
     });
 
-    // The mutation broadcast reaches the capability-advertising client.
-    const broadcast = messages.find((message) => message.type === "agent.queue.update") as Extract<
-      SessionOutboundMessage,
-      { type: "agent.queue.update" }
-    >;
+    // The mutation broadcast reaches the capability-advertising client, independently of the
+    // response above.
+    const broadcast = targetedMessages.find(
+      ({ message }) => message.type === "agent.queue.update",
+    )?.message as Extract<SessionOutboundMessage, { type: "agent.queue.update" }>;
     expect(broadcast.payload.items.map((item) => item.id)).toEqual(["item-1"]);
   } finally {
     rmSync(queueDir, { recursive: true, force: true });
@@ -6678,13 +6691,17 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
 
     const subscribed = {};
     const unsubscribed = {};
+    const incapable = {};
     const later = {};
-    for (const [index, source] of [subscribed, unsubscribed].entries()) {
+    for (const [index, source] of [subscribed, unsubscribed, incapable].entries()) {
       session.updateClientCapabilities(
-        { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.durableAgentQueue]: true },
+        {
+          [CLIENT_CAPS.ownedSubscriptions]: true,
+          [CLIENT_CAPS.durableAgentQueue]: source !== incapable,
+        },
         source,
       );
-      if (source === subscribed) {
+      if (source !== unsubscribed) {
         await session.handleMessage(
           {
             type: "session.events.set_subscription.request",
@@ -6707,14 +6724,41 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
       });
     const queueUpdates = () =>
       targetedMessages.filter(({ message }) => message.type === "agent.queue.update");
+    const subscriptionIdFor = (source: object) =>
+      (
+        targetedMessages.find(
+          ({ source: owner, message }) =>
+            owner === source && message.type === "session.events.set_subscription.response",
+        )?.message as Extract<
+          SessionOutboundMessage,
+          { type: "session.events.set_subscription.response" }
+        >
+      ).payload.subscriptionId;
+
+    // The owner principal is permitted to have these delivered; the queue update is not a
+    // privileged message that a narrower principal would be denied.
+    expect(
+      new SessionAuthorization(OWNER_PERMISSIONS).allowsOutbound({
+        type: "agent.queue.update",
+      } as SessionOutboundMessage),
+    ).toBe(true);
 
     targetedMessages.length = 0;
     await enqueue("q-1");
-    // Capability is not enough: only the source that asked for the selector hears the update.
+    // Capability is not enough: only the source that asked for the selector hears the update, and
+    // neither the unsubscribed nor the incapable source does.
     expect(queueUpdates().map(({ source }) => source)).toEqual([subscribed]);
 
-    // Release suppression: detaching the subscriber stops delivery even though it keeps the flag.
-    session.clearAgentTimelineSubscription(subscribed);
+    // Explicit release through the protocol, distinct from detaching a source: the subscription id
+    // from the subscribe response stops delivery while the source keeps its capability.
+    await session.handleMessage(
+      {
+        type: "subscription.release.request",
+        requestId: "queue-release",
+        subscriptionId: subscriptionIdFor(subscribed),
+      },
+      subscribed,
+    );
     targetedMessages.length = 0;
     await enqueue("q-2");
     expect(queueUpdates()).toEqual([]);

@@ -60,6 +60,25 @@ forwarder removed. Two more came from the integration pass: the companion feed n
 `MarkdownRenderer` (no `enableHtmlish` prop) and the stored-payload builder extracts its stream facts
 to stay under the complexity limit.
 
+Four more gate findings, each fixed without changing behavior: the client's `VoiceTransport` type was
+restored, the test's union import no longer pulls helpers that moved to `agent-messages`, the
+duplicate side-conversation forwarder was removed so U1's subscription lane stays the only one, and
+`packages/server/src/server/session.ts`'s event-category switch moved its one-to-one cases into
+`DIRECT_EVENT_CATEGORIES` to stay under the complexity limit. The composer memo at
+`packages/app/src/composer/input/input.tsx` (the overlay container that renders the dictation and
+realtime-voice overlays) was missing `isAgentRunning`, `isCancellingAgent` and `onCancelAgent` from
+its dependency list; those are the dependencies added, not voice-overlay-only ones.
+
+### Sign-off recorded before the test edits
+
+The coordinator's sign-off authorizes, in this layer: the bounded test setup fix for the queue
+enqueue case (explicit source, targeted response capture that keeps the payload expectations, and an
+independent queue-update assertion), with no production reply-routing change; explicit
+`delivery.permits` positive and negative proof in the queue ownership case; explicit
+`subscription.release.request` coverage separate from `clearAgentTimelineSubscription`; and the
+same-client capable, incapable, capable reconnect selector case. A new provider-mounting test file is
+acceptable where no existing file fits, reusing the existing suites and jobs.
+
 ## Audit of all 94 content merges
 
 **57 equal to the U2c head.** Every line the carry added is present in the merged file for 49 of them.
