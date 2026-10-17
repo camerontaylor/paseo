@@ -117,8 +117,11 @@ test("long script lists stay bounded, scroll, and filter by name", async ({ page
     await expect(menu.locator('[data-testid^="workspace-scripts-item-"]')).toHaveCount(80);
     await page.screenshot({ path: testInfo.outputPath("scrollable-scripts.png") });
     await page.keyboard.press("Escape");
+    // Compact mounts its own header, so start the app at the compact size instead of resizing a
+    // mounted desktop header and racing its replacement.
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByTestId("workspace-scripts-button").click();
+    await page.goto(buildHostWorkspaceRoute(getServerId(), created.workspace!.id));
+    await openWorkspaceScriptsMenu(page);
     const sheet = page.getByTestId("workspace-scripts-menu-content");
     await expect(sheet).toBeVisible();
     await page.getByTestId("workspace-scripts-search").fill("task-79");
@@ -141,7 +144,7 @@ test("discovers and runs a nested package script from the compact sheet", async 
         path: "packages/web/package.json",
         content: JSON.stringify({
           scripts: {
-            dev: "node -e \"setInterval(() => {}, 100000)\"",
+            dev: 'node -e "setInterval(() => {}, 100000)"',
           },
         }),
       },
