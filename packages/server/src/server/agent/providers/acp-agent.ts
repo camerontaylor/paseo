@@ -215,7 +215,7 @@ export function summarizeACPRequestError(error: unknown): {
     return { message: error.message };
   }
 
-  return { message: String(error) };
+  return { message: toDiagnosticErrorMessage(error) };
 }
 
 // Keeps the JSON-RPC code so callers can still tell invalid params from other failures.
@@ -231,7 +231,7 @@ class ACPRequestError extends Error {
 
 function toACPRequestError(error: unknown): Error {
   if (!isACPError(error)) {
-    return error instanceof Error ? error : new Error(String(error));
+    return error instanceof Error ? error : new Error(toDiagnosticErrorMessage(error));
   }
   return new ACPRequestError(error);
 }
