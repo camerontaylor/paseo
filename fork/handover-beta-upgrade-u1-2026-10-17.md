@@ -25,7 +25,7 @@ Both inputs are ancestors of the final SHA. Commits after the merge:
 | `b3dd1f955` | Beta lint regressions (duplicate case, complexity, shadow) and oxfmt |
 | `0ef3e75ef` | Cover beta observation-producer gating and routing edges |
 | `aa41dc761` | Deliver side conversation events through beta owned subscriptions |
-| `084d37953` | Keep the event category switch within the lint branch limit |
+| `084d37953` | Bounded lint repair: the two category cases become a set check at complexity 20, plus session test formatting |
 
 ## Conflicts at recovery
 
@@ -107,8 +107,9 @@ All receipts are under
 - Playwright browser project: 10 of 10 pass across `side-conversations.spec.ts`,
   `compact-workspace-sheet.spec.ts` and `compact-workspace-header.spec.ts`, including
   "tells the user the thread is gone when the parent is archived". The full-file run used the
-  `aa41dc761` sources; `084d37953` changes only the unreachable default delivery lane and test
-  formatting, and the archive assertion was re-run on `084d37953`.
+  working tree that became `aa41dc761`. `084d37953` is an equivalent category-set extraction plus
+  test formatting, with no behavior change, and the archive assertion was re-run green on
+  `084d37953`.
 
 ## Gaps
 
