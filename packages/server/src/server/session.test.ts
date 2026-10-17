@@ -241,7 +241,10 @@ test("side conversation manager events reach every capable client", async () => 
     messages,
     agentManager: { subscribe: events.subscribe },
   });
-  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true });
+  // Beta's observation producers subscribe to the manager only for a source that demands
+  // agent events, so the test must attach one instead of relying on a legacy default client.
+  const capableSocket = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true }, capableSocket);
 
   events.dispatch({
     type: "side_conversation",
@@ -271,7 +274,8 @@ test("side conversation manager events reach every capable client", async () => 
 test("side conversation manager events stay off the wire for clients without the capability", async () => {
   const messages: SessionOutboundMessage[] = [];
   const events = captureAgentManagerEvents();
-  createSessionForTest({ messages, agentManager: { subscribe: events.subscribe } });
+  const session = createSessionForTest({ messages, agentManager: { subscribe: events.subscribe } });
+  session.updateClientCapabilities(null, {});
 
   events.dispatch({
     type: "side_conversation",

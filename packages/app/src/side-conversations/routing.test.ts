@@ -28,9 +28,11 @@ import { openPreferredWorkspaceTarget } from "@/workspace-tabs/open-beside";
  * live: `openInSidePane.subagents` ships off, and the only UI that turns it on is the settings
  * Layout section, which renders `null` outside Electron (`screens/settings-screen.tsx:1451`).
  * Settings live in device-local AsyncStorage under `@paseo:app-settings`, so the preference cannot
- * travel from a desktop install to a phone or tablet either.
+ * travel from a desktop install to a phone or tablet either. Forcing `split-panes` below proves
+ * what the store does under that mode; it is not a platform state a native device reaches.
  *
- * If someone ever exposes the Layout section on native, the second test is the one that changes.
+ * If someone ever exposes the Layout section on native, the split-panes test is the one that
+ * changes.
  */
 
 const WORKSPACE_KEY = "server-1:workspace-1";
@@ -129,5 +131,19 @@ describe("starting a side conversation on a device that cannot render pane split
     expect(paneHolding(parentTabId).id).not.toBe(sidePaneId);
     expect(paneHolding(parentTabId).tabIds).toEqual([parentTabId]);
     expect(paneHolding(threadTabId).tabIds).toEqual([threadTabId]);
+  });
+
+  it("keeps the thread in the parent's pane when the preference is on but splits are not", () => {
+    useWorkspaceLayoutStore.getState().setLayoutMode("single-pane");
+    const parentTabId = openParentAgentTab();
+
+    const threadTabId = startSideConversationOnNativeTablet(
+      { ...DEFAULT_APP_SETTINGS.openInSidePane, subagents: true },
+      parentTabId,
+    );
+
+    expect(panes()).toHaveLength(1);
+    expect(paneHolding(threadTabId).id).toBe(paneHolding(parentTabId).id);
+    expect(useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY]).toBeUndefined();
   });
 });

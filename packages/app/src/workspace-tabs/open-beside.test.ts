@@ -75,6 +75,7 @@ describe("openPreferredWorkspaceTarget for a side conversation", () => {
     expect(tabId).not.toBeNull();
     expect(collectAllPanes(layout().root)).toHaveLength(1);
     expect(paneIdHolding(tabId as string)).toBe(layout().focusedPaneId);
+    expect(sidePaneId()).toBeNull();
   });
 
   it("opens in the side pane when the subagents preference is on", () => {
@@ -101,6 +102,42 @@ describe("openPreferredWorkspaceTarget for a side conversation", () => {
     expect(tabId).not.toBeNull();
     expect(paneIdHolding(tabId as string)).toBe(layout().focusedPaneId);
     expect(sidePaneId()).toBeNull();
+  });
+
+  it("reveals the existing thread instead of opening a second one", () => {
+    const preferences = { ...DEFAULT_APP_SETTINGS.openInSidePane, subagents: true };
+    const input = {
+      workspaceKey: WORKSPACE_KEY,
+      target: SIDE_CONVERSATION,
+      source: "subagents" as const,
+      preferences,
+    };
+
+    const first = openPreferredWorkspaceTarget(input);
+    const second = openPreferredWorkspaceTarget(input);
+
+    expect(second).toBe(first);
+    expect(
+      collectAllTabs(layout().root).filter((tab) => tab.target.kind === "side_conversation"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps the thread tab when the compact layout widens", () => {
+    useWorkspaceLayoutStore.getState().setLayoutMode("compact");
+    const tabId = openPreferredWorkspaceTarget({
+      workspaceKey: WORKSPACE_KEY,
+      target: SIDE_CONVERSATION,
+      source: "subagents",
+      preferences: { ...DEFAULT_APP_SETTINGS.openInSidePane, subagents: false },
+    });
+
+    useWorkspaceLayoutStore.getState().setLayoutMode("split-panes");
+
+    expect(
+      collectAllTabs(layout().root).some(
+        (tab) => tab.tabId === tabId && tab.target.kind === "side_conversation",
+      ),
+    ).toBe(true);
   });
 });
 
