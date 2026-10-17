@@ -679,6 +679,27 @@ describe("voice runtime", () => {
     });
   });
 
+  it("an old host gets no durable attachment, so no receipts are read", async () => {
+    const adapter = createSessionAdapter();
+    const { runtime, engine } = createRuntime({
+      // No durableVoiceInputV1: the host predates the fork's receipt flow.
+      getServerInfo: () => ({ ...createServerInfo(), features: {} }),
+    });
+    runtime.registerSession(adapter);
+
+    await runtime.startVoice("server-1", "agent-1");
+
+    expect(engine.startCapture).toHaveBeenCalled();
+    // No attachment identity is minted, so a receipts read cannot be scoped to one.
+    expect(adapter.setVoiceMode).toHaveBeenCalledWith(
+      true,
+      "agent-1",
+      expect.objectContaining({ attachmentId: null }),
+    );
+    expect(adapter.readVoiceInputReceipts).not.toHaveBeenCalled();
+    await runtime.destroy();
+  });
+
   it("uses one logical attachment across reconnect and ignores stale transport output", async () => {
     const adapter = createSessionAdapter();
     let generation = "g1";
