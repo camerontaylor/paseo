@@ -1057,7 +1057,8 @@ function WorkspaceScreenContent({
   // scripts are discovered in the menu, so the button must render for a workspace that has none
   // configured yet; the button itself hides only when neither source can produce a row.
   const supportsPackageJsonScripts = useSessionStore(
-    (state) => state.sessions[normalizedServerId]?.serverInfo?.features?.packageJsonScripts === true,
+    (state) =>
+      state.sessions[normalizedServerId]?.serverInfo?.features?.packageJsonScripts === true,
   );
   const workspaceDirectory = workspaceDescriptor?.workspaceDirectory || null;
   const isMissingWorkspaceDirectory = Boolean(workspaceDescriptor) && !workspaceDirectory;
