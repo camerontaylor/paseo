@@ -432,6 +432,52 @@ export type Value = string;`,
     });
   });
 
+  it.each([
+    { owner: "client", source: 'import "node";', specifier: "@types/node" },
+    { owner: "shared", source: 'import "node";', specifier: "@types/node" },
+    {
+      owner: "client",
+      source: 'import type { Future } from "node:paseo-future-builtin";',
+      specifier: "node:paseo-future-builtin",
+    },
+    {
+      owner: "shared",
+      source: 'import type { Future } from "node:paseo-future-builtin";',
+      specifier: "node:paseo-future-builtin",
+    },
+  ])("rejects $specifier in declarations reached from $owner", async (fixture) => {
+    const entries = await createSplitPlugin();
+    const dependency = path.join(entries.directory, "node_modules/image-codec");
+    await mkdir(dependency, { recursive: true });
+    await writeFile(
+      path.join(dependency, "package.json"),
+      JSON.stringify({ name: "image-codec", main: "index.js", types: "index.d.ts" }),
+    );
+    await writeFile(path.join(dependency, "index.js"), 'module.exports = "decoded";');
+    const declaration = path.join(dependency, "index.d.ts");
+    await writeFile(
+      declaration,
+      `${fixture.source}\ndeclare const value: string;\nexport = value;`,
+    );
+    if (fixture.owner === "client") {
+      await writeFile(entries.client, 'import value from "image-codec"; export default value;');
+    } else {
+      await writeFile(
+        path.join(entries.directory, "shared/labels.ts"),
+        'import value from "image-codec"; export const clientLabel = value; export const serverLabel = value;',
+      );
+    }
+
+    await expect(
+      compilePlugin({
+        client: fixture.owner === "client" ? entries.client : null,
+        server: fixture.owner === "shared" ? entries.server : null,
+      }),
+    ).rejects.toThrow(
+      `Node module cannot be imported into the plugin ${fixture.owner} bundle: ${fixture.specifier} imported by ${realpathSync.native(declaration)}`,
+    );
+  });
+
   it("checks the physical owner of type-only symlinks", async () => {
     const entries = await createSplitPlugin();
     await writeFile(
