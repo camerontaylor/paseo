@@ -144,3 +144,19 @@ artifacts view.
 - Capability flags (`durableAgentQueueV1`, `companionStreamPortV1`, `durableVoiceInputV1`) are
   recorded as source presence only. No activation is claimed, and C1, C2, A3 and the rest of T0-T10
   are out of this layer.
+
+## Test-only changes, classified before editing
+
+Recorded before any edit, per the sign-off. Every item below is a test or test-fixture change; no
+product behavior changes and no expectation is relaxed. If a new case exposes a defect, the cause and
+a repair design go to review before any product edit.
+
+| Change | Kind | Where |
+| --- | --- | --- |
+| Side-conversation capability case subscribes all three sources, keeps its expectations, adds `allowsOutbound` assertions for update and removal, separates release suppression from capability removal, keeps the legacy capable case | Setup correction to match accepted U1 semantics | `packages/server/src/server/session.test.ts` |
+| Queue subscription cases: capable and subscribed receives, capable and unsubscribed does not, release suppresses, mixed sources stay isolated, downgrade restores | New cases | `packages/server/src/server/session.test.ts` |
+| Same client through capable, incapable and capable again, asserting the outbound selector list each time | New case | `packages/client/src/daemon-client.test.ts` |
+| Registered status handler driven with a pending outbox through absent, capable and downgrade | New case in a new suite, because no existing suite mounts the session provider and a production extraction is not authorized | `packages/app/src/contexts/session-queue-resume.test.tsx` |
+| Voice runtime with the durable-voice feature absent mints no transport generation and sends no receipts read | New case | `packages/app/src/voice/voice-runtime.test.ts` |
+| Audio cancel-during-preparation, mic loss and stale-callback cases | Existing carry cases, run and cited, not duplicated | `packages/app/src/audio/*` |
+| Queue promotion and deletion with daemon and UI assertions; artifacts view and compact entry with outbound capture and capability-absent suppression | New cases | `packages/app/e2e/browser/agent-message-submission.spec.ts`, `packages/app/e2e/browser/agent-stream-ui.spec.ts` |
