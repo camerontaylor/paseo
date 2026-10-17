@@ -9279,25 +9279,30 @@ const SIDE_CONVERSATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   "agent.side_conversation.removed",
 ]);
 
+/** Outbound types whose subscription category is the type itself. */
+const DIRECT_EVENT_CATEGORIES: ReadonlySet<string> = new Set([
+  "project.update",
+  "providers_snapshot_update",
+  "agent_attention_required",
+  "agent_permission_request",
+  "agent_permission_resolved",
+  "checkout_status_update",
+  "script_status_update",
+  "workspace_setup_progress",
+  "agent.provider_subagents.update",
+  "agent.queue.update",
+  "terminal_attention_required",
+  "activity_log",
+  "hub.execution.agent.update",
+  "hub.execution.agent.stream",
+]);
+
 function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubscription | null {
   if (SIDE_CONVERSATION_EVENT_TYPES.has(message.type))
     return message.type as SessionEventSubscription;
+  if (DIRECT_EVENT_CATEGORIES.has(message.type))
+    return message.type as SessionEventSubscription;
   switch (message.type) {
-    case "project.update":
-    case "providers_snapshot_update":
-    case "agent_attention_required":
-    case "agent_permission_request":
-    case "agent_permission_resolved":
-    case "checkout_status_update":
-    case "script_status_update":
-    case "workspace_setup_progress":
-    case "agent.provider_subagents.update":
-    case "agent.queue.update":
-    case "terminal_attention_required":
-    case "activity_log":
-    case "hub.execution.agent.update":
-    case "hub.execution.agent.stream":
-      return message.type;
     case "status":
       switch (message.payload.status) {
         case "server_info":
