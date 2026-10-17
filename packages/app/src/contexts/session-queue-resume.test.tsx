@@ -19,7 +19,10 @@ const harness = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+  initReactI18next: { type: "3rdParty", init: () => undefined },
+}));
 vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => ({}) }));
 vi.mock("@/contexts/voice-context", () => ({
   useVoiceRuntimeOptional: () => null,
