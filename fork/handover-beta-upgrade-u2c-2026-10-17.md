@@ -19,7 +19,8 @@ touched. Checks ran on Neptune in the shared private candidate.
 | Handoff evidence corrections | `d7f65eadbfa1186e7b85d671e5bde81be055d0a5` |
 | Daemon-side handoff setup proof | `7d8d787cae45f6b326164ad591c22760d59b4ea9` |
 | Pin fixture turn count | `f97f1d173ae5de6ddb261e0281b1277cec7773da` |
-| Final source SHA | `f97f1d173ae5de6ddb261e0281b1277cec7773da` |
+| E2E helper type for the thinking option | `1005bda7826c961597f9f6ebc1ae1c561f858e4c` |
+| Final source SHA | `1005bda7826c961597f9f6ebc1ae1c561f858e4c` |
 
 Merge base with the carry branch is `5c922d3d2`. The carry covers IP-05, IP-06, IP-08, IP-09, IP-10,
 IP-11 and IP-14.
@@ -91,7 +92,11 @@ different set: 28 is the UI-layer carry delta (`1dd375931` -> `133ff0f7e`, 85 pa
 paths beta also changed, and inside that 28 it is 5 conflicted and 23 auto-merged, because six of the
 eleven conflicts are backend-replay paths outside it.
 
-No path resolved to the carry alone, so no beta delta was dropped.
+Observed blob facts for the 38 content merges: the merged blob equals the U2b head in 15 paths,
+differs from both sides in 23, and equals the carry in 0. That is a statement about content, not a
+preservation proof; preservation is established by the per-path ownership, guard, ordering and
+cleanup audit below, and by the 21 byte-identical paths, where `ours:path` and `theirs:path` are the
+same blob.
 
 **The 21 byte-identical paths** (backend carry replay, accepted in U2b) have `ours:path` and
 `theirs:path` at the same blob, so the merged content equals both sides by construction. They are
@@ -167,6 +172,9 @@ All evidence paths are under
   `normalizedWorkspaceId` without listing it; `ed1a39917` fixes it.
 - `typecheck`, `lint` and `format:check` exit 0 at `ed1a39917` (`checks-ed1a39917.log`).
 - `typecheck`, `lint` and `format:check` exit 0 at `d372efd5a` (`checks-d372efd5a.log`).
+- `typecheck`, `lint` and `format:check` exit 0 at `1005bda78` (`checks-1005bda78.log`), after the
+  type-only e2e helper change. The layer's last product-relevant static receipt is `d372efd5a`; the
+  commits after it touch tests and the ledger only.
 - Focused suites, `npx vitest run <files> --bail=1`, 457 tests pass at `7d8d787ca`
   (`tests-7d8d787ca.log`), including the four navigation-history suites, the handoff suite, the
   pinned-prompt model suite and the locale parity suite that compares every locale's flattened key
@@ -190,7 +198,9 @@ thinking selector renders. Replaced with daemon-side proof: the spec seeds `ten-
 `thinkingOptionId` equal the source agent's, with the source's `thinkingOptionId` pinned to `"high"`
 so the effort check cannot pass vacuously. Every pre-existing assertion is unchanged. One type-only
 test-infrastructure fix went with it: `seed-client.ts`'s `fetchAgents` return type now lists
-`thinkingOptionId`, which the daemon payload already carries.
+`thinkingOptionId`, which the daemon payload already carries — `packages/protocol/src/agent-types.ts`
+types it on the agent payload, `packages/client/src/daemon-client.ts:903` on the client's agent
+record, and `packages/app/src/stores/session-store.ts:68` on the `Agent` the app reads it from.
 
 **Pin cases.** Quantified with a temporary diagnostic spec (uncommitted, deleted) that printed
 scroll geometry: at 12 seeded turns the transcript was `scrollHeight` 1914 against a 696px
@@ -208,8 +218,10 @@ bottom is 273px above the transcript top, 345px of headroom.
 
 ## Gaps
 
-- The pin's behavior for a turn whose remaining content is shorter than the transcript viewport is
-  not proven here: no scroll position can place such a prompt above the fold, so the fixture cannot
-  reach it. The repaired fixture proves the reachable case with `prompts[8]` and 345px of headroom.
+- Coverage boundary, not a waived bug: the pin's behavior for a turn whose remaining content is
+  shorter than the transcript viewport is unreachable, because no scroll position can put such a
+  prompt above the fold. That is a precondition no fixture can satisfy, and it says nothing about
+  whether the pin is correct there. The repaired fixture proves the reachable case with `prompts[8]`
+  and 345px of headroom.
 - The claude CLI and a usable claude provider are absent here.
 - Physical iOS and Android, packaged Electron and nine-locale sweeps remain U7 work.
