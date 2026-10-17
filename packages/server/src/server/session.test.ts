@@ -6653,6 +6653,18 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
       socket,
     );
 
+    // OBSERVE-ONLY, removed before final receipts.
+    console.log(
+      "LANES",
+      JSON.stringify({
+        targeted: targetedMessages.map(({ source, message }) => [
+          message.type,
+          source === socket ? "socket" : "other",
+        ]),
+        broadcast: messages.map((message) => message.type),
+      }),
+    );
+
     const delivered = targetedMessages
       .filter(({ source }) => source === socket)
       .map(({ message }) => message);
