@@ -891,6 +891,7 @@ function createPluginProviderDefinition(
     label: registration.label,
     description: registration.description ?? `Plugin provider ${registration.label}`,
     iconSvg: registration.icon,
+    requiresConfiguration: registration.requiresConfiguration,
     defaultModeId: null,
     modes: [],
     supportsExactMcpPreapproval: true,

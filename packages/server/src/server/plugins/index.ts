@@ -630,6 +630,7 @@ export class PluginService {
           description: provider.description,
           supportsSystemPrompt: provider.supportsSystemPrompt,
           command: provider.command,
+          requiresConfiguration: provider.requiresConfiguration,
           status: provider.hasStatus
             ? (request) => {
                 if (!this.runtime.getProviderStatus)

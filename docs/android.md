@@ -172,7 +172,9 @@ If the app cannot fetch the bundle from `10.0.2.2:8081` while Metro is clearly r
 
 Android focus and selection visibility requests must not reposition inverted timelines. The
 `modules/paseo-scroll` package keeps React Native's scroll manager interface and returns zero for
-child-reveal scroll calculations when the vertical scale is inverted. Dragging and explicit scroll
+child-reveal scroll calculations when the view's transform matrix inverts the vertical axis. React
+Native's Android list uses `scale: -1`, which decomposes into a 180-degree rotation with positive
+`scaleY`; checking the scale property alone misses it. Dragging and explicit scroll
 commands still work; non-inverted scroll views keep Android's default behavior.
 
 Register this package before React Native's core package through its Expo config plugin. Normal

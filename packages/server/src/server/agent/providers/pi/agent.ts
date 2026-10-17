@@ -1006,6 +1006,8 @@ function isProcessExitEvent(
 
 function isPiAgentSessionEvent(event: PiRuntimeEvent): event is PiAgentSessionEvent {
   switch (event.type) {
+    case "thinking_level_changed":
+      return typeof event.level === "string" && normalizePiThinkingOption(event.level) !== null;
     case "agent_start":
     case "turn_start":
     case "message_start":
