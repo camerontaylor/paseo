@@ -11073,9 +11073,40 @@ test("tryRunOutOfBand gives providers the command another agent sent, not its en
   });
 
   try {
-    const fromAgent = prepareAgentMessage("/handled", { kind: "agent-message", agentId: "sender" });
-    expect(manager.tryRunOutOfBand(agent.id, fromAgent.prompt)).toBe(true);
+    const fromAgent = prepareAgentMessage(
+      "/handled",
+      { kind: "agent-message", agentId: "sender" },
+      "sourced-command",
+    );
+    expect(
+      manager.tryRunOutOfBand(agent.id, fromAgent.prompt, {
+        clientMessageId: fromAgent.messageId,
+      }),
+    ).toBe(true);
     expect(seenPrompts).toEqual(["/handled"]);
+    expect(manager.getTimeline(agent.id)).toEqual([
+      {
+        type: "tool_call",
+        callId: "paseo-agent-message:sourced-command",
+        agentMessage: {
+          event: "message",
+          sender: { id: "sender" },
+          text: "/handled",
+        },
+        name: "agent_message",
+        status: "completed",
+        error: null,
+        detail: { type: "plain_text", text: "/handled", icon: "bot" },
+      },
+    ]);
+    expect(fromAgent.prompt).toBe(
+      '<paseo-system version="1" kind="agent-message" source-agent-id="sender" message-id="sourced-command">\n/handled\n</paseo-system>',
+    );
+
+    const structured: AgentPromptInput = [{ type: "text", text: String(fromAgent.prompt) }];
+    expect(manager.tryRunOutOfBand(agent.id, structured)).toBe(false);
+    expect(seenPrompts.at(-1)).toBe(structured);
+    expect(manager.getTimeline(agent.id)).toHaveLength(1);
 
     // A human who pastes an envelope gets it quoted, and it stays a plain prompt.
     const pasted = prepareAgentMessage(String(fromAgent.prompt));

@@ -4654,6 +4654,7 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
         await vi.waitFor(() => {
           expect(agentManager.getAgent(childId)?.activeTurnId).toMatch(/^autonomous-/);
         });
+        const originalTurnId = agentManager.getAgent(childId)?.activeTurnId;
 
         const response = await invokeToolWithParsedInput(tool, {
           agentId: childId,
@@ -4672,6 +4673,7 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
         });
         expect(ompSession.abortRequested).toBe(false);
         expect(agentManager.getAgent(childId)?.lifecycle).toBe("running");
+        expect(agentManager.getAgent(childId)?.activeTurnId).toBe(originalTurnId);
 
         ompSession.finishTurn();
         await expectOneFinishNotification(agentManager, parentClient, childId);
@@ -4681,16 +4683,32 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
     },
   );
 
-  it.each(["before ack", "after ack"])(
-    "reports an idle follow-up rejected %s and notifies its parent",
-    async (order) => {
+  it.each([
+    { command: "follow-up", streamingBehavior: "followUp", order: "before ack" },
+    { command: "follow-up", streamingBehavior: "followUp", order: "after ack" },
+    { command: "steer", streamingBehavior: "steer", order: "before ack" },
+    { command: "steer", streamingBehavior: "steer", order: "after ack" },
+  ] as const)(
+    "reports an idle /$command rejected $order and notifies its parent",
+    async ({ command, streamingBehavior, order }) => {
       const { agentManager, storage, workdir, parentClient, ompSession, childId, tool } =
         await setupOmpChild();
       try {
-        ompSession.promptAck = { requestId: "follow-up-rejected" };
+        const requestId = `${command}-rejected`;
+        ompSession.promptAck = { requestId };
+        let releaseAck!: () => void;
+        const ackGate = new Promise<void>((resolve) => {
+          releaseAck = resolve;
+        });
+        const actualPrompt = ompSession.prompt.bind(ompSession);
+        const promptCall = vi.spyOn(ompSession, "prompt").mockImplementationOnce(async (input) => {
+          const ack = await actualPrompt(input);
+          await ackGate;
+          return ack;
+        });
         const rejection = {
           type: "prompt_result",
-          id: "follow-up-rejected",
+          id: requestId,
           agentInvoked: false,
           status: "error",
           sessionSettled: true,
@@ -4699,10 +4717,17 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
         const promptStarted = ompSession.nextPrompt();
         const response = invokeToolWithParsedInput(tool, {
           agentId: childId,
-          prompt: "/follow-up check the build",
+          prompt: `/${command} check the build`,
         });
         await promptStarted;
+        expect(ompSession.prompts).toEqual([
+          { message: "check the build", imageCount: 0, streamingBehavior },
+        ]);
+        ompSession.emit({ ...rejection, id: "unrelated-request" });
+        expect(agentManager.getAgent(childId)?.lifecycle).toBe("running");
         if (order === "before ack") ompSession.emit(rejection);
+        releaseAck();
+        expect(await promptCall.mock.results[0].value).toEqual({ requestId });
         await response;
         if (order === "after ack") ompSession.emit(rejection);
         await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("error"));
@@ -4713,41 +4738,49 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
         expect(parentClient.sessions[0]!.prompts[0]).toContain(
           `Agent ${childId} (OMP child) errored.`,
         );
+        expect(ompSession.abortRequested).toBe(false);
       } finally {
         await removeAgentStateDir(agentManager, storage, workdir);
       }
     },
   );
 
-  it("lets an idle child start a run with the follow-up", async () => {
-    const { agentManager, storage, workdir, parentClient, ompSession, childId, tool } =
-      await setupOmpChild();
-    try {
-      const response = await invokeToolWithParsedInput(tool, {
-        agentId: childId,
-        prompt: "/follow-up check the build",
-      });
+  it.each([
+    { command: "follow-up", streamingBehavior: "followUp" },
+    { command: "steer", streamingBehavior: "steer" },
+  ] as const)(
+    "lets an idle child start a run with /$command",
+    async ({ command, streamingBehavior }) => {
+      const { agentManager, storage, workdir, parentClient, ompSession, childId, tool } =
+        await setupOmpChild();
+      try {
+        const response = await invokeToolWithParsedInput(tool, {
+          agentId: childId,
+          prompt: `/${command} check the build`,
+        });
 
-      expect(response.structuredContent).toMatchObject({
-        success: true,
-        disposition: "out_of_band",
-        status: "running",
-      });
-      await vi.waitFor(() => {
-        expect(ompSession.prompts).toEqual([
-          { message: "check the build", imageCount: 0, streamingBehavior: "followUp" },
-        ]);
-      });
+        expect(response.structuredContent).toMatchObject({
+          success: true,
+          disposition: "out_of_band",
+          status: "running",
+        });
+        await vi.waitFor(() => {
+          expect(ompSession.prompts).toEqual([
+            { message: "check the build", imageCount: 0, streamingBehavior },
+          ]);
+        });
 
-      ompSession.beginTurn();
-      ompSession.streamAssistantText("Build is green");
-      await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
-      ompSession.finishTurn();
-      await expectOneFinishNotification(agentManager, parentClient, childId);
-    } finally {
-      await removeAgentStateDir(agentManager, storage, workdir);
-    }
-  });
+        ompSession.beginTurn();
+        ompSession.streamAssistantText("Build is green");
+        await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
+        ompSession.finishTurn();
+        await expectOneFinishNotification(agentManager, parentClient, childId);
+        expect(ompSession.abortRequested).toBe(false);
+      } finally {
+        await removeAgentStateDir(agentManager, storage, workdir);
+      }
+    },
+  );
 });
 
 describe("update_agent MCP tool", () => {
