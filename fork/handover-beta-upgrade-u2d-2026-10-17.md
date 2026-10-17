@@ -79,6 +79,16 @@ independent queue-update assertion), with no production reply-routing change; ex
 same-client capable, incapable, capable reconnect selector case. A new provider-mounting test file is
 acceptable where no existing file fits, reusing the existing suites and jobs.
 
+Final advisor review found that the queue case had not completed the authorized explicit
+`delivery.permits` requirement: its earlier receipt established destination isolation and
+`SessionAuthorization.allowsOutbound`, which is authorization evidence, not delivery-owner proof.
+The side-conversation tests had separate permits assertions; they do not receipt the queue case.
+Before this final test-only edit, the inspected design was sent to the advisor: retain the actual
+emitted queue update object, assert its owner permitted and unsubscribed/incapable sources denied,
+then assert the same object's owner denied after the real release request. Existing authorization,
+delivery, release, later-source and downgrade/restoration assertions remain. No proof values or
+permits outcomes are synthesized. The changed case alone is rerun with required static gates.
+
 ## Audit of all 94 content merges
 
 **57 equal to the U2c head.** Every line the carry added is present in the merged file for 49 of them.

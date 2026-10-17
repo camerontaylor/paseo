@@ -6785,6 +6785,13 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
     // Capability is not enough: only the source that asked for the selector hears the update, and
     // neither the unsubscribed nor the incapable source does.
     expect(queueUpdates().map(({ source }) => source)).toEqual([subscribed]);
+    const initialUpdate = queueUpdates().find(({ source }) => source === subscribed)?.message;
+    if (initialUpdate?.type !== "agent.queue.update") {
+      throw new Error("Missing emitted queue update for subscribed source");
+    }
+    expect(session.delivery.permits(subscribed, initialUpdate)).toBe(true);
+    expect(session.delivery.permits(unsubscribed, initialUpdate)).toBe(false);
+    expect(session.delivery.permits(incapable, initialUpdate)).toBe(false);
 
     // Explicit release through the protocol, distinct from detaching a source: the subscription id
     // from the subscribe response stops delivery while the source keeps its capability.
@@ -6799,6 +6806,7 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
     targetedMessages.length = 0;
     await enqueue("q-2");
     expect(queueUpdates()).toEqual([]);
+    expect(session.delivery.permits(subscribed, initialUpdate)).toBe(false);
 
     // A later source that subscribes joins without disturbing anyone else.
     session.updateClientCapabilities(
