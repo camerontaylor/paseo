@@ -6708,7 +6708,17 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
       messages,
       targetedMessages,
       agentQueueService: queueService,
-      agentManager: { listAgents: vi.fn(() => [{ id: agentId }]) },
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+        // Proven dependency for every enqueue path: without it the request answers with
+        // `rpc_error: createStub: "getAgent" was called but not stubbed` and no update is emitted.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
+      },
       agentStorage: {
         get: vi.fn().mockResolvedValue(undefined),
         list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
@@ -6906,6 +6916,13 @@ test("a client without the durableAgentQueue capability never sees the queue bro
       agentQueueService: queueService,
       agentManager: {
         listAgents: vi.fn(() => [{ id: agentId }]),
+        // Proven dependency for the enqueue path, as in the subscribed case.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
       },
       agentStorage: {
         get: vi.fn().mockResolvedValue(undefined),
