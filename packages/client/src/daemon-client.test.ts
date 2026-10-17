@@ -7890,6 +7890,64 @@ test.each([false, true])(
   },
 );
 
+test("the queue selector follows the host capability across one client's reconnects", async () => {
+  const capable = createMockTransport();
+  const incapable = createMockTransport();
+  const capableAgain = createMockTransport();
+  const transports = [capable, incapable, capableAgain];
+  let transportIndex = 0;
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "queue_selector_unit_test",
+    reconnect: { enabled: true, baseDelayMs: 1, maxDelayMs: 1 },
+    transportFactory: () => {
+      const transport = transports[transportIndex];
+      if (!transport) throw new Error("unexpected extra reconnect");
+      transportIndex += 1;
+      return transport.transport;
+    },
+  });
+  clients.push(client);
+
+  const subscriptionSelectors = (mock: ReturnType<typeof createMockTransport>) =>
+    mock.sent
+      .map((frame) => parseSentFrame(frame))
+      .filter((message) => message.type === "session.events.set_subscription.request")
+      .map((message) => message.events as string[]);
+
+  const initialConnect = client.connect();
+  capable.triggerOpen({ features: { ownedSubscriptions: true, durableAgentQueueV1: true } });
+  await initialConnect;
+
+  const subscription = client.observeEvents(["agent.queue.update", "status.server_info"]);
+  expect(subscriptionSelectors(capable).at(-1)).toEqual([
+    "agent.queue.update",
+    "status.server_info",
+  ]);
+
+  // Downgrade: the same client reconnects to a host that never saw the fork flag.
+  capable.triggerClose({ code: 1001, reason: "daemon restarted" });
+  client.ensureConnected();
+  incapable.triggerOpen({ features: { ownedSubscriptions: true } });
+  await vi.waitFor(() =>
+    expect(subscriptionSelectors(incapable).at(-1)).toEqual(["status.server_info"]),
+  );
+
+  // Restore: the flag returns with the next handshake, so the selector comes back.
+  incapable.triggerClose({ code: 1001, reason: "daemon upgraded" });
+  client.ensureConnected();
+  capableAgain.triggerOpen({ features: { ownedSubscriptions: true, durableAgentQueueV1: true } });
+  await vi.waitFor(() =>
+    expect(subscriptionSelectors(capableAgain).at(-1)).toEqual([
+      "agent.queue.update",
+      "status.server_info",
+    ]),
+  );
+
+  subscription.dispose();
+  await client.close();
+});
+
 test("measures an outbound message in UTF-8 bytes against the daemon's message limit", async () => {
   const mock = createMockTransport();
   const client = new DaemonClient({
