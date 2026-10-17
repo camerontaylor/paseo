@@ -2,7 +2,7 @@
 # Base: v0.12.0-beta.1 = e2f4948f92ce2fc3c4cfb7878f239a88034883de
 # Disposable assembly: upgrade/basket-0.12.0-beta.1
 # Verify each ref still equals its pinned head before assembly.
-# This order includes A1 explicitly. U3 and full fork intakes remain separate.
+# This order includes A1 and conditionally accepted #7179. Later intakes remain separate.
 
 # U1 head: 81831be87bfad35802f0a0bf0a90fc7183c4fc1c
 upgrade/custom-0.12.0-beta.1
@@ -19,3 +19,6 @@ fork/acp-model-switch-0.12.0-beta.1
 # U2f head: 6a2d930ee4845e121c718a143742b9d2cb8909c0
 # Published A1 diagnostic behavior has a separate owner after ACP model switching.
 fork/a1-diagnostics-0.12.0-beta.1
+# U3-7179 head: ea141f351920e51f7b7e0116352f998d8e97deb7
+# Conditional source acceptance only. Real Claude turn survival remains an open U7 gap.
+fork/claude-turn-survival-0.12.0-beta.1
