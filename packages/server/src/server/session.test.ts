@@ -6675,6 +6675,13 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
         sendOwnedCalls: sendOwnedSpy.mock.calls.map(([, message]) => message.type),
         broadcast: messages.map((message) => message.type),
         targeted: targetedMessages.map(({ message }) => message.type),
+        responseSourceIsSocket: targetedMessages.some(
+          ({ source, message }) =>
+            message.type === "agent.queue.enqueue.response" && source === socket,
+        ),
+        responseSources: targetedMessages
+          .filter(({ message }) => message.type === "agent.queue.enqueue.response")
+          .map(({ source }) => (source === socket ? "socket" : "other")),
       }),
     );
     replySpy.mockRestore();
