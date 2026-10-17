@@ -184,9 +184,10 @@ All evidence paths are under
   set against English. Earlier runs: `tests-d7f65eadb.log` (81 of 81 for the four touched suites)
   and `tests-895f1c660.log`.
 - Browser, pinned UI only, desktop and compact:
-  - `project-pull-requests.spec.ts` 2 of 2, `branch-switcher.spec.ts` 1 of 1 and
-    `plan-card-markdown.spec.ts` 3 of 3 pass at `7d8d787ca`
-    (`browser-d7f65eadb.log`, `browser-plan-card-7d8d787ca.log`).
+  - `project-pull-requests.spec.ts` 2 of 2 and `branch-switcher.spec.ts` 1 of 1 pass at
+    `d7f65eadb` (`browser-d7f65eadb.log`).
+  - `plan-card-markdown.spec.ts` 3 of 3 passes at `7d8d787ca`
+    (`browser-plan-card-7d8d787ca.log`).
   - `pinned-prompt.spec.ts` 6 of 6 passes at `f97f1d173`
     (`browser-pinned-prompt-f97f1d173.log`) after the fixture repair below.
 
