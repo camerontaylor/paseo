@@ -49,6 +49,8 @@ vi.mock("@/stores/draft-store", () => ({
 
 import { PlanHandoffButton } from "./plan-handoff-button";
 
+const SOURCE = { serverId: "server-1", agentId: "agent-1" };
+
 describe("buildPlanHandoffPrompt", () => {
   it("preserves literal plan text and identifies the source agent", () => {
     const plan = '# Plan\n\nAdd the (c) note with --name="my repo".\n\n---buzz';
@@ -89,6 +91,8 @@ describe("PlanHandoffButton", () => {
   };
 
   beforeEach(() => {
+    // The app's JSX compiles to the classic runtime here, and the button does not import React.
+    vi.stubGlobal("React", React);
     harness.sendMessage.mockClear();
     harness.saveDraftInput.mockClear();
     harness.navigateToWorkspace.mockClear();
@@ -102,7 +106,7 @@ describe("PlanHandoffButton", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     act(() => {
-      root?.render(<PlanHandoffButton source={{ serverId: "server-1", agentId: "agent-1" }} text="# Plan" />);
+      root?.render(<PlanHandoffButton source={SOURCE} text="# Plan" />);
     });
   });
 
@@ -113,6 +117,7 @@ describe("PlanHandoffButton", () => {
     root = null;
     container?.remove();
     container = null;
+    vi.unstubAllGlobals();
   });
 
   // The source agent's workspace can be gone by the time the plan is read. The button has to say so

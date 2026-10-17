@@ -11,7 +11,10 @@ touched. Checks ran on Neptune in the shared private candidate.
 | U2b head (base) | `d9e19ff7d5776fee993d93a354375b2a367bdafc` |
 | Adapted infi UI carry | `133ff0f7e0234da8aa684a23a8da31024531242d` |
 | Merge | `07e3835f2c7d6363c631a069c028bfd4e1939d6e` (parents `d9e19ff7d`, `133ff0f7e`) |
-| Final source SHA | `ed1a399176ac497f5a7ead4cd163f1a8f8945a56` |
+| Header dependency fix | `ed1a399176ac497f5a7ead4cd163f1a8f8945a56` |
+| History route-context fix | `bcc4a49ed48b3c41040fa1db9466328d0a5b0a8a` |
+| Suite rename for JSX cases | `895f1c660598cb20378c8992697e4cf6ba5ddece` |
+| Final source SHA | `895f1c660598cb20378c8992697e4cf6ba5ddece` |
 
 Merge base with the carry branch is `5c922d3d2`. The carry covers IP-05, IP-06, IP-08, IP-09, IP-10,
 IP-11 and IP-14.
@@ -64,26 +67,105 @@ route and compact-menu ownership.
 
 ## Semantic audit of the auto-merges
 
-45 paths are changed by both sides; 5 conflicted and 40 auto-merged. For each path the carry's added
-lines (base `5c922d3d2` -> carry `133ff0f7e`) were checked for presence in the merged file. Every
-path is complete except the two accounted above: `app/new.tsx` reports one line that is present at
-beta's indentation, and `workspace-screen.tsx` reports exactly the retired and ported hunks.
+Denominators, all reproducible from the merge:
 
-Every new carry module resolves to a live reference: `project-pull-requests/view` through
-`shortcut.tsx` into `sidebar-workspace-list.tsx`, `overlay-frame` through `view.tsx`,
-`navigation/history/recorder` mounted in `app/_layout.tsx`, `reading-signal` through
-`pinned-prompt`, `plan-copy-actions` and `plan-handoff-button` through `plan-card.tsx`,
-`workspace-header-branches` through the header module, plus `use-status-pulse`, `recently-closed`
-and `workspace-recent-agents-menu`.
+| Measure | Count |
+| --- | --- |
+| Paths changed by both sides versus `5c922d3d2` | 69 |
+| Real conflicts | 11 |
+| Both-side paths auto-merged | 59 |
+| ... byte-identical on both sides | 21 |
+| ... requiring a content merge | 38 |
+| ... merged result byte-identical to the U2b head | 15 |
+| ... genuine unions of both sides | 23 |
+| ... merged result equal to the carry | 0 |
+| Merge versus U2b head | 86 paths (83 under `packages/app`) |
 
-## Receipts
+The preflight figure "28 files changed by both sides, 11 conflicted and 17 auto-merged" describes a
+different set: 28 is the UI-layer carry delta (`1dd375931` -> `133ff0f7e`, 85 paths) intersected with
+paths beta also changed, and inside that 28 it is 5 conflicted and 23 auto-merged, because six of the
+eleven conflicts are backend-replay paths outside it.
+
+No path resolved to the carry alone, so no beta delta was dropped.
+
+**The 21 byte-identical paths** (backend carry replay, accepted in U2b) have `ours:path` and
+`theirs:path` at the same blob, so the merged content equals both sides by construction. They are
+`packages/server/**` (session, websocket-server, worktree-bootstrap, checkout-git, forge and github
+services and their tests, package-scripts, workspace-scripts-service, script-status-projection,
+operation-permissions, workspace-script-runtime-store, worktree-metadata,
+websocket-server.terminal-notifications), `packages/desktop/src/daemon/quit-lifecycle*`,
+`packages/app/e2e/support/helpers/workspace-setup.ts`,
+`packages/app/src/components/sidebar/sidebar-workspace-menu.tsx`,
+`packages/app/src/components/sidebar/workspace-meta-row/*`, `docs/forge-providers.md` and
+`docs/terminal-activity.md`.
+
+**The 15 paths whose merge equals the U2b head** keep ours byte for byte, and every line the carry
+added is present in ours, so the carry's change is a subset of the change U2b already adapted:
+`packages/server/src/{server/session.ts,server/websocket-server.ts,server/worktree-bootstrap*.ts,
+services/forge-service.ts,services/github-service*.ts,utils/checkout-git*.ts}`,
+`packages/protocol/src/{messages.ts,messages.checkout-pr-schema.test.ts}`,
+`packages/desktop/src/main.ts`, `docs/service-proxy.md`,
+`packages/app/src/assistant-file-links/parse.ts` and `packages/app/src/runtime/replica-cache/index.ts`.
+
+**The 23 unions**, reviewed for ownership, guards, ordering and cleanup:
+
+- `app/_layout.tsx` — the carry mounts `NavigationHistoryRecorder` once, inside `ProvidersWrapper`
+  after `HostSessionManager` and inside the appearance and voice providers; it renders nothing and
+  touches no route registration, so beta's route tree is untouched.
+- `navigation/history` seam — recording is an effect on (pathname, focused tab of that pathname's
+  workspace) rather than a raw store subscription, which keeps the torn `navigateToWorkspace` sample
+  invisible; replay moves the index before navigating (`store.setIndex(nextIndex)` at
+  `navigation/history/replay.ts:81`) so the landing location is a no-op for the recorder; `pushEntry`
+  drops the forward branch and caps at 100; `entriesEqual` identifies a route entry by its path, so a
+  distinct change request is a distinct entry.
+- `keyboard/keyboard-shortcuts.ts` and `keyboard/actions.ts` — four history entries (`Cmd+[`,
+  `Cmd+]`, `Ctrl+[`, `Ctrl+]`), each desktop-only with `commandCenter: false` and `terminal: false`
+  where it applies, no duplicates; beta's shortcut table and dispatch are unchanged.
+- `hooks/use-keyboard-shortcuts.ts` — `history-go` maps to `goHistory(action.delta)` and returns its
+  handled flag; beta's `router-back`/`router-push` cases are untouched.
+- `components/sidebar-workspace-list.tsx` — the project PR shortcut renders only for a row with a
+  worktree target on a host whose `worktreeSupport !== "unsupported"`, behind `actionsVisible`; the
+  carry's `useSidebarProjectStatus`/`statusEnteredAt` plumbing sits beside beta's row content.
+- `components/sidebar/project-leading-visual.tsx` and
+  `components/sidebar/sidebar-workspace-row-content.tsx` — `useStatusPulse` wraps the status dot and
+  takes the bucket's `enteredAt`. The hook cancels its animation and clears its timer on cleanup,
+  restores opacity, keeps the original expiry (`enteredAt + 60s`) rather than restarting it, and
+  returns early under reduced motion or while the retained panel is inactive. Beta's "busy is the
+  ring, not a dot" rule survives in the merged comment and markup.
+- `hooks/sidebar-workspaces-view-model.ts` (and its suite) — `deriveProjectStatusBucket` stays as a
+  wrapper over the new `deriveProjectStatus`, which returns `{ bucket, enteredAt }` where `enteredAt`
+  is the latest timestamp among members that match the aggregated bucket; beta's bucketing is
+  unchanged.
+- `screens/new-workspace-screen.tsx` — the seeded change request attaches exactly once behind an
+  `initialRequestAttached` ref, starts the form in worktree isolation
+  (`initialWorktree: Boolean(initialChangeRequest)`), and derives the initial picker selection with
+  `allowAutoPrSelection: false`, so a later user selection is not overwritten.
+- `stores/workspace-layout-store.ts` — the carry adds an injectable
+  `storage: StateStorage = AsyncStorage` factory parameter and passes it to
+  `createValidatedPersistStorage`; beta's persist name, version, migrate and partialize are untouched.
+- `vitest.config.ts` — `optimizeDeps.include` gains `react`, `react-dom/client` and two
+  react-native-web style modules for the jsdom and browser suites; beta's exclude list is intact.
+- `docs/glossary.md` — union of the carry's "Base branch" term (which the ported header branch pair
+  and the Changes "Compared with" label depend on) and beta's forge terms.
+- `e2e/browser/plan-card-markdown.spec.ts` — the carry's handoff case lands on beta's spec; this
+  layer extends it with the non-overwrite, setup-preservation and no-auto-send assertions.
+- The nine `i18n/resources/*.ts` files — union of carry and beta keys; the locale parity suite
+  compares every locale's flattened key set against English and passes.
+
+## Behavioral receipts
 
 All evidence paths are under
 `/Users/ctaylor/.paseo-fork/candidates/upgrade-0.12.0-beta.1/evidence/u2c/` on Neptune.
 
 - `build:client`, `build:server`, `typecheck`, `format:check` exit 0 and `lint` exits 1 at
   `07e3835f2` (`checks-07e3835f2.log`). The single lint error is the header memo reading
-  `normalizedWorkspaceId` without listing it; `ed1a39917` fixes it and `typecheck`, `lint` and
-  `format:check` exit 0 at that SHA (`checks-ed1a39917.log`).
-- Focused suites, `npx vitest run <files> --bail=1` (`tests-ed1a39917.log`).
-- Browser, pinned UI only, at desktop and compact widths (`browser-ed1a39917.log`).
+  `normalizedWorkspaceId` without listing it; `ed1a39917` fixes it.
+- `typecheck`, `lint` and `format:check` exit 0 at `ed1a39917` (`checks-ed1a39917.log`).
+- `typecheck`, `lint` and `format:check` at `895f1c660` (`checks-895f1c660.log`).
+- Focused suites at `895f1c660`, `npx vitest run <files> --bail=1` (`tests-895f1c660.log`).
+- Browser, pinned UI only, desktop and compact (`browser-895f1c660.log`).
+
+## Gaps
+
+- The claude CLI and a usable claude provider are absent here.
+- Physical iOS and Android, packaged Electron and nine-locale sweeps remain U7 work.
