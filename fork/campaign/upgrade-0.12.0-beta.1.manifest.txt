@@ -2,7 +2,7 @@
 # Base: v0.12.0-beta.1 = e2f4948f92ce2fc3c4cfb7878f239a88034883de
 # Disposable assembly: upgrade/basket-0.12.0-beta.1
 # Verify each ref still equals its pinned head before assembly.
-# This order includes A1 and conditionally accepted #7179/#7169. Later intakes remain separate.
+# Includes accepted U3 subjects through #6762. Later intakes remain separate.
 
 # U1 head: 81831be87bfad35802f0a0bf0a90fc7183c4fc1c
 upgrade/custom-0.12.0-beta.1
@@ -25,3 +25,5 @@ fork/claude-turn-survival-0.12.0-beta.1
 # U3-7169 head: 78209041d21f7a308393f5ed7208d7bf49a46960
 # Conditional source acceptance only. Real OMP executable preflight remains an open U7 gap.
 fork/slash-followup-0.12.0-beta.1
+# U3-6762 head: df8df0bbef3969e87bdaa2d15bac2ca47447ad39
+fork/snapshot-trimming-0.12.0-beta.1
