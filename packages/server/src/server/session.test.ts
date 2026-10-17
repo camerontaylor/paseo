@@ -6639,17 +6639,46 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
       socket,
     );
 
-    await session.handleMessage(
-      {
-        type: "agent.queue.enqueue.request",
-        requestId: "q-1",
-        agentId,
-        itemId: "item-1",
-        text: "queued from the phone",
-        intent: "queue",
-      },
-      socket,
+    // OBSERVE-ONLY diagnostics for the lane contract; removed before final receipts.
+    const deliveryForObservation = (
+      session as unknown as {
+        delivery: {
+          reply: (message: SessionOutboundMessage) => boolean;
+          sendOwned: (owner: unknown, message: SessionOutboundMessage) => void;
+        };
+      }
+    ).delivery;
+    const replySpy = vi.spyOn(deliveryForObservation, "reply");
+    const sendOwnedSpy = vi.spyOn(deliveryForObservation, "sendOwned");
+    let observedError: string | null = null;
+    try {
+      await session.handleMessage(
+        {
+          type: "agent.queue.enqueue.request",
+          requestId: "q-1",
+          agentId,
+          itemId: "item-1",
+          text: "queued from the phone",
+          intent: "queue",
+        },
+        socket,
+      );
+    } catch (error) {
+      observedError = error instanceof Error ? error.message : String(error);
+    }
+    console.log(
+      "OBSERVE",
+      JSON.stringify({
+        observedError,
+        replyCalls: replySpy.mock.calls.map(([message]) => message.type),
+        replyResults: replySpy.mock.results.map((result) => result.value),
+        sendOwnedCalls: sendOwnedSpy.mock.calls.map(([, message]) => message.type),
+        broadcast: messages.map((message) => message.type),
+        targeted: targetedMessages.map(({ message }) => message.type),
+      }),
     );
+    replySpy.mockRestore();
+    sendOwnedSpy.mockRestore();
 
     const response = [
       ...targetedMessages.filter(({ source }) => source === socket).map(({ message }) => message),
