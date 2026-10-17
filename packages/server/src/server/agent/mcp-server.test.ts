@@ -4369,7 +4369,7 @@ describe("send_agent_prompt MCP tool", () => {
             title: "Recovering child",
             event: "errored",
           },
-          text: `Agent ${child.id} (Recovering child) errored.\n\n<agent-response>\n[System Error] Synthetic recovery error ${count}\n</agent-response>`,
+          text: `Agent ${child.id} (Recovering child) errored.\n\n<agent-response>\n${count === 1 ? "[System Error] Synthetic recovery error 1" : "[System Error] Synthetic recovery error 1[System Error] Synthetic recovery error 2"}\n</agent-response>`,
         });
       }
 
@@ -4391,8 +4391,8 @@ describe("send_agent_prompt MCP tool", () => {
           },
           text:
             event === "finished"
-              ? `Agent ${child.id} (Recovering child) finished.\n\n<agent-response>\n${finalText}\n</agent-response>`
-              : `Agent ${child.id} (Recovering child) errored.\n\n<agent-response>\n[System Error] Synthetic recovery error ${index + 1}\n</agent-response>`,
+              ? `Agent ${child.id} (Recovering child) finished.\n\n<agent-response>\n[System Error] Synthetic recovery error 1[System Error] Synthetic recovery error 2${finalText}\n</agent-response>`
+              : `Agent ${child.id} (Recovering child) errored.\n\n<agent-response>\n${index === 0 ? "[System Error] Synthetic recovery error 1" : "[System Error] Synthetic recovery error 1[System Error] Synthetic recovery error 2"}\n</agent-response>`,
         })),
       );
       expect(childSession.prompts).toHaveLength(1);
