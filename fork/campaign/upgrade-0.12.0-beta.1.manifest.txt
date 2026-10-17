@@ -2,7 +2,7 @@
 # Base: v0.12.0-beta.1 = e2f4948f92ce2fc3c4cfb7878f239a88034883de
 # Disposable assembly: upgrade/basket-0.12.0-beta.1
 # Verify each ref still equals its pinned head before assembly.
-# Includes accepted U3 subjects through #7062. Later intakes remain separate.
+# Includes accepted U3 subjects through #7146. Later intakes remain separate.
 
 # U1 head: 81831be87bfad35802f0a0bf0a90fc7183c4fc1c
 upgrade/custom-0.12.0-beta.1
@@ -31,3 +31,5 @@ fork/snapshot-trimming-0.12.0-beta.1
 fork/notification-rearming-0.12.0-beta.1
 # U3-7062 head: 65723a80fcedaca36ac558fe9bc82b86fc84172f
 fork/attention-edges-0.12.0-beta.1
+# U3-7146 head: 67531e3301901041ded5d159a5df5f7cc32ff5cf
+fork/node-declaration-walk-0.12.0-beta.1
