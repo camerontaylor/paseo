@@ -162,7 +162,23 @@ activated. The app's `pretypecheck` builds the native audio workspace first.
 All execution uses Neptune's exclusive private candidate, Node 22.20.0. Receipt paths below are
 relative to `~/.paseo-fork/candidates/upgrade-0.12.0-beta.1/`. No build or test ran on Uranus.
 The retained-file code and corrected browser contracts are committed at
-`33e270f60987a29890039f1d619203e55ca27827`; later handover-only commits do not retimestamp tests.
+`33e270f60987a29890039f1d619203e55ca27827`. The final browser adapters are
+`a61591ddb285e8082591f165f66a068fdfcb86e1`; the delivery-proof test addition is
+`87c8049f5985c1604ee864a78633ddb1e19dfd8e`. Neither changes product code. Later handover-only
+commits do not retimestamp tests.
+
+The sealed manifest `evidence/u2d/receipts-87c8049f5.sha256` inventories 139 receipt files,
+including original failures, final logs, traces, images, videos and wire/snapshot observations.
+Its SHA-256 is `f313a88ccb2e73db7b277b1851949ac24f5cd3867630de9e8e4382c385d02bed`.
+All entries verify; `evidence/u2d/receipt-integrity-87c8049f5.txt` records the check. The later
+advisor receipt, independent coordinator check (`evidence/u2d/coordinator-integrity-87c8049f5.txt`)
+and handover-only static receipt are separate from this sealed inventory.
+
+Persistent advisor `3f2c7ea5-1328-4cd7-85c3-8c3d3ddbe4ff` gave final **ACCEPT** for U2d source
+and evidence at `87c8049f5985c1604ee864a78633ddb1e19dfd8e`, with no blocking finding in the
+code, ownership-proof assertions or reviewed ledger draft. The exact verdict is retained in
+`evidence/u2d/advisor-final-87c8049f5.txt`. Acceptance covers this bounded baseline only, with
+the gaps below still open; it grants no ADVANCE or activation.
 
 | Gate | Executed SHA | Result and receipt |
 | --- | --- | --- |
@@ -173,11 +189,14 @@ The retained-file code and corrected browser contracts are committed at
 | Server queue/receipts/collection | `71dcafa6dc75b0d9735fd7043440049d33ce4f79` | 7 files / 87 tests pass, `evidence/u2d/server-remaining-71dcafa6d.log`. This fills the suites not reached by the earlier bailed server batch. |
 | Merged prompt and MCP behavior | `71dcafa6dc75b0d9735fd7043440049d33ce4f79` | 2 files / 158 tests pass, `evidence/u2d/merged-agent-tests-71dcafa6d.log`. |
 | Session ownership and queue subscription suite | `17771efb2e6d2b1c109a2b86c6e0d46221ffdd81` | 170 tests pass, `evidence/u2d/session-final.log`; later ACK discriminant guard rerun alone at `71dcafa6d`, 1 pass / 169 skipped, `evidence/u2d/static-focused-71dcafa6d.log`. The production `session.ts` delta after this receipt is whitespace-only. |
+| Actual queue delivery proof | `87c8049f5985c1604ee864a78633ddb1e19dfd8e` | Changed ownership case 1 pass / 169 skipped, `evidence/u2d/queue-proof-87c8049f5.log`: actual emitted message permits its owner, rejects unsubscribed/incapable sources and rejects its owner after release. Authorization checks remain distinct. This completes the earlier missing proof; earlier session greens alone did not establish it. |
 | Registered reconnect handler | `71dcafa6dc75b0d9735fd7043440049d33ce4f79` | 3 tests pass after typed-mock correction, `evidence/u2d/handler-corrected-71dcafa6d.log`. Initial 3/3 at `9ec641052f6ab92314e94a64372f12c5d57216ce` remains in `evidence/u2d/status-handler.log`. |
 | Strengthened reconnect selector | `f605c8dd0e49ab6a241cc634cd5a76e93bb94361` | Selector 1 pass and handler 3 pass, `evidence/u2d/reconnect-f605c8dd0.log`. Every incapable request excludes the selector; real completed flush precedes downgrade, exact pending item survives and dispatches once on restoration. Later static findings in that log were corrected separately. |
 | Old-host voice adapter | `5d9d91d4337b8e88895dd81e44ec008357bb1a7a` | Changed case 1 pass / 31 skipped, `evidence/u2d/voice-absent-5d9d91d43.log`: exactly two adapter arguments, zero receipt reads and cleanup retained. |
 | Unsupported retained-file rendering | `33e270f60987a29890039f1d619203e55ca27827` | New real-feed cases 2/2 pass, `evidence/u2d/retained-files-focused-33e270f60.log`: supplied card opens through workspace-file navigation; absent files use the ordinary empty state. Both keep the upgrade notice and avoid companion mutation calls. |
 | Exact retained-file static gates | `33e270f60987a29890039f1d619203e55ca27827` | Typecheck, repository lint and format check all exit 0, `evidence/u2d/static-33e270f60.log`. Advisor source-cleared this exact commit; final receipt review remains separate. |
+| Exact browser-adapter static gates | `a61591ddb285e8082591f165f66a068fdfcb86e1` | Typecheck, repository lint and format check all exit 0, `evidence/u2d/static-a61591ddb.log`. Advisor source-cleared both test adapters. |
+| Exact final test/code static gates | `87c8049f5985c1604ee864a78633ddb1e19dfd8e` | Typecheck, repository lint and format check all exit 0, `evidence/u2d/static-87c8049f5.log`. The only test delta after the browser receipt is the independently receipted queue proof. |
 | U2a provider rename | `46e14f12226658a669ba878170bd9736c736b8fd` | Accepted 4/4 in `evidence/u2a/final-rename-owner.log`; that receipt also contains the owner/config-store cases. |
 | U2a mutable owner/config store | `05e01290fbde13058031d30775096bf950d8e042` | Accepted 4/4 and 40/40, `evidence/u2a/fix-owner.log`, `evidence/u2a/fix-config-store.log`. |
 
@@ -198,10 +217,20 @@ collection (`__DEV__`); the app-workspace invocation above is the valid 3/3 rece
 | Queue flag absent, desktop 1280 | `71dcafa6dc75b0d9735fd7043440049d33ce4f79` | Pass, `evidence/u2d/browser-71dcafa6d.log`: local queue path with no durable queue RPC or daemon item. |
 | Queue flag absent, compact 390 | `400dae50d694ab78a3571cb846f9cf1364c37a7d` | Pass, `evidence/u2d/browser-adapters-400dae50d.log`, same local-path and zero-durable-RPC contract. |
 | Companion flag absent, desktop 1280 | `33e270f60987a29890039f1d619203e55ca27827` | Pass, `evidence/u2d/artifacts-33e270f60.log`: delivered absent flag and supplied snapshot, upgrade notice, file card and HTML preview, exact draft retained, mutation controls absent and both feature RPC families zero throughout. |
+| Supported artifacts, desktop 1280 and compact 390 | `a61591ddb285e8082591f165f66a068fdfcb86e1` | Both pass, `evidence/u2d/artifacts-a61591ddb.log`: populated all-items view, canonical entry (compact menu Find plus explicit dismissal), Chat/draft round trip, filter reselection, same card and real iframe preview, return and zero requests in both feature families. This is all-items coverage, not default file visibility or filter persistence. |
+| Companion flag absent, compact 390 | `a61591ddb285e8082591f165f66a068fdfcb86e1` | Pass in the same 3/3 browser receipt: actual delivered absent flag and supplied snapshot, upgrade notice/card, no mutation controls, real preview, canonical file-sheet close and exact draft retained, both feature RPC families zero. |
 
 Each browser output directory retains traces, screenshots and JSON attachments beside its named
 log. `browser-observations-71dcafa6d.json` and `browser-observations-400dae50d.json` summarize actual
 app outbound requests; they do not substitute fixture-client requests for browser traffic.
+`artifact-observations-33e270f60.json`, `artifact-observations-a61591ddb.json` and
+`artifact-snapshots-a61591ddb.json` preserve the retained-file flows' actual requests and snapshots.
+The four final artifact gates are the one retained desktop absent-host pass plus three affected
+passes; no single run is described as 4/4. Ordinary workspace-file reads/subscriptions occur during
+preview and are allowed. Zero feature RPCs does not mean zero network traffic. Desktop/compact
+retained-file and both queue pending screenshots were inspected. The supported desktop trace also
+records a caught post-test WebSocket send ("Test ended"); the case and runner pass, with all acceptance
+assertions complete. The diagnostic remains in the trace summary.
 
 Superseded failures remain in `browser-71dcafa6d.log`, `browser-compact-9b5a69159.log` and
 `browser-compact-5d9d91d43.log`, with their trace directories. They record the unhandled browser
