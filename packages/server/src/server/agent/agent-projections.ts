@@ -24,6 +24,7 @@ import {
   resolveStoredAgentUpdatedAt,
   toAgentPersistenceHandle,
 } from "../persistence-hooks.js";
+import { restoreCompanionEntries } from "./companion-stream.js";
 export type { ManagedAgent };
 
 interface ProjectionOptions {
@@ -98,6 +99,8 @@ export function toStoredAgentRecord(
       : null,
     internal: options?.internal,
     owner: agent.owner,
+    artifacts: agent.artifacts ?? [],
+    companionEntries: agent.companionEntries ?? [],
   } satisfies StoredAgentRecord;
 }
 
@@ -140,6 +143,8 @@ export function toAgentPayload(
     title: options?.title ?? null,
     labels: agent.labels,
     ...(agent.internal ? { internal: true } : {}),
+    artifacts: agent.artifacts ?? [],
+    companionEntries: agent.companionEntries ?? [],
   };
 
   const usage = sanitizeUsage(agent.lastUsage);
@@ -251,6 +256,8 @@ export function buildStoredAgentPayload(
     ...(record.internal ? { internal: true } : {}),
     labels: normalizeLabels(record.labels),
     ...(typeof record.lastError === "string" ? { lastError: record.lastError } : {}),
+    artifacts: record.artifacts ?? [],
+    companionEntries: restoreCompanionEntries(record),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
   };
 }

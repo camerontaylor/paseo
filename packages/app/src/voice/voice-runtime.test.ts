@@ -3,6 +3,8 @@ import type { DaemonServerInfo } from "@/stores/session-store";
 import type { AudioEngine } from "@/audio";
 import { createVoiceRuntime, type VoiceSessionAdapter } from "@/voice/voice-runtime";
 import { REALTIME_VOICE_VAD_CONFIG } from "@/voice/realtime-voice-config";
+import type { VoiceFailureKind } from "@/voice/voice-failure";
+import { createVoiceFailureCue, createVoiceReconnectedCue } from "@/voice/voice-failure-cue";
 
 const CUE_MIME_TYPE = "audio/pcm;rate=16000;bits=16";
 const THINKING_TONE_MIN_SILENCE_MS = 1500;
@@ -26,9 +28,10 @@ function createAudioEngineMock(): AudioEngine {
 function createSessionAdapter(serverId = "server-1"): VoiceSessionAdapter {
   return {
     serverId,
-    setVoiceMode: vi.fn().mockResolvedValue(undefined),
+    setVoiceMode: vi.fn(async () => ({})),
     sendVoiceAudioChunk: vi.fn().mockResolvedValue(undefined),
     audioPlayed: vi.fn().mockResolvedValue(undefined),
+    readVoiceInputReceipts: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
     abortRequest: vi.fn().mockResolvedValue(undefined),
     setAssistantAudioPlaying: vi.fn(),
   };
@@ -534,5 +537,378 @@ describe("voice runtime", () => {
 
     expect(listener).not.toHaveBeenCalled();
     unsubscribe();
+  });
+
+  it("reports playback failure instead of acknowledging success and plays the next reply", async () => {
+    const adapter = createSessionAdapter();
+    const engine = createAudioEngineMock();
+    vi.mocked(engine.play).mockRejectedValueOnce(new Error("audio output unavailable"));
+    const { runtime } = createRuntime({ engine });
+    runtime.registerSession(adapter);
+    await runtime.startVoice("server-1", "agent-1");
+
+    runtime.handleAudioOutput(
+      "server-1",
+      createAudioPayload({
+        id: "failed",
+        groupId: "failed-group",
+        chunkIndex: 0,
+        isLastChunk: true,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(adapter.audioPlayed).toHaveBeenCalledWith("failed", "audio output unavailable"),
+    );
+    runtime.handleAudioOutput(
+      "server-1",
+      createAudioPayload({
+        id: "recovered",
+        groupId: "recovered-group",
+        chunkIndex: 0,
+        isLastChunk: true,
+      }),
+    );
+    await vi.waitFor(() => expect(adapter.audioPlayed).toHaveBeenCalledWith("recovered"));
+    expect(runtime.getSnapshot().phase).toBe("listening");
+    await runtime.destroy();
+  });
+
+  it("times out a stalled player, reports failure, and consumes the next reply", async () => {
+    const adapter = createSessionAdapter();
+    const engine = createAudioEngineMock();
+    vi.mocked(engine.play).mockImplementationOnce(() => new Promise(() => {}));
+    const { runtime } = createRuntime({ engine });
+    runtime.registerSession(adapter);
+    await runtime.startVoice("server-1", "agent-1");
+    runtime.handleAudioOutput(
+      "server-1",
+      createAudioPayload({
+        id: "stalled",
+        groupId: "stalled-group",
+        chunkIndex: 0,
+        isLastChunk: true,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(adapter.audioPlayed).toHaveBeenCalledWith("stalled", "Audio playback timed out");
+    expect(engine.stop).toHaveBeenCalled();
+    expect(engine.clearQueue).toHaveBeenCalled();
+    runtime.handleAudioOutput(
+      "server-1",
+      createAudioPayload({
+        id: "next",
+        groupId: "next-group",
+        chunkIndex: 0,
+        isLastChunk: true,
+      }),
+    );
+    await vi.waitFor(() => expect(adapter.audioPlayed).toHaveBeenCalledWith("next"));
+    await runtime.destroy();
+  });
+
+  it("drops stalled playback on reconnect so new audio can play", async () => {
+    const adapter = createSessionAdapter();
+    const engine = createAudioEngineMock();
+    let finishOldPlayback!: (duration: number) => void;
+    vi.mocked(engine.play).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOldPlayback = resolve;
+        }),
+    );
+    const { runtime } = createRuntime({ engine });
+    runtime.registerSession(adapter);
+    await runtime.startVoice("server-1", "agent-1");
+    runtime.handleAudioOutput(
+      "server-1",
+      createAudioPayload({
+        id: "stale",
+        groupId: "stale-group",
+        chunkIndex: 0,
+        isLastChunk: false,
+      }),
+    );
+    expect(engine.play).toHaveBeenCalledOnce();
+
+    runtime.updateSessionConnection("server-1", false);
+    runtime.updateSessionConnection("server-1", true);
+    await vi.waitFor(() => expect(runtime.getSnapshot().isVoiceSwitching).toBe(false));
+    runtime.handleAudioOutput(
+      "server-1",
+      createAudioPayload({
+        id: "fresh",
+        groupId: "fresh-group",
+        chunkIndex: 0,
+        isLastChunk: true,
+      }),
+    );
+    await vi.waitFor(() => expect(adapter.audioPlayed).toHaveBeenCalledWith("fresh"));
+    finishOldPlayback(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(adapter.audioPlayed).toHaveBeenCalledTimes(1);
+    expect(engine.stop).toHaveBeenCalled();
+    expect(engine.clearQueue).toHaveBeenCalled();
+    expect(engine.initialize).toHaveBeenCalledTimes(2);
+    await runtime.destroy();
+  });
+
+  it("a stopped delayed start never restarts microphone capture", async () => {
+    const adapter = createSessionAdapter();
+    let acknowledge!: () => void;
+    const acknowledgement = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    vi.mocked(adapter.setVoiceMode).mockImplementation(async (enabled, _agentId, input) => {
+      if (enabled) await acknowledgement;
+      return { attachmentId: input?.attachmentId, generation: "g1" };
+    });
+    const { runtime, engine } = createRuntime({
+      getServerInfo: () => ({ ...createServerInfo(), features: { durableVoiceInputV1: true } }),
+    });
+    runtime.registerSession(adapter);
+    const start = runtime.startVoice("server-1", "agent-1");
+    await vi.waitFor(() => expect(adapter.setVoiceMode).toHaveBeenCalledTimes(1));
+    const stop = runtime.stopVoice();
+    acknowledge();
+    await Promise.all([start, stop]);
+    expect(engine.startCapture).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot().isVoiceMode).toBe(false);
+    expect(adapter.setVoiceMode).toHaveBeenLastCalledWith(false, undefined, {
+      attachmentId: expect.any(String),
+      generation: "g1",
+    });
+  });
+
+  it("uses one logical attachment across reconnect and ignores stale transport output", async () => {
+    const adapter = createSessionAdapter();
+    let generation = "g1";
+    vi.mocked(adapter.setVoiceMode).mockImplementation(async (_enabled, _agentId, input) => ({
+      attachmentId: input?.attachmentId,
+      generation,
+    }));
+    const { runtime, engine } = createRuntime({
+      getServerInfo: () => ({ ...createServerInfo(), features: { durableVoiceInputV1: true } }),
+    });
+    runtime.registerSession(adapter);
+    await runtime.startVoice("server-1", "agent-1");
+    const firstStart = vi.mocked(adapter.setVoiceMode).mock.calls[0];
+    const attachmentId = firstStart?.[2]?.attachmentId;
+    expect(attachmentId).toEqual(expect.any(String));
+    runtime.handleCapturePcm(new Uint8Array([1, 2]));
+    expect(adapter.sendVoiceAudioChunk).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      {
+        attachmentId,
+        generation: "g1",
+      },
+    );
+
+    runtime.onTranscriptionResult("server-1", "follow up", {
+      attachmentId,
+      generation: "g1",
+      queued: true,
+      messageId: `${attachmentId}:one`,
+    });
+    expect(runtime.getSnapshot()).toMatchObject({ phase: "listening", lastInputStatus: "queued" });
+    generation = "g2";
+    runtime.updateSessionConnection("server-1", false);
+    vi.mocked(engine.play).mockClear();
+    runtime.handleAudioOutput("server-1", {
+      ...createAudioPayload({ id: "in-gap", groupId: "in-gap", chunkIndex: 0, isLastChunk: true }),
+      attachmentId,
+      generation: "g1",
+    });
+    expect(engine.play).not.toHaveBeenCalled();
+    runtime.updateSessionConnection("server-1", true);
+    await vi.waitFor(() => expect(adapter.setVoiceMode).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(adapter.setVoiceMode).mock.calls[1]?.[2]?.attachmentId).toBe(attachmentId);
+    expect(runtime.acceptsVoiceTransport("server-1", { attachmentId, generation: "g1" })).toBe(
+      false,
+    );
+    expect(runtime.acceptsVoiceTransport("server-1", { attachmentId, generation: "g2" })).toBe(
+      true,
+    );
+    vi.mocked(engine.play).mockClear();
+    runtime.handleAudioOutput("server-1", {
+      ...createAudioPayload({ id: "old", groupId: "old", chunkIndex: 0, isLastChunk: true }),
+      attachmentId,
+      generation: "g1",
+    });
+    expect(engine.play).not.toHaveBeenCalled();
+    await runtime.stopVoice();
+  });
+
+  it("reconciles queued and submitted speech by message id without replaying admission", async () => {
+    const adapter = createSessionAdapter();
+    vi.mocked(adapter.setVoiceMode).mockImplementation(async (_enabled, _agentId, input) => ({
+      attachmentId: input?.attachmentId,
+      generation: "g1",
+    }));
+    const { runtime } = createRuntime({
+      getServerInfo: () => ({ ...createServerInfo(), features: { durableVoiceInputV1: true } }),
+    });
+    runtime.registerSession(adapter);
+    await runtime.startVoice("server-1", "agent-1");
+    const attachmentId = vi.mocked(adapter.setVoiceMode).mock.calls[0]?.[2]?.attachmentId ?? "";
+    vi.mocked(adapter.readVoiceInputReceipts).mockResolvedValue({
+      items: [
+        { messageId: `${attachmentId}:one`, state: "queued", createdAt: "2026-10-02T12:00:00Z" },
+      ],
+      nextCursor: null,
+    });
+    runtime.onQueueChanged("server-1", "agent-1");
+    await vi.waitFor(() => expect(runtime.getSnapshot().lastInputStatus).toBe("queued"));
+    vi.mocked(adapter.readVoiceInputReceipts).mockResolvedValue({
+      items: [
+        { messageId: `${attachmentId}:one`, state: "submitted", createdAt: "2026-10-02T12:00:00Z" },
+      ],
+      nextCursor: null,
+    });
+    runtime.onQueueChanged("server-1", "agent-1");
+    await vi.waitFor(() => expect(runtime.getSnapshot().lastInputStatus).toBe("sent"));
+    // A replayed transcript for an already-submitted id neither re-queues nor regresses.
+    runtime.onTranscriptionResult("server-1", "follow up", {
+      attachmentId,
+      generation: "g1",
+      queued: true,
+      messageId: `${attachmentId}:one`,
+    });
+    expect(runtime.getSnapshot().lastInputStatus).toBe("sent");
+    await runtime.stopVoice();
+  });
+});
+
+describe("voice failure reporting", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Names of the local failure cues the engine was asked to play, in order. */
+  function spokenFailureCues(engine: AudioEngine): string[] {
+    const kinds: VoiceFailureKind[] = [
+      "nothing-recognized",
+      "recognition-stalled",
+      "recognition-failed",
+      "recognition-unavailable",
+      "host-disconnected",
+      "microphone-lost",
+    ];
+    const bySize = new Map<number, string>([[createVoiceReconnectedCue().size, "reconnected"]]);
+    for (const kind of kinds) bySize.set(createVoiceFailureCue(kind).size, kind);
+    return vi.mocked(engine.play).mock.calls.flatMap(([source]) => {
+      const name = source.type.includes("rate=12000") ? bySize.get(source.size) : undefined;
+      return name ? [name] : [];
+    });
+  }
+
+  function createCommandRuntime() {
+    const adapter = createSessionAdapter();
+    vi.mocked(adapter.setVoiceMode).mockResolvedValue({});
+    const { runtime, engine } = createRuntime();
+    runtime.registerSession(adapter);
+    return { runtime, adapter, engine };
+  }
+
+  it("says and shows recognition failure and stops uploads instead of failing silently", async () => {
+    const { runtime, adapter, engine } = createCommandRuntime();
+    await runtime.startVoice("server-1", "agent-1");
+    for (let i = 0; i < 5; i++) {
+      runtime.onInputError(
+        "server-1",
+        "Speech recognition failed. Stop and restart voice to reconnect.",
+      );
+      runtime.onRecognitionIssue("server-1", "failed");
+    }
+    runtime.handleCapturePcm(new Uint8Array([1, 2]));
+    expect(adapter.sendVoiceAudioChunk).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot()).toMatchObject({ failure: "recognition-failed" });
+    expect(spokenFailureCues(engine)).toEqual(["recognition-failed"]);
+    await runtime.destroy();
+  });
+
+  it("says a host disconnect once through flapping and says when it is back", async () => {
+    const { runtime, engine } = createCommandRuntime();
+    await runtime.startVoice("server-1", "agent-1");
+    runtime.onRecognitionIssue("server-1", "nothing_recognized");
+    await vi.advanceTimersByTimeAsync(5_000);
+    runtime.updateSessionConnection("server-1", false);
+    expect(runtime.getSnapshot().failure).toBe("host-disconnected");
+    runtime.updateSessionConnection("server-1", true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.getSnapshot().failure).toBeNull();
+    for (let i = 0; i < 10; i++) {
+      runtime.updateSessionConnection("server-1", false);
+      await vi.advanceTimersByTimeAsync(200);
+      runtime.updateSessionConnection("server-1", true);
+      await vi.advanceTimersByTimeAsync(200);
+    }
+    expect(spokenFailureCues(engine)).toEqual([
+      "nothing-recognized",
+      "host-disconnected",
+      "reconnected",
+    ]);
+    await runtime.destroy();
+  });
+
+  it("says a missed utterance once and shows it until recognition works again", async () => {
+    const { runtime, engine } = createCommandRuntime();
+    await runtime.startVoice("server-1", "agent-1");
+    runtime.onTranscriptionResult("server-1", "");
+    runtime.onRecognitionIssue("server-1", "nothing_recognized");
+    runtime.onRecognitionIssue("server-1", "nothing_recognized");
+    expect(runtime.getSnapshot()).toMatchObject({
+      phase: "listening",
+      failure: "nothing-recognized",
+    });
+    runtime.onTranscriptionResult("server-1", "run the tests");
+    expect(runtime.getSnapshot().failure).toBeNull();
+    // A repeat inside the re-announce floor stays quiet; an unknown issue is ignored.
+    await vi.advanceTimersByTimeAsync(5_000);
+    runtime.onRecognitionIssue("server-1", "nothing_recognized");
+    runtime.onRecognitionIssue("server-1", "a_future_issue");
+    expect(runtime.getSnapshot().failure).toBe("nothing-recognized");
+    expect(spokenFailureCues(engine)).toEqual(["nothing-recognized"]);
+    await runtime.destroy();
+  });
+
+  it("reports an unknown recognition issue kind without speaking it", async () => {
+    const { runtime, engine } = createCommandRuntime();
+    await runtime.startVoice("server-1", "agent-1");
+    runtime.onRecognitionIssue("server-1", "a_future_issue");
+    expect(runtime.getSnapshot().failure).toBeNull();
+    expect(spokenFailureCues(engine)).toEqual([]);
+    await runtime.destroy();
+  });
+
+  it("says the microphone was lost before stopping voice, even if the player never settles", async () => {
+    const { runtime, engine, adapter } = createCommandRuntime();
+    await runtime.startVoice("server-1", "agent-1");
+    vi.mocked(engine.play).mockReturnValue(new Promise(() => {}));
+    const stopped = runtime.handleMicrophoneLost();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spokenFailureCues(engine)).toEqual(["microphone-lost"]);
+    expect(engine.stopCapture).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4_000);
+    await stopped;
+    expect(engine.stopCapture).toHaveBeenCalled();
+    expect(adapter.setVoiceMode).toHaveBeenLastCalledWith(false);
+    expect(runtime.getSnapshot()).toMatchObject({ isVoiceMode: false, failure: null });
+    await runtime.destroy();
+  });
+
+  it("says recognition is unavailable when the host cannot start it", async () => {
+    const { runtime, engine, adapter } = createCommandRuntime();
+    vi.mocked(adapter.setVoiceMode).mockRejectedValueOnce(
+      new Error("Local speech models are still downloading (stt_unavailable)"),
+    );
+    await expect(runtime.startVoice("server-1", "agent-1")).rejects.toThrow("downloading");
+    expect(spokenFailureCues(engine)).toEqual(["recognition-unavailable"]);
+    expect(runtime.getSnapshot()).toMatchObject({ isVoiceMode: false, failure: null });
+    await runtime.destroy();
   });
 });

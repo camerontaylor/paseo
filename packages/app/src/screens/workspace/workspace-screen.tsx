@@ -127,6 +127,7 @@ import { createWorkspaceBrowser, useBrowserStore } from "@/desktop/browser/store
 import { getDesktopHost } from "@/desktop/host";
 import { buildProviderCommand } from "@/utils/provider-command-templates";
 import { generateDraftId } from "@/stores/draft-keys";
+import { useAgentViewStore } from "@/stores/agent-view-store";
 import { resolveWorkspaceRouteId } from "@/utils/workspace-identity";
 import { useOpenAgentTabLabels } from "@/subagents/use-open-agent-tab-labels";
 import { WorkspaceTabPresentationResolver } from "@/screens/workspace/workspace-tab-presentation";
@@ -2196,6 +2197,42 @@ function WorkspaceScreenContent({
     [toast, t],
   );
 
+  const setFindOpen = useAgentViewStore((state) => state.setFindOpen);
+  const handleFindInChat = useCallback(
+    (agentId: string) => {
+      setFindOpen(normalizedServerId, agentId, true);
+      if (persistenceKey) {
+        const tabTarget = { kind: "agent", agentId } as WorkspaceTabTarget;
+        const tabId = openWorkspaceTabFocused(persistenceKey, tabTarget);
+        if (tabId) {
+          navigateToTabId(tabId);
+        }
+      }
+    },
+    [normalizedServerId, persistenceKey, openWorkspaceTabFocused, navigateToTabId, setFindOpen],
+  );
+
+  const setAgentSelectedView = useAgentViewStore((state) => state.setSelectedView);
+  const handleViewArtifacts = useCallback(
+    (agentId: string) => {
+      setAgentSelectedView(normalizedServerId, agentId, "artifacts");
+      if (persistenceKey) {
+        const tabTarget = { kind: "agent", agentId } as WorkspaceTabTarget;
+        const tabId = openWorkspaceTabFocused(persistenceKey, tabTarget);
+        if (tabId) {
+          navigateToTabId(tabId);
+        }
+      }
+    },
+    [
+      normalizedServerId,
+      persistenceKey,
+      openWorkspaceTabFocused,
+      navigateToTabId,
+      setAgentSelectedView,
+    ],
+  );
+
   const handleCopyFilePath = useCallback(
     async (path: string) => {
       if (!path) return;
@@ -3478,6 +3515,8 @@ function WorkspaceScreenContent({
             onCloseTabsAbove={handleCloseTabsToLeft}
             onCloseTabsBelow={handleCloseTabsToRight}
             onCloseOtherTabs={handleCloseOtherTabs}
+            onViewArtifacts={handleViewArtifacts}
+            onFindInChat={handleFindInChat}
           />
           <WorkspaceHeaderMenuMobile
             normalizedServerId={normalizedServerId}
@@ -3513,6 +3552,8 @@ function WorkspaceScreenContent({
       handleCopyBranchName,
       handleCopyFilePath,
       handleCopyResumeCommand,
+      handleFindInChat,
+      handleViewArtifacts,
       handleCopyTerminalId,
       handleCopyWorkspacePath,
       handleCreateBrowserTab,
