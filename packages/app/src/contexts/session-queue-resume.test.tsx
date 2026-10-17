@@ -39,6 +39,14 @@ vi.mock("@/runtime/host-runtime", () => ({
     runProbeCycleNow: vi.fn(),
     fetchAgentTimeline: vi.fn(async () => undefined),
     acquireScriptStatusDemand: vi.fn(() => () => {}),
+    createViewedTimelineOwner: () => ({
+      replaceVisibleAgentIds: vi.fn(),
+      replaceOpenTabAgentIds: vi.fn(),
+      enqueueStreamEvent: vi.fn(),
+      setConnected: vi.fn(),
+      setActive: vi.fn(),
+      dispose: vi.fn(),
+    }),
   }),
 }));
 vi.mock("@/hooks/use-client-activity", () => ({ useClientActivity: () => undefined }));
