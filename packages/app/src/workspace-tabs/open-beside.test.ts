@@ -64,8 +64,8 @@ beforeEach(() => {
 // pin that decision, and stand in for the coverage lost when side-panel.test.ts was deleted.
 describe("openPreferredWorkspaceTarget for a side conversation", () => {
   it("opens in the single compact pane, never a second one", () => {
+    useWorkspaceLayoutStore.getState().setLayoutMode("compact");
     const tabId = openPreferredWorkspaceTarget({
-      isCompact: true,
       workspaceKey: WORKSPACE_KEY,
       target: SIDE_CONVERSATION,
       source: "subagents",
@@ -79,7 +79,6 @@ describe("openPreferredWorkspaceTarget for a side conversation", () => {
 
   it("opens in the side pane when the subagents preference is on", () => {
     const tabId = openPreferredWorkspaceTarget({
-      isCompact: false,
       workspaceKey: WORKSPACE_KEY,
       target: SIDE_CONVERSATION,
       source: "subagents",
@@ -93,7 +92,6 @@ describe("openPreferredWorkspaceTarget for a side conversation", () => {
 
   it("opens in the focused pane when the subagents preference is off", () => {
     const tabId = openPreferredWorkspaceTarget({
-      isCompact: false,
       workspaceKey: WORKSPACE_KEY,
       target: SIDE_CONVERSATION,
       source: "subagents",
@@ -227,9 +225,10 @@ describe("opening beside", () => {
 
     const tabId = openSubagentWithSidePreference();
 
-    const sidePaneId = useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY];
-    expect(sidePaneId).toEqual(expect.any(String));
-    expect(paneIdHolding(tabId)).toBe(sidePaneId);
+    const openedSidePaneId =
+      useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY];
+    expect(openedSidePaneId).toEqual(expect.any(String));
+    expect(paneIdHolding(tabId)).toBe(openedSidePaneId);
   });
 
   it("keeps a single-pane workspace in one pane despite the side preference", () => {

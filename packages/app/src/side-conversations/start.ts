@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { useIsCompactFormFactor } from "@/constants/layout";
 import { useSettings } from "@/hooks/use-settings";
 import { useSessionStore } from "@/stores/session-store";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
@@ -31,7 +30,6 @@ export function useStartSideConversation(input: {
   const supported = useSessionStore(
     (state) => state.sessions[input.serverId]?.serverInfo?.features?.sideConversations === true,
   );
-  const isCompact = useIsCompactFormFactor();
   // Side conversations open from the subagents track and present as one, so they follow that
   // source's side-pane preference rather than introducing a preference of their own.
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
@@ -42,7 +40,6 @@ export function useStartSideConversation(input: {
   const start = useCallback(
     (parentAgentId: string, options?: StartSideConversationOptions) => {
       openPreferredWorkspaceTarget({
-        isCompact,
         workspaceKey,
         target: {
           kind: "side_conversation",
@@ -54,7 +51,7 @@ export function useStartSideConversation(input: {
         parentTabId: options?.parentTabId,
       });
     },
-    [isCompact, openInSidePane, workspaceKey],
+    [openInSidePane, workspaceKey],
   );
   return supported ? start : null;
 }

@@ -17,11 +17,12 @@ import {
 import { openPreferredWorkspaceTarget } from "@/workspace-tabs/open-beside";
 
 /**
- * `side-conversations/start.ts` calls `openPreferredWorkspaceTarget` with no `canSplit` guard,
- * while `panels/agent-tracks.tsx:71` guards the same call with
- * `supportsDesktopPaneSplits() && !isCompact`. `supportsDesktopPaneSplits()` is `isWeb`
- * (`constants/layout.ts:51`), so a non-compact *native* device — a tablet — reaches the unguarded
- * call with `isCompact: false` and can create a side pane that nothing renders a split for.
+ * `side-conversations/start.ts` opens through `openPreferredWorkspaceTarget`, and
+ * `workspace-tabs/open-beside.ts` decides whether a side pane exists from the store's layout mode
+ * (`layoutMode === "split-panes"`), never from the platform. A device that cannot render pane
+ * splits therefore reaches this call through its layout mode: the thread stays in the parent's
+ * pane under `compact`/`single-pane`, and it can still split under `split-panes` where no split
+ * chrome renders.
  *
  * These tests pin what actually happens on both sides of that boundary. The hazard is bounded, not
  * live: `openInSidePane.subagents` ships off, and the only UI that turns it on is the settings
@@ -67,14 +68,12 @@ function openParentAgentTab(): string {
   return tabId;
 }
 
-/** The one call `useStartSideConversation` makes, with the platform inputs a tablet supplies. */
+/** The one call `useStartSideConversation` makes; the layout mode set by the caller decides. */
 function startSideConversationOnNativeTablet(
   preferences: typeof DEFAULT_APP_SETTINGS.openInSidePane,
   parentTabId: string,
 ): string {
   const tabId = openPreferredWorkspaceTarget({
-    // A tablet is not compact, and `supportsDesktopPaneSplits()` is never consulted here.
-    isCompact: false,
     workspaceKey: WORKSPACE_KEY,
     target: SIDE_CONVERSATION,
     source: "subagents",
@@ -96,6 +95,7 @@ beforeEach(() => {
 
 describe("starting a side conversation on a device that cannot render pane splits", () => {
   it("keeps the thread in the parent's pane under the settings a native device can reach", () => {
+    useWorkspaceLayoutStore.getState().setLayoutMode("single-pane");
     const parentTabId = openParentAgentTab();
 
     const threadTabId = startSideConversationOnNativeTablet(
@@ -111,6 +111,7 @@ describe("starting a side conversation on a device that cannot render pane split
   });
 
   it("splits and moves focus off the parent's pane once the desktop preference is forced on", () => {
+    useWorkspaceLayoutStore.getState().setLayoutMode("split-panes");
     const parentTabId = openParentAgentTab();
 
     const threadTabId = startSideConversationOnNativeTablet(

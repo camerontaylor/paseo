@@ -79,6 +79,9 @@ const manifests = {
     supportedHosts: ["main", "explorer"],
     showCloseButton: true,
     singleton: false,
+    // Side conversations stay tabs on compact: they open from the agent tab menu and from the
+    // subagents track, and the fork's compact behaviour is a tab in the compact pane.
+    compactSheet: null,
     resourceKey: (target) => `${target.parentAgentId}:${target.threadId}`,
   },
   terminal: {
