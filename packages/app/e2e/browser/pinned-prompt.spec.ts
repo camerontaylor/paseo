@@ -12,7 +12,10 @@ import {
 // Wide enough that the transcript is well clear of the compact form factor, which has no pin.
 const WIDE_VIEWPORT = { width: 1440, height: 900 };
 const COMPACT_VIEWPORT = { width: 420, height: 860 };
-const LOADED_TURNS = 12;
+// Enough turns below `prompts[8]` to fill a viewport: a prompt can only scroll clear of the
+// transcript top when the content beneath it is taller than the viewport, and the mock's turns are
+// short. Keep this above 13 so `prompts[8]` stays reachable.
+const LOADED_TURNS = 14;
 
 function timeline(page: Page) {
   return page.locator('[data-testid="agent-chat-scroll"]:visible').first();
