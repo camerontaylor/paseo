@@ -2339,6 +2339,7 @@ export const ar: TranslationResources = {
         label: "عرض استدعاءات الأدوات",
         description: "كيفية ظهور استدعاءات الأدوات في المخطط الزمني",
         options: {
+          quiet: "هادئ",
           overview: "ملخص",
           detailed: "التفاصيل الكاملة",
         },

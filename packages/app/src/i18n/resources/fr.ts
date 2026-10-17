@@ -2393,6 +2393,7 @@ export const fr: TranslationResources = {
         label: "Affichage des appels d’outils",
         description: "Comment les appels d’outils apparaissent dans la chronologie",
         options: {
+          quiet: "Discret",
           overview: "Résumé",
           detailed: "Détails complets",
         },

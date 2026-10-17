@@ -1,8 +1,10 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "../support/fixtures";
+import { gotoAppShell, openSettings } from "../support/helpers/app";
 import { expectComposerVisible } from "../support/helpers/composer";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
+import { openSettingsSection } from "../support/helpers/settings";
 
 type WebSocketMessage = string | Buffer;
 
@@ -251,6 +253,10 @@ test.describe("compact overview tool calls", () => {
         body: await page.screenshot(),
         contentType: "image/png",
       });
+      await testInfo.attach("compact-summary-tool-calls", {
+        body: await page.screenshot(),
+        contentType: "image/png",
+      });
 
       await page.getByTestId("tool-call-group-sheet-close").click();
       await expect(sheet).toBeHidden();
@@ -261,7 +267,7 @@ test.describe("compact overview tool calls", () => {
   });
 });
 
-test("keeps overview tool calls inline on desktop", async ({ page }) => {
+test("keeps overview tool calls inline on desktop", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const agent = await createOverviewAgent(page, "Desktop overview tool calls");
 
@@ -274,7 +280,44 @@ test("keeps overview tool calls inline on desktop", async ({ page }) => {
     await group.click();
     await expect(page.getByTestId("tool-call-group-sheet")).toHaveCount(0);
     await expect(group.getByTestId("tool-call-badge").first()).toBeVisible();
+    await testInfo.attach("desktop-summary-tool-calls", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
   } finally {
     await agent.cleanup();
   }
+});
+
+test("defaults tool calls to Summary and keeps Quiet and Full detail available", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  await gotoAppShell(page);
+  await openSettings(page);
+  await openSettingsSection(page, "chat");
+  const display = page.getByRole("button", { name: "Tool call display: Summary" });
+  await expect(display).toBeVisible();
+  await display.click();
+  await expect(page.getByRole("menuitem", { name: "Quiet" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Full detail" })).toBeVisible();
+  await testInfo.attach("chat-tool-call-display-choices", {
+    body: await page.screenshot(),
+    contentType: "image/png",
+  });
+
+  await page.getByRole("menuitem", { name: "Full detail" }).click();
+  await expect(page.getByRole("button", { name: "Tool call display: Full detail" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Tool call display: Full detail" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Tool call display: Full detail" }).click();
+  await page.getByRole("menuitem", { name: "Quiet" }).click();
+  await expect(page.getByRole("button", { name: "Tool call display: Quiet" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Tool call display: Quiet" })).toBeVisible();
+  await testInfo.attach("chat-tool-call-display-quiet", {
+    body: await page.screenshot(),
+    contentType: "image/png",
+  });
 });
