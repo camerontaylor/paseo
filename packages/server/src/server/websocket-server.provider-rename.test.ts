@@ -21,6 +21,8 @@ import type { WorkspaceAutoName } from "./workspace-auto-name.js";
 interface ProviderRenameHarness {
   configStore: DaemonConfigStore;
   agentStorage: AgentStorage;
+  wsServer: VoiceAssistantWebSocketServer;
+  httpServer: HTTPServer;
   renameProviderOnLiveAgents: ReturnType<typeof vi.fn>;
   stop(): Promise<void>;
 }
@@ -30,6 +32,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   await Promise.all(harnesses.splice(0).map((harness) => harness.stop()));
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -155,6 +158,8 @@ async function startHarness(): Promise<ProviderRenameHarness> {
   const harness: ProviderRenameHarness = {
     configStore,
     agentStorage,
+    wsServer,
+    httpServer,
     renameProviderOnLiveAgents,
     async stop() {
       await wsServer.close();
@@ -197,5 +202,149 @@ describe("provider rename migration wiring", () => {
 
     const other = await harness.agentStorage.get("agent-other");
     expect(other?.provider).toBe("claude");
+  });
+});
+
+/** Blocks the first storage migration so a second config change can land while it runs. */
+function gateRenameProvider(agentStorage: AgentStorage): {
+  release: () => void;
+  calls: () => number;
+} {
+  const original = agentStorage.renameProvider.bind(agentStorage);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  agentStorage.renameProvider = (async (from: string, to: string) => {
+    calls += 1;
+    if (calls === 1) await gate;
+    return original(from, to);
+  }) as AgentStorage["renameProvider"];
+  return { release: () => release(), calls: () => calls };
+}
+
+function captureConfigBroadcasts(wsServer: VoiceAssistantWebSocketServer): Array<{
+  providers?: Record<string, unknown>;
+}> {
+  const configs: Array<{ providers?: Record<string, unknown> }> = [];
+  const target = wsServer as unknown as {
+    broadcastDaemonConfigChanged: (config: { providers?: Record<string, unknown> }) => void;
+  };
+  const original = target.broadcastDaemonConfigChanged.bind(wsServer);
+  vi.spyOn(target, "broadcastDaemonConfigChanged").mockImplementation((config) => {
+    configs.push(config);
+    original(config);
+  });
+  return configs;
+}
+
+describe("provider rename migration ordering", () => {
+  it("keeps successive renames ordered when the first storage migration is delayed", async () => {
+    const harness = await startHarness();
+    await harness.agentStorage.upsert(storedRecord({ id: "agent-renamed" }));
+    const broadcasts = captureConfigBroadcasts(harness.wsServer);
+    const gate = gateRenameProvider(harness.agentStorage);
+
+    harness.configStore.patch({
+      replaceProviders: { "claude-job": { extends: "claude", label: "Job" } },
+      removeProviders: ["claude-work"],
+      renameProviders: { "claude-work": "claude-job" },
+    });
+    await vi.waitFor(() => expect(gate.calls()).toBe(1));
+
+    // The second change lands while the first migration is blocked inside storage.
+    harness.configStore.patch({
+      replaceProviders: { "claude-final": { extends: "claude", label: "Final" } },
+      removeProviders: ["claude-job"],
+      renameProviders: { "claude-job": "claude-final" },
+    });
+    const broadcastsBeforeRelease = broadcasts.length;
+
+    gate.release();
+    await vi.waitFor(async () => {
+      const record = await harness.agentStorage.get("agent-renamed");
+      expect(record?.provider).toBe("claude-final");
+    });
+
+    const record = await harness.agentStorage.get("agent-renamed");
+    expect(record?.runtimeInfo?.provider).toBe("claude-final");
+    expect(record?.persistence?.provider).toBe("claude-final");
+
+    // Nothing republishes the superseded config once claude-final is live.
+    const afterRelease = broadcasts.slice(broadcastsBeforeRelease);
+    expect(afterRelease.some((config) => config.providers?.["claude-final"])).toBe(true);
+    expect(afterRelease.every((config) => !config.providers?.["claude-job"])).toBe(true);
+  });
+
+  it("drains a queued rename migration before close resolves", async () => {
+    const harness = await startHarness();
+    harnesses.splice(harnesses.indexOf(harness), 1);
+    await harness.agentStorage.upsert(storedRecord({ id: "agent-drained" }));
+    const gate = gateRenameProvider(harness.agentStorage);
+
+    harness.configStore.patch({
+      replaceProviders: { "claude-job": { extends: "claude", label: "Job" } },
+      removeProviders: ["claude-work"],
+      renameProviders: { "claude-work": "claude-job" },
+    });
+    await vi.waitFor(() => expect(gate.calls()).toBe(1));
+
+    let closed = false;
+    const closing = harness.wsServer.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closed).toBe(false);
+
+    gate.release();
+    await closing;
+    const record = await harness.agentStorage.get("agent-drained");
+    expect(record?.provider).toBe("claude-job");
+    await new Promise<void>((resolve) => harness.httpServer.close(() => resolve()));
+  });
+
+  it("does not wedge later migrations when one batch fails", async () => {
+    const harness = await startHarness();
+    await harness.agentStorage.upsert(storedRecord({ id: "agent-failed" }));
+    await harness.agentStorage.upsert(
+      storedRecord({
+        id: "agent-codex",
+        provider: "codex-work",
+        runtimeInfo: { provider: "codex-work", sessionId: "session-codex" },
+        persistence: { provider: "codex-work", sessionId: "session-codex" },
+      }),
+    );
+    harness.configStore.patch({
+      replaceProviders: { "codex-work": { extends: "codex", label: "Codex Work" } },
+    });
+
+    const original = harness.agentStorage.renameProvider.bind(harness.agentStorage);
+    let calls = 0;
+    harness.agentStorage.renameProvider = (async (from: string, to: string) => {
+      calls += 1;
+      if (calls === 1) throw new Error("storage unavailable");
+      return original(from, to);
+    }) as AgentStorage["renameProvider"];
+
+    harness.configStore.patch({
+      replaceProviders: { "claude-job": { extends: "claude", label: "Job" } },
+      removeProviders: ["claude-work"],
+      renameProviders: { "claude-work": "claude-job" },
+    });
+    await vi.waitFor(() => expect(calls).toBe(1));
+
+    // The failed batch keeps its record and the tail still runs the next change.
+    harness.configStore.patch({
+      replaceProviders: { "codex-final": { extends: "codex", label: "Codex Final" } },
+      removeProviders: ["codex-work"],
+      renameProviders: { "codex-work": "codex-final" },
+    });
+    await vi.waitFor(async () => {
+      const record = await harness.agentStorage.get("agent-codex");
+      expect(record?.provider).toBe("codex-final");
+    });
+    const failed = await harness.agentStorage.get("agent-failed");
+    expect(failed?.provider).toBe("claude-work");
   });
 });

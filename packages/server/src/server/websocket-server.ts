@@ -590,6 +590,12 @@ export class VoiceAssistantWebSocketServer {
   private eventLoopDelayMonitor: ReturnType<typeof monitorEventLoopDelay> | null = null;
   private unsubscribeSpeechReadiness: (() => void) | null = null;
   private unsubscribeDaemonConfigChange: (() => void) | null = null;
+  /**
+   * Serializes persisted-agent migrations across config changes. Two renames that overlap can
+   * strand a record: an A to B migration that is still writing when B to C runs finds no B
+   * records, and the first migration then persists B after configuration already says C.
+   */
+  private providerRenameMigration: Promise<void> = Promise.resolve();
   private unsubscribeTerminalActivity: (() => void) | null = null;
   private readonly browserToolsBroker: BrowserToolsBroker | null;
   private readonly hubRelationships: HubRelationshipManagement | null;
@@ -745,7 +751,7 @@ export class VoiceAssistantWebSocketServer {
         this.agentManager.renameProviderOnLiveAgents(rename.from, rename.to);
       }
       this.broadcastDaemonConfigChanged(config);
-      void this.migrateRenamedProviders(details.renamedProviders, config);
+      this.enqueueProviderRenameMigration([...details.renamedProviders]);
     });
     this.unsubscribeDaemonConfigChange = () => {
       unsubscribeProviderConfig();
@@ -1078,6 +1084,8 @@ export class VoiceAssistantWebSocketServer {
     this.unsubscribeSpeechReadiness = null;
     this.unsubscribeDaemonConfigChange?.();
     this.unsubscribeDaemonConfigChange = null;
+    // Drain queued migrations so a pending rename cannot write storage after teardown.
+    await this.providerRenameMigration;
     this.unsubscribeTerminalActivity?.();
     this.unsubscribeTerminalActivity = null;
     if (this.runtimeMetricsInterval) {
@@ -2008,9 +2016,21 @@ export class VoiceAssistantWebSocketServer {
    * `daemon_config_changed` once records have moved, which is what makes them refetch the
    * agent list and see the migrated agents under the new provider id.
    */
+  private enqueueProviderRenameMigration(renames: readonly ProviderRename[]): void {
+    if (renames.length === 0) {
+      return;
+    }
+    // The stored tail stays settled on failure so one bad migration cannot wedge the ones
+    // queued behind it. Per-rename failures are isolated inside migrateRenamedProviders.
+    this.providerRenameMigration = this.providerRenameMigration
+      .then(() => this.migrateRenamedProviders(renames))
+      .catch((error) => {
+        this.logger.error({ err: error }, "Provider rename migration chain failed");
+      });
+  }
+
   private async migrateRenamedProviders(
     renames: readonly ProviderRename[],
-    config: MutableDaemonConfig,
   ): Promise<void> {
     if (renames.length === 0) {
       return;
@@ -2028,7 +2048,9 @@ export class VoiceAssistantWebSocketServer {
       }
     }
     if (migratedAny) {
-      this.broadcastDaemonConfigChanged(config);
+      // Read the store at completion: a change that landed while the migration ran already
+      // broadcast its own config, and republishing the captured one would supersede it.
+      this.broadcastDaemonConfigChanged(this.daemonConfigStore.get());
     }
   }
 
