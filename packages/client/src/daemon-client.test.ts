@@ -7932,6 +7932,9 @@ test("the queue selector follows the host capability across one client's reconne
   await vi.waitFor(() =>
     expect(subscriptionSelectors(incapable).at(-1)).toEqual(["status.server_info"]),
   );
+  for (const selectors of subscriptionSelectors(incapable)) {
+    expect(selectors).not.toContain("agent.queue.update");
+  }
 
   // Restore: the flag returns with the next handshake, so the selector comes back.
   incapable.triggerClose({ code: 1001, reason: "daemon upgraded" });

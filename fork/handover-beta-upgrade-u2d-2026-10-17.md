@@ -166,6 +166,14 @@ artifacts view.
 
 ## Test-only changes, classified before editing
 
+The replacement writer preserved clean `9ec641052` and its registered-handler 3/3 green receipt
+(`evidence/u2d/status-handler.log`). Advisor review accepted the registered-handler architecture and
+requested stronger reconnect proof. The coordinator explicitly approved these test-only refinements:
+await the real first flush promise before resetting the enqueue spy; retain the exact pending
+`item-2` through downgrade, then dispatch it exactly once when capability returns; and check every
+incapable-transport subscription for absence of the queue selector. Existing assertions and product
+code remain unchanged. Only the changed reconnect files are rerun after this strengthening.
+
 ### The queue enqueue case: attribution corrected, not a product defect
 
 The first gate run showed the carry's enqueue case failing, and an early reading called it a

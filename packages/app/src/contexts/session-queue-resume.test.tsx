@@ -60,6 +60,7 @@ vi.mock("@/utils/app-visibility", () => ({
 
 import { SessionProvider } from "./session-context";
 import { useQueueOutboxStore } from "@/stores/queue-outbox-store";
+import * as queueOutbox from "@/stores/queue-outbox-store";
 
 function createFakeClient() {
   const feedHandlers = harness.feedHandlers;
@@ -118,10 +119,7 @@ describe("session queue resume", () => {
     root = createRoot(container);
     act(() => {
       root?.render(
-        <SessionProvider
-          serverId="server-1"
-          client={createFakeClient() as unknown as never}
-        >
+        <SessionProvider serverId="server-1" client={createFakeClient() as unknown as never}>
           {null}
         </SessionProvider>,
       );
@@ -136,6 +134,7 @@ describe("session queue resume", () => {
     container?.remove();
     container = null;
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("holds a pending outbox entry when the host lacks the durable queue", async () => {
@@ -184,6 +183,7 @@ describe("session queue resume", () => {
   });
 
   it("stops resuming after a downgrade back to a host without the flag", async () => {
+    const flush = vi.spyOn(queueOutbox, "flushQueueOutboxForServer");
     useQueueOutboxStore.getState().add({
       images: [],
       attachments: [],
@@ -200,6 +200,11 @@ describe("session queue resume", () => {
     });
     expect(harness.enqueueAgentMessage).toHaveBeenCalledTimes(1);
 
+    // Await the real flush through its finally block before testing the capability gate.
+    expect(flush).toHaveBeenCalledTimes(1);
+    await flush.mock.results[0]!.value;
+    expect(useQueueOutboxStore.getState().entriesForServer("server-1")).toEqual([]);
+
     harness.enqueueAgentMessage.mockClear();
     useQueueOutboxStore.getState().add({
       images: [],
@@ -211,10 +216,29 @@ describe("session queue resume", () => {
       text: "queued again",
       intent: "queue",
     });
+    const pending = structuredClone(useQueueOutboxStore.getState().entriesForServer("server-1"));
+    expect(pending).toEqual([
+      expect.objectContaining({ itemId: "item-2", text: "queued again", attempts: 0 }),
+    ]);
     await act(async () => {
       deliverServerInfo({ ownedSubscriptions: true });
     });
 
     expect(harness.enqueueAgentMessage).not.toHaveBeenCalled();
+    expect(useQueueOutboxStore.getState().entriesForServer("server-1")).toEqual(pending);
+
+    await act(async () => {
+      deliverServerInfo({ ownedSubscriptions: true, durableAgentQueueV1: true });
+    });
+    expect(flush).toHaveBeenCalledTimes(2);
+    await flush.mock.results[1]!.value;
+    expect(harness.enqueueAgentMessage).toHaveBeenCalledTimes(1);
+    expect(harness.enqueueAgentMessage.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "agent-1",
+      itemId: "item-2",
+      text: "queued again",
+      intent: "queue",
+    });
+    expect(useQueueOutboxStore.getState().entriesForServer("server-1")).toEqual([]);
   });
 });
