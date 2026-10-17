@@ -654,6 +654,18 @@ test.each([true, false])(
         source,
       );
     }
+    // The modern lane is capability plus subscription. Every source subscribes here, including the
+    // incapable one, so the case proves capability decides rather than the subscription alone.
+    for (const [index, source] of sources.entries()) {
+      await session.handleMessage(
+        {
+          type: "session.events.set_subscription.request",
+          requestId: `side-conversation-capability-${index}`,
+          events: ["agent.side_conversation.update", "agent.side_conversation.removed"],
+        },
+        source,
+      );
+    }
 
     events.dispatch({
       type: "side_conversation",
@@ -665,11 +677,13 @@ test.each([true, false])(
         source,
         message: {
           type: "agent.side_conversation.update",
-          payload: SIDE_CONVERSATION_SNAPSHOT,
+          payload: { ...SIDE_CONVERSATION_SNAPSHOT, subscriptionId: expect.any(String) },
         },
       })),
     );
 
+    // Release, not capability: detaching the first capable source drops its subscriptions, and only
+    // the second one still hears about the removal.
     session.clearAgentTimelineSubscription(capableSource);
     targetedMessages.length = 0;
     events.dispatch({
@@ -688,6 +702,7 @@ test.each([true, false])(
           payload: {
             parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
             threadId: SIDE_CONVERSATION_RECORD.threadId,
+            subscriptionId: expect.any(String),
           },
         },
       },
@@ -6628,6 +6643,109 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
       { type: "agent.queue.update" }
     >;
     expect(broadcast.payload.items.map((item) => item.id)).toEqual(["item-1"]);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("agent.queue.update reaches only the capable sources that subscribed", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-subscription-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      targetedMessages,
+      agentQueueService: queueService,
+      agentManager: { listAgents: vi.fn(() => [{ id: agentId }]) },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue(undefined),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+
+    const subscribed = {};
+    const unsubscribed = {};
+    const later = {};
+    for (const [index, source] of [subscribed, unsubscribed].entries()) {
+      session.updateClientCapabilities(
+        { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.durableAgentQueue]: true },
+        source,
+      );
+      if (source === subscribed) {
+        await session.handleMessage(
+          {
+            type: "session.events.set_subscription.request",
+            requestId: `queue-subscription-${index}`,
+            events: ["agent.queue.update"],
+          },
+          source,
+        );
+      }
+    }
+
+    const enqueue = (requestId: string) =>
+      session.handleMessage({
+        type: "agent.queue.enqueue.request",
+        requestId,
+        agentId,
+        itemId: `item-${requestId}`,
+        text: `queued ${requestId}`,
+        intent: "queue",
+      });
+    const queueUpdates = () =>
+      targetedMessages.filter(({ message }) => message.type === "agent.queue.update");
+
+    targetedMessages.length = 0;
+    await enqueue("q-1");
+    // Capability is not enough: only the source that asked for the selector hears the update.
+    expect(queueUpdates().map(({ source }) => source)).toEqual([subscribed]);
+
+    // Release suppression: detaching the subscriber stops delivery even though it keeps the flag.
+    session.clearAgentTimelineSubscription(subscribed);
+    targetedMessages.length = 0;
+    await enqueue("q-2");
+    expect(queueUpdates()).toEqual([]);
+
+    // A later source that subscribes joins without disturbing anyone else.
+    session.updateClientCapabilities(
+      { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.durableAgentQueue]: true },
+      later,
+    );
+    await session.handleMessage(
+      {
+        type: "session.events.set_subscription.request",
+        requestId: "queue-subscription-later",
+        events: ["agent.queue.update"],
+      },
+      later,
+    );
+    targetedMessages.length = 0;
+    await enqueue("q-3");
+    expect(queueUpdates().map(({ source }) => source)).toEqual([later]);
+
+    // Downgrade: dropping the capability stops delivery, restoring it resumes.
+    session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, later);
+    targetedMessages.length = 0;
+    await enqueue("q-4");
+    expect(queueUpdates()).toEqual([]);
+    session.updateClientCapabilities(
+      { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.durableAgentQueue]: true },
+      later,
+    );
+    targetedMessages.length = 0;
+    await enqueue("q-5");
+    expect(queueUpdates().map(({ source }) => source)).toEqual([later]);
   } finally {
     rmSync(queueDir, { recursive: true, force: true });
   }
