@@ -4406,6 +4406,155 @@ describe("send_agent_prompt MCP tool", () => {
     }
   });
 
+  it("refreshes attention edges independently of rearmed sourced recovery notifications", async () => {
+    const cleanup: Array<() => void | Promise<void>> = [
+      () => {
+        vi.useRealTimers();
+      },
+    ];
+    const cleanupFailures: unknown[] = [];
+    let primaryFailed = false;
+    try {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-18T02:00:00.000Z"));
+      const workdir = await mkdtemp(join(tmpdir(), "mcp-attention-recovery-"));
+      cleanup.push(() => removeTempDir(workdir));
+      const storage = new AgentStorage(join(workdir, "agents"), logger);
+      cleanup.push(() => storage.flush());
+      const parentClient = new HeldTurnAgentClient("claude", false);
+      const childClient = new HeldTurnAgentClient("codex", true);
+      const callbacks: Array<{ agentId: string; provider: AgentProvider; reason: string }> = [];
+      const agentManager = new AgentManager({
+        clients: { claude: parentClient, codex: childClient },
+        registry: storage,
+        logger,
+        onAgentAttention: (event) => callbacks.push(event),
+      });
+      cleanup.push(() => agentManager.flushForShutdown());
+      const parent = await agentManager.createAgent(
+        { provider: "claude", cwd: existingCwd, title: "Attention parent" },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      cleanup.push(() => agentManager.closeAgent(parent.id));
+      const child = await agentManager.createAgent(
+        { provider: "codex", cwd: existingCwd, title: "Attention child" },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      cleanup.push(() => agentManager.closeAgent(child.id));
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        callerAgentId: parent.id,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+      cleanup.push(() => server.close());
+      await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+        agentId: child.id,
+        prompt: "Observe recovery attention",
+      });
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
+      const childSession = childClient.sessions[0]!;
+      const parentSession = parentClient.sessions[0]!;
+      const snapshots: Date[] = [];
+      const childCallbacks = () => callbacks.filter((event) => event.agentId === child.id);
+      const expectedNotifications = [
+        { event: "errored", body: "[System Error] Attention recovery error 1" },
+        {
+          event: "errored",
+          body: "[System Error] Attention recovery error 1[System Error] Attention recovery error 2",
+        },
+        {
+          event: "finished",
+          body: "[System Error] Attention recovery error 1[System Error] Attention recovery error 2Attention recovery completed.",
+        },
+      ].map(({ event, body }) => ({
+        id: expect.any(String),
+        source: { kind: "agent-notification", agentId: child.id, title: "Attention child", event },
+        text: `Agent ${child.id} (Attention child) ${event}.\n\n<agent-response>\n${body}\n</agent-response>`,
+      }));
+      for (const cycle of [0, 1, 2]) {
+        if (cycle > 0) {
+          childSession.startOwnTurn();
+          await vi.waitFor(() =>
+            expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"),
+          );
+        }
+        vi.setSystemTime(new Date(Date.UTC(2026, 9, 18, 2, cycle + 1)));
+        if (cycle < 2) childSession.failTurn(`Attention recovery error ${cycle + 1}`);
+        else childSession.finishTurn("Attention recovery completed.");
+        const lifecycle = cycle < 2 ? "error" : "idle";
+        const reason = cycle < 2 ? "error" : "finished";
+        await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe(lifecycle));
+        await vi.waitFor(() => expect(parentSession.prompts).toHaveLength(cycle + 1));
+        await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
+        await agentManager.flush();
+        const attention = agentManager.getAgent(child.id)!.attention;
+        if (!attention.requiresAttention) throw new Error("Expected unread recovery attention");
+        expect(attention.attentionReason).toBe(reason);
+        if (cycle > 0)
+          expect(attention.attentionTimestamp.getTime()).toBeGreaterThan(
+            snapshots[cycle - 1]!.getTime(),
+          );
+        snapshots.push(attention.attentionTimestamp);
+        expect(childCallbacks()).toEqual(
+          Array.from({ length: cycle + 1 }, (_, index) => ({
+            agentId: child.id,
+            provider: "codex",
+            reason: index < 2 ? "error" : "finished",
+          })),
+        );
+        expect(await storage.get(child.id)).toMatchObject({
+          lastStatus: lifecycle,
+          requiresAttention: true,
+          attentionReason: reason,
+          attentionTimestamp: attention.attentionTimestamp.toISOString(),
+        });
+        expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toEqual(
+          expectedNotifications.slice(0, cycle + 1),
+        );
+        agentManager.notifyAgentState(child.id);
+        agentManager.notifyAgentState(child.id);
+        await agentManager.flush();
+        expect(agentManager.getAgent(child.id)!.attention).toEqual(attention);
+        expect(childCallbacks()).toHaveLength(cycle + 1);
+        expect((await storage.get(child.id))?.attentionTimestamp).toBe(
+          attention.attentionTimestamp.toISOString(),
+        );
+        expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toEqual(
+          expectedNotifications.slice(0, cycle + 1),
+        );
+      }
+      expect(childSession.prompts).toHaveLength(1);
+      expect(parseAgentMessage(childSession.prompts[0]!)).toEqual({
+        id: expect.any(String),
+        source: { kind: "agent-message", agentId: parent.id, title: "Attention parent" },
+        text: "Observe recovery attention",
+      });
+    } catch (error) {
+      primaryFailed = true;
+      throw error;
+    } finally {
+      for (const release of cleanup.toReversed()) {
+        try {
+          await release();
+        } catch (error) {
+          cleanupFailures.push(error);
+        }
+      }
+      if (primaryFailed && cleanupFailures.length) {
+        logger.warn(
+          { err: new AggregateError(cleanupFailures) },
+          "Attention MCP test cleanup failed",
+        );
+      }
+    }
+    if (cleanupFailures.length)
+      throw new AggregateError(cleanupFailures, "Attention MCP test cleanup failed");
+  });
+
   it.each(["out_of_band", "startup_failure"] as const)(
     "preserves %s dispatch notification semantics",
     async (scenario) => {

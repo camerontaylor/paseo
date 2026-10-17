@@ -8497,6 +8497,143 @@ test("each finish or error re-stamps and broadcasts attention while an older fla
   expect(persisted?.attentionTimestamp).toBe(third.attentionTimestamp.toISOString());
 });
 
+test("same-reason attention refreshes only on a new edge and stays read after clearing", async () => {
+  const cleanup: Array<() => void | Promise<void>> = [
+    () => {
+      vi.useRealTimers();
+    },
+  ];
+  const cleanupFailures: unknown[] = [];
+  let primaryFailed = false;
+  try {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T01:00:00.000Z"));
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-attention-edges-"));
+    cleanup.push(() => rmSync(workdir, { recursive: true, force: true }));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    cleanup.push(() => storage.flush());
+    class FailingSession extends TestAgentSession {
+      private attempt = 0;
+      override async startTurn(): Promise<{ turnId: string }> {
+        const turnId = `edge-turn-${++this.attempt}`;
+        setTimeout(() => {
+          this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
+          this.pushEvent({
+            type: "turn_failed",
+            provider: this.provider,
+            turnId,
+            error: "edge failure",
+          });
+        }, 0);
+        return { turnId };
+      }
+    }
+    class FailingClient extends TestAgentClient {
+      override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+        return new FailingSession(config);
+      }
+    }
+    const callbacks: Array<{ agentId: string; provider: AgentProvider; reason: string }> = [];
+    const manager = new AgentManager({
+      clients: { codex: new FailingClient() },
+      registry: storage,
+      logger,
+      onAgentAttention: (event) => callbacks.push(event),
+    });
+    cleanup.push(() => manager.flushForShutdown());
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    cleanup.push(() => manager.closeAgent(agent.id));
+    const lifecycles: string[] = [];
+    cleanup.push(
+      manager.subscribe(
+        (event) => {
+          if (event.type === "agent_state") lifecycles.push(event.agent.lifecycle);
+        },
+        { agentId: agent.id, replayState: false },
+      ),
+    );
+    const expectedCallback = { agentId: agent.id, provider: "codex", reason: "error" };
+    const readAttention = () => {
+      const attention = manager.getAgent(agent.id)!.attention;
+      if (!attention.requiresAttention) throw new Error("Expected unread edge attention");
+      return attention;
+    };
+    await expect(manager.runAgent(agent.id, "first failure")).rejects.toThrow("edge failure");
+    await manager.flush();
+    const first = readAttention();
+    expect(first.attentionReason).toBe("error");
+    expect(lifecycles).toContain("running");
+    lifecycles.length = 0;
+    expect(callbacks).toEqual([expectedCallback]);
+    expect(await storage.get(agent.id)).toMatchObject({
+      lastStatus: "error",
+      requiresAttention: true,
+      attentionReason: "error",
+      attentionTimestamp: first.attentionTimestamp.toISOString(),
+    });
+    vi.setSystemTime(new Date("2026-10-18T01:01:00.000Z"));
+    manager.notifyAgentState(agent.id);
+    manager.notifyAgentState(agent.id);
+    await manager.flush();
+    expect(readAttention()).toEqual(first);
+    expect(callbacks).toEqual([expectedCallback]);
+    expect((await storage.get(agent.id))?.attentionTimestamp).toBe(
+      first.attentionTimestamp.toISOString(),
+    );
+    await expect(manager.runAgent(agent.id, "second failure")).rejects.toThrow("edge failure");
+    await manager.flush();
+    const second = readAttention();
+    expect(second.attentionReason).toBe("error");
+    expect(second.attentionTimestamp.getTime()).toBeGreaterThan(first.attentionTimestamp.getTime());
+    expect(callbacks).toEqual([expectedCallback, expectedCallback]);
+    expect(lifecycles).toContain("running");
+    expect(await storage.get(agent.id)).toMatchObject({
+      lastStatus: "error",
+      requiresAttention: true,
+      attentionReason: "error",
+      attentionTimestamp: second.attentionTimestamp.toISOString(),
+    });
+    vi.setSystemTime(new Date("2026-10-18T01:02:00.000Z"));
+    manager.notifyAgentState(agent.id);
+    await manager.flush();
+    expect(readAttention()).toEqual(second);
+    expect(callbacks).toEqual([expectedCallback, expectedCallback]);
+    await manager.clearAgentAttention(agent.id);
+    manager.notifyAgentState(agent.id);
+    manager.notifyAgentState(agent.id);
+    await manager.flush();
+    expect(manager.getAgent(agent.id)!.attention).toEqual({ requiresAttention: false });
+    expect(callbacks).toEqual([expectedCallback, expectedCallback]);
+    expect(await storage.get(agent.id)).toMatchObject({
+      lastStatus: "error",
+      requiresAttention: false,
+      attentionReason: null,
+      attentionTimestamp: null,
+    });
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
+  } finally {
+    for (const release of cleanup.toReversed()) {
+      try {
+        await release();
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+    if (primaryFailed && cleanupFailures.length) {
+      logger.warn(
+        { err: new AggregateError(cleanupFailures) },
+        "Attention edge test cleanup failed",
+      );
+    }
+  }
+  if (cleanupFailures.length)
+    throw new AggregateError(cleanupFailures, "Attention edge test cleanup failed");
+});
+
 test("streamAgent clears pending run when startTurn fails before a turn id exists", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-start-turn-failure-"));
   const storagePath = join(workdir, "agents");
