@@ -10,6 +10,8 @@ import {
   type MenuPageDefinition,
 } from "@/components/ui/dropdown-menu";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
+import { useSessionStore } from "@/stores/session-store";
+import { useFetchQuery } from "@/data/query";
 import type { Theme } from "@/styles/theme";
 import { openServiceUrl } from "@/utils/open-service-url";
 import type {
@@ -55,6 +57,11 @@ function scriptPageId(scriptName: string): string {
   return `${SCRIPTS_PAGE_ID}/${scriptName}`;
 }
 
+/** Discovered package scripts carry the package's own script name. */
+function scriptLabel(script: WorkspaceScript): string {
+  return script.packageJson?.script ?? script.scriptName;
+}
+
 export interface UseWorkspaceScriptsMenuPagesInput {
   serverId: string;
   workspaceId: string;
@@ -63,6 +70,8 @@ export interface UseWorkspaceScriptsMenuPagesInput {
   onScriptTerminalStarted: (terminalId: string) => void;
   onViewTerminal: (terminalId: string) => void;
   onOpenUrlInBrowserTab: (url: string) => void;
+  /** Package-script discovery runs only while the owning menu is open. */
+  menuOpen?: boolean;
 }
 
 export interface WorkspaceScriptsMenuPages {
@@ -86,13 +95,43 @@ export interface WorkspaceScriptsMenuPages {
 export function useWorkspaceScriptsMenuPages({
   serverId,
   workspaceId,
-  scripts,
+  scripts: workspaceScripts,
   liveTerminalIds,
   onScriptTerminalStarted,
   onViewTerminal,
   onOpenUrlInBrowserTab,
+  menuOpen = false,
 }: UseWorkspaceScriptsMenuPagesInput): WorkspaceScriptsMenuPages {
   const { t } = useTranslation();
+  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
+  // COMPAT(packageJsonScripts): added in fork v0.10.1, remove gate after 2027-04-01.
+  const supportsPackages = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.packageJsonScripts === true,
+  );
+  const packageQuery = useFetchQuery({
+    dataShape: "value",
+    staleTimeMs: 0,
+    queryKey: ["workspace-package-scripts", serverId, workspaceId],
+    enabled: menuOpen && supportsPackages && client !== null,
+    queryFn: async () => {
+      if (!client) throw new Error(t("common.errors.daemonClientUnavailable"));
+      const result = await client.listWorkspaceScripts(workspaceId);
+      if (result.error) throw new Error(result.error);
+      return { scripts: result.scripts ?? [] };
+    },
+  });
+  const scripts = useMemo(() => {
+    if (!packageQuery.data) return workspaceScripts;
+    const live = new Map(workspaceScripts.map((script) => [script.scriptName, script]));
+    const discovered = packageQuery.data.scripts.filter((script) => script.packageJson);
+    const packageIds = new Set(discovered.map((script) => script.scriptName));
+    const configured = workspaceScripts.filter(
+      (script) =>
+        !script.packageJson ||
+        (script.lifecycle === "running" && !packageIds.has(script.scriptName)),
+    );
+    return [...configured, ...discovered.map((script) => live.get(script.scriptName) ?? script)];
+  }, [packageQuery.data, workspaceScripts]);
   const actions = useWorkspaceScriptActions({
     serverId,
     workspaceId,
@@ -102,8 +141,9 @@ export function useWorkspaceScriptsMenuPages({
   const summary = useMemo(() => summarizeScripts(scripts), [scripts]);
 
   const trigger = useMemo(
-    () => (scripts.length === 0 ? null : <ScriptsMenuTrigger summary={summary} />),
-    [scripts.length, summary],
+    () =>
+      scripts.length === 0 && !supportsPackages ? null : <ScriptsMenuTrigger summary={summary} />,
+    [scripts.length, summary, supportsPackages],
   );
 
   const pages = useMemo<MenuPageDefinition[]>(() => {
@@ -117,7 +157,7 @@ export function useWorkspaceScriptsMenuPages({
       },
       ...scripts.map((script) => ({
         id: scriptPageId(script.scriptName),
-        title: script.scriptName,
+        title: scriptLabel(script),
         content: (
           <ScriptPage
             script={script}
@@ -198,7 +238,7 @@ function RunningScriptRow({ script }: { script: WorkspaceScript }): ReactElement
       leading={leading}
       testID={`workspace-scripts-row-${script.scriptName}`}
     >
-      {script.scriptName}
+      {scriptLabel(script)}
     </DropdownMenuSubTrigger>
   );
 }
@@ -236,7 +276,7 @@ function StoppedScriptRow({
       onSelect={handleSelect}
       testID={`workspace-scripts-row-${script.scriptName}`}
     >
-      {script.scriptName}
+      {scriptLabel(script)}
     </DropdownMenuItem>
   );
 }

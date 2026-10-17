@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test, expect } from "../support/fixtures";
+import { test, expect, type Page } from "../support/fixtures";
 import { createTempGitRepo } from "../support/helpers/workspace";
 import {
   connectWorkspaceSetupClient,
@@ -158,30 +158,57 @@ test("discovers and runs a nested package script from the compact sheet", async 
     const workspaceId = created.workspace!.id;
     await page.goto(buildHostWorkspaceRoute(getServerId(), workspaceId));
 
-    // Compact opens the menu as a sheet, so this is the compact access path for discovery.
-    await openWorkspaceScriptsMenu(page);
-    const nestedGroup = page.getByTestId("workspace-scripts-group-packages/web/package.json");
-    await expect(nestedGroup).toBeVisible();
-    const scriptId = "package.json:packages%2Fweb%2Fpackage.json:dev";
-    const row = page.getByTestId(`workspace-scripts-item-${scriptId}`);
-    await expect(row).not.toBeVisible();
-    await nestedGroup.click();
-    await expect(row).toContainText("dev");
-
-    await page.getByTestId(`workspace-scripts-start-${scriptId}`).click();
-    await expect(
-      page.getByLabel("Script packages/web/dev running", { exact: true }).first(),
-    ).toBeVisible();
-
-    // View terminal navigates to the script's terminal; dismissing the sheet unveils it.
-    await page.getByTestId(`workspace-scripts-view-${scriptId}`).click();
-    await expect(page.locator('[data-testid^="workspace-tab-terminal_"]').first()).toBeAttached({
-      timeout: 15_000,
-    });
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("terminal-surface").first()).toBeVisible({ timeout: 30_000 });
+    await runDiscoveredScriptFromCompactHeader(page);
   } finally {
     await client.close();
     await repo.cleanup();
   }
 });
+
+test("keeps compact script discovery working after a desktop to compact resize", async ({ page }) => {
+  const client = await connectWorkspaceSetupClient();
+  const repo = await createTempGitRepo("package-scripts-resize-", {
+    files: [
+      { path: "package.json", content: JSON.stringify({ scripts: { build: "echo root" } }) },
+      {
+        path: "packages/web/package.json",
+        content: JSON.stringify({
+          scripts: {
+            dev: 'node -e "setInterval(() => {}, 100000)"',
+          },
+        }),
+      },
+    ],
+  });
+  try {
+    const created = await client.createWorkspace({
+      source: { kind: "directory", path: repo.path },
+    });
+    expect(created.error).toBeFalsy();
+    const workspaceId = created.workspace!.id;
+    // Desktop first, then the same mounted app narrows to the compact layout.
+    await page.goto(buildHostWorkspaceRoute(getServerId(), workspaceId));
+    await expect(page.getByTestId("workspace-scripts-button")).toBeVisible({ timeout: 30_000 });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByTestId("workspace-header-menu-trigger")).toBeVisible({ timeout: 30_000 });
+
+    await runDiscoveredScriptFromCompactHeader(page);
+  } finally {
+    await client.close();
+    await repo.cleanup();
+  }
+});
+
+/** Compact puts scripts on a page of the header menu; discovery still runs on demand. */
+async function runDiscoveredScriptFromCompactHeader(page: Page): Promise<void> {
+  await page.getByTestId("workspace-header-menu-trigger").click();
+  await expect(page.getByTestId("workspace-header-menu")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("workspace-header-scripts").click();
+  const scriptId = "package.json:packages%2Fweb%2Fpackage.json:dev";
+  const row = page.getByTestId(`workspace-scripts-row-${scriptId}`);
+  await expect(row).toContainText("dev", { timeout: 15_000 });
+  await row.click();
+  await expect(page.locator('[data-testid^="workspace-tab-terminal_"]').first()).toBeAttached({
+    timeout: 20_000,
+  });
+}
