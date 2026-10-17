@@ -13,7 +13,9 @@ worktree were not touched. Checks ran on Neptune in the shared private candidate
 | Common carries (manifest `fork/carries-0.11.1`) | `36fdadba65369dc41feb756d5b2c6004dc2a17e8` |
 | Merge | `85830573a36216889faccca17124c39f4acfe7f3` (parents `81831be87`, `36fdadba`) |
 | Non-Latin coverage | `d92c42b11246955c6fbb990546b9a9ba725ceca0` |
-| Capability-absent coverage | `f219e61842fb3b125d9e4065b9e9426ae39296e5` (final source SHA) |
+| Capability-absent coverage | `f219e61842fb3b125d9e4065b9e9426ae39296e5` |
+| Rename ordering fix | `24dddacd4315f5a3ae5e4090444a2b14c1623063` |
+| Final source SHA | `05e01290fbde13058031d30775096bf950d8e042` |
 
 The carry manifest line owns accounts #2785, screenshots #2237, bounded byte hydration #2664,
 terminal flush #3545, structured finish reasons #3950, CJK #4101 and argument hints #3369 only.
@@ -116,6 +118,33 @@ Baseline attribution at `81831be87` runs the same three files with the same comm
 
 All three fail identically at the U1 head, so they are inherited environment failures, not carry
 regressions. No assertion was weakened.
+
+## Rename ordering correction
+
+The first audit of the rename path checked ordering inside one migration and missed ordering
+between migrations. Two config changes could overlap: an A to B migration that was still writing
+when the B to C change ran found no B records, and the first migration then persisted B while
+configuration already said C. The same change published the config captured at change time, so a
+completion could republish a superseded config.
+
+`24dddacd4` fixes both. Each change's rename batch is queued on one promise tail, so migration
+order follows config order. The stored tail is re-settled after a failure, keeping one bad batch
+from wedging the ones behind it while per-rename isolation stays inside the migration. Completion
+broadcasts `daemonConfigStore.get()` instead of the captured config. `close()` awaits the tail
+after the config subscription is released, so a pending migration cannot write storage after
+teardown. The live-agent repoint stays synchronous and first, and beta's transactional owner is
+untouched.
+
+The regression lives in `websocket-server.provider-rename.test.ts`: a delayed first storage
+migration with a second rename landing while it is blocked, asserting `provider`,
+`runtimeInfo.provider` and `persistence.provider` all end at the final id and that nothing
+republishes the superseded config once the final one is live; a close-drain case; and a failed
+batch that leaves its record alone while the next change still migrates. Run against the pre-fix
+source, the ordering and drain cases fail (2 failed, 2 passed); with the fix all four pass.
+
+Receipts at the fix head `05e01290f`: `build:server`, `typecheck`, `lint`, `format:check` all exit
+0; the rename suite (4 tests), `mutable-provider-config-owner.test.ts` and
+`daemon-config-store.test.ts` pass.
 
 ## Gaps
 
