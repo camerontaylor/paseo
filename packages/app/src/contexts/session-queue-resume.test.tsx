@@ -73,12 +73,16 @@ function createFakeClient() {
         return () => feedHandlers.delete(key);
       },
       dispose: () => undefined,
+      release: async () => undefined,
     }),
     on: (type: string, handler: (message: unknown) => void) => {
       feedHandlers.set(`on-${type}`, handler);
       return () => feedHandlers.delete(`on-${type}`);
     },
-    observeTimeline: () => ({ dispose: () => undefined }),
+    observeTimeline: () => ({
+      subscribe: () => () => undefined,
+      release: async () => undefined,
+    }),
     enqueueAgentMessage: harness.enqueueAgentMessage,
   };
 }
