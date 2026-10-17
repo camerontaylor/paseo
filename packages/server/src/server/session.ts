@@ -8834,7 +8834,16 @@ function isValidGitHubRepoSegment(value: string): boolean {
   return /^[A-Za-z0-9._-]+$/u.test(value);
 }
 
+// Side conversation events are only delivered to a client that subscribed to them. Grouping them
+// here keeps the category switch under the lint branch limit.
+const SIDE_CONVERSATION_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "agent.side_conversation.update",
+  "agent.side_conversation.removed",
+]);
+
 function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubscription | null {
+  if (SIDE_CONVERSATION_EVENT_TYPES.has(message.type))
+    return message.type as SessionEventSubscription;
   switch (message.type) {
     case "project.update":
     case "providers_snapshot_update":
@@ -8845,8 +8854,6 @@ function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubs
     case "script_status_update":
     case "workspace_setup_progress":
     case "agent.provider_subagents.update":
-    case "agent.side_conversation.update":
-    case "agent.side_conversation.removed":
     case "terminal_attention_required":
     case "activity_log":
     case "hub.execution.agent.update":

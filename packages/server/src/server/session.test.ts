@@ -460,12 +460,20 @@ test("a released side conversation subscription stops receiving removals", async
   const subscriptionId = targetedMessages
     .map((entry) => entry.message)
     .find(
-      (message): message is Extract<SessionOutboundMessage, { type: "session.events.set_subscription.response" }> =>
-        message.type === "session.events.set_subscription.response",
+      (
+        message,
+      ): message is Extract<
+        SessionOutboundMessage,
+        { type: "session.events.set_subscription.response" }
+      > => message.type === "session.events.set_subscription.response",
     )?.payload.subscriptionId;
   if (!subscriptionId) throw new Error("subscription id missing");
   await session.handleMessage(
-    { type: "subscription.release.request", requestId: "release-side-conversation", subscriptionId },
+    {
+      type: "subscription.release.request",
+      requestId: "release-side-conversation",
+      subscriptionId,
+    },
     socket,
   );
   targetedMessages.length = 0;
