@@ -1,0 +1,64 @@
+# Beta upgrade execution
+
+User authorization: 2026-10-17, “Orchestrate implementation of [beta upgrade plan]”. The owning plan is [upgrade-0.12.0-beta.1.md](../plans/upgrade-0.12.0-beta.1.md). This execution does not authorize publication, installation, production restart, or live-state repair.
+
+## Ownership and safety
+
+- Coordinator: `c837f343-68c4-48a7-bd0b-fc7d15211671`, Uranus, control checkout `/home/ctaylor/repos/paseo-upgrade-control`, branch `fork/upgrade-control-0.12.0-beta.1`.
+- Persistent read-only advisor: `3f2c7ea5-1328-4cd7-85c3-8c3d3ddbe4ff`. **U1 PREFLIGHT APPROVE** received 2026-10-17. Reuse this advisor. One review outstanding at a time.
+- Implementation route: retain the existing campaign's user-selected `jcode/opencode-go:deepseek-v4.1-flash`, high thinking. No agent profiles found in the local daemon configuration; provider discovery confirms this route on Neptune. One implementation writer at a time. Separate TMAD, infi and panic8 owners start only after the preservation basket is accepted.
+- All builds, dependency installation and broad static checks run on Neptune or CI. Use private candidate dependencies and serialize builds. No full local suite. No writes into live `dist`, installation paths, daemon homes, or active manifests. No remote publication or pushes under this authorization.
+- Author candidates from owning branches, never `mine`. Preserve previous branches and worktrees. Integrate shared composer/protocol/panel/schedule files serially.
+
+## Frozen inputs
+
+| Input               | Exact identity / receipt                                                                                                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plan SHA-256        | `7f72057a78072efdbc549a46f11e2f855b5843441f83473565b5531aa508d0b0`                                                                                                                                                                          |
+| Beta base           | `e2f4948f92ce2fc3c4cfb7878f239a88034883de`, peeled `v0.12.0-beta.1`                                                                                                                                                                         |
+| Reconciled custom   | `7ce6fca987721c33ad2b87fcab8d1cb59f4b0c8b`; includes local research and `557a5f9ca` Pi work. Already reconciled before execution.                                                                                                           |
+| Published baseline  | `929d7427163474f5c0cbfc45192436d3de7540c6`, `fork/v0.11.2-fork.2`                                                                                                                                                                           |
+| Neptune custom      | `557a5f9ca1917579605e3829ae32ad10dc5576be`; untracked `plans/` preserved                                                                                                                                                                    |
+| Common carries      | `36fdadba65369dc41feb756d5b2c6004dc2a17e8`                                                                                                                                                                                                  |
+| Infi backend / UI   | `1dd375931a0c4de5e930abb4b2cf2dc52d9cbcc5` / `133ff0f7e0234da8aa684a23a8da31024531242d`                                                                                                                                                     |
+| TMAD baseline       | `139e0c81e8eb51b0f97551171b2217838c3ebab5`                                                                                                                                                                                                  |
+| ACP model switching | `de8ea216a9d4a2a64bb01a593143f02bddcf8d0f`                                                                                                                                                                                                  |
+| A1 diagnostics      | `831f6a858127a41a6eeeef1dce2e6df0c905e18c`; must be explicit candidate ownership                                                                                                                                                            |
+| C1 / C2             | `8468e7f55452a76e32e67444841f3f148b2e8e54` / `94fbbd6a416fb71e2fd36eb539c25560a73718f6`                                                                                                                                                     |
+| Browser repair      | `d2407b79b445ce4da02791715f5253a45f3f6265`                                                                                                                                                                                                  |
+| B9                  | `eb6409c5ae062a6d03a99c2bfe416e9489f828e1`; accepted basket `4e48d0c950ac0af54069617bd35d2f3e28baa59a`                                                                                                                                      |
+| A3 partial          | `ea90c778777c25efa8b64304bfbec8f73d13c3bd`; worker `8689e491-a361-4e6f-a764-50658d9dc26c` archived `2026-10-17T03:16:12.681Z`. Original worktree is absent, not an active writer. No remaining dirty tree could be inspected. Stage 1 only. |
+
+Neptune live configuration was copied, not edited, to `~/.paseo-fork/snapshots/upgrade-0.12.0-beta.1-20261017/` before any candidate configuration exists:
+
+- `desvio.conf`: SHA-256 `78c1065cac32380c08da445d154c6806e0419b37bf34fe458d57d29bae0c2a5a`, actual base `v0.11.2`.
+- `manifest.txt`: SHA-256 `95b83dd57269bd0b754de4adbaeed4ce4ffef5e1d94eb4382fbe17e43d289bf6`. Stale 0.11.1 header retained in snapshot.
+
+The complete Neptune head inventory is retained in the coordinator scratch directory as `beta-upgrade-20261017/neptune-freeze.txt`. Old campaign evidence remains in `/home/ctaylor/repos/paseo-control/fork/campaign/ledger.md`; do not rewrite those historical verdicts.
+
+## Work queue
+
+| Unit                            | Dependencies                   | Owner / branch                                                                                                            | Status and acceptance                                                                                                                                                                 |
+| ------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| U0 input freeze                 | None                           | Coordinator                                                                                                               | Complete: clean local source checkout, reconciled custom verified, live config snapshots and A3 receipt captured.                                                                     |
+| U1 custom beta preservation     | U0, advisor preflight          | Worker `1d6f4cc6-d3ec-472e-a12b-c52313c31824`, `upgrade/custom-0.12.0-beta.1`, `/home/ctaylor/repos/paseo-upgrade-custom` | **In progress, GO sent after PREFLIGHT APPROVE.** Merge exact beta, preserve plan semantics, regenerate lock/validators on Neptune, focused tests, typecheck/lint, advisor gate.      |
+| U2 existing carries             | U1 accepted                    | Coordinator serial integration; owning `-0.12.0-beta.1` branches                                                          | Pending. Common carries, infi backend, infi UI, TMAD baseline, ACP model switch, explicit A1. Retire only proven-equivalent hunks. Basket `upgrade/basket-0.12.0-beta.1`.             |
+| U3 selected PRs                 | U2 accepted                    | Independent subject owners                                                                                                | Pending. Required small order: 7179, 7169, 6762, 7057, 7062, 7146, 7106, 6978, 6264, 6402, 6165. Conditional subjects require bounded adaptation and recorded accept/defer decisions. |
+| U4 TMAD closure                 | U2 accepted, relevant U3 seams | Separate TMAD owner                                                                                                       | Pending. Recover C1/C2/A3, then ordered T0–T10, source-main and explicit source-open decisions. No baseline-only parity claim.                                                        |
+| U5 infi workflow closure        | U2 accepted                    | Separate infi owner                                                                                                       | Pending. Preserve IP-01–14/B9, A2, B1–B8/B10, PR6. Larger PR5 explicitly conditional.                                                                                                 |
+| U6 panic8 accounts/history      | U2 accepted                    | Separate panic8 owner                                                                                                     | Pending. Verify accounts, then independent P8-H1/H2/H3 units. Does not block TMAD parity.                                                                                             |
+| U7 integrated delivery evidence | Accepted candidate units       | Coordinator                                                                                                               | Pending. Exact assembled SHA, artifact digests, browser/compact/nine-locales, packaged Electron and applicable physical iOS/Android/voice checks. Build/package only, no install.     |
+
+## Gates and observations
+
+Neptune private trees are `~/.paseo-fork/candidates/upgrade-0.12.0-beta.1/{beta-baseline,custom}`. The clean beta baseline owns the current build token. Its private `npm ci`, declaration build, typecheck, lint and format checks are running serially with logs under `evidence/beta-baseline/`. Node is pinned to `22.20.0`; use its direct binary path to avoid untrusted candidate mise configuration. Do not share writable dependencies. Git hooks are redirected to an isolated path during installation.
+
+The CLI ignored `--cwd` when creating an agent inside the caller's existing workspace. The U1 worker was told to use absolute candidate paths and `git -C /home/ctaylor/repos/paseo-upgrade-custom` for every write. Its reported process cwd is the original checkout, not permission to modify `custom`.
+
+Advisor acceptance requires both approved inputs as ancestors, actual conflict counts, a resolution and preservation/retirement ledger, silent-adaptation audit, exact-baseline failure attribution, focused lifecycle/Pi/protocol/panel tests, and compact/desktop evidence for changed UI ownership. Release-watch infrastructure stays owned but must not be dispatched. A1 remains a separate later carry. Reconcile A3's old one-time tool-display reset with preservation of explicit user preferences before porting A3.
+
+Control-document checks were attempted locally: typecheck failed because `tsgo` is absent, lint ran but reported 1,100 existing source errors, and format failed because `oxfmt` is absent. These are not candidate results. The control worktree has no installed dependencies. Formatting will use npm scripts on Neptune before commit.
+
+No application changes, builds, tests, packaging, installation, or activation have passed in this execution yet. Full TMAD remains inactive. The source intake matrix owns all 26 register rows and legacy/open additions. Add included source SHA, artifact digest, installed version/source and observed platform behavior per row before activation can be claimed.
+
+Use exact-SHA evidence. Classify inherited failures against a separately checked beta baseline. Never infer runtime behavior from clean merges, feature flags, source inclusion, accepted old packages, or artifacts that have not been installed.
