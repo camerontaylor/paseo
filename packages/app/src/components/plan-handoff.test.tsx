@@ -123,7 +123,11 @@ describe("PlanHandoffButton", () => {
   // The source agent's workspace can be gone by the time the plan is read. The button has to say so
   // and leave no trace: no draft, no navigation, and still usable afterwards.
   it("reports an unavailable source without saving a draft or navigating", () => {
-    harness.session = { client: { sendMessage: harness.sendMessage }, agents: new Map(), workspaces: new Map() };
+    harness.session = {
+      client: { sendMessage: harness.sendMessage },
+      agents: new Map(),
+      workspaces: new Map(),
+    };
 
     press();
 

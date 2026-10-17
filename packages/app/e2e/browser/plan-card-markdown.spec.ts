@@ -76,9 +76,12 @@ test.describe("Plan card markdown", () => {
         .filter({ visible: true });
       await existingDraftComposer.fill("keep this draft");
       await attachFileFromMenu(page, TEST_JSON);
-      await expect(page.getByTestId("composer-file-attachment-pill")).toContainText(TEST_JSON.name, {
-        timeout: 30_000,
-      });
+      await expect(page.getByTestId("composer-file-attachment-pill")).toContainText(
+        TEST_JSON.name,
+        {
+          timeout: 30_000,
+        },
+      );
 
       // The plan card lives in the source agent's tab, so hand off from there.
       await page
