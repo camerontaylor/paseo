@@ -6618,6 +6618,15 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
       clientCapabilities: { [CLIENT_CAPS.durableAgentQueue]: true },
       agentManager: {
         listAgents: vi.fn(() => [{ id: agentId }]),
+        // Proven handler dependency: without it the enqueue request answers with
+        // `rpc_error: Request failed: createStub: "getAgent" was called but not stubbed`, so the
+        // case never reaches its response.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
       },
       agentStorage: {
         get: vi.fn().mockResolvedValue(undefined),
@@ -6651,19 +6660,6 @@ test("agent.queue.enqueue.request admits through the queue service and mirrors t
         intent: "queue",
       },
       socket,
-    );
-
-    // OBSERVE-ONLY, removed before final receipts.
-    console.log(
-      "LANES",
-      JSON.stringify({
-        targeted: targetedMessages.map(({ source, message }) => [
-          message.type,
-          source === socket ? "socket" : "other",
-          message.type === "rpc_error" ? message.payload.error : undefined,
-        ]),
-        broadcast: messages.map((message) => message.type),
-      }),
     );
 
     const delivered = targetedMessages
@@ -6712,7 +6708,16 @@ test("agent.queue.update reaches only the capable sources that subscribed", asyn
       messages,
       targetedMessages,
       agentQueueService: queueService,
-      agentManager: { listAgents: vi.fn(() => [{ id: agentId }]) },
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+        // Same proven dependency as the subscribed case: the enqueue path resolves the agent.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
+      },
       agentStorage: {
         get: vi.fn().mockResolvedValue(undefined),
         list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
