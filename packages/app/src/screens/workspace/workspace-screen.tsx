@@ -1053,6 +1053,12 @@ function WorkspaceScreenContent({
   const supportsProvidersSnapshot = useSessionStore(
     (state) => state.sessions[normalizedServerId]?.serverInfo?.features?.providersSnapshot === true,
   );
+  // COMPAT(packageJsonScripts): added in fork v0.10.1, remove gate after 2027-04-01. Package
+  // scripts are discovered in the menu, so the button must render for a workspace that has none
+  // configured yet; the button itself hides only when neither source can produce a row.
+  const supportsPackageJsonScripts = useSessionStore(
+    (state) => state.sessions[normalizedServerId]?.serverInfo?.features?.packageJsonScripts === true,
+  );
   const workspaceDirectory = workspaceDescriptor?.workspaceDirectory || null;
   const isMissingWorkspaceDirectory = Boolean(workspaceDescriptor) && !workspaceDirectory;
   const [isImportSheetVisible, setIsImportSheetVisible] = useState(false);
@@ -3230,7 +3236,8 @@ function WorkspaceScreenContent({
     () => (
       <View style={styles.headerRight}>
         <PluginHeaderButtons serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
-        {workspaceDescriptor && workspaceDescriptor.scripts.length > 0 ? (
+        {workspaceDescriptor &&
+        (workspaceDescriptor.scripts.length > 0 || supportsPackageJsonScripts) ? (
           <WorkspaceScriptsButton
             serverId={normalizedServerId}
             workspaceId={normalizedWorkspaceId}
@@ -3268,6 +3275,7 @@ function WorkspaceScreenContent({
     ),
     [
       workspaceDescriptor,
+      supportsPackageJsonScripts,
       normalizedServerId,
       normalizedWorkspaceId,
       workspaceDirectory,
