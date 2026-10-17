@@ -1241,6 +1241,12 @@ export function supportsUsageReports(features: ServerInfoStatusPayload["features
   return features?.usageSources === true || features?.providerUsageList === true;
 }
 
+/** Identifies the voice attachment a voice message belongs to. */
+export interface VoiceTransport {
+  attachmentId: string;
+  generation: string;
+}
+
 /**
  * Event selectors a host only understands behind a handshake feature. Anything absent from this
  * map is part of the base protocol and always sent. The client drops mapped selectors the

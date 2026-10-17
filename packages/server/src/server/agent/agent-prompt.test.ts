@@ -17,8 +17,6 @@ import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import {
-  formatSystemNotificationPrompt,
-  isSystemInjectedEnvelope,
   sendPromptToAgent,
   setupFinishNotification,
   waitForAgentRunStartWithTimeout,
