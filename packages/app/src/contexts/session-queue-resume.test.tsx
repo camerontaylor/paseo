@@ -97,6 +97,8 @@ describe("session queue resume", () => {
   let container: HTMLElement | null = null;
 
   beforeEach(() => {
+    // The app's JSX compiles to the classic runtime here, and the provider does not import React.
+    vi.stubGlobal("React", React);
     harness.enqueueAgentMessage.mockClear();
     useQueueOutboxStore.setState({ entries: {} });
     container = document.createElement("div");
@@ -121,6 +123,7 @@ describe("session queue resume", () => {
     root = null;
     container?.remove();
     container = null;
+    vi.unstubAllGlobals();
   });
 
   it("holds a pending outbox entry when the host lacks the durable queue", async () => {
