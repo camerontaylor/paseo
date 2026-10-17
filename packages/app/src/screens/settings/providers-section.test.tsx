@@ -571,6 +571,23 @@ describe("ProvidersSection", () => {
     expect(openProviderSettingsMock).not.toHaveBeenCalled();
   });
 
+  it("hides account editing when the daemon does not support exact replacement", () => {
+    snapshotState.entries = [claudeEntry, claudeWorkEntry];
+    configState.config = makeConfig({
+      "claude-work": {
+        extends: "claude",
+        label: "Claude · Work",
+        env: { CLAUDE_CONFIG_DIR: "/work/claude" },
+      },
+    });
+
+    render();
+
+    expect(
+      container?.querySelector<HTMLElement>('[data-testid="provider-edit-account-claude-work"]'),
+    ).toBeNull();
+  });
+
   it("toggles the provider enabled flag through patchConfig when the switch is pressed", async () => {
     snapshotState.entries = [claudeEntry];
     configState.config = makeConfig();
