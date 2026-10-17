@@ -7463,6 +7463,80 @@ it("MCP negotiates unsupported initialization dates and rejects unsupported requ
 });
 
 describe("list_schedules MCP tool", () => {
+  it("lists scoped and foreign heartbeats while preserving deletion ownership", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mcp-list-owned-heartbeats-"));
+    const logger = createTestLogger();
+    const storage = new AgentStorage(join(directory, "agents"), logger);
+    const agentManager = new AgentManager({ clients: {}, registry: storage, logger });
+    const unexpected = async (): Promise<never> => {
+      throw new Error("Unexpected schedule execution");
+    };
+    const scheduleService = new ScheduleService({
+      paseoHome: directory,
+      logger,
+      agentManager,
+      agentStorage: storage,
+      createAgent: unexpected,
+      createDirectoryWorkspace: unexpected,
+      createPaseoWorktreeWorkspace: unexpected,
+      archiveWorkspace: unexpected,
+    });
+    try {
+      const callerAgentId = randomUUID();
+      const ownHeartbeat = await scheduleService.createOrReplace({
+        prompt: "Check own progress",
+        cadence: { type: "every", everyMs: 60_000 },
+        target: { type: "agent", agentId: callerAgentId },
+      });
+      const foreignHeartbeat = await scheduleService.createOrReplace({
+        prompt: "Check foreign progress",
+        cadence: { type: "every", everyMs: 60_000 },
+        target: { type: "agent", agentId: randomUUID() },
+      });
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        scheduleService,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        callerAgentId,
+        logger,
+      });
+      const listTool = registeredTool(server, "list_schedules");
+      const result = await invokeToolWithParsedInput(listTool, {});
+      const schedules = z
+        .array(z.record(z.string(), z.unknown()))
+        .parse(result.structuredContent.schedules);
+      expect(schedules).toHaveLength(2);
+      expect(schedules).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: ownHeartbeat.id, target: ownHeartbeat.target }),
+          expect.objectContaining({ id: foreignHeartbeat.id, target: foreignHeartbeat.target }),
+        ]),
+      );
+      for (const schedule of schedules) expect(schedule).not.toHaveProperty("runs");
+
+      const deleteTool = registeredTool(server, "delete_heartbeat");
+      await expect(
+        invokeToolWithParsedInput(deleteTool, { id: foreignHeartbeat.id }),
+      ).rejects.toThrow(
+        `Heartbeat ${foreignHeartbeat.id} does not belong to caller ${callerAgentId}`,
+      );
+      expect(await scheduleService.inspect(foreignHeartbeat.id)).toEqual(foreignHeartbeat);
+      const deleted = await invokeToolWithParsedInput(deleteTool, { id: ownHeartbeat.id });
+      expect(deleted.structuredContent).toEqual({ success: true });
+      await expect(scheduleService.inspect(ownHeartbeat.id)).rejects.toThrow(
+        `Schedule not found: ${ownHeartbeat.id}`,
+      );
+      expect(await scheduleService.inspect(foreignHeartbeat.id)).toEqual(foreignHeartbeat);
+      const remaining = await invokeToolWithParsedInput(listTool, {});
+      expect(remaining.structuredContent.schedules).toEqual([
+        expect.objectContaining({ id: foreignHeartbeat.id, target: foreignHeartbeat.target }),
+      ]);
+    } finally {
+      await removeAgentStateDir(agentManager, storage, directory);
+    }
+  });
+
   it("lists new-agent schedules and agent heartbeats without run history", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mcp-list-schedules-"));
     const logger = createTestLogger();
