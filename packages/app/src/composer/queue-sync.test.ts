@@ -319,3 +319,21 @@ describe("resolveQueueStorageErrorRow", () => {
     expect(row?.messageKey).toBe("composer.errors.queuedPersistFailed");
   });
 });
+
+it("pending ids include tombstoned entries even when a snapshot contains them", () => {
+  const tombstoned: PendingQueueEnqueue = {
+    serverId: "server-1",
+    agentId: "agent-1",
+    itemId: "item-1",
+    text: "text",
+    intent: "queue",
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+    createdAt: 1,
+    attempts: 0,
+    removalRequested: true,
+  };
+  const ids = getPendingQueueMessageIds([tombstoned], new Set(["item-1"]));
+  expect([...ids]).toEqual(["item-1"]);
+});

@@ -37,7 +37,7 @@ interface QueueOutboxActions {
   /** Persists the entry before resolving; rolls the in-memory entry back when the write fails. */
   add: (entry: Omit<PendingQueueEnqueue, "createdAt" | "attempts">) => Promise<void>;
   remove: (itemId: string) => void;
-  removeDurably: (itemId: string) => Promise<void>;
+  removeDurably: (itemId: string, preserveRemovalIntent?: boolean) => Promise<void>;
   bumpAttempts: (itemId: string) => void;
   /** The pre-send attempt reservation: resolving means the increment is persisted. */
   bumpAttemptsDurably: (itemId: string) => Promise<void>;
@@ -46,6 +46,13 @@ interface QueueOutboxActions {
   retryEntry: (itemId: string) => void;
   /** The explicit retry reset; the park fence clears only once the reset persists. */
   retryEntryDurably: (itemId: string) => Promise<void>;
+  /**
+   * Durable cancellation intent for a queued row. Fenced for the whole write
+   * (no dispatch can escape); the volatile park fence lifts only after the
+   * tombstone persists, and a failed write restores the prior park.
+   */
+  requestRemoval: (entry: PendingQueueEnqueue) => Promise<void>;
+  markRemovalFailedDurably: (itemId: string) => Promise<void>;
   reportStorageError: (itemId: string | null) => void;
   clearStorageError: () => void;
   entriesForServer: (serverId: string) => PendingQueueEnqueue[];
@@ -223,7 +230,7 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
         });
       },
 
-      removeDurably: (itemId) =>
+      removeDurably: (itemId, preserveRemovalIntent = false) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
           try {
             await awaitOutboxHydration();
@@ -233,6 +240,8 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
           }
           const entry = get().entries[itemId];
           if (!entry) return;
+          // A snapshot containing the item never acknowledges a tombstone.
+          if (preserveRemovalIntent && entry.removalRequested) return;
           get().remove(itemId);
           try {
             await pendingWrite;
@@ -375,6 +384,89 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
           get().clearStorageError();
         }),
 
+      requestRemoval: (entry) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(entry.itemId);
+            throw error;
+          }
+          const previous = get().entries[entry.itemId];
+          const merged: PendingQueueEnqueue = {
+            ...(previous ?? entry),
+            removalRequested: true,
+            removalFailedAt: undefined,
+            // The tombstone is an active removal intent: the persisted park
+            // clears with it (the in-process fence lifts after the write).
+            failedAt: undefined,
+            attempts: 0,
+          };
+          // The dispatch fence holds for the whole write: failedAt and the
+          // volatile fence stay set until the tombstone persists, so no lane
+          // can dispatch a removal or enqueue for this entry mid-write.
+          writesInFlight.add(entry.itemId);
+          set((state) => ({
+            entries: {
+              ...state.entries,
+              [entry.itemId]: merged,
+            },
+          }));
+          try {
+            await pendingWrite;
+          } catch (error) {
+            // Restore the full prior state: the park (if any) stays intact.
+            set((state) => {
+              const current = state.entries[entry.itemId];
+              if (previous) {
+                return { entries: { ...state.entries, [entry.itemId]: previous } };
+              }
+              if (current?.removalRequested) {
+                const next = { ...state.entries };
+                delete next[entry.itemId];
+                return { entries: next };
+              }
+              return state;
+            });
+            get().reportStorageError(entry.itemId);
+            throw error;
+          } finally {
+            writesInFlight.delete(entry.itemId);
+          }
+          // The persisted tombstone supersedes the volatile park fence.
+          if (previous?.failedAt !== undefined || parkedVolatile.has(entry.itemId)) {
+            parkedVolatile.delete(entry.itemId);
+          }
+          get().clearStorageError();
+        }),
+
+      markRemovalFailedDurably: (itemId) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          set((state) => {
+            const entry = state.entries[itemId];
+            if (!entry || !entry.removalRequested) return state;
+            return {
+              entries: {
+                ...state.entries,
+                [itemId]: { ...entry, removalFailedAt: Date.now() },
+              },
+            };
+          });
+          try {
+            await pendingWrite;
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          get().clearStorageError();
+        }),
+
       reportStorageError: (itemId) => {
         set({ storageError: { itemId, at: Date.now() } });
       },
@@ -449,8 +541,10 @@ export async function retryFailedOutboxEntry(input: {
           : [];
       },
       remove: useQueueOutboxStore.getState().removeDurably,
+      get: (itemId) => useQueueOutboxStore.getState().entries[itemId],
       bumpAttempts: useQueueOutboxStore.getState().bumpAttemptsDurably,
       markFailed: useQueueOutboxStore.getState().markFailedDurably,
+      markRemovalFailed: useQueueOutboxStore.getState().markRemovalFailedDurably,
     },
     client: input.client,
     applySnapshot: input.applySnapshot,
@@ -488,9 +582,11 @@ export async function flushQueueOutboxForServer(input: {
     ...input,
     outbox: {
       list: (serverId) => useQueueOutboxStore.getState().entriesForServer(serverId),
+      get: (itemId) => useQueueOutboxStore.getState().entries[itemId],
       remove: store.removeDurably,
       bumpAttempts: store.bumpAttemptsDurably,
       markFailed: store.markFailedDurably,
+      markRemovalFailed: store.markRemovalFailedDurably,
     },
   });
 }

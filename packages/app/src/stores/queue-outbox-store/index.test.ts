@@ -692,3 +692,191 @@ describe("queue outbox hydration failures", () => {
     expect(Object.keys(payload.state?.entries ?? {}).sort()).toEqual(["fresh", "saved"]);
   });
 });
+
+describe("queue outbox tombstones", () => {
+  test("requestRemoval persists the tombstone across a reload", async () => {
+    const { useQueueOutboxStore } = await loadOutbox();
+    await useQueueOutboxStore.getState().add(entry({ itemId: "item-1" }));
+
+    await useQueueOutboxStore.getState().requestRemoval({
+      ...entry({ itemId: "item-1" }),
+      removalRequested: true,
+    });
+
+    expect(useQueueOutboxStore.getState().entries["item-1"]?.removalRequested).toBe(true);
+
+    const reloaded = await loadOutbox();
+    await reloaded.useQueueOutboxStore.persist.rehydrate();
+    expect(reloaded.useQueueOutboxStore.getState().entries["item-1"]?.removalRequested).toBe(true);
+  });
+
+  test("a tombstoned entry flushes as a removal, never an enqueue", async () => {
+    const { flushQueueOutboxForServer, useQueueOutboxStore } = await loadOutbox();
+    await useQueueOutboxStore.getState().add(entry({ itemId: "item-1" }));
+    await useQueueOutboxStore.getState().requestRemoval({
+      ...entry({ itemId: "item-1" }),
+      removalRequested: true,
+    });
+
+    const enqueues: string[] = [];
+    const removals: string[] = [];
+    await flushQueueOutboxForServer({
+      serverId: "server-1",
+      client: {
+        enqueueAgentMessage: async (input) => {
+          enqueues.push(input.itemId);
+          return snapshotWith(input.itemId);
+        },
+        removeQueuedAgentMessage: async (agentId, itemId) => {
+          removals.push(itemId);
+          return snapshotWith(itemId);
+        },
+      },
+      applySnapshot: () => {},
+    });
+
+    expect(enqueues).toEqual([]);
+    expect(removals).toEqual(["item-1"]);
+    expect(useQueueOutboxStore.getState().entries["item-1"]).toBeUndefined();
+  });
+
+  test("a cancellation racing acknowledgement survives until the host confirms removal", async () => {
+    const { flushQueueOutboxForServer, useQueueOutboxStore } = await loadOutbox();
+    await useQueueOutboxStore.getState().add(entry({ itemId: "item-1" }));
+
+    let releaseEnqueue: ((snapshot: AgentQueueSnapshot) => void) | null = null;
+    const enqueues: string[] = [];
+    const removals: string[] = [];
+    const flush = flushQueueOutboxForServer({
+      serverId: "server-1",
+      client: {
+        enqueueAgentMessage: async (input) => {
+          enqueues.push(input.itemId);
+          return new Promise<AgentQueueSnapshot>((resolve) => {
+            releaseEnqueue = () => resolve(snapshotWith(input.itemId));
+          });
+        },
+        removeQueuedAgentMessage: async (_agentId, itemId) => {
+          removals.push(itemId);
+          return snapshotWith(itemId);
+        },
+      },
+      applySnapshot: () => {},
+    });
+
+    // Deterministic barrier: the enqueue has been invoked and hangs.
+    await vi.waitFor(() => expect(enqueues).toEqual(["item-1"]));
+
+    // The user cancels while the enqueue is in flight: a durable tombstone.
+    await useQueueOutboxStore.getState().requestRemoval({
+      ...entry({ itemId: "item-1", text: "hello" }),
+      removalRequested: true,
+    });
+    releaseEnqueue!(snapshotWith("item-1"));
+    await flush;
+
+    // The raced tombstone forced the host removal before the entry settled.
+    expect(enqueues).toEqual(["item-1"]);
+    expect(removals).toEqual(["item-1"]);
+    expect(useQueueOutboxStore.getState().entries["item-1"]).toBeUndefined();
+  });
+
+  test("a snapshot containing the item does not clear a tombstoned entry", async () => {
+    const { useQueueOutboxStore } = await loadOutbox();
+    await useQueueOutboxStore.getState().requestRemoval({
+      ...entry({ itemId: "item-1" }),
+      removalRequested: true,
+    });
+
+    await useQueueOutboxStore.getState().removeDurably("item-1", true);
+
+    expect(useQueueOutboxStore.getState().entries["item-1"]?.removalRequested).toBe(true);
+  });
+
+  test("a failed removal keeps the tombstone, records the failure, and parks at the cap", async () => {
+    const { flushQueueOutboxForServer, useQueueOutboxStore } = await loadOutbox([
+      entry({
+        itemId: "item-1",
+        removalRequested: true,
+        removalFailedAt: 1,
+        attempts: QUEUE_OUTBOX_MAX_ATTEMPTS - 1,
+      }),
+    ]);
+    const enqueues: string[] = [];
+    const removals: string[] = [];
+    const exhausted: string[] = [];
+
+    await flushQueueOutboxForServer({
+      serverId: "server-1",
+      client: {
+        enqueueAgentMessage: async (input) => {
+          enqueues.push(input.itemId);
+          return snapshotWith(input.itemId);
+        },
+        removeQueuedAgentMessage: async (_agentId, itemId) => {
+          removals.push(itemId);
+          throw new Error("removal transport down");
+        },
+      },
+      applySnapshot: () => {},
+      onEntryExhausted: (failed) => exhausted.push(failed.itemId),
+    });
+
+    // Never re-enqueued; the failure outcome is recorded; the cap parks it.
+    expect(enqueues).toEqual([]);
+    expect(removals).toEqual(["item-1"]);
+    expect(useQueueOutboxStore.getState().entries["item-1"]?.removalRequested).toBe(true);
+    expect(useQueueOutboxStore.getState().entries["item-1"]?.removalFailedAt).toBeDefined();
+    expect(useQueueOutboxStore.getState().entries["item-1"]?.failedAt).toBeDefined();
+    expect(exhausted).toEqual(["item-1"]);
+  });
+
+  test("requestRemoval of an unknown id creates a synthetic tombstone", async () => {
+    const { useQueueOutboxStore } = await loadOutbox();
+
+    await useQueueOutboxStore.getState().requestRemoval({
+      serverId: "server-1",
+      agentId: "agent-1",
+      itemId: "accepted-row",
+      text: "host has this",
+      intent: "queue",
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+      createdAt: 1,
+      attempts: 0,
+      removalRequested: true,
+    });
+
+    expect(useQueueOutboxStore.getState().entries["accepted-row"]?.removalRequested).toBe(true);
+  });
+
+  test("a parked tombstone is removed from a host that contains the item", async () => {
+    const { flushQueueOutboxForServer, useQueueOutboxStore } = await loadOutbox([
+      entry({ itemId: "item-1", attempts: QUEUE_OUTBOX_MAX_ATTEMPTS, failedAt: 1 }),
+    ]);
+
+    // The user cancels the parked row: the fence must lift so the lane can
+    // dispatch the host removal.
+    await useQueueOutboxStore.getState().requestRemoval({
+      ...entry({ itemId: "item-1", attempts: QUEUE_OUTBOX_MAX_ATTEMPTS, failedAt: 1 }),
+      removalRequested: true,
+    });
+
+    const removals: string[] = [];
+    await flushQueueOutboxForServer({
+      serverId: "server-1",
+      client: {
+        enqueueAgentMessage: async (input) => snapshotWith(input.itemId),
+        removeQueuedAgentMessage: async (_agentId, itemId) => {
+          removals.push(itemId);
+          return snapshotWith(itemId);
+        },
+      },
+      applySnapshot: () => {},
+    });
+
+    expect(removals).toEqual(["item-1"]);
+    expect(useQueueOutboxStore.getState().entries["item-1"]).toBeUndefined();
+  });
+});

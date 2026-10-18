@@ -1838,12 +1838,19 @@ export const useSessionStore = create<SessionStore>()(
         // rows and the outbox untouched so the next snapshot retries the ack.
         const outbox = useQueueOutboxStore.getState();
         const acceptedIds = new Set(snapshot.items.map((item) => item.id));
-        const acknowledged = outbox
-          .entriesForAgent(serverId, snapshot.agentId)
-          .filter((entry) => acceptedIds.has(entry.itemId) && entry.failedAt === undefined);
+        const acknowledged = outbox.entriesForAgent(serverId, snapshot.agentId).filter(
+          (entry) =>
+            acceptedIds.has(entry.itemId) &&
+            entry.failedAt === undefined &&
+            // A snapshot containing the item never acknowledges a pending
+            // cancellation — the host row must actually be removed first.
+            !entry.removalRequested,
+        );
         if (acknowledged.length > 0) {
           try {
-            await Promise.all(acknowledged.map((entry) => outbox.removeDurably(entry.itemId)));
+            await Promise.all(
+              acknowledged.map((entry) => outbox.removeDurably(entry.itemId, true)),
+            );
           } catch {
             outbox.reportStorageError(null);
             return;

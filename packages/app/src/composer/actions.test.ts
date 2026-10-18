@@ -29,6 +29,7 @@ import {
   editQueuedComposerMessage,
   findForgeItemByOption,
   resolveQueueSubmitClearing,
+  resolveQueuedEditSave,
   runQueuedSubmission,
   isAttachmentSelectedForForgeItem,
   isQueueRevisionConflictError,
@@ -1824,5 +1825,58 @@ describe("queue submission clearing contracts", () => {
     expect(o.clearText).not.toHaveBeenCalled();
     expect(o.clearAttachments).not.toHaveBeenCalled();
     expect(clearSentAttachments).toHaveBeenCalledWith(o.submittedOutgoing);
+  });
+});
+
+describe("resolveQueuedEditSave", () => {
+  const base = {
+    appliedRevision: 4,
+    conflicted: false,
+    force: false,
+    conflictMessage: "changed on another device",
+  };
+
+  it("skips a no-op save when the row already holds the text", () => {
+    expect(
+      resolveQueuedEditSave({
+        ...base,
+        text: "row text",
+        baselineText: "row text",
+        baselineRevision: 4,
+      }),
+    ).toEqual({ kind: "noop" });
+  });
+
+  it("conflicts without an RPC when a remote edit intervened before save", () => {
+    expect(
+      resolveQueuedEditSave({
+        ...base,
+        text: "new text",
+        baselineText: "old",
+        baselineRevision: 2,
+      }),
+    ).toEqual({ kind: "conflict", message: "changed on another device" });
+  });
+
+  it("a conflicted fence blocks implicit saves but yields to the explicit force", () => {
+    expect(
+      resolveQueuedEditSave({
+        ...base,
+        conflicted: true,
+        text: "draft",
+        baselineText: "row",
+        baselineRevision: 4,
+      }),
+    ).toEqual({ kind: "conflict", message: "changed on another device" });
+    expect(
+      resolveQueuedEditSave({
+        ...base,
+        conflicted: true,
+        force: true,
+        text: "draft",
+        baselineText: "row",
+        baselineRevision: 2,
+      }),
+    ).toEqual({ kind: "rpc", revision: 4 });
   });
 });

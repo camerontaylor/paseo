@@ -19,6 +19,7 @@ import { type ViewedTimelineOwner } from "@/timeline/viewed-timeline-sync";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import { parseServerInfoStatusPayload } from "@getpaseo/protocol/messages";
 import { flushQueueOutboxForServer } from "@/stores/queue-outbox-store";
+import { createQueueOutboxFlushClient } from "@/composer/actions";
 import {
   buildAgentAttentionNotificationPayload,
   type AgentAttentionReason,
@@ -629,7 +630,17 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         if (serverInfo.features?.durableAgentQueueV1 === true) {
           void flushQueueOutboxForServer({
             serverId,
-            client,
+            client: createQueueOutboxFlushClient({
+              client,
+              getAppliedRevision: (agentId) =>
+                useSessionStore
+                  .getState()
+                  .sessions[serverId]?.queuedMessageRevisions.get(agentId) ?? 0,
+              onRevisionConflict: async (agentId) => {
+                const snapshot = await client.listQueuedAgentMessages(agentId);
+                await useSessionStore.getState().applyAgentQueueSnapshot(serverId, snapshot);
+              },
+            }),
             applySnapshot: (snapshot) =>
               useSessionStore.getState().applyAgentQueueSnapshot(serverId, snapshot),
           }).catch((error) => {
