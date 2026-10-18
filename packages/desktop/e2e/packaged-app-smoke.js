@@ -119,18 +119,26 @@ function shellQuoteCliArg(value) {
   return shellQuote(String(value));
 }
 
-function getTerminalHookSmokeCommand(marker) {
-  if (process.platform === "win32") {
+function getTerminalHookSmokeCommand(marker, platform = process.platform) {
+  // Keep the complete marker out of echoed input, including wrapped command lines.
+  const midpoint = Math.floor(marker.length / 2);
+  const parts = [marker.slice(0, midpoint), marker.slice(midpoint)];
+  if (platform === "win32") {
+    const literals = parts.map((part) => `'${part.replace(/'/g, "''")}'`);
     const script = [
       "& $env:PASEO_HOOK_CLI hooks codex Stop",
       "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
-      `Write-Output '${marker}'`,
+      `Write-Output (${literals.join(" + ")})`,
     ].join("; ");
     const encodedScript = Buffer.from(script, "utf16le").toString("base64");
     return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodedScript}`;
   }
 
-  return `"$PASEO_HOOK_CLI" hooks codex Stop && echo ${marker}`;
+  return `"$PASEO_HOOK_CLI" hooks codex Stop && printf '%s%s\\n' ${parts.map(shellQuote).join(" ")}`;
+}
+
+function hasTerminalHookMarker(lines, marker) {
+  return lines.some((line) => line.trimEnd() === marker);
 }
 
 function getShellCommand(script) {
@@ -149,7 +157,10 @@ function getShellCommand(script) {
 
 function createDefaultDaemonEnv(extraEnv) {
   return {
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("PASEO_"))),
+    // A host ZDOTDIR would load user startup files outside the isolated HOME.
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("PASEO_") && key !== "ZDOTDIR"),
+    ),
     ...extraEnv,
   };
 }
@@ -749,7 +760,7 @@ async function smokeCliTerminal({ appPath, env }) {
         label: "Bundled CLI shim terminal capture",
       });
       const lines = Array.isArray(capture?.lines) ? capture.lines : [];
-      if (lines.join("\n").includes(marker)) {
+      if (hasTerminalHookMarker(lines, marker)) {
         console.log("Packaged desktop smoke: terminal hook command completed");
         return;
       }
@@ -986,6 +997,9 @@ async function smokePackagedDesktopApp({
 }
 
 module.exports = {
+  createDefaultDaemonEnv,
+  getTerminalHookSmokeCommand,
+  hasTerminalHookMarker,
   smokePackagedDesktopApp,
 };
 

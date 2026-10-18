@@ -9,11 +9,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const { createDefaultDaemonEnv, getTerminalHookSmokeCommand, hasTerminalHookMarker } =
+  createRequire(import.meta.url)("../../e2e/packaged-app-smoke.js") as {
+    createDefaultDaemonEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv;
+    getTerminalHookSmokeCommand(marker: string, platform?: NodeJS.Platform): string;
+    hasTerminalHookMarker(lines: string[], marker: string): boolean;
+  };
 
 function writeExecutable(filePath: string, contents: string): void {
   writeFileSync(filePath, contents, "utf8");
@@ -174,6 +181,86 @@ describe("desktop packaging", () => {
       expect(result.stdout).not.toContain("main-executable");
     } finally {
       rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("packaged terminal smoke", () => {
+  const marker = "paseo-packaged-terminal-smoke-1234567890";
+
+  it("isolates inherited zsh configuration while preserving explicit environment overrides", () => {
+    vi.stubEnv("ZDOTDIR", "/host/zsh-config");
+    vi.stubEnv("HOME", "/host/home");
+    vi.stubEnv("SHELL", "/bin/zsh");
+    vi.stubEnv("PASEO_HOME", "/host/paseo");
+    try {
+      const env = createDefaultDaemonEnv({ HOME: "/isolated/home", USERPROFILE: "/isolated/home" });
+      expect(env.ZDOTDIR).toBeUndefined();
+      expect(env.HOME).toBe("/isolated/home");
+      expect(env.USERPROFILE).toBe("/isolated/home");
+      expect(env.SHELL).toBe("/bin/zsh");
+      expect(env.PASEO_HOME).toBeUndefined();
+      expect(createDefaultDaemonEnv({ ZDOTDIR: "/explicit/zsh-config" }).ZDOTDIR).toBe(
+        "/explicit/zsh-config",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["darwin", "win32"] as const)(
+    "rejects echoed and wrapped %s command input",
+    (platform) => {
+      const command = getTerminalHookSmokeCommand(marker, platform);
+      const wrapped = command.match(/.{1,40}/g) ?? [];
+      expect(command).not.toContain(marker);
+      expect(hasTerminalHookMarker([command, ...wrapped], marker)).toBe(false);
+      expect(hasTerminalHookMarker([`prompt> ${marker}`, `${marker}-extra`], marker)).toBe(false);
+      expect(hasTerminalHookMarker([marker, "prompt>"], marker)).toBe(true);
+      expect(hasTerminalHookMarker([`${marker}   `], marker)).toBe(true);
+    },
+  );
+
+  it("keeps PowerShell hook failure ahead of split-generated output", () => {
+    const command = getTerminalHookSmokeCommand(marker, "win32");
+    const encoded = command.split(" ").at(-1)!;
+    const script = Buffer.from(encoded, "base64").toString("utf16le");
+    expect(command).toMatch(/^powershell.exe -NoProfile -NonInteractive -EncodedCommand /);
+    expect(script).toMatch(
+      /^& \$env:PASEO_HOOK_CLI hooks codex Stop; if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}; Write-Output \('[^']+' \+ '[^']+'\)$/,
+    );
+    expect(script).not.toContain(marker);
+  });
+
+  it.each([0, 7])("requires real hook success before capturing output (exit %i)", (exitCode) => {
+    const root = mkdtempSync(join(tmpdir(), "paseo-smoke-hook-test-"));
+    const windows = process.platform === "win32";
+    const hook = join(root, windows ? "hook.cmd" : "hook");
+    writeExecutable(
+      hook,
+      windows
+        ? `@echo off\r\nif not "%*"=="hooks codex Stop" exit /b 99\r\nexit /b ${exitCode}\r\n`
+        : `#!/bin/sh\n[ "$*" = "hooks codex Stop" ] || exit 99\nexit ${exitCode}\n`,
+    );
+    try {
+      const command = getTerminalHookSmokeCommand(marker);
+      const result = spawnSync(
+        windows ? "cmd.exe" : "/bin/sh",
+        windows ? ["/d", "/c", command] : ["-c", command],
+        { encoding: "utf8", timeout: 5_000, env: { ...process.env, PASEO_HOOK_CLI: hook } },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(exitCode);
+      expect(result.stderr).toBe("");
+      expect(result.stdout.replace(/\r\n/g, "\n")).toBe(exitCode === 0 ? `${marker}\n` : "");
+      const capturedLines = [
+        command,
+        ...(command.match(/.{1,40}/g) ?? []),
+        ...result.stdout.split(/\r?\n/),
+      ];
+      expect(hasTerminalHookMarker(capturedLines, marker)).toBe(exitCode === 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
