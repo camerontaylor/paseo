@@ -1,0 +1,105 @@
+{
+  "result": "PASS",
+  "checked_at_utc": "2026-10-18T04:18:39.630938+00:00",
+  "source_sha": "1aa33f374428db47e8e969110fbd32105a98ebd8",
+  "source_tree": "ba91e63a2b5fdfbee94cac0d48f29083453b5ddc",
+  "version": "0.12.0-beta.1.fork.1",
+  "run_id": 39095502619,
+  "run_url": "https://github.com/camerontaylor/paseo/actions/runs/39095502619",
+  "single_dispatch": true,
+  "packages": [
+    {
+      "name": "@camerontaylor/paseo-highlight",
+      "version": "0.12.0-beta.1.fork.1",
+      "latest": "0.12.0-beta.1.fork.1",
+      "fork": "0.8.0-fork.1",
+      "sha256": "3db8d8a52e57f623a8f71adfb955c56ab9521249b1ecc54f4868de539b8184f1",
+      "integrity": "sha512-7+FxzICgArMXOP9/gF5MspwGRqKPZ0Wili/ZP9h5sbh/37uJeURLuetSwggYE+LPGKRO3mbWIzP6jo5oZ4dv1w==",
+      "internal_exact_pins": {}
+    },
+    {
+      "name": "@camerontaylor/paseo-relay",
+      "version": "0.12.0-beta.1.fork.1",
+      "latest": "0.12.0-beta.1.fork.1",
+      "fork": "0.8.0-fork.1",
+      "sha256": "68cdd99099a220c0eeaae099201d8591cc93fa37e6cf703dea3b5d91c049fc1a",
+      "integrity": "sha512-hMD78NSYV0sIPwsUiRTyDzqam01L8M0MgDFyYRfIwriunCobmA3EiueHzfk4G24rUGCkMI3g+u3fl3PGGjh0QA==",
+      "internal_exact_pins": {}
+    },
+    {
+      "name": "@camerontaylor/paseo-protocol",
+      "version": "0.12.0-beta.1.fork.1",
+      "latest": "0.12.0-beta.1.fork.1",
+      "fork": "0.8.0-fork.1",
+      "sha256": "0f854f3ff2081f796e1d932cb7f2926f32205e144941313db285a32e74ecef97",
+      "integrity": "sha512-8nNwm7lLRFPUXXnnkoFwsTVUBw+KJsdOl18ehomafWkuOHDOIM/qT4r0Xx7ZLPKT6VSojsUhSI+7VOBj61IBoQ==",
+      "internal_exact_pins": {}
+    },
+    {
+      "name": "@camerontaylor/paseo-client",
+      "version": "0.12.0-beta.1.fork.1",
+      "latest": "0.12.0-beta.1.fork.1",
+      "fork": "0.8.0-fork.1",
+      "sha256": "a1b710333668d3ad5ae3b60db9221ae58ad5077db5787ea238f707c6b0e00ab2",
+      "integrity": "sha512-lmMG5/N8rT09XVmiOedomXXivWU8Xgu0AI43yRUUPM8FB/z8CGkkry02VTb8+5uz17gukf1dO+xGzPC/Df8p/g==",
+      "internal_exact_pins": {
+        "@camerontaylor/paseo-protocol": "0.12.0-beta.1.fork.1",
+        "@camerontaylor/paseo-relay": "0.12.0-beta.1.fork.1"
+      }
+    },
+    {
+      "name": "@camerontaylor/paseo-plugin",
+      "version": "0.12.0-beta.1.fork.1",
+      "latest": "0.12.0-beta.1.fork.1",
+      "fork": "0.8.0-fork.1",
+      "sha256": "affca54497a2742e179acb9d8f2e42df89e3416d8b9a56fbfb40ce02ff4afb4c",
+      "integrity": "sha512-JY3T0kgNhdxqPlbt4QD/eeT1XEwdUurU8hnkcAIuUlKho4hvseKpdL6s3JZdHljfJMBWX3yEoGhO+SXfCkBJ9Q==",
+      "internal_exact_pins": {
+        "@camerontaylor/paseo-client": "0.12.0-beta.1.fork.1",
+        "@camerontaylor/paseo-protocol": "0.12.0-beta.1.fork.1"
+      }
+    },
+    {
+      "name": "@camerontaylor/paseo-server",
+      "version": "0.12.0-beta.1.fork.1",
+      "latest": "0.12.0-beta.1.fork.1",
+      "fork": "0.8.0-fork.1",
+      "sha256": "4391097f4c0bfc6f653d4cfbecd34f6ea4387c3aa8c9a5e7b88b73f08a7220ba",
+      "integrity": "sha512-NbW3Zu6UxLzOt7VL8oEnuW/4qCt6Xe+WX90bNSPzl6KA8y+PzMOlht+iof50eT258835WC2P069474BpUdrNQA==",
+      "internal_exact_pins": {
+        "@camerontaylor/paseo-client": "0.12.0-beta.1.fork.1",
+        "@camerontaylor/paseo-highlight": "0.12.0-beta.1.fork.1",
+        "@camerontaylor/paseo-plugin": "0.12.0-beta.1.fork.1",
+        "@camerontaylor/paseo-protocol": "0.12.0-beta.1.fork.1",
+        "@camerontaylor/paseo-relay": "0.12.0-beta.1.fork.1"
+      }
+    },
+    {
+      "name": "@camerontaylor/paseo-cli",
+      "version": "0.12.0-beta.1.fork.1",
+      "latest": "0.12.0-beta.1.fork.1",
+      "fork": "0.8.0-fork.1",
+      "sha256": "a609571b14bdc672f732cb3b0432820cc49f0314dc7e388c21a31b565343e50a",
+      "integrity": "sha512-uRL6YIOab6deg3dCcdSGlfBw4rJXAjfhdaslOU/XrIJ67oUmVvR0/W91QCC78dpb3i1UZZFI6NgqiOn8DlcFJA==",
+      "internal_exact_pins": {
+        "@camerontaylor/paseo-client": "0.12.0-beta.1.fork.1",
+        "@camerontaylor/paseo-protocol": "0.12.0-beta.1.fork.1",
+        "@camerontaylor/paseo-server": "0.12.0-beta.1.fork.1"
+      }
+    }
+  ],
+  "tarball_integrity": "PASS_ALL_7",
+  "internal_exact_pins": "PASS_ALL_7",
+  "registry_signatures": "PASS_ALL_7",
+  "source_run_and_workflow_provenance": "PASS_ALL_7",
+  "release_assets_equal_registry_tarballs": "PASS_ALL_7",
+  "source_tag": "fork/v0.12.0-beta.1.fork.1",
+  "source_tag_target": "1aa33f374428db47e8e969110fbd32105a98ebd8",
+  "github_latest": "fork/v0.12.0-beta.1.fork.1",
+  "fork_dist_tag_outcome": "All seven update attempts HTTP403; fork remains 0.8.0-fork.1",
+  "original_partial_registry_propagation_receipts_preserved": true,
+  "release_limitations_recorded": true,
+  "mac_installs": "NOT_STARTED_BOTH_OLD_VERSION",
+  "execution_state": "STOPPED_FOR_MIGRATION",
+  "remaining_gaps": "Both real-provider U7 gaps; partial campaign; physical platforms/locales/voice/background; Saturn arm64; PowerShell runtime"
+}

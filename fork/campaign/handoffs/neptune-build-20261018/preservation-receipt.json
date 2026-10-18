@@ -1,0 +1,147 @@
+{
+  "result": "PASS",
+  "checked_at_utc": "2026-10-18T04:22:17.910183+00:00",
+  "source_host": "neptune",
+  "destination_host": "triton",
+  "destination_root": "/home/ctaylor/.paseo-fork/migration/upgrade-0.12.0-beta.1-20261018",
+  "source_evidence_root": "/Users/ctaylor/.paseo-fork/candidates/upgrade-0.12.0-beta.1/evidence",
+  "complete_manifest": true,
+  "entries": 2528,
+  "regular_files": 1976,
+  "regular_file_bytes": 1176863435,
+  "complete_subtrees": ["evidence", "artifacts", "supplemental"],
+  "objects": [
+    {
+      "path": "evidence.tar",
+      "bytes": 758628352,
+      "source_sha256": "bff5946f36771c0407452f90a584a1fbd34626489d4290007f317bf5b3eb7535",
+      "destination_sha256": "bff5946f36771c0407452f90a584a1fbd34626489d4290007f317bf5b3eb7535",
+      "result": "PASS"
+    },
+    {
+      "path": "supplemental.tar",
+      "bytes": 30146560,
+      "source_sha256": "fa1a62377e9a97874ed2f67feff00d553cc27e10ed5ea88eb2d4afa9ad4826c6",
+      "destination_sha256": "fa1a62377e9a97874ed2f67feff00d553cc27e10ed5ea88eb2d4afa9ad4826c6",
+      "result": "PASS"
+    },
+    {
+      "path": "file-manifest.json",
+      "bytes": 589251,
+      "source_sha256": "3f5a40a369c72177031ca369c01a4514af89655e09c5611a72dda4494ebc99bd",
+      "destination_sha256": "3f5a40a369c72177031ca369c01a4514af89655e09c5611a72dda4494ebc99bd",
+      "result": "PASS"
+    },
+    {
+      "path": "artifacts/Paseo-0.12.0-beta.1-mine.261018-0125-x64.zip",
+      "bytes": 196445986,
+      "source_sha256": "03efd54fc281442295ff3347f76992e4161d0cf548f2384fbaafabaa70936c3f",
+      "destination_sha256": "03efd54fc281442295ff3347f76992e4161d0cf548f2384fbaafabaa70936c3f",
+      "result": "PASS"
+    },
+    {
+      "path": "artifacts/rollback-0.11.2-mine.261011-1857-x64.zip",
+      "bytes": 196073601,
+      "source_sha256": "f9893673d68f82a0ade53d2b1edcf904ee9b115ff283199832f04696590b674e",
+      "destination_sha256": "f9893673d68f82a0ade53d2b1edcf904ee9b115ff283199832f04696590b674e",
+      "result": "PASS"
+    }
+  ],
+  "representation_differences": [
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Electron Framework.framework/Electron Framework",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Electron Framework.framework/Helpers",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Electron Framework.framework/Libraries",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Electron Framework.framework/Resources",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Electron Framework.framework/Versions/Current",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Mantle.framework/Mantle",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Mantle.framework/Resources",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Mantle.framework/Versions/Current",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/ReactiveObjC.framework/ReactiveObjC",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/ReactiveObjC.framework/Resources",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/ReactiveObjC.framework/Versions/Current",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Squirrel.framework/Resources",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Squirrel.framework/Squirrel",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    },
+    {
+      "path": "evidence/build-deploy/snapshots/known-good-Paseo.app/Contents/Frameworks/Squirrel.framework/Versions/Current",
+      "kind": "linux_symlink_mode",
+      "source": 493,
+      "destination": 511
+    }
+  ],
+  "macos_metadata": "Original tar and ZIP bytes exact. Linux extraction reports unsupported Apple provenance xattrs and 14 symlink-mode differences; all targets and regular-file/directory modes exact. Restore apps from original Mac archives.",
+  "publication_verification": "ALL_7_PASS",
+  "source_sha": "1aa33f374428db47e8e969110fbd32105a98ebd8",
+  "source_tree": "ba91e63a2b5fdfbee94cac0d48f29083453b5ddc",
+  "mac_artifact_version": "0.12.0-beta.1-mine.261018-0125",
+  "npm_version": "0.12.0-beta.1.fork.1",
+  "both_installed_mac_versions": "0.11.2-mine.261011-1857",
+  "execution_state": "STOPPED_FOR_MIGRATION_NO_DEPLOYMENTS",
+  "tooling": "DRAFT_NOT_LAUNCH_READY_NO_FINAL_REVIEW_OR_AUTHORIZATION_BINDING",
+  "clone_deletions": "NONE; publication of separate handover ref must be verified before task clone deletion",
+  "scope": "This beta build owner only; unrelated Neptune worktrees are outside this receipt"
+}

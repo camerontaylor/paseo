@@ -1,0 +1,17 @@
+diff --git 1/../evidence/build-deploy/snapshots/package.sh 2/../evidence/build-deploy/config/package.sh
+old mode 100644
+new mode 100755
+index 13208fa7a..693edcb55
+--- 1/../evidence/build-deploy/snapshots/package.sh
++++ 2/../evidence/build-deploy/config/package.sh
+@@ -204,6 +204,10 @@ log "3/3 electron-builder (unsigned, no notarization, v$VERSION, $APP_NAME)"
+     -c.mac.notarize=false \
+     -c.mac.target=dir \
+     -c.extraMetadata.version="$VERSION" \
++    -c.extraMetadata.paseoSourceSha="${PASEO_PACKAGE_SOURCE_SHA:?}" \
++    -c.extraMetadata.paseoSourceTree="${PASEO_PACKAGE_SOURCE_TREE:?}" \
++    -c.mac.extendInfo.PaseoSourceSHA="${PASEO_PACKAGE_SOURCE_SHA:?}" \
++    -c.mac.extendInfo.PaseoSourceTree="${PASEO_PACKAGE_SOURCE_TREE:?}" \
+     ${BUILDER_NAME_ARGS[@]+"${BUILDER_NAME_ARGS[@]}"} )
+ 
+ # electron-builder names the .app directory after executableName, which the

@@ -1,0 +1,21 @@
+# INERT historical Neptune example; migration paths require review. NOT launch-ready.
+# Isolated accepted beta packaging. Do not use desvio build: it creates new --no-ff assembly commits.
+# Manifest is the exact published control manifest; prepare.sh verifies every pin and serial ancestry.
+# Use ./run-build.sh, which invokes the established desvio run package path.
+DESVIO_REPO="/Users/ctaylor/.paseo-fork/candidates/upgrade-0.12.0-beta.1/custom"
+DESVIO_WORKTREE="/Volumes/offload/neptune/.cache/paseo-fork-release/upgrade-0.12.0-beta.1-1aa33f374/mac-x64"
+DESVIO_STATE="/Users/ctaylor/.paseo-fork/candidates/upgrade-0.12.0-beta.1/evidence/build-deploy/state"
+DESVIO_MANIFEST="/Users/ctaylor/.paseo-fork/candidates/upgrade-0.12.0-beta.1/evidence/build-deploy/config/manifest.txt"
+DESVIO_BRANCH="upgrade/package-0.12.0-beta.1"
+DESVIO_NAME="paseo-beta-candidate"
+DESVIO_REMOTE="upstream"
+DESVIO_BASE="v0.12.0-beta.1"
+DESVIO_AUTO_RESOLVE=0
+export PATH="/Users/ctaylor/.local/share/mise/installs/node/22.20.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export LEFTHOOK=0 HUSKY=0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath
+export GIT_CONFIG_VALUE_0="/Users/ctaylor/.paseo-fork/candidates/upgrade-0.12.0-beta.1/evidence/build-deploy/state/hooks"
+export ONNXRUNTIME_NODE_INSTALL=skip PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD=0
+export PASEO_PACKAGE_VERSION="0.12.0-beta.1-mine.261018-0125"
+export PASEO_PACKAGE_SOURCE_SHA="1aa33f374428db47e8e969110fbd32105a98ebd8"
+export PASEO_PACKAGE_SOURCE_TREE="ba91e63a2b5fdfbee94cac0d48f29083453b5ddc"
+export PASEO_CONF="/Users/ctaylor/.paseo-fork/candidates/upgrade-0.12.0-beta.1/evidence/build-deploy/config/paseo.conf"

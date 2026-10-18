@@ -1,0 +1,58 @@
+{
+  "status": "STOPPED_FOR_MIGRATION_NOT_LAUNCH_READY",
+  "reason": "No final persistent-advisor ACCEPT or final authorization binding. Saturn counterpart predates latest Neptune edits. Previous two-mac-worker.sha256 is historical and stale. Migration STOP overrides prior deploy approval.",
+  "files": [
+    {
+      "relative_path": "deploy-neptune-staged.sh",
+      "sha256": "0150727b25a9b656b32d35150a242e9c8318061c0c4dca7c84c73aad3f1bb29a",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    },
+    {
+      "relative_path": "neptune-deploy-staged.plist",
+      "sha256": "b1d7ed0beeb8f54e87a83a26221bb3124587aff023566dbb4432a6cda180f754",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    },
+    {
+      "relative_path": "bounded-run.py",
+      "sha256": "de44b007bde037e6711823cb254dd05e09b8588429d0dd1eb1da7ff84d21d6c7",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    },
+    {
+      "relative_path": "probe-installed.py",
+      "sha256": "4e51e68495a2430fcec5b5bcbe7576d334ac56f5b65d1749e12e675946962886",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    },
+    {
+      "relative_path": "offhost-neptune-worker.py",
+      "sha256": "6fec035e15fbe5e6a395acdaedded1aabd7999bcff397d51160e1fe1fd06fa9e",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    },
+    {
+      "relative_path": "deployment-prerequisites.sha256",
+      "sha256": "ff0db8d0f7bd2cebb1d7bb0c4bd588ce8ef741629eef09e8985a618e76389692",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    },
+    {
+      "relative_path": "saturn-stage/run-saturn-build.sh",
+      "sha256": "bfc226a0e207c4a5fd96410f6be270436e55f5122e1a4df8642d0a0b7a1491f5",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    },
+    {
+      "relative_path": "saturn-stage/deploy-saturn-staged.sh",
+      "sha256": "d68945a1cd6e79f279b75dfd050a3e5e275daaae2a4a8821a6abe25767ff4dfd",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    },
+    {
+      "relative_path": "saturn-stage/saturn-deploy-staged.plist",
+      "sha256": "a50a1e8531f8d2b95725d67ab12e6f0fae2a7a634f0abf5cb45bc425e10b5f12",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    },
+    {
+      "relative_path": "saturn-stage/offhost-neptune-worker.py",
+      "sha256": "6fec035e15fbe5e6a395acdaedded1aabd7999bcff397d51160e1fe1fd06fa9e",
+      "status": "DRAFT_NOT_LAUNCH_READY"
+    }
+  ],
+  "private_preservation_root": "/home/ctaylor/.paseo-fork/migration/upgrade-0.12.0-beta.1-20261018/evidence/build-deploy",
+  "source_sha": "1aa33f374428db47e8e969110fbd32105a98ebd8"
+}
