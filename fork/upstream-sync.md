@@ -14,6 +14,12 @@ branches. Add to this record as syncs teach you more.
 | Upstream merges or replaces a carried PR | Remove or replace its manifest line after confirming the pinned base contains the replacement. | Check the behavior and any downstream carries that depended on it. Desvio re-resolves entries below the changed line. |
 | Our code changes | Edit `custom`, then rebuild `mine`. | Update [feature-ledger.md](feature-ledger.md) when a feature's entry point or shared wiring changes. |
 
+When an accepted beta basket precedes the next base, start from its pinned owner
+manifest. Do not reuse the older live manifest: serial owner branches can include
+earlier carries in their ancestry. Retire upstreamed patches by comparing their
+net behavior, not by dropping a later branch that depends on them. Keep the old
+owners immutable and record replacements in the candidate evidence ledger.
+
 Do not treat a fix made only in `mine` as durable: the next Desvio build
 recreates it. A recurring conflict resolution belongs in Desvio's recorded
 resolution or in the owning branch; a behavior change belongs in `custom` or a
@@ -34,6 +40,20 @@ npm run build:server            # generated declarations, or you chase phantom t
 npm run typecheck
 npm run lint
 ```
+
+Keep installed provider binaries on `PATH` when pinning the build toolchain.
+Prepend the pinned Node directory to the inherited path; replacing the path with
+system directories hides mise-managed Claude and fails its installed-version
+regression test before provider behavior runs. Do not install a provider to
+repair this harness error. Run the version probes from the candidate directory:
+its mise Node selection can hide an OMP installed under another Node version.
+Put that existing installation's bin directory after pinned Node and before
+mise shims, without changing provider installs. Invoke Node directly when its
+mise installation hook would install unrelated global packages.
+
+Use the owning Vitest configuration: app unit tests need its Expo setup and
+server OMP tests need its existing 30-second timeout. The root configuration
+lacks those globals and races the 5-second OMP settle window.
 
 Use an isolated candidate tree when a daemon serves the current build. Keep
 its lazy-loaded `dist/` files intact. Share third-party dependencies through
@@ -59,6 +79,7 @@ Grep for new callers of anything the fork made stricter.
 
 | Sync               | What broke                                                                                                                                                                                                                                               |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| → `v0.12.0-beta.3` | #7179 changes query reuse while the fork guards closed sessions. Keep the guard before upstream's active-query reuse condition. Independent client and Usage regression tests both survive the merge. |
 | → `v0.11.0-beta.1` | Upstream made `wrapSessionProvider` exhaustive over session methods. Forward the fork's `askSideQuestion` with its receiver bound, and include it in `provider-registry-wrap.test.ts`'s optional-method coverage. |
 | → `v0.7.2`         | `packages/server/src/server/authorization/operation-permissions.ts` — new file, `satisfies Record<InboundOperation \| OutboundOperation, …>` over every message type. The eight `agent.side_conversation.*` types were absent, so `TS1360` on both maps. |
 | → `v0.8.0`         | Two, one from each half of the hop. From `v0.7.2`: `packages/app/src/panels/provider-subagent-panel.tsx` — new upstream file rendering `SubagentsTrack`, whose `onOpenSideConversation` the fork made required, so `TS2741` at the new call site. A no-op is the correct fix, not real wiring: `useSubagentsForParent` returns `providerRows` alone once `providerParentSubagentId` is set, so no side-conversation row reaches a nested provider track. `selectSideConversationsForParent` does ignore that param, which makes the opposite conclusion easy to reach — check the hook's return, not the selector. From `v0.8.0-beta.1`: `packages/client/src/connection/index.ts` — `DEFAULT_CLIENT_CAPABILITIES` gained `satisfies Record<Exclude<ClientCapability, …>, true>`, and the fork's `sideConversations` cap had no entry, so `TS1360`. |
