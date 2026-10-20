@@ -4,6 +4,25 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.12.0 base decision — 2026-10-20
+
+Advance the preserved beta.3 custom merge to upstream stable `v0.12.0`
+(`cafe4b01c`). Keep the five beta.3 conflict decisions and union upstream
+subagent selector imports with the fork's side-conversation selector tests.
+Retain the beta.3 postmortem below. Rebuild and gate the accepted basket on
+this stable base before publishing or deploying. Real OMP on Triton remains
+unverified because its selected provider has no credentials; preserve the failed
+receipt and verify authenticated providers during host canaries.
+
+## 0.12.0-beta.3 base decision — 2026-10-19
+
+Advance from the reviewed beta.1 custom merge to upstream `v0.12.0-beta.3`.
+Skip beta.2 and stable 0.11.4. Keep side conversations, closed-session fences,
+ACP cancellation ownership and Pi effort/cache-risk behavior. Preserve upstream
+active-query reuse and additive Usage snapshots. Rebuild the accepted beta.1
+basket separately, retiring carries only after proving upstream equivalence.
+Publication and host deployment remain gated by the fleet release cycle.
+
 ## 0.11.2 base decision — 2026-10-11
 
 Advance `custom` and the Desvio base to upstream `v0.11.2`, the newest
