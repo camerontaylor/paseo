@@ -70,3 +70,14 @@ export function useHostFeatureAvailabilityMap(
     [flags, serverIds],
   );
 }
+
+export function useHostFeatureAvailability(
+  serverId: string | null | undefined,
+  feature: HostFeatureName,
+): boolean | null {
+  const normalizedServerId = serverId?.trim() ?? "";
+  return useSessionStore((state) => {
+    const info = state.sessions[normalizedServerId]?.serverInfo;
+    return info ? hostSupportsFeature(info, feature) : null;
+  });
+}

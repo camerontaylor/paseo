@@ -80,6 +80,7 @@ import { registerWorkspaceRouteNavigationRef } from "@/navigation/workspace-rout
 import { ThemedStack } from "@/navigation/themed-stack";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { AgentNavigationListener } from "@/desktop/agent-navigation";
+import { UiCommandListener } from "@/ui-commands/listener";
 import { LegacyAgentSkillsMigration } from "@/agent-skills/legacy-migration";
 import { legacyFavoriteProfileMigration } from "@/agent-profiles/migration";
 import { listenToDesktopEvent } from "@/desktop/electron/events";
@@ -874,6 +875,7 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
       pathname === "/sessions" ||
       pathname === "/stream" ||
       pathname === "/schedules" ||
+      pathname.startsWith("/views/") ||
       routeHasKnownHost);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
@@ -907,6 +909,7 @@ function RootStack() {
         <Stack.Screen name="sessions" />
         <Stack.Screen name="stream" />
         <Stack.Screen name="schedules" />
+        <Stack.Screen name="views/[viewId]" />
         <Stack.Screen name="pair-scan" />
       </Stack.Protected>
       <Stack.Screen name="h/[serverId]" />
@@ -935,6 +938,7 @@ function AppShell() {
       <HorizontalScrollProvider>
         <OpenProjectListener />
         <AgentNavigationListener />
+        <UiCommandListener />
         <AppWithSidebar>
           <WorkspaceRouteNavigationBridge />
           <RootStack />

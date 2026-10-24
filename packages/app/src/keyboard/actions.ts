@@ -17,6 +17,7 @@ export type MessageInputKeyboardActionKind =
   | "mode-cycle";
 
 export type KeyboardActionId =
+  | "agent.subthreads.toggle"
   | "agent.interrupt"
   | "agent.new"
   | "workspace.tab.menu.open"

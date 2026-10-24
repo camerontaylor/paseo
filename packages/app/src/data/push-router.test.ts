@@ -135,6 +135,7 @@ function createFakeClient(config: { rejectCheckoutDiffSubscribe?: boolean } = {}
 
   return {
     client: {
+      on: on as RouterClient["on"],
       async getProvidersSnapshot() {
         throw new Error("Unexpected snapshot pull");
       },

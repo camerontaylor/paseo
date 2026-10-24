@@ -26,6 +26,7 @@ export interface BuildWorkspacePaneContentModelInput {
   tab: WorkspaceTabDescriptor;
   normalizedServerId: string;
   normalizedWorkspaceId: string;
+  layoutWorkspaceId?: string;
   host: PaneHost;
   fileNavigationRevision?: number;
   onOpenTab: (target: WorkspaceTabDescriptor["target"]) => void;
@@ -45,6 +46,7 @@ export function buildWorkspacePaneContentModel({
   tab,
   normalizedServerId,
   normalizedWorkspaceId,
+  layoutWorkspaceId,
   host,
   fileNavigationRevision,
   onOpenTab,
@@ -60,11 +62,12 @@ export function buildWorkspacePaneContentModel({
   const registration = getPanelRegistration(tab.kind);
   invariant(registration, `No panel registration for kind: ${tab.kind}`);
   return {
-    key: `${normalizedServerId}:${normalizedWorkspaceId}:${tab.tabId}`,
+    key: `${tab.scope?.serverId ?? normalizedServerId}:${tab.scope?.workspaceId ?? normalizedWorkspaceId}:${tab.tabId}`,
     Component: registration.component,
     paneContextValue: {
-      serverId: normalizedServerId,
-      workspaceId: normalizedWorkspaceId,
+      serverId: tab.scope?.serverId ?? normalizedServerId,
+      workspaceId: tab.scope?.workspaceId ?? normalizedWorkspaceId,
+      layoutWorkspaceId,
       host,
       tabId: tab.tabId,
       target: tab.target,
@@ -108,6 +111,7 @@ export function WorkspacePaneContent({
     () => ({
       serverId: paneContextValue.serverId,
       workspaceId: paneContextValue.workspaceId,
+      layoutWorkspaceId: paneContextValue.layoutWorkspaceId,
       host: paneContextValue.host,
       tabId: paneContextValue.tabId,
       target: paneContextValue.target,
@@ -135,6 +139,7 @@ export function WorkspacePaneContent({
       paneContextValue.target,
       paneContextValue.state,
       paneContextValue.workspaceId,
+      paneContextValue.layoutWorkspaceId,
       paneContextValue.host,
       paneContextValue.openTargetToSide,
       retargetCurrentTab,

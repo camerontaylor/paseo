@@ -598,3 +598,8 @@ export function normalizeProjectSettingsRouteId(value: string | string[] | undef
   const id = Array.isArray(value) ? value[0] : value;
   return typeof id === "string" ? id : "";
 }
+
+/** Client-owned saved View route, independent of any host boundary. */
+export function buildViewRoute(viewId: string): string {
+  return `/views/${encodeSegment(viewId)}`;
+}

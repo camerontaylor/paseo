@@ -103,6 +103,8 @@ interface SplitContainerProps {
   normalizedWorkspaceId: string;
   isWorkspaceFocused: boolean;
   uiTabs: WorkspaceTab[];
+  activityByAgentId?: Map<string, number>;
+  unreadTabIds?: Set<string>;
   hoveredCloseTabKey: string | null;
   setHoveredCloseTabKey: Dispatch<SetStateAction<string | null>>;
   closingTabIds: Set<string>;
@@ -773,6 +775,7 @@ function DragOverlayTabChip({
             tabId: tab.tabId,
             kind: tab.target.kind,
             target: tab.target,
+            scope: tab.scope,
           }
         : null,
     [tab],

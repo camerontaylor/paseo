@@ -81,6 +81,7 @@ import {
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
+import { SidebarViewsSection } from "@/views/sidebar-views-section";
 
 const ThemedX = withUnistyles(X);
 
@@ -608,6 +609,7 @@ function MobileSidebar({
             listHeaderComponent={
               <>
                 <PinnedSessions onNavigate={closeSidebar} />
+                <SidebarViewsSection />
                 {workspacesSectionHeaderElement}
               </>
             }
@@ -815,6 +817,7 @@ function DesktopSidebar({
             listHeaderComponent={
               <>
                 <PinnedSessions />
+                <SidebarViewsSection />
                 {workspacesSectionHeaderElement}
               </>
             }

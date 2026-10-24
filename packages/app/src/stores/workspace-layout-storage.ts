@@ -89,7 +89,7 @@ const SplitNodeStorageSchema: z.ZodType<SplitNode> = z.lazy(() =>
     }),
   ]),
 );
-const WorkspaceLayoutStorageSchema: z.ZodType<WorkspaceLayout> = z.strictObject({
+export const WorkspaceLayoutStorageSchema: z.ZodType<WorkspaceLayout> = z.strictObject({
   root: SplitNodeStorageSchema,
   focusedPaneId: z.string().nullable(),
   parentTabIdByTabId: z.record(z.string(), z.string()).optional(),

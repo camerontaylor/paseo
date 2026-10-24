@@ -197,6 +197,7 @@ export const SHORTCUT_HELP_ROW_ORDER: Record<ShortcutSectionId, readonly string[
   ],
   layout: ["toggle-left-sidebar", "toggle-right-sidebar", "toggle-both-sidebars", "toggle-focus"],
   "agent-input": [
+    "subthreads-toggle",
     "focus-message-input",
     "cycle-agent-mode",
     "voice-toggle",
@@ -210,6 +211,7 @@ const SHORTCUT_HELP_LABEL_KEYS: Record<string, string> = {
   "history-back": "settings.shortcuts.help.historyBack",
   "history-forward": "settings.shortcuts.help.historyForward",
   "new-agent": "settings.shortcuts.help.openProject",
+  "subthreads-toggle": "subthreads.shortcutHelp",
   "new-workspace": "settings.shortcuts.help.newWorkspace",
   "switch-project": "settings.shortcuts.help.switchProject",
   "archive-workspace": "settings.shortcuts.help.archiveWorkspace",
@@ -310,6 +312,57 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
       id: "new-workspace",
       section: "workspaces",
       label: "New workspace",
+    },
+  },
+
+  // --- Search files (switch project on the New Workspace screen) ---
+  {
+    id: "workspace-project-pick-cmd-p-mac",
+    action: "command-center.files",
+    combo: "Cmd+P",
+    when: { mac: true, commandCenter: false },
+    help: {
+      id: "search-files",
+      section: "general",
+      label: "Search files",
+    },
+  },
+  {
+    id: "workspace-project-pick-ctrl-p-non-mac",
+    action: "command-center.files",
+    combo: "Ctrl+P",
+    when: { mac: false, commandCenter: false, terminal: false },
+    help: {
+      id: "search-files",
+      section: "general",
+      label: "Search files",
+    },
+  },
+
+  // --- Subthreads drawer ---
+  // J sits beside L (focus composer / Quick launch) and is free on every platform here. It fires
+  // from the composer because an orchestrator's user is usually typing when they want to check
+  // on a subthread; the handler is enabled only in the focused pane of an agent with subthreads.
+  {
+    id: "subthreads-toggle-cmd-shift-j-mac",
+    action: "agent.subthreads.toggle",
+    combo: "Cmd+Shift+J",
+    when: { mac: true, commandCenter: false },
+    help: {
+      id: "subthreads-toggle",
+      section: "agent-input",
+      label: "Subthreads drawer",
+    },
+  },
+  {
+    id: "subthreads-toggle-ctrl-shift-j-non-mac",
+    action: "agent.subthreads.toggle",
+    combo: "Ctrl+Shift+J",
+    when: { mac: false, commandCenter: false, terminal: false },
+    help: {
+      id: "subthreads-toggle",
+      section: "agent-input",
+      label: "Subthreads drawer",
     },
   },
 

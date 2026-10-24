@@ -53,6 +53,7 @@ import { buttonControlHeight } from "@/components/ui/control-geometry";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { Shortcut } from "@/components/ui/shortcut";
 import { useWorkspaceTabLayout } from "@/screens/workspace/use-workspace-tab-layout";
+import { useSplitWithSession } from "@/workspace-tabs/split-with-session";
 import { retainWorkspaceTabMeasuredWidth } from "@/screens/workspace/workspace-tab-layout";
 import {
   WorkspaceTabPresentationResolver,
@@ -93,6 +94,8 @@ import {
   useHorizontalScrollBoundary,
 } from "@/components/ui/horizontal-scroll-boundary";
 import { useSessionStore } from "@/stores/session-store";
+import { useViewPaneActions } from "@/views/view-pane-actions";
+import { useOpenInViewMenuEntries } from "@/views/open-in-view-menu";
 
 const DROPDOWN_WIDTH = 220;
 const DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH = 36 + buttonControlHeight.xs;
@@ -247,6 +250,24 @@ function WorkspaceNewTabButton({
 }: WorkspaceNewTabButtonProps) {
   const { t } = useTranslation();
   const tooltipText = t("workspace.tabs.actions.newTab");
+  const viewPaneActions = useViewPaneActions();
+  const addViewTab = useCallback(() => {
+    if (paneId) viewPaneActions?.onAddTab(paneId);
+  }, [paneId, viewPaneActions]);
+  if (viewPaneActions && paneId) {
+    const button = (
+      <ToolbarButton
+        label={viewPaneActions.addTabLabel}
+        shortcut={shortcutKeys}
+        testID="view-add-tab-button"
+        style={placement === "inline" ? styles.inlineNewTabButton : undefined}
+        onPress={addViewTab}
+      >
+        <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
+      </ToolbarButton>
+    );
+    return placement === "inline" ? <View style={styles.inlineAddButton}>{button}</View> : button;
+  }
   const menu = (
     <>
       <DropdownMenu>
@@ -335,6 +356,15 @@ function WorkspacePaneToolbarActions({
     () => (splitDownKeys ? <Shortcut chord={splitDownKeys} /> : null),
     [splitDownKeys],
   );
+  const splitWithSession = useSplitWithSession();
+  const requestSplitWithSession = splitWithSession?.request;
+  const handleSplitRightWithSession = useCallback(() => {
+    if (paneId) requestSplitWithSession?.(paneId, "right");
+  }, [paneId, requestSplitWithSession]);
+  const handleSplitDownWithSession = useCallback(() => {
+    if (paneId) requestSplitWithSession?.(paneId, "bottom");
+  }, [paneId, requestSplitWithSession]);
+  const showSplitWithSession = Boolean(requestSplitWithSession && paneId);
   const maximizeActionVisible = showMaximizeAction && Boolean(onTogglePaneMaximized);
   if (!showNewTabButton && !splitActionsVisible && !maximizeActionVisible) return null;
 
@@ -402,6 +432,24 @@ function WorkspacePaneToolbarActions({
             >
               {t("workspace.tabs.actions.splitDown")}
             </DropdownMenuItem>
+            {showSplitWithSession ? (
+              <>
+                <DropdownMenuItem
+                  leading={splitRightLeading}
+                  testID="workspace-split-pane-right-with-session"
+                  onSelect={handleSplitRightWithSession}
+                >
+                  {t("workspace.tabs.actions.splitRightWithSession")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  leading={splitDownLeading}
+                  testID="workspace-split-pane-down-with-session"
+                  onSelect={handleSplitDownWithSession}
+                >
+                  {t("workspace.tabs.actions.splitDownWithSession")}
+                </DropdownMenuItem>
+              </>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
@@ -465,6 +513,8 @@ function TabContextMenuItem({
         return <ThemedSearch size={16} uniProps={mutedColorMapping} />;
       case "circle":
         return <ThemedCircle size={16} uniProps={mutedColorMapping} />;
+      case "layout-panel-left":
+        return <ThemedColumns2 size={16} uniProps={mutedColorMapping} />;
       default:
         return undefined;
     }
@@ -1036,8 +1086,8 @@ export function WorkspaceDesktopTabsRow(props: WorkspaceDesktopTabsRowProps) {
         <WorkspaceDesktopTabPresentationSlot
           key={`${tab.key}:${tab.kind}`}
           tab={tab}
-          serverId={props.normalizedServerId}
-          workspaceId={props.normalizedWorkspaceId}
+          serverId={tab.scope?.serverId ?? props.normalizedServerId}
+          workspaceId={tab.scope?.workspaceId ?? props.normalizedWorkspaceId}
           onResolve={handlePresentation}
         />
       ))}
@@ -1317,8 +1367,8 @@ function ResolvedWorkspaceDesktopTabsRow({
       return (
         <ResolvedDesktopTabChip
           key={`${item.tab.key}:${item.tab.kind}`}
-          serverId={normalizedServerId}
-          workspaceId={normalizedWorkspaceId}
+          serverId={item.tab.scope?.serverId ?? normalizedServerId}
+          workspaceId={item.tab.scope?.workspaceId ?? normalizedWorkspaceId}
           item={item}
           isFocused={isFocused}
           isDragging={isActive}
@@ -1588,6 +1638,19 @@ function ResolvedDesktopTabChip({
           },
     [baseResolvedTab, markUnreadEntries],
   );
+  const openInViewEntries = useOpenInViewMenuEntries({
+    tab: item.tab,
+    serverId,
+    workspaceId,
+    menuTestIDBase: resolvedTab.contextMenuTestId,
+  });
+  const resolvedTabWithViews = useMemo(
+    () =>
+      openInViewEntries.length === 0
+        ? resolvedTab
+        : { ...resolvedTab, menuEntries: [...openInViewEntries, ...resolvedTab.menuEntries] },
+    [openInViewEntries, resolvedTab],
+  );
 
   const rawTooltipLabel =
     presentation.titleState === "loading" ? t("common.states.loading") : presentation.tooltip;
@@ -1619,7 +1682,7 @@ function ResolvedDesktopTabChip({
         presentation={presentation}
         tooltipLabel={tooltipLabel}
         accessibilityLabel={accessibilityLabel}
-        resolvedTab={resolvedTab}
+        resolvedTab={resolvedTabWithViews}
         setHoveredCloseTabKey={setHoveredCloseTabKey}
         onNavigateTab={onNavigateTab}
         onCloseTab={onCloseTab}

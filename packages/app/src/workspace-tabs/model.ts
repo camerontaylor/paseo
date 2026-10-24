@@ -49,11 +49,18 @@ export type WorkspaceTabTarget =
   | { kind: "setup"; workspaceId: string }
   | { kind: "commit_diff"; sha: string };
 
+/** Owning host and workspace when a tab is rendered outside its home workspace. */
+export interface WorkspaceTabScope {
+  serverId: string;
+  workspaceId: string;
+}
+
 export interface WorkspaceTab {
   tabId: string;
   target: WorkspaceTabTarget;
   createdAt: number;
   state?: JsonValue;
+  scope?: WorkspaceTabScope;
 }
 
 export function buildWorkspaceTabPersistenceKey(input: {

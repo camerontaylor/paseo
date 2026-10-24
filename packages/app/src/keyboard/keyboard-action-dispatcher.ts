@@ -4,6 +4,7 @@ export type WorkspacePanelTarget = "changes" | "files" | "pull-request";
 export type WorkspacePanelPlacement = "supporting" | "side-pane" | "focused-pane";
 
 export type KeyboardActionId =
+  | "agent.subthreads.toggle"
   | "agent.interrupt"
   | "message-input.focus"
   | "message-input.send"
@@ -57,6 +58,7 @@ export type KeyboardActionId =
   | "workspace.setup.show";
 
 export type KeyboardActionDefinition =
+  | { id: "agent.subthreads.toggle"; scope: KeyboardActionScope }
   | { id: "agent.interrupt"; scope: KeyboardActionScope }
   | { id: "message-input.focus"; scope: KeyboardActionScope }
   | { id: "message-input.send"; scope: KeyboardActionScope }

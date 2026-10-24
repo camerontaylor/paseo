@@ -107,6 +107,9 @@ import type { PendingPermission } from "@/types/shared";
 import type { StreamItem, TodoEntry } from "@/types/stream";
 import type { ViewedTimelineStatus, ViewedTimelineUiBridge } from "@/timeline/viewed-timeline-sync";
 import { useArchiveFinishedSubagents, useSubagentsForParent } from "@/subagents";
+import { useSubthreadReplyTarget } from "@/subthreads/context";
+import { SubthreadsHost, type RenderSubthreadAgentInput } from "@/subthreads/host";
+import { SessionChecklistButton, SubthreadsOpenButton } from "@/subthreads/open-button";
 import { getInitDeferred, getInitKey } from "@/utils/agent-initialization";
 import { derivePendingPermissionKey, normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { applyLegacyDaemonWorkspaceOwnership } from "@/workspace/legacy-daemon-workspaces";
@@ -322,15 +325,28 @@ function AgentPanel() {
 
   return (
     <RetainedChatContent>
-      <AgentPanelContent
+      <SubthreadsHost
         serverId={serverId}
         workspaceId={workspaceId}
         agentId={target.agentId}
-        isPaneFocused={isInteractive}
-        onOpenWorkspaceFile={openFileInWorkspace}
-      />
+        renderAgent={renderSubthreadAgent}
+      >
+        {(parentActive) => (
+          <AgentPanelContent
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={target.agentId}
+            isPaneFocused={isInteractive && parentActive}
+            onOpenWorkspaceFile={openFileInWorkspace}
+          />
+        )}
+      </SubthreadsHost>
     </RetainedChatContent>
   );
+}
+
+function renderSubthreadAgent(input: RenderSubthreadAgentInput) {
+  return <AgentPanelContent {...input} />;
 }
 
 function DraftPanel() {
@@ -1286,17 +1302,21 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
 
   const dockContent = (
     <View style={styles.contentContainer}>
-      <SegmentedControl
-        options={viewOptions}
-        value={selectedView}
-        onValueChange={handleSetSelectedView}
-        size={isCompact ? "md" : "xs"}
-        textWrap={isCompact}
-        testID="agent-view-switcher"
-        style={[styles.viewSwitcher, isCompact && isChatVisible && findOpen && styles.hiddenPane]}
-        segmentStyle={isCompact ? styles.compactSegment : undefined}
-      />
-      <SessionPinButton serverId={serverId} agentId={agentId} />
+      <View style={styles.viewSwitcher}>
+        <SegmentedControl
+          options={viewOptions}
+          value={selectedView}
+          onValueChange={handleSetSelectedView}
+          size={isCompact ? "md" : "xs"}
+          textWrap={isCompact}
+          testID="agent-view-switcher"
+          style={isCompact && isChatVisible && findOpen ? styles.hiddenPane : undefined}
+          segmentStyle={isCompact ? styles.compactSegment : undefined}
+        />
+        <SessionPinButton serverId={serverId} agentId={agentId} />
+        <SubthreadsOpenButton />
+        <SessionChecklistButton />
+      </View>
       {streamContent}
       {!isChatVisible ? (
         <CompanionFeed
@@ -1621,6 +1641,11 @@ function ActiveAgentComposer({
   const paneContext = usePaneContext();
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
   const { workspaceId, tabId, retargetCurrentTab } = paneContext;
+  const { t } = useTranslation();
+  const replyTarget = useSubthreadReplyTarget(agentId);
+  const replyPlaceholder = replyTarget
+    ? t("subthreads.replyPlaceholder", { label: replyTarget.label })
+    : undefined;
   const { archiveAgent } = useArchiveAgent();
   const closeWorkspaceTab = useWorkspaceLayoutStore((state) => state.closeTab);
   const hideWorkspaceAgent = useWorkspaceLayoutStore((state) => state.hideAgent);
@@ -1656,7 +1681,10 @@ function ActiveAgentComposer({
         throw new Error("Agent not found");
       }
 
-      const workspaceKey = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
+      const workspaceKey = buildWorkspaceTabPersistenceKey({
+        serverId,
+        workspaceId: paneContext.layoutWorkspaceId ?? workspaceId,
+      });
       if (workspaceKey) {
         unpinWorkspaceAgent(workspaceKey, agentId);
         hideWorkspaceAgent(workspaceKey, agentId);
@@ -1679,6 +1707,7 @@ function ActiveAgentComposer({
       archiveAgent,
       closeWorkspaceTab,
       hideWorkspaceAgent,
+      paneContext.layoutWorkspaceId,
       retargetCurrentTab,
       serverId,
       tabId,
@@ -1714,6 +1743,7 @@ function ActiveAgentComposer({
         onMessageSent={onMessageSent}
         onClientSlashCommand={handleClientSlashCommand}
         isCompactLayout={isCompactComposerLayout}
+        placeholder={replyPlaceholder}
       />
     </View>
   );
@@ -1818,6 +1848,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   viewSwitcher: {
     minHeight: 40,
+    gap: theme.spacing[1],
     flexShrink: 0,
     flexDirection: "row",
     alignItems: "center",
