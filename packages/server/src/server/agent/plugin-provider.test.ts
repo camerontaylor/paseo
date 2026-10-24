@@ -443,6 +443,70 @@ describe("PluginAgentClientRegistry", () => {
     },
   );
 
+  test("rejects unsupported system policy before opening a native session", async () => {
+    const harness = createProviderHarness();
+    harness.registration.supportsSystemPrompt = false;
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const client = registry.clients()[harness.registration.id]!;
+    try {
+      await expect(
+        client.createSession({
+          provider: harness.registration.id,
+          cwd: "/workspace",
+          daemonAppendSystemPrompt: "Unattended agents: wait cheaply.",
+        }),
+      ).rejects.toThrow("daemon.appendSystemPrompt cannot be delivered");
+      expect(harness.inputs.some((input) => input.type === "session.open")).toBe(false);
+      const session = await client.createSession({
+        provider: harness.registration.id,
+        cwd: "/workspace",
+      });
+      const persistence = session.describePersistence();
+      expect(persistence).not.toBeNull();
+      await session.close();
+      const openCount = harness.inputs.filter((input) => input.type === "session.open").length;
+      await expect(
+        client.createSession({
+          provider: harness.registration.id,
+          cwd: "/workspace",
+          systemPrompt: "Agent policy.",
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_CONFIGURATION" });
+      await expect(
+        client.resumeSession(persistence!, {
+          cwd: "/workspace",
+          daemonAppendSystemPrompt: "Owner policy.",
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_CONFIGURATION" });
+      expect(harness.inputs.filter((input) => input.type === "session.open")).toHaveLength(
+        openCount,
+      );
+    } finally {
+      await registry.shutdown();
+    }
+  });
+
+  test("preserves combined system policy for existing supporting plugins", async () => {
+    const harness = createProviderHarness();
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    try {
+      const session = await registry.clients()[harness.registration.id]!.createSession({
+        provider: harness.registration.id,
+        cwd: "/workspace",
+        systemPrompt: "Agent policy.",
+        daemonAppendSystemPrompt: "Owner policy.",
+      });
+      expect(harness.inputs.find((input) => input.type === "session.open")).toMatchObject({
+        config: { systemPrompt: "Agent policy.\n\nOwner policy." },
+      });
+      await session.close();
+    } finally {
+      await registry.shutdown();
+    }
+  });
+
   test("preserves nested provider child ownership during opening", async () => {
     const harness = createProviderHarness({ openChildren: openNestedChildren });
     const registry = new PluginAgentClientRegistry(createTestLogger());

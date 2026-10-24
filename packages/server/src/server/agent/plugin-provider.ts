@@ -233,6 +233,12 @@ class ProviderRuntime {
     if (this.sessions.has(input.sessionId)) {
       throw new Error(`Provider session already exists: ${input.sessionId}`);
     }
+    if (this.registration.supportsSystemPrompt === false && input.config.systemPrompt?.trim()) {
+      throw providerError({
+        code: "INVALID_CONFIGURATION",
+        message: `${this.registration.label} does not support additional system instructions. The configured agent systemPrompt or daemon.appendSystemPrompt cannot be delivered; use a provider that supports them.`,
+      });
+    }
     const connection = await this.getConnection();
     requireProviderCapabilities(connection.capabilities, {
       type: "session.open",
