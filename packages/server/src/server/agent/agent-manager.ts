@@ -1342,6 +1342,61 @@ export class AgentManager {
     return this.timelineStore.fetch(id, options);
   }
 
+  async readSessionSearchText(
+    id: string,
+    query: string,
+  ): Promise<import("../session-search.js").SessionSearchExcerpt[]> {
+    let rows = this.timelineStore.has(id)
+      ? this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows
+      : [];
+    if (this.durableTimelineStore) {
+      rows = (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 400 }))
+        .rows;
+    }
+    const excerpts = projectTimelineRows({ rows, mode: "projected" })
+      .filter(
+        (entry) => entry.item.type === "user_message" || entry.item.type === "assistant_message",
+      )
+      .map((entry): import("../session-search.js").SessionSearchExcerpt => ({
+        text: (
+          entry.item as Extract<typeof entry.item, { type: "user_message" | "assistant_message" }>
+        ).text,
+        source: entry.item.type === "user_message" ? "user_message" : "assistant_message",
+        timestamp: entry.timestamp,
+      }));
+    return (await import("../session-search.js")).selectSessionSearchExcerpts(excerpts, query);
+  }
+
+  /** Recent projected user and assistant messages without resuming an agent. */
+  async readRecentConversationMessages(id: string): Promise<
+    Array<{
+      text: string;
+      role: "user" | "assistant";
+      timestamp: string;
+      seq: number;
+    }>
+  > {
+    let rows = this.timelineStore.has(id)
+      ? this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows
+      : [];
+    if (this.durableTimelineStore) {
+      rows = (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 400 }))
+        .rows;
+    }
+    return projectTimelineRows({ rows, mode: "projected" })
+      .filter(
+        (entry) => entry.item.type === "user_message" || entry.item.type === "assistant_message",
+      )
+      .map((entry) => ({
+        text: (
+          entry.item as Extract<typeof entry.item, { type: "user_message" | "assistant_message" }>
+        ).text,
+        role: entry.item.type === "user_message" ? ("user" as const) : ("assistant" as const),
+        timestamp: entry.timestamp,
+        seq: entry.seqEnd,
+      }));
+  }
+
   listProviderSubagents(parentAgentId: string): ProviderSubagentDescriptor[] {
     this.requirePublicAgent(parentAgentId);
     return this.providerSubagents.list(parentAgentId);

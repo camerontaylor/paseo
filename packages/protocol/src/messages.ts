@@ -1108,6 +1108,21 @@ export const ProjectRemoveRequestSchema = z.object({
   requestId: z.string(),
 });
 
+// COMPAT(projectPinning): fork feature, gated on server_info.features.projectPinning.
+export const ProjectPinSetRequestSchema = z.object({
+  type: z.literal("project.pin.set.request"),
+  projectId: z.string(),
+  pinned: z.boolean(),
+  requestId: z.string(),
+});
+
+export const ProjectDefaultSetRequestSchema = z.object({
+  type: z.literal("project.default.set.request"),
+  projectId: z.string(),
+  isDefault: z.boolean(),
+  requestId: z.string(),
+});
+
 export const WorkspaceTitleSetRequestSchema = z.object({
   type: z.literal("workspace.title.set.request"),
   workspaceId: z.string(),
@@ -2323,6 +2338,28 @@ export const ProjectRemoveResponseSchema = z.object({
   payload: ProjectRemoveResponsePayloadSchema,
 });
 
+export const ProjectPinSetResponseSchema = z.object({
+  type: z.literal("project.pin.set.response"),
+  payload: z.object({
+    requestId: z.string(),
+    projectId: z.string(),
+    accepted: z.boolean(),
+    pinnedAt: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const ProjectDefaultSetResponseSchema = z.object({
+  type: z.literal("project.default.set.response"),
+  payload: z.object({
+    requestId: z.string(),
+    projectId: z.string(),
+    accepted: z.boolean(),
+    defaultAt: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
 export const WorkspaceTitleSetResponsePayloadSchema = z.object({
   requestId: z.string(),
   workspaceId: z.string(),
@@ -2820,6 +2857,84 @@ export const QueuedAgentMessageSchema = z.object({
   images: z.array(QueuedAgentMessageImageSchema).optional(),
   createdAt: z.string(),
 });
+
+export const SessionSearchResultSchema = z.object({
+  agentId: z.string(),
+  workspaceId: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  title: z.string(),
+  excerpt: z.string(),
+  excerptTimestamp: z.string().optional(),
+  excerptSource: z
+    .enum(["title", "user_message", "assistant_message", "queued_message"])
+    .optional(),
+  updatedAt: z.string().optional(),
+  confidence: z.number().min(0).max(1),
+});
+
+export const SessionSearchRequestSchema = z.object({
+  type: z.literal("session.search.request"),
+  requestId: z.string(),
+  query: z.string().min(1).max(16000),
+  workspaceIds: z.array(z.string()).max(1000),
+});
+
+export const SessionSearchResponseSchema = z.object({
+  type: z.literal("session.search.response"),
+  payload: z.object({
+    requestId: z.string(),
+    results: z.array(SessionSearchResultSchema),
+    searchedCount: z.number().int().nonnegative(),
+    totalCount: z.number().int().nonnegative(),
+    error: z.string().nullable(),
+    errorCode: z.enum(["setup_required"]).optional(),
+  }),
+});
+
+export type SessionSearchResult = z.infer<typeof SessionSearchResultSchema>;
+
+// Lexical message search for the sidebar filter. Unlike `session.search` it never calls a model;
+// the daemon bounds the scan (sessions, hits, time) and supersedes an older request from the same
+// client. See docs/sidebar-filter.md.
+export const SessionTextSearchHitSchema = z.object({
+  agentId: z.string(),
+  workspaceId: z.string(),
+  workspaceTitle: z.string(),
+  projectName: z.string(),
+  title: z.string(),
+  provider: z.string(),
+  role: z.enum(["user", "assistant"]),
+  snippet: z.string(),
+  /** Offsets into `snippet`, in UTF-16 code units. */
+  matchStart: z.number().int().nonnegative(),
+  matchLength: z.number().int().nonnegative(),
+  timestamp: z.string().optional(),
+  seq: z.number().int().optional(),
+});
+
+export const SessionTextSearchRequestSchema = z.object({
+  type: z.literal("session.text_search.request"),
+  requestId: z.string(),
+  query: z.string().min(1).max(500),
+  /** Restricts the search to these workspaces. Omitted searches every active workspace. */
+  workspaceIds: z.array(z.string()).max(2000).optional(),
+});
+
+export const SessionTextSearchResponseSchema = z.object({
+  type: z.literal("session.text_search.response"),
+  payload: z.object({
+    requestId: z.string(),
+    hits: z.array(SessionTextSearchHitSchema),
+    searchedCount: z.number().int().nonnegative(),
+    totalCount: z.number().int().nonnegative(),
+    /** True when a bound stopped the scan before every candidate was read. */
+    truncated: z.boolean(),
+    error: z.string().nullable(),
+  }),
+});
+
+export type SessionTextSearchHit = z.infer<typeof SessionTextSearchHitSchema>;
 
 export const AgentQueueSnapshotSchema = z.object({
   agentId: z.string(),
@@ -3873,6 +3988,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ProjectRenameRequestSchema,
   ProjectIconSetRequestSchema,
   ProjectRemoveRequestSchema,
+  ProjectPinSetRequestSchema,
+  ProjectDefaultSetRequestSchema,
   WorkspaceTitleSetRequestSchema,
   WorkspacePinSetRequestSchema,
   WorkspaceLabelListRequestSchema,
@@ -3950,6 +4067,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   SideConversationAskRequestMessageSchema,
   SideConversationTimelineGetRequestMessageSchema,
   SideConversationListRequestMessageSchema,
+  SessionSearchRequestSchema,
+  SessionTextSearchRequestSchema,
   AgentQueueEnqueueRequestSchema,
   AgentQueueUpdateRequestSchema,
   AgentQueueReorderRequestSchema,
@@ -4467,6 +4586,12 @@ export const ServerInfoStatusPayloadSchema = z
         importSessionWorkspaceTarget: z.boolean().optional(),
         // COMPAT(importSessionSearch): added in v0.8.0, remove gate after 2027-03-02.
         importSessionSearch: z.boolean().optional(),
+        // COMPAT(sessionSearch): fork v0.12.0-fork.2; retain while older hosts are supported.
+        sessionSearch: z.boolean().optional(),
+        // COMPAT(sessionTextSearch): fork v0.12.0-fork.2; retain while older hosts are supported.
+        sessionTextSearch: z.boolean().optional(),
+        // COMPAT(projectPinning): fork v0.12.0-fork.2; retain while older hosts are supported.
+        projectPinning: z.boolean().optional(),
         // COMPAT(forgeProviders): added in v0.2.0-beta.1. Drop the gate after
         // 2027-01-17 once the supported daemon floor is >= v0.2.0.
         // Daemon advertises pluggable non-GitHub forge support (the forge registry);
@@ -4984,6 +5109,8 @@ export const WorkspaceProjectDescriptorPayloadSchema = z.object({
   projectIconRevision: z.string().optional(),
   projectRootPath: z.string(),
   projectKind: z.enum(["git", "non_git", "directory"]),
+  projectPinnedAt: z.string().nullable().optional(),
+  projectDefaultAt: z.string().nullable().optional(),
   // COMPAT(directorySync): sequence of this latest directory projection.
   syncSeq: z.number().int().positive().optional(),
 });
@@ -7846,6 +7973,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   SideConversationUpdateMessageSchema,
   SideConversationListResponseMessageSchema,
   SideConversationRemovedMessageSchema,
+  SessionSearchResponseSchema,
+  SessionTextSearchResponseSchema,
   AgentQueueEnqueueResponseSchema,
   AgentQueueUpdateResponseSchema,
   AgentQueueReorderResponseSchema,
@@ -7899,6 +8028,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ProjectRenameResponseSchema,
   ProjectIconSetResponseSchema,
   ProjectRemoveResponseSchema,
+  ProjectPinSetResponseSchema,
+  ProjectDefaultSetResponseSchema,
   WorkspaceTitleSetResponseSchema,
   WorkspacePinSetResponseSchema,
   WorkspaceRecoveryInspectResponseSchema,
@@ -8101,6 +8232,8 @@ export type UpdateAgentResponseMessage = z.infer<typeof UpdateAgentResponseMessa
 export type ProjectRenameResponse = z.infer<typeof ProjectRenameResponseSchema>;
 export type ProjectIconSetResponse = z.infer<typeof ProjectIconSetResponseSchema>;
 export type ProjectRemoveResponse = z.infer<typeof ProjectRemoveResponseSchema>;
+export type ProjectPinSetResponse = z.infer<typeof ProjectPinSetResponseSchema>;
+export type ProjectDefaultSetResponse = z.infer<typeof ProjectDefaultSetResponseSchema>;
 export type WorkspaceTitleSetResponse = z.infer<typeof WorkspaceTitleSetResponseSchema>;
 export type WorkspaceTitleSetResponsePayload = z.infer<
   typeof WorkspaceTitleSetResponsePayloadSchema
@@ -8281,6 +8414,8 @@ export type ProjectIconSource = z.infer<typeof ProjectIconSourceSchema>;
 export type ProjectRenameRequest = z.infer<typeof ProjectRenameRequestSchema>;
 export type ProjectIconSetRequest = z.infer<typeof ProjectIconSetRequestSchema>;
 export type ProjectRemoveRequest = z.infer<typeof ProjectRemoveRequestSchema>;
+export type ProjectPinSetRequest = z.infer<typeof ProjectPinSetRequestSchema>;
+export type ProjectDefaultSetRequest = z.infer<typeof ProjectDefaultSetRequestSchema>;
 export type WorkspaceTitleSetRequest = z.infer<typeof WorkspaceTitleSetRequestSchema>;
 export type WorkspacePinSetRequest = z.infer<typeof WorkspacePinSetRequestSchema>;
 export type WorkspaceRecoveryInspectRequest = z.infer<typeof WorkspaceRecoveryInspectRequestSchema>;

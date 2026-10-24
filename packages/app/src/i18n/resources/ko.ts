@@ -27,6 +27,79 @@ export const ko: TranslationResources = {
     offlineNotice: "offline — cached items may be out of date",
     upgradeNotice: "update this host to use global Stream",
   },
+  defaultProject: {
+    actions: {
+      pin: "프로젝트 고정",
+      unpin: "프로젝트 고정 해제",
+      makeDefault: "기본 프로젝트로 설정",
+      removeDefault: "기본 프로젝트에서 제거",
+    },
+    badges: {
+      default: "기본 프로젝트",
+      pinned: "고정된 프로젝트",
+    },
+    commandCenter: {
+      goToDefault: "기본 프로젝트로 이동",
+      pinCurrent: "현재 프로젝트 고정",
+      unpinCurrent: "현재 프로젝트 고정 해제",
+      makeCurrentDefault: "현재 프로젝트를 기본으로 설정",
+      removeCurrentDefault: "현재 프로젝트를 기본에서 제거",
+    },
+    settings: {
+      title: "기본 프로젝트",
+      hint: "Quick launch와 New conversation이 여기에서 시작됩니다.",
+      updateHost: "기본 프로젝트를 선택하려면 이 호스트를 업데이트하세요.",
+      none: "없음",
+      accessibilityLabel: "기본 프로젝트: {{value}}",
+    },
+    toasts: {
+      failed: "프로젝트를 업데이트할 수 없습니다",
+      hostDisconnected: "호스트가 연결되어 있지 않습니다",
+    },
+  },
+  quickLaunch: {
+    title: "빠른 실행",
+    commandCenterTitle: "에이전트 빠른 실행…",
+    placeholder: "새 에이전트가 무엇을 해야 하나요?",
+    promptLabel: "새 에이전트에게 보낼 프롬프트",
+    project: {
+      title: "프로젝트",
+      label: "프로젝트: {{project}}",
+      choose: "프로젝트 선택",
+      search: "프로젝트 검색",
+      empty: "사용할 수 있는 프로젝트가 없습니다",
+    },
+    host: {
+      title: "호스트",
+      label: "호스트: {{host}}",
+    },
+    where: {
+      newWorkspace: "새 워크스페이스",
+      newTab: "{{workspace}}의 새 탭",
+    },
+    actions: {
+      start: "시작",
+      startHint: "현재 화면에 머문 채로 에이전트를 시작합니다",
+      startAndOpen: "시작하고 열기",
+      startAndOpenHint: "에이전트를 시작하고 엽니다",
+    },
+    toast: {
+      starting: "{{project}} · {{workspace}}에서 시작하는 중…",
+      started: "{{project}} · {{workspace}}에서 시작됨",
+      newWorkspace: "새 워크스페이스",
+      open: "열기",
+      retry: "다시 시도",
+      failed: "에이전트를 시작할 수 없습니다: {{error}}",
+    },
+    errors: {
+      noAgent: "에이전트 없이 워크스페이스가 생성되었습니다",
+      createFailed: "워크스페이스를 만들 수 없습니다",
+    },
+    router: {
+      startWithoutLeaving: "이동하지 않고 시작",
+      startWithoutLeavingHint: "빠른 실행으로 이 프롬프트를 시작하고 현재 화면에 머뭅니다",
+    },
+  },
   paneFind: {
     connectionFailure: "이 채팅을 검색할 수 없습니다. 호스트 연결을 확인하고 다시 시도하세요.",
     historyChangedFailure: "검색 중에 채팅이 변경되었습니다. 다시 검색하세요.",

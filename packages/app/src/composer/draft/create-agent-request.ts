@@ -1,8 +1,31 @@
-import type { AgentSessionConfig } from "@getpaseo/protocol/agent-types";
+import type { AgentProvider, AgentSessionConfig } from "@getpaseo/protocol/agent-types";
 import type { AgentSnapshotPayload, CreateAgentRequestMessage } from "@getpaseo/protocol/messages";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { encodeImages } from "@/utils/encode-images";
 import type { UserMessageImageAttachment } from "@/types/stream";
+
+/** The Agent controls resolved when a draft launches. */
+export interface DraftAgentSelection {
+  selectedMode: string;
+  effectiveModelId: string;
+  effectiveThinkingOptionId: string;
+  featureValues: Record<string, unknown> | undefined;
+}
+
+export function buildDraftAgentConfig(input: {
+  provider: AgentProvider;
+  cwd: string;
+  selection: DraftAgentSelection;
+}): AgentSessionConfig {
+  return {
+    provider: input.provider,
+    cwd: input.cwd,
+    modeId: input.selection.selectedMode || undefined,
+    model: input.selection.effectiveModelId || undefined,
+    thinkingOptionId: input.selection.effectiveThinkingOptionId || undefined,
+    featureValues: input.selection.featureValues,
+  };
+}
 
 export interface WorkspaceDraftAgentRequest {
   workspaceId: string;

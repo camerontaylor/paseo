@@ -1,5 +1,12 @@
 import { useTranslation } from "react-i18next";
-import React, { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   useSidebarWorkspacesList,
   type SidebarProjectEntry,
@@ -24,6 +31,9 @@ import { useHosts } from "@/runtime/host-runtime";
 import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model";
 import { filterWorkspacesByLabels, type SidebarWorkspaceGroup } from "./sidebar-labels";
 import { filterWorkspacesByProjects, resolveActiveProjectFilters } from "./sidebar-project-filter";
+import { orderProjectsWithPins } from "@/default-project/model";
+import { useProjectPinStates } from "@/default-project/hooks";
+import { usePinnedProjectOrderStore } from "@/default-project/pinned-project-order-store";
 import {
   hasAuthoritativeWorkspaceLabelCatalog,
   useWorkspaceLabelProjection,
@@ -31,6 +41,8 @@ import {
 
 interface SidebarModel extends SidebarWorkspacesListResult {
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
   /**
    * Every project the sidebar could show, before any filter narrows it.
    *
@@ -45,6 +57,7 @@ interface SidebarModel extends SidebarWorkspacesListResult {
   workspaceGroups: SidebarWorkspaceGroup[];
   projectIconTargets: SidebarProjectIconTarget[];
   pinnedGroups: PinnedSidebarGroups;
+  pinnedProjectViewKeys: ReadonlySet<string>;
   collapsedProjectKeys: ReadonlySet<string>;
   toggleProjectCollapsed: (projectViewKey: string) => void;
   shortcutModel: SidebarShortcutModel;
@@ -60,6 +73,7 @@ export function SidebarModelProvider({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  const [searchQuery, setSearchQuery] = useState("");
   const list = useSidebarWorkspacesList({ enabled: active });
   const showBackground = useSidebarViewStore((state) => state.showBackground);
   const groupMode = useSidebarViewStore((state) => state.groupMode);
@@ -175,10 +189,22 @@ export function SidebarModelProvider({
     list.projects,
     visibleWorkspaceKeys,
   ]);
-  const pinnedKeys = usePinnedSidebarKeys(filteredProjects);
+  const projectPinStates = useProjectPinStates(list.projects);
+  const pinnedProjectOrder = usePinnedProjectOrderStore((state) => state.pinnedProjectOrder);
+  const pinOrdered = useMemo(
+    () =>
+      orderProjectsWithPins({
+        projects: filteredProjects,
+        pinStates: projectPinStates,
+        pinnedProjectOrder,
+      }),
+    [filteredProjects, projectPinStates, pinnedProjectOrder],
+  );
+  const orderedProjects = pinOrdered.projects;
+  const pinnedKeys = usePinnedSidebarKeys(orderedProjects);
   const projectionInput = useMemo(
     () => ({
-      projects: filteredProjects,
+      projects: orderedProjects,
       pinnedKeys,
       pinnedWorkspaceOrder,
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
@@ -196,7 +222,7 @@ export function SidebarModelProvider({
       groupMode,
       sortMode,
       list.projectNamesByViewKey,
-      filteredProjects,
+      orderedProjects,
       pinnedCollapsed,
       pinnedKeys,
       pinnedWorkspaceOrder,
@@ -208,25 +234,30 @@ export function SidebarModelProvider({
   const value = useMemo(
     () => ({
       ...list,
-      projects: filteredProjects,
+      projects: orderedProjects,
       allProjects: list.projects,
       resolvedProjectFilters,
       hasProjectsBeforeFilter: list.projects.length > 0,
+      searchQuery,
+      setSearchQuery,
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
       groupMode,
       workspaceGroups: projection.workspaceGroups,
       projectIconTargets: projection.projectIconTargets,
       pinnedGroups: projection.pinnedGroups,
+      pinnedProjectViewKeys: pinOrdered.pinnedViewKeys,
       collapsedProjectKeys,
       toggleProjectCollapsed,
       shortcutModel: projection.shortcutModel,
     }),
     [
       resolvedProjectFilters,
+      searchQuery,
       collapsedProjectKeys,
       groupMode,
       list,
-      filteredProjects,
+      orderedProjects,
+      pinOrdered.pinnedViewKeys,
       projection,
       toggleProjectCollapsed,
       filteredWorkspaceEntriesByKey,

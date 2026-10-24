@@ -27,6 +27,79 @@ export const ar: TranslationResources = {
     offlineNotice: "offline — cached items may be out of date",
     upgradeNotice: "update this host to use global Stream",
   },
+  defaultProject: {
+    actions: {
+      pin: "تثبيت المشروع",
+      unpin: "إلغاء تثبيت المشروع",
+      makeDefault: "تعيين كمشروع افتراضي",
+      removeDefault: "إزالة كمشروع افتراضي",
+    },
+    badges: {
+      default: "المشروع الافتراضي",
+      pinned: "مشروع مثبّت",
+    },
+    commandCenter: {
+      goToDefault: "الانتقال إلى المشروع الافتراضي",
+      pinCurrent: "تثبيت المشروع الحالي",
+      unpinCurrent: "إلغاء تثبيت المشروع الحالي",
+      makeCurrentDefault: "تعيين المشروع الحالي كافتراضي",
+      removeCurrentDefault: "إزالة المشروع الحالي كافتراضي",
+    },
+    settings: {
+      title: "المشروع الافتراضي",
+      hint: "يبدأ Quick launch وNew conversation من هنا.",
+      updateHost: "حدّث هذا المضيف لاختيار مشروع افتراضي.",
+      none: "لا شيء",
+      accessibilityLabel: "المشروع الافتراضي: {{value}}",
+    },
+    toasts: {
+      failed: "تعذّر تحديث المشروع",
+      hostDisconnected: "المضيف غير متصل",
+    },
+  },
+  quickLaunch: {
+    title: "التشغيل السريع",
+    commandCenterTitle: "تشغيل وكيل سريعًا…",
+    placeholder: "ما الذي يجب أن يفعله الوكيل الجديد؟",
+    promptLabel: "الطلب الموجّه إلى الوكيل الجديد",
+    project: {
+      title: "المشروع",
+      label: "المشروع: {{project}}",
+      choose: "اختر مشروعًا",
+      search: "ابحث في المشاريع",
+      empty: "لا توجد مشاريع متاحة",
+    },
+    host: {
+      title: "المضيف",
+      label: "المضيف: {{host}}",
+    },
+    where: {
+      newWorkspace: "مساحة عمل جديدة",
+      newTab: "علامة تبويب جديدة في {{workspace}}",
+    },
+    actions: {
+      start: "بدء",
+      startHint: "يبدأ الوكيل مع بقائك في مكانك",
+      startAndOpen: "بدء وفتح",
+      startAndOpenHint: "يبدأ الوكيل ويفتحه",
+    },
+    toast: {
+      starting: "جارٍ البدء في {{project}} · {{workspace}}…",
+      started: "بدأ في {{project}} · {{workspace}}",
+      newWorkspace: "مساحة عمل جديدة",
+      open: "فتح",
+      retry: "إعادة المحاولة",
+      failed: "تعذر بدء الوكيل: {{error}}",
+    },
+    errors: {
+      noAgent: "أُنشئت مساحة العمل دون وكيل",
+      createFailed: "تعذر إنشاء مساحة العمل",
+    },
+    router: {
+      startWithoutLeaving: "البدء دون مغادرة",
+      startWithoutLeavingHint: "ابدأ هذا الطلب بالتشغيل السريع وابقَ هنا",
+    },
+  },
   paneFind: {
     connectionFailure: "تعذر البحث في هذه المحادثة. تحقق من الاتصال بالمضيف وأعد المحاولة.",
     historyChangedFailure: "تغيّرت المحادثة أثناء البحث. أعد البحث.",

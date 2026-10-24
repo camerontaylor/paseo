@@ -27,6 +27,80 @@ export const fr: TranslationResources = {
     offlineNotice: "offline — cached items may be out of date",
     upgradeNotice: "update this host to use global Stream",
   },
+  defaultProject: {
+    actions: {
+      pin: "Épingler le projet",
+      unpin: "Désépingler le projet",
+      makeDefault: "Définir comme projet par défaut",
+      removeDefault: "Retirer comme projet par défaut",
+    },
+    badges: {
+      default: "Projet par défaut",
+      pinned: "Projet épinglé",
+    },
+    commandCenter: {
+      goToDefault: "Aller au projet par défaut",
+      pinCurrent: "Épingler le projet actuel",
+      unpinCurrent: "Désépingler le projet actuel",
+      makeCurrentDefault: "Définir le projet actuel par défaut",
+      removeCurrentDefault: "Retirer le projet actuel comme projet par défaut",
+    },
+    settings: {
+      title: "Projet par défaut",
+      hint: "Quick launch et New conversation démarrent ici.",
+      updateHost: "Mettez à jour cet hôte pour choisir un projet par défaut.",
+      none: "Aucun",
+      accessibilityLabel: "Projet par défaut : {{value}}",
+    },
+    toasts: {
+      failed: "Impossible de mettre à jour le projet",
+      hostDisconnected: "L’hôte n’est pas connecté",
+    },
+  },
+  quickLaunch: {
+    title: "Lancement rapide",
+    commandCenterTitle: "Lancement rapide d'agent…",
+    placeholder: "Que doit faire le nouvel agent ?",
+    promptLabel: "Consigne pour le nouvel agent",
+    project: {
+      title: "Projet",
+      label: "Projet : {{project}}",
+      choose: "Choisir un projet",
+      search: "Rechercher des projets",
+      empty: "Aucun projet disponible",
+    },
+    host: {
+      title: "Hôte",
+      label: "Hôte : {{host}}",
+    },
+    where: {
+      newWorkspace: "Nouvel espace de travail",
+      newTab: "Nouvel onglet dans {{workspace}}",
+    },
+    actions: {
+      start: "Démarrer",
+      startHint: "Démarre l'agent sans quitter la vue actuelle",
+      startAndOpen: "Démarrer et ouvrir",
+      startAndOpenHint: "Démarre l'agent et l'ouvre",
+    },
+    toast: {
+      starting: "Démarrage dans {{project}} · {{workspace}}…",
+      started: "Démarré dans {{project}} · {{workspace}}",
+      newWorkspace: "nouvel espace de travail",
+      open: "Ouvrir",
+      retry: "Réessayer",
+      failed: "Impossible de démarrer l'agent : {{error}}",
+    },
+    errors: {
+      noAgent: "L'espace de travail a été créé sans agent",
+      createFailed: "Impossible de créer l'espace de travail",
+    },
+    router: {
+      startWithoutLeaving: "Démarrer sans quitter",
+      startWithoutLeavingHint:
+        "Démarre cette consigne avec le lancement rapide sans quitter la vue",
+    },
+  },
   paneFind: {
     connectionFailure:
       "Impossible de rechercher dans cette conversation. Vérifiez la connexion à l’hôte et réessayez.",

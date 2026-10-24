@@ -27,6 +27,79 @@ export const ja: TranslationResources = {
     offlineNotice: "offline — cached items may be out of date",
     upgradeNotice: "update this host to use global Stream",
   },
+  defaultProject: {
+    actions: {
+      pin: "プロジェクトを固定",
+      unpin: "プロジェクトの固定を解除",
+      makeDefault: "既定のプロジェクトにする",
+      removeDefault: "既定のプロジェクトから外す",
+    },
+    badges: {
+      default: "既定のプロジェクト",
+      pinned: "固定したプロジェクト",
+    },
+    commandCenter: {
+      goToDefault: "既定のプロジェクトへ移動",
+      pinCurrent: "現在のプロジェクトを固定",
+      unpinCurrent: "現在のプロジェクトの固定を解除",
+      makeCurrentDefault: "現在のプロジェクトを既定にする",
+      removeCurrentDefault: "現在のプロジェクトを既定から外す",
+    },
+    settings: {
+      title: "既定のプロジェクト",
+      hint: "Quick launch と New conversation はここから始まります。",
+      updateHost: "既定のプロジェクトを選ぶには、このホストを更新してください。",
+      none: "なし",
+      accessibilityLabel: "既定のプロジェクト: {{value}}",
+    },
+    toasts: {
+      failed: "プロジェクトを更新できませんでした",
+      hostDisconnected: "ホストに接続されていません",
+    },
+  },
+  quickLaunch: {
+    title: "クイック起動",
+    commandCenterTitle: "エージェントをクイック起動…",
+    placeholder: "新しいエージェントに何をさせますか？",
+    promptLabel: "新しいエージェントへのプロンプト",
+    project: {
+      title: "プロジェクト",
+      label: "プロジェクト: {{project}}",
+      choose: "プロジェクトを選択",
+      search: "プロジェクトを検索",
+      empty: "利用できるプロジェクトがありません",
+    },
+    host: {
+      title: "ホスト",
+      label: "ホスト: {{host}}",
+    },
+    where: {
+      newWorkspace: "新しいワークスペース",
+      newTab: "{{workspace}} の新しいタブ",
+    },
+    actions: {
+      start: "開始",
+      startHint: "今の画面のままエージェントを開始します",
+      startAndOpen: "開始して開く",
+      startAndOpenHint: "エージェントを開始して開きます",
+    },
+    toast: {
+      starting: "{{project}} · {{workspace}} で開始中…",
+      started: "{{project}} · {{workspace}} で開始しました",
+      newWorkspace: "新しいワークスペース",
+      open: "開く",
+      retry: "再試行",
+      failed: "エージェントを開始できません: {{error}}",
+    },
+    errors: {
+      noAgent: "ワークスペースはエージェントなしで作成されました",
+      createFailed: "ワークスペースを作成できません",
+    },
+    router: {
+      startWithoutLeaving: "移動せずに開始",
+      startWithoutLeavingHint: "このプロンプトをクイック起動で開始し、この画面に留まります",
+    },
+  },
   paneFind: {
     connectionFailure:
       "このチャットを検索できませんでした。ホストへの接続を確認して再試行してください。",

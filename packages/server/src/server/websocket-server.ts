@@ -2011,6 +2011,10 @@ export class VoiceAssistantWebSocketServer {
         agentTimelinePromptIndex: true,
         // COMPAT(agentHistorySearch): added in v0.3.0, remove gate after 2027-02-07.
         agentHistorySearch: true,
+        // COMPAT(sessionSearch): fork v0.12.0-fork.2; retain while older hosts are supported.
+        sessionSearch: true,
+        // COMPAT(sessionTextSearch): fork v0.12.0-fork.2; retain while older hosts are supported.
+        sessionTextSearch: true,
         // COMPAT(durableAgentQueue): added in 0.11.0-beta.3.fork.1, fork-only —
         // stock peers never gain it, so the gate lasts as long as stock peers
         // are supported. Gates the agent.queue.* surface end to end.
@@ -2085,6 +2089,8 @@ export class VoiceAssistantWebSocketServer {
         sideConversationEvents: true,
         // COMPAT(workspacePinning): added in v0.1.107, remove gate after 2027-01-12.
         workspacePinning: true,
+        // COMPAT(projectPinning): fork v0.12.0-fork.2; retain while older hosts are supported.
+        projectPinning: true,
         // COMPAT(workspaceMarkUnread): added in v0.5.0, remove after 2027-08-20.
         workspaceMarkUnread: true,
         agentMarkUnread: true,

@@ -27,6 +27,79 @@ export const ru: TranslationResources = {
     offlineNotice: "offline — cached items may be out of date",
     upgradeNotice: "update this host to use global Stream",
   },
+  defaultProject: {
+    actions: {
+      pin: "Закрепить проект",
+      unpin: "Открепить проект",
+      makeDefault: "Сделать проектом по умолчанию",
+      removeDefault: "Убрать из проектов по умолчанию",
+    },
+    badges: {
+      default: "Проект по умолчанию",
+      pinned: "Закреплённый проект",
+    },
+    commandCenter: {
+      goToDefault: "Перейти к проекту по умолчанию",
+      pinCurrent: "Закрепить текущий проект",
+      unpinCurrent: "Открепить текущий проект",
+      makeCurrentDefault: "Сделать текущий проект проектом по умолчанию",
+      removeCurrentDefault: "Убрать текущий проект из проектов по умолчанию",
+    },
+    settings: {
+      title: "Проект по умолчанию",
+      hint: "Quick launch и New conversation начинаются здесь.",
+      updateHost: "Обновите этот хост, чтобы выбрать проект по умолчанию.",
+      none: "Нет",
+      accessibilityLabel: "Проект по умолчанию: {{value}}",
+    },
+    toasts: {
+      failed: "Не удалось обновить проект",
+      hostDisconnected: "Хост не подключён",
+    },
+  },
+  quickLaunch: {
+    title: "Быстрый запуск",
+    commandCenterTitle: "Быстрый запуск агента…",
+    placeholder: "Что должен сделать новый агент?",
+    promptLabel: "Запрос для нового агента",
+    project: {
+      title: "Проект",
+      label: "Проект: {{project}}",
+      choose: "Выбрать проект",
+      search: "Поиск проектов",
+      empty: "Нет доступных проектов",
+    },
+    host: {
+      title: "Хост",
+      label: "Хост: {{host}}",
+    },
+    where: {
+      newWorkspace: "Новое рабочее пространство",
+      newTab: "Новая вкладка в {{workspace}}",
+    },
+    actions: {
+      start: "Запустить",
+      startHint: "Запускает агента, не уводя с текущего экрана",
+      startAndOpen: "Запустить и открыть",
+      startAndOpenHint: "Запускает агента и открывает его",
+    },
+    toast: {
+      starting: "Запуск в {{project}} · {{workspace}}…",
+      started: "Запущено в {{project}} · {{workspace}}",
+      newWorkspace: "новое рабочее пространство",
+      open: "Открыть",
+      retry: "Повторить",
+      failed: "Не удалось запустить агента: {{error}}",
+    },
+    errors: {
+      noAgent: "Рабочее пространство создано без агента",
+      createFailed: "Не удалось создать рабочее пространство",
+    },
+    router: {
+      startWithoutLeaving: "Запустить, не уходя",
+      startWithoutLeavingHint: "Запустить этот запрос через быстрый запуск и остаться здесь",
+    },
+  },
   paneFind: {
     connectionFailure:
       "Не удалось выполнить поиск в чате. Проверьте подключение к хосту и повторите попытку.",

@@ -3326,6 +3326,47 @@ export class DaemonClient {
     return { removedWorkspaceIds: payload.removedWorkspaceIds };
   }
 
+  // COMPAT(projectPinning): callers gate on server_info.features.projectPinning.
+  async setProjectPinned(
+    projectId: string,
+    pinned: boolean,
+    requestId?: string,
+  ): Promise<{ pinnedAt: string | null }> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"project.pin.set.response">({
+      requestId,
+      message: {
+        type: "project.pin.set.request",
+        projectId,
+        pinned,
+      },
+    });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "setProjectPinned rejected");
+    }
+    return { pinnedAt: payload.pinnedAt };
+  }
+
+  // COMPAT(projectPinning): callers gate on server_info.features.projectPinning.
+  async setProjectDefault(
+    projectId: string,
+    isDefault: boolean,
+    requestId?: string,
+  ): Promise<{ defaultAt: string | null }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"project.default.set.response">({
+        requestId,
+        message: {
+          type: "project.default.set.request",
+          projectId,
+          isDefault,
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "setProjectDefault rejected");
+    }
+    return { defaultAt: payload.defaultAt };
+  }
+
   async setWorkspaceTitle(
     workspaceId: string,
     title: string | null,
@@ -3543,6 +3584,41 @@ export class DaemonClient {
       responseType: "agent.timeline.append.response",
     });
     return { seq: payload.seq, epoch: payload.epoch };
+  }
+
+  async searchSessions(input: { query: string; workspaceIds: string[] }): Promise<{
+    results: import("@getpaseo/protocol/messages").SessionSearchResult[];
+    searchedCount: number;
+    totalCount: number;
+  }> {
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "session.search.request", requestId, ...input },
+      responseType: "session.search.response",
+      timeout: 50_000,
+    });
+    if (payload.error) {
+      const error = new Error(payload.error);
+      if (payload.errorCode) Object.assign(error, { code: payload.errorCode });
+      throw error;
+    }
+    return payload;
+  }
+
+  /**
+   * Lexical message search across sessions (`session.text_search`). Gate on
+   * `server_info.features.sessionTextSearch`. The daemon supersedes an older request from the
+   * same connection; the superseded call rejects with the daemon's error.
+   */
+  async searchSessionText(input: { query: string; workspaceIds?: string[] }) {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"session.text_search.response">({
+        message: { type: "session.text_search.request", ...input },
+        timeout: 10000,
+      });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
   }
 
   async searchAgentTimeline({

@@ -24,6 +24,79 @@ export const en = {
     offlineNotice: "offline — cached items may be out of date",
     upgradeNotice: "update this host to use global Stream",
   },
+  defaultProject: {
+    actions: {
+      pin: "Pin project",
+      unpin: "Unpin project",
+      makeDefault: "Make default project",
+      removeDefault: "Remove as default project",
+    },
+    badges: {
+      default: "Default project",
+      pinned: "Pinned project",
+    },
+    commandCenter: {
+      goToDefault: "Go to default project",
+      pinCurrent: "Pin current project",
+      unpinCurrent: "Unpin current project",
+      makeCurrentDefault: "Make current project default",
+      removeCurrentDefault: "Remove current project as default",
+    },
+    settings: {
+      title: "Default project",
+      hint: "Quick launch and New conversation start here.",
+      updateHost: "Update this host to choose a default project.",
+      none: "None",
+      accessibilityLabel: "Default project: {{value}}",
+    },
+    toasts: {
+      failed: "Couldn't update the project",
+      hostDisconnected: "Host is not connected",
+    },
+  },
+  quickLaunch: {
+    title: "Quick launch",
+    commandCenterTitle: "Quick launch agent…",
+    placeholder: "What should the new agent do?",
+    promptLabel: "Prompt for the new agent",
+    project: {
+      title: "Project",
+      label: "Project: {{project}}",
+      choose: "Choose project",
+      search: "Search projects",
+      empty: "No projects available",
+    },
+    host: {
+      title: "Host",
+      label: "Host: {{host}}",
+    },
+    where: {
+      newWorkspace: "New workspace",
+      newTab: "New tab in {{workspace}}",
+    },
+    actions: {
+      start: "Start",
+      startHint: "Starts the agent and keeps you where you are",
+      startAndOpen: "Start and open",
+      startAndOpenHint: "Starts the agent and opens it",
+    },
+    toast: {
+      starting: "Starting in {{project}} · {{workspace}}…",
+      started: "Started in {{project}} · {{workspace}}",
+      newWorkspace: "new workspace",
+      open: "Open",
+      retry: "Retry",
+      failed: "Unable to start agent: {{error}}",
+    },
+    errors: {
+      noAgent: "The workspace was created without an agent",
+      createFailed: "Unable to create workspace",
+    },
+    router: {
+      startWithoutLeaving: "Start without leaving",
+      startWithoutLeavingHint: "Start this prompt with Quick launch and stay here",
+    },
+  },
   paneFind: {
     connectionFailure: "Could not search this chat. Check the host connection and retry.",
     historyChangedFailure: "The chat changed while searching. Search again.",

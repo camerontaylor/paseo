@@ -27,6 +27,79 @@ export const zhCN: TranslationResources = {
     offlineNotice: "offline — cached items may be out of date",
     upgradeNotice: "update this host to use global Stream",
   },
+  defaultProject: {
+    actions: {
+      pin: "固定项目",
+      unpin: "取消固定项目",
+      makeDefault: "设为默认项目",
+      removeDefault: "取消默认项目",
+    },
+    badges: {
+      default: "默认项目",
+      pinned: "已固定的项目",
+    },
+    commandCenter: {
+      goToDefault: "前往默认项目",
+      pinCurrent: "固定当前项目",
+      unpinCurrent: "取消固定当前项目",
+      makeCurrentDefault: "将当前项目设为默认",
+      removeCurrentDefault: "取消当前项目的默认设置",
+    },
+    settings: {
+      title: "默认项目",
+      hint: "Quick launch 和 New conversation 从这里开始。",
+      updateHost: "请更新此主机以选择默认项目。",
+      none: "无",
+      accessibilityLabel: "默认项目：{{value}}",
+    },
+    toasts: {
+      failed: "无法更新项目",
+      hostDisconnected: "主机未连接",
+    },
+  },
+  quickLaunch: {
+    title: "快速启动",
+    commandCenterTitle: "快速启动 Agent…",
+    placeholder: "新的 Agent 要做什么？",
+    promptLabel: "给新 Agent 的提示",
+    project: {
+      title: "项目",
+      label: "项目：{{project}}",
+      choose: "选择项目",
+      search: "搜索项目",
+      empty: "没有可用的项目",
+    },
+    host: {
+      title: "主机",
+      label: "主机：{{host}}",
+    },
+    where: {
+      newWorkspace: "新建工作区",
+      newTab: "在 {{workspace}} 中新建标签页",
+    },
+    actions: {
+      start: "启动",
+      startHint: "启动 Agent 并留在当前位置",
+      startAndOpen: "启动并打开",
+      startAndOpenHint: "启动 Agent 并打开它",
+    },
+    toast: {
+      starting: "正在 {{project}} · {{workspace}} 中启动…",
+      started: "已在 {{project}} · {{workspace}} 中启动",
+      newWorkspace: "新工作区",
+      open: "打开",
+      retry: "重试",
+      failed: "无法启动 Agent：{{error}}",
+    },
+    errors: {
+      noAgent: "工作区已创建，但没有 Agent",
+      createFailed: "无法创建工作区",
+    },
+    router: {
+      startWithoutLeaving: "不离开当前页启动",
+      startWithoutLeavingHint: "通过快速启动开始此提示并留在当前位置",
+    },
+  },
   paneFind: {
     connectionFailure: "无法搜索此聊天。请检查主机连接后重试。",
     historyChangedFailure: "搜索期间聊天已更改。请重新搜索。",

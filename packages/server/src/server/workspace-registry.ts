@@ -43,6 +43,8 @@ const PersistedProjectRecordSchema = z.object({
     .nullable()
     .optional()
     .transform((value) => value ?? null),
+  pinnedAt: z.string().nullable().optional(),
+  defaultAt: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   archivedAt: z.string().nullable(),
@@ -149,8 +151,18 @@ export interface ProjectRegistry {
   ): Promise<PersistedProjectRecord | null>;
   archive(projectId: string, archivedAt: string): Promise<void>;
   remove(projectId: string): Promise<void>;
+  setDefaultProject?(input: {
+    projectId: string;
+    isDefault: boolean;
+    now: string;
+  }): Promise<DefaultProjectMutation>;
   /** Central lifecycle seam for daemon-global project observers. */
   subscribeToMutations?(listener: (mutation: ProjectMutation) => void | Promise<void>): () => void;
+}
+
+export interface DefaultProjectMutation {
+  project: PersistedProjectRecord | null;
+  changed: PersistedProjectRecord[];
 }
 
 export interface WorkspaceRegistry {
@@ -485,6 +497,47 @@ export class FileBackedProjectRegistry
     return project;
   }
 
+  async setDefaultProject(input: {
+    projectId: string;
+    isDefault: boolean;
+    now: string;
+  }): Promise<DefaultProjectMutation> {
+    const result = await this.mutateCache<DefaultProjectMutation>((records) => {
+      const target = records.get(input.projectId);
+      if (!target) return { project: null, changed: [] };
+      const changed: PersistedProjectRecord[] = [];
+      let project = target;
+      const defaultAt = input.isDefault ? (target.defaultAt ?? input.now) : null;
+      if ((target.defaultAt ?? null) !== defaultAt) {
+        project = PersistedProjectRecordSchema.parse({
+          ...target,
+          defaultAt,
+          updatedAt: input.now,
+        });
+        records.set(project.projectId, project);
+        changed.push(project);
+      }
+      if (!input.isDefault) return { project, changed };
+      const previousDefaults = Array.from(records.values()).filter(
+        (record) => record.projectId !== input.projectId && record.defaultAt,
+      );
+      for (const previous of previousDefaults) {
+        const cleared = PersistedProjectRecordSchema.parse({
+          ...previous,
+          defaultAt: null,
+          updatedAt: input.now,
+        });
+        records.set(cleared.projectId, cleared);
+        changed.push(cleared);
+      }
+      return { project, changed };
+    });
+    for (const project of result.changed) {
+      await this.notifyMutation({ kind: "upsert", projectId: project.projectId, project });
+    }
+    return result;
+  }
+
   override async archive(projectId: string, archivedAt: string): Promise<void> {
     const project = await this.archiveIfActive(projectId, archivedAt);
     if (!project) return;
@@ -650,6 +703,8 @@ export function createPersistedProjectRecord(input: {
   customName?: string | null;
   projectKey?: string | null;
   customIconRevision?: string | null;
+  pinnedAt?: string | null;
+  defaultAt?: string | null;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;

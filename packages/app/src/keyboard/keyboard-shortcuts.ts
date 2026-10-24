@@ -166,6 +166,7 @@ export const SHORTCUT_HELP_ROW_ORDER: Record<ShortcutSectionId, readonly string[
   workspaces: [
     "new-agent",
     "new-workspace",
+    "quick-launch",
     "workspace-jump-index",
     "workspace-prev",
     "workspace-next",
@@ -213,6 +214,7 @@ const SHORTCUT_HELP_LABEL_KEYS: Record<string, string> = {
   "new-agent": "settings.shortcuts.help.openProject",
   "subthreads-toggle": "subthreads.shortcutHelp",
   "new-workspace": "settings.shortcuts.help.newWorkspace",
+  "quick-launch": "Quick launch",
   "switch-project": "settings.shortcuts.help.switchProject",
   "archive-workspace": "settings.shortcuts.help.archiveWorkspace",
   "workspace-tab-new": "settings.shortcuts.help.newTab",
@@ -313,6 +315,22 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
       section: "workspaces",
       label: "New workspace",
     },
+  },
+
+  // --- Quick launch ---
+  {
+    id: "quick-launch-cmd-shift-l-mac",
+    action: "quick-launch.open",
+    combo: "Cmd+Shift+L",
+    when: { mac: true, commandCenter: false },
+    help: { id: "quick-launch", section: "workspaces", label: "Quick launch" },
+  },
+  {
+    id: "quick-launch-ctrl-shift-l-non-mac",
+    action: "quick-launch.open",
+    combo: "Ctrl+Shift+L",
+    when: { mac: false, commandCenter: false, terminal: false },
+    help: { id: "quick-launch", section: "workspaces", label: "Quick launch" },
   },
 
   // --- Search files (switch project on the New Workspace screen) ---

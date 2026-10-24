@@ -6,7 +6,7 @@ import { workspaceLabelKey } from "@getpaseo/protocol/workspace-labels";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 
 export type SidebarGroupMode = "project" | "status";
-export type SidebarSortMode = "manual" | "recent" | "user" | "title";
+export type SidebarSortMode = "manual" | "recent" | "user" | "assistant" | "title";
 
 const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
 const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
@@ -93,7 +93,7 @@ const SidebarLabelFilterSchema = z.object({
 const SidebarViewPersistedStateSchema = z.strictObject({
   showBackground: z.boolean().optional(),
   groupMode: PersistedSidebarGroupModeSchema.optional(),
-  sortMode: z.enum(["manual", "recent", "user", "title"]).optional(),
+  sortMode: z.enum(["manual", "recent", "user", "assistant", "title"]).optional(),
   hostFilters: z.array(z.string()).optional(),
   hostFilter: z.string().nullable().optional(),
   projectFilters: z.array(z.string()).optional(),

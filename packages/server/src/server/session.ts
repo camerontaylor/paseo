@@ -1,6 +1,19 @@
 import { AgentDirectory } from "./agent/directory.js";
 import { TIMELINE_PAGE_BYTE_BUDGET } from "./websocket/physical-socket.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
+import {
+  searchExistingSessions,
+  selectSessionSearchExcerpts,
+  type SessionSearchCandidate,
+} from "./session-search.js";
+import {
+  generateSessionSearchRanking,
+  resolveSessionSearchMatcherConfig,
+} from "./session-search-matcher.js";
+import { searchSessionText, type SessionTextSearchCandidate } from "./session-text-search.js";
+import { getSharedPersistedConversationReader } from "./session-text-history.js";
+import { parseSessionIdQuery } from "@getpaseo/protocol/search/session-id";
+import { configurationEnvironment } from "./config-environment.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type {
@@ -170,6 +183,7 @@ import {
   type WorkspaceMutation,
   type WorkspaceRegistry,
 } from "./workspace-registry.js";
+import { setProjectDefault, setProjectPinned } from "./project-pins.js";
 import { isVoicePermissionAllowed } from "./voice-permission-policy.js";
 import {
   ProjectIconReader,
@@ -818,6 +832,8 @@ export class Session {
   private registryMutationQueue: Promise<void> = Promise.resolve();
   private projectUpdateQueue: Promise<void> = Promise.resolve();
   private isCleanedUp = false;
+  private sessionSearchActive: AbortController | null = null;
+  private sessionTextSearchActive: AbortController | null = null;
   private readonly timelineSubscriptions = new Map<
     string,
     { owner: OwnedSubscription; agentIds: Set<string> }
@@ -2827,6 +2843,10 @@ export class Session {
         return this.handleFetchAgentTimelineRequest(msg, source);
       case "agent.timeline.append.request":
         return this.handleAgentTimelineAppendRequest(msg);
+      case "session.search.request":
+        return this.handleSessionSearchRequest(msg, source);
+      case "session.text_search.request":
+        return this.handleSessionTextSearchRequest(msg, source);
       case "agent.timeline.search.request":
         return this.handleAgentTimelineSearchRequest(msg, source);
       case "agent.timeline.list_prompts.request":
@@ -3127,6 +3147,10 @@ export class Session {
         return this.handleWorkspaceTitleSetRequest(msg.workspaceId, msg.title, msg.requestId);
       case "workspace.pin.set.request":
         return this.handleWorkspacePinSetRequest(msg.workspaceId, msg.pinned, msg.requestId);
+      case "project.pin.set.request":
+        return this.handleProjectPinSetRequest(msg);
+      case "project.default.set.request":
+        return this.handleProjectDefaultSetRequest(msg);
       default:
         return undefined;
     }
@@ -4128,6 +4152,78 @@ export class Session {
           error: getErrorMessageOr(error, "Failed to set workspace title"),
         },
       });
+    }
+  }
+
+  private async handleProjectPinSetRequest(
+    request: Extract<SessionInboundMessage, { type: "project.pin.set.request" }>,
+  ): Promise<void> {
+    const { projectId, pinned, requestId } = request;
+    const logContext = { projectId, pinned, requestId };
+    this.sessionLogger.info(logContext, "session: project.pin.set.request");
+    const emitResponse = (accepted: boolean, pinnedAt: string | null, error: string | null) => {
+      this.emit({
+        type: "project.pin.set.response",
+        payload: { requestId, projectId, accepted, pinnedAt, error },
+      });
+    };
+    try {
+      const updated = await setProjectPinned({
+        registry: this.projectRegistry,
+        projectId,
+        pinned,
+        now: new Date().toISOString(),
+      });
+      if (!updated) {
+        emitResponse(false, null, "Project not found");
+        return;
+      }
+      emitResponse(true, updated.pinnedAt ?? null, null);
+      // The registry mutation also broadcasts to every client; this keeps the requester current
+      // even when it is the only observer, matching project rename.
+      await this.emitProjectUpdate({ kind: "upsert", project: updated });
+    } catch (error) {
+      this.sessionLogger.error(
+        { ...logContext, err: error },
+        "session: project.pin.set.request error",
+      );
+      emitResponse(false, null, getErrorMessageOr(error, "Failed to pin project"));
+    }
+  }
+
+  private async handleProjectDefaultSetRequest(
+    request: Extract<SessionInboundMessage, { type: "project.default.set.request" }>,
+  ): Promise<void> {
+    const { projectId, isDefault, requestId } = request;
+    const logContext = { projectId, isDefault, requestId };
+    this.sessionLogger.info(logContext, "session: project.default.set.request");
+    const emitResponse = (accepted: boolean, defaultAt: string | null, error: string | null) => {
+      this.emit({
+        type: "project.default.set.response",
+        payload: { requestId, projectId, accepted, defaultAt, error },
+      });
+    };
+    try {
+      const result = await setProjectDefault({
+        registry: this.projectRegistry,
+        projectId,
+        isDefault,
+        now: new Date().toISOString(),
+      });
+      if (!result.project) {
+        emitResponse(false, null, "Project not found");
+        return;
+      }
+      emitResponse(true, result.project.defaultAt ?? null, null);
+      for (const project of result.changed) {
+        await this.emitProjectUpdate({ kind: "upsert", project });
+      }
+    } catch (error) {
+      this.sessionLogger.error(
+        { ...logContext, err: error },
+        "session: project.default.set.request error",
+      );
+      emitResponse(false, null, getErrorMessageOr(error, "Failed to set the default project"));
     }
   }
 
@@ -6175,6 +6271,8 @@ export class Session {
       projectIconRevision: icon.revision,
       projectRootPath: project.rootPath,
       projectKind: project.kind,
+      ...(project.pinnedAt ? { projectPinnedAt: project.pinnedAt } : {}),
+      ...(project.defaultAt ? { projectDefaultAt: project.defaultAt } : {}),
     };
   }
 
@@ -8176,6 +8274,239 @@ export class Session {
     });
   }
 
+  private async getSessionSearchCandidates(
+    workspaceIds: string[],
+    query: string,
+    signal: AbortSignal,
+  ): Promise<SessionSearchCandidate[]> {
+    const [records, workspaces, projects] = await Promise.all([
+      this.agentStorage.list(),
+      this.workspaceRegistry.list(),
+      this.projectRegistry.list(),
+    ]);
+    const workspaceById = new Map(
+      workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+    );
+    const projectById = new Map(projects.map((project) => [project.projectId, project]));
+    const allowed = new Set(workspaceIds);
+    const candidates: SessionSearchCandidate[] = [];
+    for (const record of records) {
+      const workspace = record.workspaceId ? workspaceById.get(record.workspaceId) : undefined;
+      const project = workspace ? projectById.get(workspace.projectId) : undefined;
+      if (
+        !workspace ||
+        !project ||
+        workspace.archivedAt ||
+        project.archivedAt ||
+        !allowed.has(workspace.workspaceId)
+      )
+        continue;
+      if (record.internal || record.archivedAt || record.labels["paseo.parent-agent-id"]) continue;
+      const title = record.title || resolveWorkspaceDisplayName(workspace);
+      const queued = this.agentQueueService
+        ? (await this.agentQueueService.list(record.id)).items
+        : [];
+      const queuedExcerpts = selectSessionSearchExcerpts(
+        queued.map((item) => ({
+          text: item.text,
+          source: "queued_message" as const,
+          timestamp: item.createdAt,
+        })),
+        query,
+      );
+      const updatedAt = queued.reduce(
+        (latest, item) => (item.createdAt > latest ? item.createdAt : latest),
+        record.updatedAt,
+      );
+      candidates.push({
+        agentId: record.id,
+        workspaceId: workspace.workspaceId,
+        projectId: project.projectId,
+        projectName: resolveProjectDisplayName(project),
+        title,
+        cwd: workspace.cwd,
+        updatedAt,
+        excerpts: [{ text: title, source: "title" }, ...queuedExcerpts],
+      });
+      signal.throwIfAborted();
+    }
+    return candidates;
+  }
+
+  private async handleSessionSearchRequest(
+    msg: Extract<SessionInboundMessage, { type: "session.search.request" }>,
+    source?: object,
+  ): Promise<void> {
+    this.sessionSearchActive?.abort();
+    const active = new AbortController();
+    this.sessionSearchActive = active;
+    const signal = AbortSignal.any([active.signal, AbortSignal.timeout(45000)]);
+    try {
+      const candidates = await this.getSessionSearchCandidates(msg.workspaceIds, msg.query, signal);
+      let matcher: ReturnType<typeof resolveSessionSearchMatcherConfig> = null;
+      let matcherSetupError: string | null = null;
+      try {
+        matcher = resolveSessionSearchMatcherConfig({
+          persisted: loadPersistedConfig(this.paseoHome),
+          env: configurationEnvironment(process.env),
+        });
+      } catch (error) {
+        matcherSetupError = errorToFriendlyMessage(error);
+      }
+      if (!matcher && !parseSessionIdQuery(msg.query)) {
+        this.emitForSource(
+          {
+            type: "session.search.response",
+            payload: {
+              requestId: msg.requestId,
+              results: [],
+              searchedCount: 0,
+              totalCount: candidates.length,
+              error:
+                matcherSetupError ??
+                "Configure features.sessionSearch and providers.openai to use intelligent Find.",
+              errorCode: "setup_required",
+            },
+          },
+          source,
+        );
+        return;
+      }
+      const result = await searchExistingSessions({
+        query: msg.query,
+        workspaceIds: msg.workspaceIds,
+        candidates,
+        readContext: async (agentId) => {
+          signal.throwIfAborted();
+          return this.agentManager.readSessionSearchText(agentId, msg.query);
+        },
+        generate: ({ prompt }) => {
+          if (!matcher)
+            throw Object.assign(
+              new Error(matcherSetupError ?? "Session search matcher is not configured."),
+              { code: "setup_required" },
+            );
+          return generateSessionSearchRanking({ config: matcher, prompt, signal });
+        },
+      });
+      signal.throwIfAborted();
+      this.emitForSource(
+        {
+          type: "session.search.response",
+          payload: { requestId: msg.requestId, ...result, error: null },
+        },
+        source,
+      );
+    } catch (error) {
+      this.emitForSource(
+        {
+          type: "session.search.response",
+          payload: {
+            requestId: msg.requestId,
+            results: [],
+            searchedCount: 0,
+            totalCount: 0,
+            error: errorToFriendlyMessage(error),
+            errorCode:
+              error instanceof Error && "code" in error && error.code === "setup_required"
+                ? "setup_required"
+                : undefined,
+          },
+        },
+        source,
+      );
+    } finally {
+      if (this.sessionSearchActive === active) this.sessionSearchActive = null;
+    }
+  }
+
+  private async handleSessionTextSearchRequest(
+    msg: Extract<SessionInboundMessage, { type: "session.text_search.request" }>,
+    source?: object,
+  ): Promise<void> {
+    this.sessionTextSearchActive?.abort();
+    const active = new AbortController();
+    this.sessionTextSearchActive = active;
+    const signal = active.signal;
+    try {
+      const [records, workspaces, projects] = await Promise.all([
+        this.agentStorage.list(),
+        this.workspaceRegistry.list(),
+        this.projectRegistry.list(),
+      ]);
+      const workspaceById = new Map(
+        workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+      );
+      const projectById = new Map(projects.map((project) => [project.projectId, project]));
+      const allowed = msg.workspaceIds ? new Set(msg.workspaceIds) : null;
+      const candidates: SessionTextSearchCandidate[] = [];
+      const recordsById = new Map<string, (typeof records)[number]>();
+      for (const record of records) {
+        const workspace = record.workspaceId ? workspaceById.get(record.workspaceId) : undefined;
+        const project = workspace ? projectById.get(workspace.projectId) : undefined;
+        if (!workspace || !project || workspace.archivedAt || project.archivedAt) continue;
+        if (allowed && !allowed.has(workspace.workspaceId)) continue;
+        // Same exclusions as intelligent Find: archived, internal, and child sessions.
+        if (record.internal || record.archivedAt || record.labels["paseo.parent-agent-id"])
+          continue;
+        const workspaceTitle = resolveWorkspaceDisplayName(workspace);
+        recordsById.set(record.id, record);
+        candidates.push({
+          agentId: record.id,
+          workspaceId: workspace.workspaceId,
+          workspaceTitle,
+          projectName: resolveProjectDisplayName(project),
+          title: record.title || workspaceTitle,
+          provider: record.provider,
+          activityAt: record.lastActivityAt ?? record.updatedAt,
+        });
+      }
+      const result = await searchSessionText({
+        query: msg.query,
+        candidates,
+        // Loaded agents answer from the daemon's timeline. Everything else is read, never resumed,
+        // from the provider transcript its record points to (see session-text-history.ts).
+        readMessages: async (agentId) => {
+          const live = await this.agentManager.readRecentConversationMessages(agentId);
+          const record = recordsById.get(agentId);
+          if (live.length > 0 || !record) return live;
+          return getSharedPersistedConversationReader().read({
+            agentId,
+            provider: record.provider,
+            cwd: record.cwd,
+            persistence: record.persistence,
+            activityStamp: `${record.lastActivityAt ?? ""}|${record.updatedAt}`,
+          });
+        },
+        signal,
+      });
+      this.emitForSource(
+        {
+          type: "session.text_search.response",
+          payload: { requestId: msg.requestId, ...result, error: null },
+        },
+        source,
+      );
+    } catch (error) {
+      this.emitForSource(
+        {
+          type: "session.text_search.response",
+          payload: {
+            requestId: msg.requestId,
+            hits: [],
+            searchedCount: 0,
+            totalCount: 0,
+            truncated: false,
+            error: signal.aborted ? "Superseded by a newer search" : errorToFriendlyMessage(error),
+          },
+        },
+        source,
+      );
+    } finally {
+      if (this.sessionTextSearchActive === active) this.sessionTextSearchActive = null;
+    }
+  }
+
   private async handleAgentTimelineSearchRequest(
     msg: Extract<SessionInboundMessage, { type: "agent.timeline.search.request" }>,
     source?: object,
@@ -9498,6 +9829,8 @@ export class Session {
   public async cleanup(): Promise<void> {
     this.sessionLogger.trace({}, "agent.session.lifecycle.cleanup");
     this.isCleanedUp = true;
+    this.sessionSearchActive?.abort();
+    this.sessionTextSearchActive?.abort();
     await this.delivery.close();
 
     if (this.unsubscribeAgentEvents) {

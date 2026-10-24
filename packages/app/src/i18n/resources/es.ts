@@ -27,6 +27,79 @@ export const es: TranslationResources = {
     offlineNotice: "offline — cached items may be out of date",
     upgradeNotice: "update this host to use global Stream",
   },
+  defaultProject: {
+    actions: {
+      pin: "Fijar proyecto",
+      unpin: "Desfijar proyecto",
+      makeDefault: "Convertir en proyecto predeterminado",
+      removeDefault: "Quitar como proyecto predeterminado",
+    },
+    badges: {
+      default: "Proyecto predeterminado",
+      pinned: "Proyecto fijado",
+    },
+    commandCenter: {
+      goToDefault: "Ir al proyecto predeterminado",
+      pinCurrent: "Fijar el proyecto actual",
+      unpinCurrent: "Desfijar el proyecto actual",
+      makeCurrentDefault: "Convertir el proyecto actual en predeterminado",
+      removeCurrentDefault: "Quitar el proyecto actual como predeterminado",
+    },
+    settings: {
+      title: "Proyecto predeterminado",
+      hint: "Quick launch y New conversation empiezan aquí.",
+      updateHost: "Actualiza este host para elegir un proyecto predeterminado.",
+      none: "Ninguno",
+      accessibilityLabel: "Proyecto predeterminado: {{value}}",
+    },
+    toasts: {
+      failed: "No se pudo actualizar el proyecto",
+      hostDisconnected: "El host no está conectado",
+    },
+  },
+  quickLaunch: {
+    title: "Inicio rápido",
+    commandCenterTitle: "Inicio rápido de agente…",
+    placeholder: "¿Qué debe hacer el nuevo agente?",
+    promptLabel: "Instrucción para el nuevo agente",
+    project: {
+      title: "Proyecto",
+      label: "Proyecto: {{project}}",
+      choose: "Elegir proyecto",
+      search: "Buscar proyectos",
+      empty: "No hay proyectos disponibles",
+    },
+    host: {
+      title: "Host",
+      label: "Host: {{host}}",
+    },
+    where: {
+      newWorkspace: "Nuevo espacio de trabajo",
+      newTab: "Nueva pestaña en {{workspace}}",
+    },
+    actions: {
+      start: "Iniciar",
+      startHint: "Inicia el agente sin salir de donde estás",
+      startAndOpen: "Iniciar y abrir",
+      startAndOpenHint: "Inicia el agente y lo abre",
+    },
+    toast: {
+      starting: "Iniciando en {{project}} · {{workspace}}…",
+      started: "Iniciado en {{project}} · {{workspace}}",
+      newWorkspace: "nuevo espacio de trabajo",
+      open: "Abrir",
+      retry: "Reintentar",
+      failed: "No se pudo iniciar el agente: {{error}}",
+    },
+    errors: {
+      noAgent: "El espacio de trabajo se creó sin agente",
+      createFailed: "No se pudo crear el espacio de trabajo",
+    },
+    router: {
+      startWithoutLeaving: "Iniciar sin salir",
+      startWithoutLeavingHint: "Inicia este prompt con Inicio rápido y quédate aquí",
+    },
+  },
   paneFind: {
     connectionFailure:
       "No se pudo buscar en este chat. Comprueba la conexión con el host y vuelve a intentarlo.",

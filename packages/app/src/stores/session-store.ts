@@ -189,6 +189,8 @@ export interface ProjectDescriptor {
   projectIconRevision?: string;
   projectRootPath: string;
   projectKind: WorkspaceDescriptorPayload["projectKind"];
+  projectPinnedAt?: string | null;
+  projectDefaultAt?: string | null;
 }
 
 export function normalizeProjectDescriptor(
@@ -203,6 +205,8 @@ export function normalizeProjectDescriptor(
     projectIconRevision: payload.projectIconRevision,
     projectRootPath: payload.projectRootPath,
     projectKind: payload.projectKind,
+    ...(payload.projectPinnedAt ? { projectPinnedAt: payload.projectPinnedAt } : {}),
+    ...(payload.projectDefaultAt ? { projectDefaultAt: payload.projectDefaultAt } : {}),
   };
 }
 
