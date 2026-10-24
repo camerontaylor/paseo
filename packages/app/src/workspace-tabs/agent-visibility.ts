@@ -1,3 +1,4 @@
+import { shouldAutoOpenAgentTab } from "@getpaseo/protocol/agent-labels";
 import type { Agent } from "@/stores/session-store";
 import type { WorkspaceTabSnapshot } from "@/stores/workspace-layout-actions";
 import { isWorkspaceRootAgent } from "@/subagents/policies";
@@ -37,7 +38,7 @@ export function deriveWorkspaceAgentVisibility(input: {
       const parentAgent = agent.parentAgentId
         ? (sessionAgents?.get(agent.parentAgentId) ?? agentDetails?.get(agent.parentAgentId))
         : undefined;
-      if (isWorkspaceRootAgent(agent, parentAgent)) {
+      if (isWorkspaceRootAgent(agent, parentAgent) || shouldAutoOpenAgentTab(agent)) {
         autoOpenAgentIds.add(agent.id);
       }
     }

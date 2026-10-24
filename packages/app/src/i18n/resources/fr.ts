@@ -913,6 +913,7 @@ export const fr: TranslationResources = {
     tabs: {
       loading: "Chargement…",
       modified: "Modifications non enregistrées",
+      newActivity: "Nouvelle activité",
       loadingAgentTitle: "Chargement du titre de l’agent…",
       fallback: {
         newAgent: "Nouvel agent",

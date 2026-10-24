@@ -901,6 +901,7 @@ export const en = {
     tabs: {
       loading: "Loading...",
       modified: "Unsaved changes",
+      newActivity: "New activity",
       loadingAgentTitle: "Loading agent title",
       fallback: {
         newAgent: "New agent",

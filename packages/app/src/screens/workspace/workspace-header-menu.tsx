@@ -19,6 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -28,6 +29,8 @@ import {
   useIconButtonChromeStyle,
 } from "@/components/ui/icon-button-chrome";
 import { TerminalProfileIcon } from "@/components/terminal-profile-icon";
+import { RecentNavigationItems } from "@/components/headers/workspace-navigation-controls";
+import { useRecentVisits } from "@/navigation/history/use-recent-session-rows";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import {
   getTerminalProfileIcon,
@@ -313,9 +316,21 @@ export function WorkspaceHeaderMenuMobile({
     router.push(buildSettingsHostSectionRoute(normalizedServerId, "terminals") as Href);
   }, [normalizedServerId, router]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const recentVisits = useRecentVisits();
   // Discovery belongs to the open menu: the scripts page asks for package scripts only once the
   // user opens it, so a compact workspace does not poll for scripts it never shows.
   const scriptsMenu = useWorkspaceScriptsMenuPages({ ...scripts, menuOpen });
+  const menuPages = useMemo(
+    () => [
+      ...scriptsMenu.pages,
+      {
+        id: "recent-navigation",
+        title: t("agentList.dateSections.recent"),
+        content: <RecentNavigationItems />,
+      },
+    ],
+    [scriptsMenu.pages, t],
+  );
 
   return (
     <DropdownMenu compactMode="sheet" onOpenChange={setMenuOpen}>
@@ -340,7 +355,7 @@ export function WorkspaceHeaderMenuMobile({
         align="start"
         width={220}
         testID="workspace-header-menu"
-        pages={scriptsMenu.pages}
+        pages={menuPages}
         sheetTitle={t("workspace.header.actions.workspaceActions")}
       >
         <WorkspaceHeaderTabActionItems
@@ -351,6 +366,11 @@ export function WorkspaceHeaderMenuMobile({
           onCopyWorkspaceLink={onCopyWorkspaceLink}
         />
         {scriptsMenu.trigger}
+        {recentVisits.length > 0 ? (
+          <DropdownMenuSubTrigger id="recent-navigation" testID="workspace-header-recent">
+            {t("agentList.dateSections.recent")}
+          </DropdownMenuSubTrigger>
+        ) : null}
         {showCreateBrowserTab ? (
           <DropdownMenuItem
             testID="workspace-header-new-browser"

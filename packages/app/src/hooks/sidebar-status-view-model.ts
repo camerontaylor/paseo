@@ -63,6 +63,7 @@ function compareStatusRows(
   sortMode: SidebarSortMode,
 ): number {
   const sortDelta = compareStatusSort(a, b, sortMode);
+  if (sortMode === "recent" || sortMode === "user") return sortDelta;
   if (sortDelta !== 0) return sortDelta;
   const aTime = a.statusEnteredAt?.getTime() ?? null;
   const bTime = b.statusEnteredAt?.getTime() ?? null;

@@ -127,6 +127,7 @@ function getFallbackTabOptionDescription(
 
 interface MobileWorkspaceTabSwitcherProps {
   tabs: WorkspaceTabDescriptor[];
+  unreadTabIds: Set<string>;
   activeTabKey: string;
   normalizedServerId: string;
   normalizedWorkspaceId: string;
@@ -156,6 +157,7 @@ function MobileWorkspaceTabOption({
   normalizedWorkspaceId,
   selected,
   active,
+  unread,
   onPress,
   onCopyResumeCommand,
   onCopyAgentId,
@@ -177,6 +179,7 @@ function MobileWorkspaceTabOption({
   normalizedWorkspaceId: string;
   selected: boolean;
   active: boolean;
+  unread: boolean;
   onPress: () => void;
   onCopyResumeCommand: (agentId: string) => Promise<void> | void;
   onCopyAgentId: (agentId: string) => Promise<void> | void;
@@ -272,11 +275,12 @@ function MobileWorkspaceTabOption({
         presentation={presentation}
         selected={selected}
         active={active}
+        unread={unread}
         onPress={onPress}
         trailingAccessory={trailingAccessory}
       />
     ),
-    [selected, active, onPress, trailingAccessory],
+    [selected, active, unread, onPress, trailingAccessory],
   );
 
   return (
@@ -292,6 +296,7 @@ function MobileWorkspaceTabOption({
 
 export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
   tabs,
+  unreadTabIds,
   activeTabKey,
   normalizedServerId,
   normalizedWorkspaceId,
@@ -427,6 +432,7 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
           normalizedWorkspaceId={normalizedWorkspaceId}
           selected={selected}
           active={active}
+          unread={unreadTabIds.has(tab.tabId)}
           onPress={onPress}
           onCopyResumeCommand={onCopyResumeCommand}
           onCopyAgentId={onCopyAgentId}
@@ -445,6 +451,7 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
     },
     [
       tabByKey,
+      unreadTabIds,
       tabIndexByKey,
       tabs.length,
       normalizedServerId,

@@ -59,10 +59,49 @@ describe("navigation history store", () => {
     store.record(ws("b", "old"));
     store.setIndex(1);
 
-    store.replaceCurrent(ws("b", "new"));
+    const replacement = {
+      ...ws("b", "new"),
+      target: { kind: "agent" as const, agentId: "new-agent" },
+    };
+    store.replaceCurrent(replacement);
 
-    expect(store.getState().entries[1]).toEqual(ws("b", "new"));
+    expect(store.getState().entries[1]).toEqual(replacement);
     expect(store.getState().index).toBe(1);
+    expect(store.getRecentVisits()[0]).toMatchObject({ workspaceId: "b", agentId: "new-agent" });
+  });
+
+  it("persists one recency list and preserves visits recorded before hydration", async () => {
+    let finishLoad: (
+      visits: readonly {
+        serverId: string;
+        workspaceId: string;
+        agentId: string | null;
+        visitedAt: number;
+      }[],
+    ) => void = () => {};
+    const load = new Promise<
+      readonly {
+        serverId: string;
+        workspaceId: string;
+        agentId: string | null;
+        visitedAt: number;
+      }[]
+    >((resolve) => {
+      finishLoad = resolve;
+    });
+    const save = vi.fn(async () => undefined);
+    const store = createNavigationHistoryStore({ load: () => load, save });
+    const hydration = store.hydrateRecentVisits();
+
+    store.record({ ...ws("current", "tab-a"), target: { kind: "agent", agentId: "agent-a" } });
+    finishLoad([{ serverId: "srv", workspaceId: "older", agentId: "agent-b", visitedAt: 1 }]);
+    await hydration;
+
+    expect(store.getRecentVisits().map((visit) => [visit.workspaceId, visit.agentId])).toEqual([
+      ["current", "agent-a"],
+      ["older", "agent-b"],
+    ]);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledWith(store.getRecentVisits()));
   });
 
   it("unsubscribes listeners", () => {

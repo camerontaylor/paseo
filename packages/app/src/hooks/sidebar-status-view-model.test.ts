@@ -75,6 +75,17 @@ describe("buildStatusGroups", () => {
     expect(groups.map((g) => g.bucket)).toEqual(["running", "done"]);
   });
 
+  it("keeps stored order when conversation clocks tie or are absent", () => {
+    const workspaces = [
+      ws({ workspaceKey: "srv:a", statusEnteredAt: d("2026-04-01T00:00:00Z") }),
+      ws({ workspaceKey: "srv:b", statusEnteredAt: d("2026-05-01T00:00:00Z") }),
+    ];
+    for (const mode of ["recent", "user"] as const) {
+      const groups = buildStatusGroups(workspaces, emptyProjectNames, i18n.t, mode);
+      expect(groups[0]?.rows.map((row) => row.workspaceKey)).toEqual(["srv:a", "srv:b"]);
+    }
+  });
+
   it("sorts by statusEnteredAt desc within a bucket", () => {
     const workspaces = [
       ws({

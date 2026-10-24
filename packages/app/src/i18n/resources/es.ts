@@ -912,6 +912,7 @@ export const es: TranslationResources = {
     tabs: {
       loading: "Cargando...",
       modified: "Cambios sin guardar",
+      newActivity: "Nueva actividad",
       loadingAgentTitle: "Título del agente de carga",
       fallback: {
         newAgent: "Nuevo agente",

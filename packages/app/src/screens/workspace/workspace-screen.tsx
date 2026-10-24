@@ -36,6 +36,10 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
 import invariant from "tiny-invariant";
 import { SidebarMenuToggle } from "@/components/headers/sidebar-menu-toggle";
+import {
+  RecentNavigationButton,
+  WorkspaceHistoryButtons,
+} from "@/components/headers/workspace-navigation-controls";
 import { ScreenHeader } from "@/components/headers/screen-header";
 import { MenuHeader } from "@/components/headers/menu-header";
 import { FloatingHeaderLayout } from "@/components/floating-header";
@@ -81,6 +85,7 @@ import { traceInstant } from "@/performance/native-trace";
 import { useSessionStore, type WorkspaceDescriptor } from "@/stores/session-store";
 import {
   canDismissPaneInLayout,
+  collectAllPanes,
   collectAllTabs,
   DEFAULT_PANE_ID,
   findPaneById,
@@ -147,6 +152,11 @@ import {
 } from "@/screens/workspace/workspace-desktop-tabs-row";
 import { useDesktopBrowserNewTabRequests } from "@/desktop/browser/new-tab-requests";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
+import {
+  reconcileTabActivity,
+  sortTabsByActivity,
+  type TabActivityState,
+} from "@/screens/workspace/workspace-tab-activity";
 import {
   resolveWorkspaceExplorerToggleOwner,
   EXPLORER_TOGGLE_KEYS,
@@ -1664,6 +1674,53 @@ function WorkspaceScreenContent({
   const tabs = useMemo<WorkspaceTabDescriptor[]>(
     () => focusedPaneTabState.tabs.map((tab) => tab.descriptor),
     [focusedPaneTabState.tabs],
+  );
+  const allActivityTabs = useMemo<WorkspaceTabDescriptor[]>(
+    () =>
+      uiTabs.map((tab) => ({
+        key: tab.tabId,
+        tabId: tab.tabId,
+        kind: tab.target.kind,
+        target: tab.target,
+      })),
+    [uiTabs],
+  );
+  const activityAgents = useSessionStore((state) => state.sessions[normalizedServerId]?.agents);
+  const activityByAgentId = useMemo(() => {
+    const activity = new Map<string, number>();
+    for (const tab of allActivityTabs) {
+      if (tab.target.kind !== "agent") continue;
+      const timestamp = activityAgents?.get(tab.target.agentId)?.lastActivityAt.getTime() ?? 0;
+      if (Number.isFinite(timestamp) && timestamp > 0) activity.set(tab.target.agentId, timestamp);
+    }
+    return activity;
+  }, [activityAgents, allActivityTabs]);
+  const viewedTabIds = useMemo(() => {
+    if (!isRouteFocused) return new Set<string>();
+    if (!workspaceLayout) return new Set(activeTabId ? [activeTabId] : []);
+    return new Set(
+      collectAllPanes(workspaceLayout.root)
+        .filter((pane) => !pane.hidden && pane.focusedTabId)
+        .map((pane) => pane.focusedTabId as string),
+    );
+  }, [activeTabId, isRouteFocused, workspaceLayout]);
+  const activitySortedTabs = useMemo(
+    () =>
+      sortTabsByActivity(
+        tabs.map((tab) => ({ tab })),
+        activityByAgentId,
+      ).map(({ tab }) => tab),
+    [activityByAgentId, tabs],
+  );
+  const [tabActivity, setTabActivity] = useState<Map<string, TabActivityState>>(() => new Map());
+  useEffect(() => {
+    setTabActivity((previous) =>
+      reconcileTabActivity(previous, allActivityTabs, activityByAgentId, viewedTabIds),
+    );
+  }, [activityByAgentId, allActivityTabs, viewedTabIds]);
+  const unreadTabIds = useMemo(
+    () => new Set([...tabActivity].filter(([, state]) => state.unread).map(([tabId]) => tabId)),
+    [tabActivity],
   );
   const hasSetupTab = useMemo(
     () =>
@@ -3371,13 +3428,20 @@ function WorkspaceScreenContent({
 
   const desktopTabRowItems = useMemo<WorkspaceDesktopTabRowItem[]>(
     () =>
-      tabs.map((tab) => ({
+      activitySortedTabs.map((tab) => ({
         tab,
         isActive: tab.tabId === activeTabDescriptor?.tabId,
         isCloseHovered: hoveredCloseTabKey === tab.key,
         isClosingTab: closingTabIds.has(tab.tabId),
+        unread: unreadTabIds.has(tab.tabId),
       })),
-    [activeTabDescriptor?.tabId, closingTabIds, hoveredCloseTabKey, tabs],
+    [
+      activeTabDescriptor?.tabId,
+      activitySortedTabs,
+      closingTabIds,
+      hoveredCloseTabKey,
+      unreadTabIds,
+    ],
   );
 
   const handleSplitPane = useCallback(
@@ -3575,6 +3639,8 @@ function WorkspaceScreenContent({
           left={
             <>
               <SidebarMenuToggle />
+              <WorkspaceHistoryButtons />
+              <RecentNavigationButton />
               <WorkspaceHeaderTitleBar
                 canCopyTabLink={canCopyTabLink}
                 onCopyTabLink={onCopyTabLink}
@@ -3662,7 +3728,8 @@ function WorkspaceScreenContent({
           explorerToggleAccessibilityState={explorerSidebarToggleAccessibilityState}
         >
           <MobileWorkspaceTabSwitcher
-            tabs={tabs}
+            tabs={activitySortedTabs}
+            unreadTabIds={unreadTabIds}
             activeTabKey={activeTabKey}
             normalizedServerId={normalizedServerId}
             normalizedWorkspaceId={normalizedWorkspaceId}
@@ -3748,7 +3815,8 @@ function WorkspaceScreenContent({
       openImportSheet,
       showCreateBrowserTab,
       showWorkspaceSetup,
-      tabs,
+      activitySortedTabs,
+      unreadTabIds,
       workspaceDirectory,
       workspaceHeaderSubtitle,
       workspaceHeaderTitle,
@@ -3770,6 +3838,8 @@ function WorkspaceScreenContent({
         normalizedWorkspaceId={normalizedWorkspaceId}
         isWorkspaceFocused={isRouteFocused}
         uiTabs={uiTabs}
+        activityByAgentId={activityByAgentId}
+        unreadTabIds={unreadTabIds}
         hoveredCloseTabKey={hoveredCloseTabKey}
         setHoveredCloseTabKey={setHoveredCloseTabKey}
         closingTabIds={closingTabIds}
@@ -3807,6 +3877,8 @@ function WorkspaceScreenContent({
     normalizedWorkspaceId,
     isRouteFocused,
     uiTabs,
+    activityByAgentId,
+    unreadTabIds,
     hoveredCloseTabKey,
     closingTabIds,
     navigateToTabId,

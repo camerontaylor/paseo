@@ -5,6 +5,7 @@ export interface TabActivityState {
   unread: boolean;
 }
 
+/** The optional tab clock keeps cross-host View tabs with equal agent IDs independent. */
 export function reconcileTabActivity(
   previous: Map<string, TabActivityState>,
   tabs: WorkspaceTabDescriptor[],
@@ -35,13 +36,16 @@ export function reconcileTabActivity(
 export function sortTabsByActivity<T extends { tab: WorkspaceTabDescriptor }>(
   items: T[],
   activityByAgentId: Map<string, number>,
+  activityByTabId?: Map<string, number>,
 ): T[] {
   return items
     .map((item, index) => ({ item, index }))
     .sort((left, right) => {
       const timestamp = (entry: T) =>
         entry.tab.target.kind === "agent"
-          ? (activityByAgentId.get(entry.tab.target.agentId) ?? 0)
+          ? (activityByTabId?.get(entry.tab.tabId) ??
+            activityByAgentId.get(entry.tab.target.agentId) ??
+            0)
           : 0;
       return timestamp(right.item) - timestamp(left.item) || left.index - right.index;
     })
