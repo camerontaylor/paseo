@@ -136,5 +136,6 @@ export function normalizeAgentSnapshot(snapshot: AgentSnapshotPayload, serverId:
     labels: snapshot.labels,
     artifacts: snapshot.artifacts,
     companionEntries: snapshot.companionEntries,
+    captureDegraded: snapshot.captureDegraded === true,
   };
 }

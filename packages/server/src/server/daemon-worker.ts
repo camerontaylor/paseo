@@ -6,6 +6,7 @@ import { resolvePaseoHome } from "./paseo-home.js";
 import { createRootLogger } from "./logger.js";
 import type { DaemonLifecycleIntent } from "./bootstrap.js";
 import { getProcessDiagnostics } from "./process-diagnostics.js";
+import { observeHomeSize, type HomeSizeObservation } from "./home-size-observation.js";
 
 process.title = "Paseo Daemon";
 
@@ -133,6 +134,7 @@ async function main() {
   let daemon: Awaited<ReturnType<typeof createPaseoDaemon>> | null = null;
   let shutdownPromise: Promise<number> | null = null;
   let exitHookInstalled = false;
+  let homeSizeObservation: HomeSizeObservation | null = null;
 
   applyCliFlagOverrides(config);
 
@@ -175,6 +177,7 @@ async function main() {
             clearTimeout(forceExit);
             return 1;
           }
+          homeSizeObservation?.cancel();
           await daemon.stop();
           clearTimeout(forceExit);
           logger.info("Server closed");
@@ -328,6 +331,10 @@ async function main() {
     if (!listen) {
       throw new Error("Daemon did not expose a listen target after startup");
     }
+    // Deferred, non-blocking home-size observation (durable Stream history
+    // deliberately grows the home; the number is logged, never scanned during
+    // boot). Cancelled deterministically by beginShutdown.
+    homeSizeObservation = observeHomeSize(paseoHome, logger);
     sendSupervisorLifecycleMessage({
       type: "paseo:ready",
       listen,

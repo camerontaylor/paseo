@@ -2,6 +2,31 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const fr: TranslationResources = {
+  globalStream: {
+    title: "Stream",
+    description: "Questions, context and outcomes across your conversations.",
+    all: "All",
+    pending: "Needs a reply",
+    pinned: "Pinned",
+    search: "Search Stream or conversations",
+    clearSearch: "Clear search",
+    archived: "Archived chats",
+    refresh: "Refresh",
+    incomplete: "No items available from the hosts that responded. Check the notices above.",
+    empty: "No items match this view.",
+    more: "Load more",
+    saveFailed: "Could not save. Please retry.",
+    openChat: "Open source chat",
+    artifact: "File artifact",
+    saving: "Saving…",
+    questionPlaceholder: "An answer you still need…",
+    addQuestion: "Add question",
+    writeUnavailable: "Connect to an updated host to change Stream items.",
+    captureDegraded:
+      "The host could not save recent Stream entries (disk). Entries are kept and will save when space allows.",
+    offlineNotice: "offline — cached items may be out of date",
+    upgradeNotice: "update this host to use global Stream",
+  },
   paneFind: {
     connectionFailure:
       "Impossible de rechercher dans cette conversation. Vérifiez la connexion à l’hôte et réessayez.",
@@ -411,6 +436,18 @@ export const fr: TranslationResources = {
       statusOpen: "Ouvert",
       statusReviewed: "Examiné",
       statusDone: "Terminé",
+      pinToStream: "Épingler dans le flux",
+      pinSelection: "Pin selected text to Stream",
+      pinMessage: "Pin message to Stream",
+      pinExcerpt: "Pin excerpt…",
+      pinExcerptHint:
+        "Keep the line or passage you want to save. Pins can contain up to 4,000 characters.",
+      pinSaved: "Saved to Stream",
+      activityTab: "Activity",
+      noExplicitAsks:
+        "Checklist contains requests your agent explicitly tracks. Captured replies and pins are in Activity.",
+      showActivity: "Show activity",
+      trackQAndA: "Suivre la question-réponse",
     },
     artifacts: {
       chatTab: "Discussion",

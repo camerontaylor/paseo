@@ -53,6 +53,24 @@ describe("companion feed", () => {
       { ...base, kind: "permission", requestId: "p", requestKind: "plan", status: "expired" },
       { ...base, kind: "outcome", status: "completed" },
     ];
-    expect(entries.filter(isCompanionEntryPending)).toEqual([entries[0], entries[2]]);
+    expect(entries.filter(isCompanionEntryPending)).toEqual([entries[0], entries[1], entries[2]]);
+  });
+
+  it("orders unresolved asks before completed asks across loaded pages", () => {
+    const ask = (id: string, state: "open" | "done", at: string) =>
+      ({
+        id,
+        kind: "question",
+        status: state === "done" ? "done" : "open",
+        timestamp: at,
+        text: id,
+        truncated: false,
+        ask: { state, remaining: "", evidence: "e", revision: 1, provenance: "explicit" },
+      }) as CompanionEntry;
+    // Page one (newest) carries only resolved asks; page two (older) the unresolved one.
+    const pageOne = [ask("older-done", "done", "2026-10-10T00:00:00.000Z")];
+    const pageTwo = [ask("newer-open", "open", "2026-10-09T00:00:00.000Z")];
+    const merged = buildCompanionFeed([...pageOne, ...pageTwo], []);
+    expect(merged.map((item) => item.id)).toEqual(["newer-open", "older-done"]);
   });
 });

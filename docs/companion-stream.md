@@ -1,68 +1,11 @@
-# Per-chat companion stream
+# Stream capture and review
 
-The managed-agent panel offers **Chat / Stream / Find in chat**. Stream is a quiet review surface
-for the current conversation. The compact workspace tab menu also offers **View stream**.
-The internal `artifacts` view identifier is retained so existing client-local tab actions keep working.
+Stream is the conversation's durable activity feed. It contains captured agent events, source messages, tracked asks, and pins. Activity opens with completed items visible; Checklist filters to asks and unreviewed source messages. A turn ending never certifies that an ask is done. Updating a tracked ask requires an expected revision, evidence, and no remaining work or unfinished subtasks.
 
-The design borrows OpenChat's chat-scoped Thoughts idea: keep questions and useful context alongside
-the conversation, with an obvious way back to it. V1 automatically captures moments; it does not
-add manual notes, message pinning, model-generated summaries, or another agent execution loop.
+The capture collector writes the full retained Stream history into the ordinary agent record. The wire snapshot stays bounded; `stream.list.request` pages the stored history in groups of 50. Capture starts when the host upgrades. It cannot reconstruct moments that earlier builds never captured or records already pruned by an old retention policy. Source-message inventory covers retained timeline rows when their conversation history is loaded. The coverage label distinguishes that state from history that has not been loaded.
 
-## Contents and meaning
+A source message can contain several asks. Inventory keeps stable source IDs and provider aliases; reviewing one message links its individual ask IDs. The review action records extraction, not completion. An unrelated user reply does not close questions or asks. Message and excerpt pins are explicit user actions. Failed writes leave the editor text and retry identity intact, and the UI waits for a successful acknowledgement before claiming a pin was saved.
 
-- Structured question and permission events appear immediately. Plan approvals are decision cards.
-  A provider resolution marks the request accepted or declined. Failed/interrupted turns and session
-  recreation expire requests that can no longer be answered. Reading Stream never answers a request.
-- The final contiguous assistant response at a terminal turn becomes a review card. Intermediate tool
-  narration, tool logs, and reasoning do not become cards. A final prose response ending in a question
-  mark becomes a question card (code spans, fenced code, and URLs are excluded from this heuristic).
-  A subsequent user message labels a prose question **Reply sent**, not “resolved”. Structured
-  questions stay pending until the provider resolves them.
-- Completed, failed, and canceled turns have distinct outcome cards. **Turn ended** is a lifecycle
-  fact, not certification that the requested task succeeded. Failure/interruption includes the reason.
-- Existing file artifacts retain their cards, previews, and workspace-file open behavior. They still
-  represent the latest collected version of each path, not an immutable file history.
+A disk write failure marks capture degraded in the agent snapshot and Stream UI, but never blocks an agent turn. A later successful snapshot clears that state. The global Stream API uses daemon `workspace.read`/`workspace.write` grants before responding. It excludes internal agents, scopes a cursor to the requested host and filters, and reports disconnected hosts separately from empty results. Listing currently scans and sorts stored rows; the page size bounds the response, not the scan cost.
 
-Cards interleave by timestamp, newest first. **Needs a reply** filters unresolved questions and
-requests without changing the chat. **Read** expands text in place. **Reply in chat** returns to
-Chat's current bottom and its existing permission/composer controls; **Back to chat** preserves
-its reading position. The mounted chat and composer survive view switches. New entries do not
-switch tabs, focus the composer, prompt for approval, or add notification behavior.
-
-## Data and compatibility
-
-`packages/protocol/src/companion-stream.ts` owns the structural wire schema. The optional
-`companionEntries` agent snapshot field is persisted with the ordinary agent record. The server
-collector in `packages/server/src/server/agent/companion-stream.ts` sees accepted live events after
-coalescing; provider history replay does not invent past turn outcomes or pending decisions.
-
-Capture starts after upgrading the host. V1 retains the most recent 50 moments with at most 4,000
-characters per entry. Longer content is explicitly marked as an excerpt; full context remains in
-Chat. The bounded snapshot is independent of how much chat history the phone has paged in.
-It survives reconnects and host reloads; an unfinished final response is not yet a captured moment.
-
-`server_info.features.companionStreamPortV1` gates the new feature once in the panel. Older hosts show an
-upgrade message while preserving their existing file-artifact view. The client does not reconstruct
-an approximate stream from legacy RPCs. Cached cards remain reviewable while disconnected, with a
-notice that pending statuses may be stale.
-
-## Verification
-
-Focused tests cover collection/deduplication, split response chunks, agent isolation, question and
-permission transitions, interruption, response bounds, coalescer integration, stored/wire snapshot
-round-trips, old snapshot compatibility, file/moment ordering, pending filtering, and locale parity.
-
-For a prepared isolated phone build, verify the following without relaunching a shared app:
-
-1. Open a managed chat in compact layout; Chat, Stream and Find remain visible and tappable at large
-   text sizes. Stream is also available from the workspace tab menu.
-2. Leave a composer draft, scroll up in Chat, open Stream, expand a response and return. The draft
-   and reading position remain. New incoming cards do not navigate or submit a response.
-3. Trigger a structured question or plan approval. It appears under Needs a reply. Reply in chat
-   reaches the existing controls; accepting/declining updates the same card rather than duplicating it.
-4. Finish, fail, or interrupt a turn; review the distinct outcome and generated file cards. Open a
-   Markdown/image artifact and return through the existing workspace navigation.
-5. Disconnect and reconnect. Cached cards remain visible; reconnection refreshes status. Reopen the
-   conversation and verify saved moments. An older host shows its upgrade message and file artifacts.
-
-Provider-owned child timelines remain separate read-only panels, as before.
+`server_info.features.companionStreamPortV1` gates the original per-chat surface, `globalStream` gates list and write RPCs, `trackedAsks` gates ask mutation, and `streamMessageInventory` gates source review. Each is optional on the wire so older clients and daemons can parse each other. The feature UI asks for a host update when the needed capability is absent; it does not reconstruct a substitute feed. Stream links open the conversation's saved view, while source links jump to the retained Chat message when its timeline epoch still matches.

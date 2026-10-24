@@ -424,6 +424,10 @@ export function buildSessionsRoute() {
   return "/sessions" as const;
 }
 
+export function buildStreamRoute() {
+  return "/stream" as const;
+}
+
 export function buildSchedulesRoute() {
   return "/schedules" as const;
 }

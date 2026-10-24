@@ -99,8 +99,7 @@ export class OpenCodeV2Session implements AgentSession {
           "OpenCode turn reconciliation failed; retrying",
         ),
       clearPermissions: async () => {
-        for (const request of this.permissions.list())
-          await this.permissions.respondToPermission(request.id, { behavior: "deny" });
+        await this.permissions.expireAll();
       },
     });
     this.usage = new SessionUsage({

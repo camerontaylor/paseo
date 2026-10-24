@@ -2,6 +2,31 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ko: TranslationResources = {
+  globalStream: {
+    title: "Stream",
+    description: "Questions, context and outcomes across your conversations.",
+    all: "All",
+    pending: "Needs a reply",
+    pinned: "Pinned",
+    search: "Search Stream or conversations",
+    clearSearch: "Clear search",
+    archived: "Archived chats",
+    refresh: "Refresh",
+    incomplete: "No items available from the hosts that responded. Check the notices above.",
+    empty: "No items match this view.",
+    more: "Load more",
+    saveFailed: "Could not save. Please retry.",
+    openChat: "Open source chat",
+    artifact: "File artifact",
+    saving: "Saving…",
+    questionPlaceholder: "An answer you still need…",
+    addQuestion: "Add question",
+    writeUnavailable: "Connect to an updated host to change Stream items.",
+    captureDegraded:
+      "The host could not save recent Stream entries (disk). Entries are kept and will save when space allows.",
+    offlineNotice: "offline — cached items may be out of date",
+    upgradeNotice: "update this host to use global Stream",
+  },
   paneFind: {
     connectionFailure: "이 채팅을 검색할 수 없습니다. 호스트 연결을 확인하고 다시 시도하세요.",
     historyChangedFailure: "검색 중에 채팅이 변경되었습니다. 다시 검색하세요.",
@@ -405,6 +430,18 @@ export const ko: TranslationResources = {
       statusOpen: "대기",
       statusReviewed: "확인함",
       statusDone: "완료",
+      pinToStream: "스트림에 고정",
+      pinSelection: "Pin selected text to Stream",
+      pinMessage: "Pin message to Stream",
+      pinExcerpt: "Pin excerpt…",
+      pinExcerptHint:
+        "Keep the line or passage you want to save. Pins can contain up to 4,000 characters.",
+      pinSaved: "Saved to Stream",
+      activityTab: "Activity",
+      noExplicitAsks:
+        "Checklist contains requests your agent explicitly tracks. Captured replies and pins are in Activity.",
+      showActivity: "Show activity",
+      trackQAndA: "Q&A 기록",
     },
     artifacts: {
       chatTab: "대화",

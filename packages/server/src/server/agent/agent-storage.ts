@@ -129,6 +129,14 @@ export class AgentStorage {
     return this.cache.get(agentId) ?? null;
   }
 
+  /**
+   * Best-effort record file path for diagnostics (degraded-capture logs).
+   * Null before this process has written or loaded the record.
+   */
+  describeRecordPath(agentId: string): string | null {
+    return this.pathById.get(agentId) ?? null;
+  }
+
   async listByProviderSession(
     provider: string,
     providerHandleId: string,

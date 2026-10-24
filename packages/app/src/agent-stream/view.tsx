@@ -1,3 +1,6 @@
+import { MessagePinItem } from "@/companion-stream/message-pin-control";
+import type { MessagePinHandler } from "@/companion-stream/message-pin-operations";
+import { useMessagePin } from "@/companion-stream/use-message-pin";
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -193,7 +196,7 @@ function renderStreamItemWithTurnFooter(input: {
   strategy: TurnContentStrategy;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
-  onPin?: (text: string) => void;
+  onPin?: MessagePinHandler;
 }): ReactNode {
   if (!input.content) {
     return null;
@@ -292,6 +295,7 @@ function renderStreamRow(input: {
 }
 
 export interface AgentStreamViewHandle {
+  jumpToSource(seq: number, epoch: string): void;
   scrollToBottom(reason?: BottomAnchorLocalRequest["reason"]): void;
   prepareForViewportChange(): void;
 }
@@ -682,6 +686,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     useImperativeHandle(
       ref,
       () => ({
+        jumpToSource(seq, epoch) {
+          if (timelineEpoch !== epoch) {
+            handleTimelineHistoryLoadError();
+            return;
+          }
+          chatOutline.jumpToPrompt(seq);
+        },
         scrollToBottom(reason = "jump-to-bottom") {
           viewportRef.current?.scrollToBottom(reason);
         },
@@ -689,7 +700,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           viewportRef.current?.prepareForViewportChange();
         },
       }),
-      [],
+      [chatOutline, timelineEpoch, handleTimelineHistoryLoadError],
     );
 
     const scrollToBottom = useCallback(() => {
@@ -737,15 +748,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       });
     }, []);
 
-    const handlePin = useCallback(
-      (text: string) => {
-        if (!agentId || !client) return;
-        client
-          .updateCompanionEntry({ agentId, action: "add_pin", text })
-          .catch(() => toast?.error(t("agentPanel.stream.mutationFailed")));
-      },
-      [agentId, client, t, toast],
-    );
+    const handlePin = useMessagePin(resolvedServerId, agentId, client, readOnly);
 
     const handleQAndA = useCallback(
       (text: string, messageId?: string) => {
@@ -829,23 +832,29 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           >
             <ChatFindExpansion messageId={getStreamItemMessageId(item)}>
               {(renderFullContent) => (
-                <AssistantMessage
-                  renderFullContent={renderFullContent}
-                  occurrenceKey={createAssistantImageOccurrenceKey({ agentId, itemId: item.id })}
-                  message={item.text}
-                  timestamp={item.timestamp.getTime()}
-                  workspaceRoot={workspaceRoot}
-                  serverId={resolvedServerId}
-                  client={client}
-                  spacing={layoutItem.assistantSpacing}
-                  phase={layoutItem.phase}
-                />
+                <MessagePinItem
+                  text={item.text}
+                  onPin={handlePin}
+                  sourceId={`msg:${getStreamItemMessageId(item)}`}
+                >
+                  <AssistantMessage
+                    renderFullContent={renderFullContent}
+                    occurrenceKey={createAssistantImageOccurrenceKey({ agentId, itemId: item.id })}
+                    message={item.text}
+                    timestamp={item.timestamp.getTime()}
+                    workspaceRoot={workspaceRoot}
+                    serverId={resolvedServerId}
+                    client={client}
+                    spacing={layoutItem.assistantSpacing}
+                    phase={layoutItem.phase}
+                  />
+                </MessagePinItem>
               )}
             </ChatFindExpansion>
           </AssistantFileLinkResolverProvider>
         );
       },
-      [agentId, client, handleInlinePathPress, resolvedServerId, toast, workspaceRoot],
+      [agentId, client, handleInlinePathPress, handlePin, resolvedServerId, toast, workspaceRoot],
     );
 
     const renderThoughtItem = useCallback(

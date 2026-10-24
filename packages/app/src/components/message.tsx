@@ -1,3 +1,5 @@
+import { MessagePinControl } from "@/companion-stream/message-pin-control";
+import type { MessagePinHandler } from "@/companion-stream/message-pin-operations";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
 import { AssistantForkMenu, type AssistantForkTarget } from "@/components/assistant-fork-menu";
@@ -44,7 +46,6 @@ import {
   HelpCircle,
   Info,
   MicVocal,
-  Pin,
   Plus,
   Scissors,
   TriangleAlertIcon,
@@ -102,7 +103,7 @@ interface UserMessageProps {
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
   timestamp: number;
-  onPin?: (text: string) => void;
+  onPin?: MessagePinHandler;
   onQAndA?: (text: string, messageId?: string) => void;
   capabilities?: AgentCapabilityFlags;
   client?: DaemonClient | null;
@@ -531,6 +532,7 @@ export const UserMessage = memo(function UserMessage({
   const isCompact = useIsCompactFormFactor();
   const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
+  const [pinActive, setPinActive] = useState(false);
   const [lightboxMetadata, setLightboxMetadata] = useState<UserMessageImageAttachment | null>(null);
   const handleLightboxClose = useCallback(() => setLightboxMetadata(null), []);
   const lightboxSource = useMemo<ImageLightboxSource | null>(
@@ -545,7 +547,7 @@ export const UserMessage = memo(function UserMessage({
     awaiting: isAwaitingUserDelivery(deliveryState),
     pending: isPending,
     hasText,
-    reveal: isCompact || isNative || isHovered,
+    reveal: isCompact || isNative || isHovered || pinActive,
   });
   const formattedTimestamp = useMemo(
     () => formatMessageTimestamp(new Date(timestamp)),
@@ -556,7 +558,6 @@ export const UserMessage = memo(function UserMessage({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const getMessageContent = useCallback(() => message, [message]);
-  const handlePin = useCallback(() => onPin?.(message), [onPin, message]);
   const handleQAndA = useCallback(
     () => onQAndA?.(message, messageId),
     [onQAndA, message, messageId],
@@ -666,7 +667,13 @@ export const UserMessage = memo(function UserMessage({
               />
             ) : null}
             {onPin ? (
-              <TurnPinButton onPin={handlePin} containerStyle={userMessageStylesheet.copyButton} />
+              <MessagePinControl
+                getContent={getMessageContent}
+                onPin={onPin}
+                onActivityChange={setPinActive}
+                sourceId={messageId ? `msg:${messageId}` : undefined}
+                containerStyle={userMessageStylesheet.copyButton}
+              />
             ) : null}
             {onQAndA ? (
               <TurnQAndAButton
@@ -692,7 +699,7 @@ interface AssistantTurnFooterProps {
   completedAt?: Date;
   durationMs?: number | null;
   onFork?: (target: AssistantForkTarget) => Promise<void> | void;
-  onPin?: (text: string) => void;
+  onPin?: MessagePinHandler;
 }
 
 const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
@@ -736,18 +743,14 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
     },
     [onFork],
   );
-  const handlePin = useCallback(() => {
-    if (onPin) {
-      onPin(getContent());
-    }
-  }, [onPin, getContent]);
   const canFork = Boolean(onFork);
 
   return (
     <View style={assistantTurnFooterStylesheet.container}>
       {onPin ? (
-        <TurnPinButton
-          onPin={handlePin}
+        <MessagePinControl
+          getContent={getContent}
+          onPin={onPin}
           containerStyle={assistantTurnFooterStylesheet.copyButton}
         />
       ) : null}
@@ -885,37 +888,6 @@ const turnCopyButtonStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
   },
 }));
-
-interface TurnPinButtonProps {
-  onPin: () => void;
-  containerStyle?: StyleProp<ViewStyle>;
-}
-
-export const TurnPinButton = memo(function TurnPinButton({
-  onPin,
-  containerStyle,
-}: TurnPinButtonProps) {
-  const pressableStyle = useMemo(
-    () => [turnCopyButtonStylesheet.container, containerStyle],
-    [containerStyle],
-  );
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      style={pressableStyle}
-      onPress={onPin}
-      accessibilityLabel="Pin to stream"
-    >
-      {({ hovered }) => {
-        const iconColor = hovered
-          ? turnCopyButtonStylesheet.iconHoveredColor.color
-          : turnCopyButtonStylesheet.iconColor.color;
-        return <Pin size={ICON_SIZE.sm} color={iconColor} />;
-      }}
-    </Pressable>
-  );
-});
 
 interface TurnQAndAButtonProps {
   onQAndA: () => void;
