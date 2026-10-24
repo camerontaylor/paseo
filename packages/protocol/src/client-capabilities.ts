@@ -55,12 +55,19 @@ export const CLIENT_CAPS = {
   // attachment admission into the durable queue and the receipt-read RPC.
   // Keep the gate while stock peers are supported.
   durableVoiceInputV1: "durable_voice_input_v1",
+  // COMPAT(uiCommands): fork UI push; only capable clients receive it.
+  uiCommands: "ui_commands",
   browserHost: "browser_host",
   // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
   // Clients declaring this get the optional `artifacts` / `companionEntries`
   // agent-snapshot fields. Paired with the `agent.companion.update_entry.*`
   // operations; not the source fork's `companionStream` capability name.
   companionStreamPortV1: "companion_stream_port_v1",
+  // COMPAT(globalStream): added in TMAD intake 2026-10-24, remove after 2027-04-24.
+  // The daemon serves the correlated stream.list/stream.entry.update RPCs only
+  // to sessions declaring this, so an unknown response type never reaches a
+  // client whose outbound union cannot parse it.
+  globalStream: "global_stream",
 } as const;
 
 export type ClientCapability = (typeof CLIENT_CAPS)[keyof typeof CLIENT_CAPS];

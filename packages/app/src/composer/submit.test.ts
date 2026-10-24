@@ -104,7 +104,7 @@ describe("submitAgentInput", () => {
     expect(clearDraft).toHaveBeenCalledWith("sent");
   });
 
-  it("queues while the agent is running and clears the composer immediately", async () => {
+  it("queues while the agent is running and delegates clearing to the queue path", async () => {
     const queueMessage = vi.fn();
     const submitMessage = vi.fn();
     const clearDraft = vi.fn();
@@ -134,10 +134,13 @@ describe("submitAgentInput", () => {
       attachments: [{ id: "img-1" }],
     });
     expect(submitMessage).not.toHaveBeenCalled();
-    expect(setUserInput).toHaveBeenCalledWith("");
-    expect(setAttachments).toHaveBeenCalledWith([]);
+    // Clearing follows durable acceptance in the queue path; submit tracks the
+    // in-flight state and delegates the clear.
+    expect(setUserInput).not.toHaveBeenCalled();
+    expect(setAttachments).not.toHaveBeenCalled();
     expect(setSendError).not.toHaveBeenCalled();
-    expect(setIsProcessing).not.toHaveBeenCalled();
+    expect(setIsProcessing).toHaveBeenNthCalledWith(1, true);
+    expect(setIsProcessing).toHaveBeenLastCalledWith(false);
     expect(clearDraft).not.toHaveBeenCalled();
   });
 
@@ -249,5 +252,76 @@ describe("submitAgentInput", () => {
       attachments: [],
     });
     expect(clearDraft).toHaveBeenCalledWith("sent");
+  });
+});
+
+describe("submitAgentInput queue durability", () => {
+  it("surfaces a queue persistence failure through its own error surface and clears nothing", async () => {
+    const queueMessage = vi.fn(async () => {
+      throw new Error("Couldn't save the queued message on this device.");
+    });
+    const submitMessage = vi.fn();
+    const clearDraft = vi.fn();
+    const setUserInput = vi.fn();
+    const setAttachments = vi.fn();
+    const setSendError = vi.fn();
+    const setIsProcessing = vi.fn();
+
+    await expect(
+      submitAgentInput({
+        message: "doomed queue",
+        attachments: [],
+        isAgentRunning: true,
+        canSubmit: true,
+        queueMessage,
+        submitMessage,
+        clearDraft,
+        setUserInput,
+        setAttachments,
+        setSendError,
+        setIsProcessing,
+      }),
+    ).resolves.toBe("failed");
+
+    expect(setSendError).toHaveBeenCalledWith("Couldn't save the queued message on this device.");
+    expect(setUserInput).not.toHaveBeenCalled();
+    expect(setAttachments).not.toHaveBeenCalled();
+    expect(setIsProcessing).toHaveBeenLastCalledWith(false);
+  });
+
+  it("resolves queued only after the queue path settles", async () => {
+    let release: () => void = () => {};
+    const queueMessage = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const setIsProcessing = vi.fn();
+    const settled: string[] = [];
+
+    const done = submitAgentInput({
+      message: "slow queue",
+      attachments: [],
+      isAgentRunning: true,
+      canSubmit: true,
+      queueMessage,
+      submitMessage: vi.fn(),
+      clearDraft: vi.fn(),
+      setUserInput: vi.fn(),
+      setAttachments: vi.fn(),
+      setSendError: vi.fn(),
+      setIsProcessing,
+    }).then((result) => {
+      settled.push(result);
+      return result;
+    });
+
+    expect(settled).toEqual([]);
+    expect(setIsProcessing).toHaveBeenCalledWith(true);
+    release();
+    await expect(done).resolves.toBe("queued");
+    expect(settled).toEqual(["queued"]);
+    expect(setIsProcessing).toHaveBeenLastCalledWith(false);
   });
 });

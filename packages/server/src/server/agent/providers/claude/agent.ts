@@ -2866,12 +2866,14 @@ class ClaudeAgentSession implements AgentSession {
   private resolveDeniedPermission(
     request: AgentPermissionRequest,
     response: Extract<AgentPermissionResponse, { behavior: "deny" }>,
+    disposition?: "expired",
   ): PermissionResult {
     this.recordDeniedPermissionTimeline(request, response);
     this.pushEvent({
       type: "permission_resolved",
       provider: "claude",
       requestId: request.id,
+      disposition,
       resolution: response,
     });
     return {
@@ -2886,10 +2888,14 @@ class ClaudeAgentSession implements AgentSession {
       this.pendingPermissions.delete(requestId);
       pending.cleanup?.();
       pending.resolve(
-        this.resolveDeniedPermission(pending.request, {
-          behavior: "deny",
-          message: STEER_SUPERSEDED_PERMISSION_MESSAGE,
-        }),
+        this.resolveDeniedPermission(
+          pending.request,
+          {
+            behavior: "deny",
+            message: STEER_SUPERSEDED_PERMISSION_MESSAGE,
+          },
+          "expired",
+        ),
       );
     }
   }
@@ -5137,10 +5143,14 @@ class ClaudeAgentSession implements AgentSession {
     });
 
     if (this.permissionClearingSteerUuids.size > 0) {
-      return this.resolveDeniedPermission(request, {
-        behavior: "deny",
-        message: STEER_SUPERSEDED_PERMISSION_MESSAGE,
-      });
+      return this.resolveDeniedPermission(
+        request,
+        {
+          behavior: "deny",
+          message: STEER_SUPERSEDED_PERMISSION_MESSAGE,
+        },
+        "expired",
+      );
     }
 
     return await new Promise<PermissionResult>((resolve, reject) => {
@@ -5163,6 +5173,7 @@ class ClaudeAgentSession implements AgentSession {
           type: "permission_resolved",
           provider: "claude",
           requestId,
+          disposition: "expired",
           resolution: { behavior: "deny", message: "Permission request canceled" },
         });
         reject(new Error("Permission request aborted"));
@@ -5310,6 +5321,7 @@ class ClaudeAgentSession implements AgentSession {
         type: "permission_resolved",
         provider: "claude",
         requestId: id,
+        disposition: "expired",
         resolution: { behavior: "deny", message: error.message },
       });
     }

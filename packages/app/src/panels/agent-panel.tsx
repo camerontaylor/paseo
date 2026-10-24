@@ -1,3 +1,4 @@
+import { SessionPinButton } from "@/session-pins/pin-button";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -106,46 +107,26 @@ import type { PendingPermission } from "@/types/shared";
 import type { StreamItem, TodoEntry } from "@/types/stream";
 import type { ViewedTimelineStatus, ViewedTimelineUiBridge } from "@/timeline/viewed-timeline-sync";
 import { useArchiveFinishedSubagents, useSubagentsForParent } from "@/subagents";
+import { useSubthreadReplyTarget } from "@/subthreads/context";
+import { SubthreadsHost, type RenderSubthreadAgentInput } from "@/subthreads/host";
+import { SessionChecklistButton, SubthreadsOpenButton } from "@/subthreads/open-button";
 import { getInitDeferred, getInitKey } from "@/utils/agent-initialization";
 import { derivePendingPermissionKey, normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { applyLegacyDaemonWorkspaceOwnership } from "@/workspace/legacy-daemon-workspaces";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { deriveSidebarStateBucket } from "@/utils/sidebar-agent-state";
+import {
+  resolveChatAgentFromSession,
+  selectChatAgentState,
+  type ChatAgentSelectedState,
+  type ChatAgentStateShape,
+} from "@/panels/select-chat-agent-state";
 import { buildDraftAgentSetup, type ClientSlashCommand } from "@/client-slash-commands";
-
-interface ChatAgentStateShape {
-  serverId: string | null;
-  id: string | null;
-  provider?: Agent["provider"];
-  status: Agent["status"] | null;
-  cwd: string | null;
-  workspaceId?: string;
-  capabilities?: Agent["capabilities"];
-  currentModeId?: Agent["currentModeId"];
-  model?: Agent["model"];
-  thinkingOptionId?: Agent["thinkingOptionId"];
-  runtimeInfo?: Agent["runtimeInfo"];
-  features?: Agent["features"];
-  lastError?: Agent["lastError"] | null;
-  artifacts?: Agent["artifacts"];
-  companionEntries?: Agent["companionEntries"];
-}
-
-interface ChatAgentSelectedState extends ChatAgentStateShape {
-  archivedAt: Date | null;
-  requiresAttention: boolean;
-  attentionReason: Agent["attentionReason"] | null;
-}
-
-function resolveChatAgentFromSession(
-  state: ReturnType<typeof useSessionStore.getState>,
-  serverId: string,
-  agentId: string | undefined,
-): Agent | null {
-  if (!agentId) return null;
-  const session = state.sessions[serverId];
-  return session?.agents?.get(agentId) ?? session?.agentDetails?.get(agentId) ?? null;
-}
+import { useStartSideConversation } from "@/side-conversations/start";
+import {
+  threadOriginAgentKey,
+  useThreadOriginNavigationStore,
+} from "@/threads/origin-navigation-store";
 
 function readViewedTimelineError(input: {
   agentId: string | undefined;
@@ -154,46 +135,6 @@ function readViewedTimelineError(input: {
 }): string | null {
   if (!input.agentId || input.status !== "error" || !input.sync) return null;
   return input.sync.getAgentTimelineError(input.agentId);
-}
-
-const EMPTY_CHAT_AGENT_STATE: ChatAgentSelectedState = {
-  serverId: null,
-  id: null,
-  status: null,
-  cwd: null,
-  lastError: null,
-  archivedAt: null,
-  requiresAttention: false,
-  attentionReason: null,
-};
-
-function selectChatAgentState(
-  state: ReturnType<typeof useSessionStore.getState>,
-  serverId: string,
-  agentId: string | undefined,
-): ChatAgentSelectedState {
-  const agent = resolveChatAgentFromSession(state, serverId, agentId);
-  if (!agent) return EMPTY_CHAT_AGENT_STATE;
-  return {
-    serverId: agent.serverId,
-    id: agent.id,
-    provider: agent.provider,
-    status: agent.status,
-    cwd: agent.cwd,
-    workspaceId: agent.workspaceId,
-    capabilities: agent.capabilities,
-    currentModeId: agent.currentModeId,
-    model: agent.model,
-    thinkingOptionId: agent.thinkingOptionId,
-    runtimeInfo: agent.runtimeInfo,
-    features: agent.features,
-    lastError: agent.lastError ?? null,
-    artifacts: agent.artifacts,
-    companionEntries: agent.companionEntries,
-    archivedAt: agent.archivedAt ?? null,
-    requiresAttention: agent.requiresAttention ?? false,
-    attentionReason: agent.attentionReason ?? null,
-  };
 }
 
 function buildChatAgentFromState(
@@ -389,15 +330,28 @@ function AgentPanel() {
 
   return (
     <RetainedChatContent>
-      <AgentPanelContent
+      <SubthreadsHost
         serverId={serverId}
         workspaceId={workspaceId}
         agentId={target.agentId}
-        isPaneFocused={isInteractive}
-        onOpenWorkspaceFile={openFileInWorkspace}
-      />
+        renderAgent={renderSubthreadAgent}
+      >
+        {(parentActive) => (
+          <AgentPanelContent
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={target.agentId}
+            isPaneFocused={isInteractive && parentActive}
+            onOpenWorkspaceFile={openFileInWorkspace}
+          />
+        )}
+      </SubthreadsHost>
     </RetainedChatContent>
   );
+}
+
+function renderSubthreadAgent(input: RenderSubthreadAgentInput) {
+  return <AgentPanelContent {...input} />;
 }
 
 function DraftPanel() {
@@ -765,6 +719,22 @@ function ChatAgentContent({
   const { api: toastApi, toast: toastState, dismiss: dismissToast } = useToastHost();
   const { isArchivingAgent } = useArchiveAgent();
   const streamViewRef = useRef<AgentStreamViewHandle>(null);
+  const startSideConversation = useStartSideConversation({ serverId, workspaceId });
+  const threadOriginRequest = useThreadOriginNavigationStore((state) =>
+    agentId ? state.requestsByAgent[threadOriginAgentKey(serverId, agentId)] : undefined,
+  );
+  const resolveThreadOriginNavigation = useThreadOriginNavigationStore((state) => state.resolve);
+  const selectedAgentView = useAgentViewStore(
+    (state) => state.selectedViews[`${serverId}:${agentId ?? ""}`] || "chat",
+  );
+  const setSelectedAgentView = useAgentViewStore((state) => state.setSelectedView);
+  const handleReplyInThread = useCallback(
+    (anchor: string) => {
+      if (!agentId || !startSideConversation) return;
+      startSideConversation(agentId, { anchor });
+    },
+    [agentId, startSideConversation],
+  );
   const clearOnAgentBlurRef = useRef<() => void>(() => {});
   const wasPaneFocusedRef = useRef(isPaneFocused);
   const initAttemptTokenRef = useRef(0);
@@ -802,6 +772,31 @@ function ChatAgentContent({
       : ("cold" as const),
   );
   const hasAppliedAuthoritativeHistory = replicaTimelineStatus === "synced";
+  useEffect(() => {
+    if (!agentId || !threadOriginRequest || !hasAppliedAuthoritativeHistory) return;
+    if (selectedAgentView !== "chat") {
+      setSelectedAgentView(serverId, agentId, "chat");
+      return;
+    }
+    const status = streamViewRef.current?.scrollToAnchor(threadOriginRequest.anchor)
+      ? "opened"
+      : "unavailable";
+    resolveThreadOriginNavigation({
+      serverId,
+      parentAgentId: agentId,
+      threadId: threadOriginRequest.threadId,
+      requestId: threadOriginRequest.requestId,
+      status,
+    });
+  }, [
+    agentId,
+    hasAppliedAuthoritativeHistory,
+    resolveThreadOriginNavigation,
+    selectedAgentView,
+    serverId,
+    setSelectedAgentView,
+    threadOriginRequest,
+  ]);
   const agentHistorySyncGeneration = useSessionStore((state) =>
     agentId ? (state.sessions[serverId]?.agentHistorySyncGeneration?.get(agentId) ?? -1) : -1,
   );
@@ -1112,6 +1107,7 @@ function ChatAgentContent({
       isRetryingHistorySync={isRetryingHistorySync}
       cwd={agentCwd}
       retryTimelineSync={retryTimelineSync}
+      onReplyInThread={startSideConversation ? handleReplyInThread : undefined}
       onAttentionInputFocus={attentionController.clearOnInputFocus}
       onAttentionPromptSend={attentionController.clearOnPromptSend}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
@@ -1143,6 +1139,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   showHistorySyncError,
   isRetryingHistorySync,
   retryTimelineSync,
+  onReplyInThread,
   cwd,
   onAttentionInputFocus,
   onAttentionPromptSend,
@@ -1169,6 +1166,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   showHistorySyncError: boolean;
   isRetryingHistorySync: boolean;
   retryTimelineSync: () => void;
+  onReplyInThread?: (anchor: string) => void;
   cwd: string;
   onAttentionInputFocus: () => void;
   onAttentionPromptSend: () => void;
@@ -1184,6 +1182,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     (state) => state.selectedViews[`${serverId}:${agentId}`] || "chat",
   );
   const setSelectedView = useAgentViewStore((state) => state.setSelectedView);
+  const findOpen = useAgentViewStore((state) => state.findOpen[`${serverId}:${agentId}`] ?? false);
   const isChatVisible = selectedView !== "artifacts";
   const handleSetSelectedView = useCallback(
     (view: "chat" | "artifacts") => {
@@ -1194,6 +1193,13 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   const handleReturnToChat = useCallback(() => {
     handleSetSelectedView("chat");
   }, [handleSetSelectedView]);
+  const handleOpenStreamSource = useCallback(
+    (seq: number, epoch: string) => {
+      handleReturnToChat();
+      streamViewRef.current?.jumpToSource(seq, epoch);
+    },
+    [handleReturnToChat, streamViewRef],
+  );
   const handleReplyInChat = useCallback(() => {
     handleReturnToChat();
     streamViewRef.current?.scrollToBottom("jump-to-bottom");
@@ -1302,6 +1308,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
             hasVisibleAgentTracks={hasVisibleAgentTracks}
             toast={toastApi}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
+            onReplyInThread={onReplyInThread}
           />
         </RenderProfile>
         {hasActiveComposer ? (
@@ -1345,28 +1352,35 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
 
   const dockContent = (
     <View style={styles.contentContainer}>
-      <SegmentedControl
-        options={viewOptions}
-        value={selectedView}
-        onValueChange={handleSetSelectedView}
-        size={isCompact ? "md" : "xs"}
-        textWrap={isCompact}
-        testID="agent-view-switcher"
-        style={styles.viewSwitcher}
-        segmentStyle={isCompact ? styles.compactSegment : undefined}
-      />
+      <View style={styles.viewSwitcher}>
+        <SegmentedControl
+          options={viewOptions}
+          value={selectedView}
+          onValueChange={handleSetSelectedView}
+          size={isCompact ? "md" : "xs"}
+          textWrap={isCompact}
+          testID="agent-view-switcher"
+          style={isCompact && isChatVisible && findOpen ? styles.hiddenPane : undefined}
+          segmentStyle={isCompact ? styles.compactSegment : undefined}
+        />
+        <SessionPinButton serverId={serverId} agentId={agentId} />
+        <SubthreadsOpenButton />
+        <SessionChecklistButton />
+      </View>
       {streamContent}
       {!isChatVisible ? (
         <CompanionFeed
           serverId={serverId}
           agentId={agentId}
           cwd={cwd}
+          captureDegraded={agentState.captureDegraded === true}
           entries={agentState.companionEntries ?? EMPTY_COMPANION_ENTRIES}
           artifacts={agentState.artifacts ?? []}
           isSupported={companionStreamSupported}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
           onReturnToChat={handleReturnToChat}
           onReplyInChat={handleReplyInChat}
+          onOpenSource={handleOpenStreamSource}
           toast={toastApi}
         />
       ) : null}
@@ -1500,6 +1514,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   hasVisibleAgentTracks,
   toast,
   onOpenWorkspaceFile,
+  onReplyInThread,
 }: {
   streamViewRef: React.RefObject<AgentStreamViewHandle | null>;
   serverId: string;
@@ -1512,6 +1527,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   hasVisibleAgentTracks: boolean;
   toast: ReturnType<typeof useToastHost>["api"];
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
+  onReplyInThread?: (anchor: string) => void;
 }) {
   const isCompactFormFactor = useIsCompactFormFactor();
   const hasWorkspaceDiffStat = useWorkspaceHasDiffStat(serverId, workspaceId);
@@ -1584,6 +1600,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
       pendingMessageSubmissions={pendingMessageSubmissions}
       turnPresentation={turnPresentation}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
+      onReplyInThread={onReplyInThread}
     />
   );
 });
@@ -1677,6 +1694,11 @@ function ActiveAgentComposer({
   const paneContext = usePaneContext();
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
   const { workspaceId, tabId, retargetCurrentTab } = paneContext;
+  const { t } = useTranslation();
+  const replyTarget = useSubthreadReplyTarget(agentId);
+  const replyPlaceholder = replyTarget
+    ? t("subthreads.replyPlaceholder", { label: replyTarget.label })
+    : undefined;
   const { archiveAgent } = useArchiveAgent();
   const closeWorkspaceTab = useWorkspaceLayoutStore((state) => state.closeTab);
   const hideWorkspaceAgent = useWorkspaceLayoutStore((state) => state.hideAgent);
@@ -1712,7 +1734,10 @@ function ActiveAgentComposer({
         throw new Error("Agent not found");
       }
 
-      const workspaceKey = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
+      const workspaceKey = buildWorkspaceTabPersistenceKey({
+        serverId,
+        workspaceId: paneContext.layoutWorkspaceId ?? workspaceId,
+      });
       if (workspaceKey) {
         unpinWorkspaceAgent(workspaceKey, agentId);
         hideWorkspaceAgent(workspaceKey, agentId);
@@ -1735,6 +1760,7 @@ function ActiveAgentComposer({
       archiveAgent,
       closeWorkspaceTab,
       hideWorkspaceAgent,
+      paneContext.layoutWorkspaceId,
       retargetCurrentTab,
       serverId,
       tabId,
@@ -1770,6 +1796,7 @@ function ActiveAgentComposer({
         onMessageSent={onMessageSent}
         onClientSlashCommand={handleClientSlashCommand}
         isCompactLayout={isCompactComposerLayout}
+        placeholder={replyPlaceholder}
       />
     </View>
   );
@@ -1874,6 +1901,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   viewSwitcher: {
     minHeight: 40,
+    gap: theme.spacing[1],
     flexShrink: 0,
     flexDirection: "row",
     alignItems: "center",

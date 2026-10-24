@@ -11,6 +11,10 @@ import { createScheduleCommand } from "./commands/schedule/index.js";
 import { createSpeechCommand } from "./commands/speech/index.js";
 import { createScriptCommand } from "./commands/script/index.js";
 import { createTerminalCommand } from "./commands/terminal/index.js";
+import { createDiagnosticsCommand } from "./commands/diagnostics/index.js";
+import { createQueueCommand } from "./commands/queue/index.js";
+import { createUiCommand } from "./commands/ui/index.js";
+import { createTargetCommand } from "./commands/target.js";
 import { createWorktreeCommand } from "./commands/worktree/index.js";
 import { createWorkspaceCommand } from "./commands/workspace/index.js";
 import { createHeartbeatCommand } from "./commands/heartbeat/index.js";
@@ -131,11 +135,15 @@ export function createCli(): Command {
   // Daemon commands
   program.addCommand(createDaemonCommand());
   program.addCommand(createHubCommand());
+  program.addCommand(createTargetCommand());
 
   // Chat commands
 
   // Terminal commands
   program.addCommand(createTerminalCommand());
+  program.addCommand(createDiagnosticsCommand());
+  program.addCommand(createQueueCommand());
+  program.addCommand(createUiCommand());
 
   // Workspace script commands
   program.addCommand(createScriptCommand());

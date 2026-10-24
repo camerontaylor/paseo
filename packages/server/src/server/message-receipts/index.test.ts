@@ -247,3 +247,22 @@ test("completed logical speech wins over an older ambiguous attempt", async () =
     }),
   ).toEqual([expect.objectContaining({ messageId: "speech", state: "completed" })]);
 });
+
+test("inspection returns only the newest 50 receipts for one agent", async () => {
+  const { requests } = await fixture();
+  await Promise.all(
+    Array.from({ length: 60 }, (_, index) =>
+      requests.recordRemoved({
+        agentId: "agent",
+        messageId: "receipt-" + index,
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+      }),
+    ),
+  );
+  await requests.recordRemoved({ agentId: "other", messageId: "other-receipt" });
+  const records = await requests.listForAgent("agent");
+  expect(records).toHaveLength(50);
+  expect(records[0]?.messageId).toBe("receipt-59");
+  expect(records.at(-1)?.messageId).toBe("receipt-10");
+  expect(records.every((record) => record.state === "removed")).toBe(true);
+});

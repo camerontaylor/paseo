@@ -1,3 +1,5 @@
+import { MessagePinControl } from "@/companion-stream/message-pin-control";
+import type { MessagePinHandler } from "@/companion-stream/message-pin-operations";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
 import { AssistantForkMenu, type AssistantForkTarget } from "@/components/assistant-fork-menu";
@@ -13,6 +15,8 @@ import { RewindMenu, type RewindMode } from "@/components/rewind/rewind-menu";
 import { useRewindAgentMutation } from "@/components/rewind/use-rewind-agent-mutation";
 import { TaskListRow } from "@/components/task-list-row";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { DeliveryMark } from "@/components/delivery-mark";
+import type { MessageDeliveryState } from "@/composer/delivery-state";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative, isWeb } from "@/constants/platform";
 import { useRevealedText, type MarkdownPhase } from "@/hooks/use-revealed-text";
@@ -42,7 +46,7 @@ import {
   HelpCircle,
   Info,
   MicVocal,
-  Pin,
+  MessagesSquare,
   Plus,
   Scissors,
   TriangleAlertIcon,
@@ -69,6 +73,7 @@ import {
   ViewStyle,
   type GestureResponderEvent,
   type LayoutChangeEvent,
+  type TextLayoutEvent,
   type TextStyle,
 } from "react-native";
 import Animated, {
@@ -82,7 +87,7 @@ import Animated, {
 import Svg, { Defs, Rect, Stop, LinearGradient as SvgLinearGradient } from "react-native-svg";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { capAssistantMessageForRender, getUtf8ByteLength } from "./assistant-message-render-limit";
-import { getTurnDurationLabel } from "./assistant-turn-footer-label";
+import { getAssistantTurnFooterLabel } from "./assistant-turn-footer-label";
 import { getCompactionMarkerLabel } from "./message-compaction-label";
 import { PlanCard } from "./plan-card";
 import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
@@ -99,13 +104,16 @@ interface UserMessageProps {
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
   timestamp: number;
-  onPin?: (text: string) => void;
+  onPin?: MessagePinHandler;
   onQAndA?: (text: string, messageId?: string) => void;
   capabilities?: AgentCapabilityFlags;
   client?: DaemonClient | null;
   isFirstInGroup?: boolean;
   isLastInGroup?: boolean;
   isPending?: boolean;
+  deliveryState?: MessageDeliveryState;
+  clientMessageId?: string;
+  onDeliveryAttentionPress?: (clientMessageId: string) => void;
   disableOuterSpacing?: boolean;
 }
 
@@ -133,6 +141,7 @@ function useDisableOuterSpacing(disableOuterSpacing: boolean | undefined) {
 const WEB_TOOLCALL_SHIMMER_KEYFRAME_ID = "paseo-toolcall-shimmer-keyframes";
 const WEB_TOOLCALL_SHIMMER_ANIMATION_NAME = "paseo-toolcall-shimmer";
 const ThemedMicVocal = withUnistyles(MicVocal);
+const ThemedMessagesSquare = withUnistyles(MessagesSquare);
 const ThemedFileSymlinkIcon = withUnistyles(FileSymlink);
 const ThemedTriangleAlertIcon = withUnistyles(TriangleAlertIcon);
 const ThemedChevronRightIcon = withUnistyles(ChevronRight);
@@ -366,6 +375,17 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
   trailingRowVisible: {
     opacity: 1,
   },
+  showMoreButton: {
+    minHeight: 44,
+    marginTop: theme.spacing[2],
+    alignSelf: "flex-start",
+    justifyContent: "center",
+  },
+  showMoreText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontWeight: "500",
+  },
   timestampText: {
     color: theme.colors.foregroundMuted,
     fontSize: STREAM_METADATA_FONT_SIZE,
@@ -391,6 +411,106 @@ function UserMessageImagePill({ image, onOpen, accessibilityLabel }: UserMessage
 
 const MESSAGE_TEXT_DATASET = { messageText: "true" };
 
+export function ClampedUserMessageText({
+  message,
+  style,
+}: {
+  message: string;
+  style: StyleProp<TextStyle>;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const [clampState, setClampState] = useState<"measuring" | "clamped" | "unclamped">("measuring");
+  useEffect(() => {
+    setExpanded(false);
+    setClampState("measuring");
+  }, [message]);
+  const handleTextLayout = useCallback((event: TextLayoutEvent) => {
+    setClampState(event.nativeEvent.lines.length > 10 ? "clamped" : "unclamped");
+  }, []);
+  const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
+  let lines: number | undefined;
+  if (clampState === "measuring") lines = 11;
+  else if (clampState === "clamped" && !expanded) lines = 10;
+  return (
+    <View>
+      <Text
+        selectable
+        style={style}
+        dataSet={MESSAGE_TEXT_DATASET}
+        numberOfLines={lines}
+        onTextLayout={clampState === "measuring" ? handleTextLayout : undefined}
+      >
+        {message}
+      </Text>
+      {clampState === "clamped" ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            expanded
+              ? t("message.actions.showLess", "Show less")
+              : t("message.actions.showMore", "Show more")
+          }
+          onPress={toggleExpanded}
+          style={userMessageStylesheet.showMoreButton}
+        >
+          <Text style={userMessageStylesheet.showMoreText}>
+            {expanded
+              ? t("message.actions.showLess", "Show less")
+              : t("message.actions.showMore", "Show more")}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function isAwaitingUserDelivery(state: MessageDeliveryState | undefined): boolean {
+  return state !== undefined && state !== "delivered";
+}
+
+function showUserTrailingRow(input: {
+  awaiting: boolean;
+  pending: boolean;
+  hasText: boolean;
+  reveal: boolean;
+}): boolean {
+  return input.awaiting || (!input.pending && input.hasText && input.reveal);
+}
+
+function UserDeliveryMetadata({
+  state,
+  clientMessageId,
+  onAttentionPress,
+  timestamp,
+}: {
+  state: MessageDeliveryState | undefined;
+  clientMessageId: string | undefined;
+  onAttentionPress: ((id: string) => void) | undefined;
+  timestamp: string;
+}) {
+  const handleAttention = useCallback(() => {
+    if (clientMessageId) onAttentionPress?.(clientMessageId);
+  }, [clientMessageId, onAttentionPress]);
+  const awaiting = isAwaitingUserDelivery(state);
+  return (
+    <>
+      {awaiting ? null : (
+        <Text style={userMessageStylesheet.timestampText} testID="user-message-timestamp">
+          {timestamp}
+        </Text>
+      )}
+      {state ? (
+        <DeliveryMark
+          state={state}
+          testID="user-message-delivery-mark"
+          onPress={state === "attention" ? handleAttention : undefined}
+        />
+      ) : null}
+    </>
+  );
+}
+
 export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
@@ -406,11 +526,15 @@ export const UserMessage = memo(function UserMessage({
   isFirstInGroup = true,
   isLastInGroup = true,
   isPending = false,
+  deliveryState,
+  clientMessageId,
+  onDeliveryAttentionPress,
   disableOuterSpacing,
 }: UserMessageProps) {
   const isCompact = useIsCompactFormFactor();
   const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
+  const [pinActive, setPinActive] = useState(false);
   const [lightboxMetadata, setLightboxMetadata] = useState<UserMessageImageAttachment | null>(null);
   const handleLightboxClose = useCallback(() => setLightboxMetadata(null), []);
   const lightboxSource = useMemo<ImageLightboxSource | null>(
@@ -421,7 +545,12 @@ export const UserMessage = memo(function UserMessage({
   const hasText = message.trim().length > 0;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;
-  const showTrailingRow = !isPending && hasText && (isCompact || isNative || isHovered);
+  const showTrailingRow = showUserTrailingRow({
+    awaiting: isAwaitingUserDelivery(deliveryState),
+    pending: isPending,
+    hasText,
+    reveal: isCompact || isNative || isHovered || pinActive,
+  });
   const formattedTimestamp = useMemo(
     () => formatMessageTimestamp(new Date(timestamp)),
     [timestamp],
@@ -431,7 +560,6 @@ export const UserMessage = memo(function UserMessage({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const getMessageContent = useCallback(() => message, [message]);
-  const handlePin = useCallback(() => onPin?.(message), [onPin, message]);
   const handleQAndA = useCallback(
     () => onQAndA?.(message, messageId),
     [onQAndA, message, messageId],
@@ -517,20 +645,21 @@ export const UserMessage = memo(function UserMessage({
             </View>
           ) : null}
           {hasText ? (
-            <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
-              {message}
-            </Text>
+            <ClampedUserMessageText message={message} style={userMessageStylesheet.text} />
           ) : null}
         </View>
-        {hasText ? (
+        {hasText || deliveryState ? (
           <View
             style={trailingRowStyle}
             pointerEvents={showTrailingRow ? "auto" : "none"}
             testID="user-message-trailing-row"
           >
-            <Text style={userMessageStylesheet.timestampText} testID="user-message-timestamp">
-              {formattedTimestamp}
-            </Text>
+            <UserDeliveryMetadata
+              state={deliveryState}
+              clientMessageId={clientMessageId}
+              onAttentionPress={onDeliveryAttentionPress}
+              timestamp={formattedTimestamp}
+            />
             {capabilities && messageId ? (
               <RewindMenu
                 capabilities={capabilities}
@@ -540,7 +669,13 @@ export const UserMessage = memo(function UserMessage({
               />
             ) : null}
             {onPin ? (
-              <TurnPinButton onPin={handlePin} containerStyle={userMessageStylesheet.copyButton} />
+              <MessagePinControl
+                getContent={getMessageContent}
+                onPin={onPin}
+                onActivityChange={setPinActive}
+                sourceId={messageId ? `msg:${messageId}` : undefined}
+                containerStyle={userMessageStylesheet.copyButton}
+              />
             ) : null}
             {onQAndA ? (
               <TurnQAndAButton
@@ -563,10 +698,12 @@ export const UserMessage = memo(function UserMessage({
 
 interface AssistantTurnFooterProps {
   getContent: () => string;
+  threadAnchor?: string;
+  onReplyInThread?: (anchor: string) => void;
   completedAt?: Date;
   durationMs?: number | null;
   onFork?: (target: AssistantForkTarget) => Promise<void> | void;
-  onPin?: (text: string) => void;
+  onPin?: MessagePinHandler;
 }
 
 const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
@@ -582,29 +719,15 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
     marginTop: 0,
     marginLeft: -theme.spacing[1],
   },
-  labelWrapper: {
-    position: "relative",
-  },
-  labelSizer: {
-    color: theme.colors.foregroundMuted,
-    fontSize: STREAM_METADATA_FONT_SIZE,
-    opacity: 0,
-  },
   labelOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
     color: theme.colors.foregroundMuted,
     fontSize: STREAM_METADATA_FONT_SIZE,
   },
 }));
 
-const TIMESTAMP_REVEAL_MS = 3000;
-
 /**
  * Footer rendered next to the copy button at the end of an assistant turn.
- * Shows the turn duration and swaps to the end timestamp when both are known.
- * A turn without a visible start shows its end timestamp directly.
+ * Shows completion time and duration together when both are known.
  */
 export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   getContent,
@@ -612,66 +735,42 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   durationMs,
   onFork,
   onPin,
+  threadAnchor,
+  onReplyInThread,
 }: AssistantTurnFooterProps) {
   const { t } = useTranslation();
-  const [hovered, setHovered] = useState(false);
-  const [pressedReveal, setPressedReveal] = useState(false);
-  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (revealTimerRef.current) {
-        clearTimeout(revealTimerRef.current);
-        revealTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  const durationLabel = useMemo(
-    () =>
-      durationMs !== undefined && durationMs !== null ? getTurnDurationLabel(durationMs, t) : "",
-    [durationMs, t],
+  const primaryLabel = useMemo(
+    () => getAssistantTurnFooterLabel(completedAt, durationMs, t),
+    [completedAt, durationMs, t],
   );
-  const timestampLabel = useMemo(
-    () => (completedAt ? formatMessageTimestamp(completedAt) : ""),
-    [completedAt],
-  );
-
-  const primaryLabel = durationLabel || timestampLabel;
-  const canSwap = Boolean(durationLabel && timestampLabel);
-  const showTimestamp = canSwap && (isWeb ? hovered : pressedReveal);
-
-  const handleHoverIn = useCallback(() => setHovered(true), []);
-  const handleHoverOut = useCallback(() => setHovered(false), []);
-  const handlePress = useCallback(() => {
-    if (isWeb || !canSwap) return;
-    if (revealTimerRef.current) {
-      clearTimeout(revealTimerRef.current);
-    }
-    setPressedReveal((prev) => !prev);
-    revealTimerRef.current = setTimeout(() => {
-      setPressedReveal(false);
-      revealTimerRef.current = null;
-    }, TIMESTAMP_REVEAL_MS);
-  }, [canSwap]);
   const handleFork = useCallback(
     (target: AssistantForkTarget) => {
       return onFork?.(target);
     },
     [onFork],
   );
-  const handlePin = useCallback(() => {
-    if (onPin) {
-      onPin(getContent());
-    }
-  }, [onPin, getContent]);
   const canFork = Boolean(onFork);
+  const handleReplyInThread = useCallback(() => {
+    if (threadAnchor) onReplyInThread?.(threadAnchor);
+  }, [onReplyInThread, threadAnchor]);
 
   return (
     <View style={assistantTurnFooterStylesheet.container}>
+      {onReplyInThread && threadAnchor ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("message.actions.replyInThread")}
+          testID="reply-in-thread"
+          onPress={handleReplyInThread}
+          style={assistantTurnFooterStylesheet.copyButton}
+        >
+          <ThemedMessagesSquare size={16} uniProps={foregroundMutedColorMapping} />
+        </Pressable>
+      ) : null}
       {onPin ? (
-        <TurnPinButton
-          onPin={handlePin}
+        <MessagePinControl
+          getContent={getContent}
+          onPin={onPin}
           containerStyle={assistantTurnFooterStylesheet.copyButton}
         />
       ) : null}
@@ -681,24 +780,9 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
       />
       {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
       {primaryLabel ? (
-        <Pressable
-          onPress={handlePress}
-          onHoverIn={handleHoverIn}
-          onHoverOut={handleHoverOut}
-          accessibilityRole={canSwap ? "button" : undefined}
-          accessibilityLabel={canSwap ? `${durationLabel}, ended ${timestampLabel}` : primaryLabel}
-        >
-          <View style={assistantTurnFooterStylesheet.labelWrapper}>
-            {/* Sizer reserves space for whichever label is longer so the
-                container width is stable across hover transitions. */}
-            <Text style={assistantTurnFooterStylesheet.labelSizer} aria-hidden>
-              {primaryLabel.length >= timestampLabel.length ? primaryLabel : timestampLabel}
-            </Text>
-            <Text style={assistantTurnFooterStylesheet.labelOverlay}>
-              {showTimestamp ? timestampLabel : primaryLabel}
-            </Text>
-          </View>
-        </Pressable>
+        <Text style={assistantTurnFooterStylesheet.labelOverlay} accessibilityLabel={primaryLabel}>
+          {primaryLabel}
+        </Text>
       ) : null}
     </View>
   );
@@ -824,37 +908,6 @@ const turnCopyButtonStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
   },
 }));
-
-interface TurnPinButtonProps {
-  onPin: () => void;
-  containerStyle?: StyleProp<ViewStyle>;
-}
-
-export const TurnPinButton = memo(function TurnPinButton({
-  onPin,
-  containerStyle,
-}: TurnPinButtonProps) {
-  const pressableStyle = useMemo(
-    () => [turnCopyButtonStylesheet.container, containerStyle],
-    [containerStyle],
-  );
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      style={pressableStyle}
-      onPress={onPin}
-      accessibilityLabel="Pin to stream"
-    >
-      {({ hovered }) => {
-        const iconColor = hovered
-          ? turnCopyButtonStylesheet.iconHoveredColor.color
-          : turnCopyButtonStylesheet.iconColor.color;
-        return <Pin size={ICON_SIZE.sm} color={iconColor} />;
-      }}
-    </Pressable>
-  );
-});
 
 interface TurnQAndAButtonProps {
   onQAndA: () => void;

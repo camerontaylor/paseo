@@ -23,6 +23,11 @@ export function useSidebarWorkspaceTrailing(): SidebarWorkspaceTrailing {
   return sidebarWorkspaceTrailing;
 }
 
+/** Message/agent activity only; opening a workspace does not move this clock. */
+export function workspaceLastActiveAt(workspace: SidebarWorkspaceEntry): Date | null {
+  return workspace.lastMessageAt ?? workspace.lastActivityAt ?? workspace.statusEnteredAt ?? null;
+}
+
 /** Whether the slot has anything to draw for this workspace under the current preference. */
 export function hasSidebarWorkspaceTrailing({
   workspace,
@@ -32,7 +37,7 @@ export function hasSidebarWorkspaceTrailing({
   trailing: SidebarWorkspaceTrailing;
 }): boolean {
   if (trailing === "diff") return workspace.diffStat !== null;
-  if (trailing === "timestamp") return workspace.statusEnteredAt !== null;
+  if (trailing === "timestamp") return workspaceLastActiveAt(workspace) !== null;
   return false;
 }
 
@@ -48,8 +53,10 @@ export function SidebarWorkspaceTrailingContent({
       <DiffStat additions={workspace.diffStat.additions} deletions={workspace.diffStat.deletions} />
     );
   }
-  if (trailing === "timestamp" && workspace.statusEnteredAt) {
-    return <WorkspaceTimestamp enteredAt={workspace.statusEnteredAt} />;
+  const lastActiveAt =
+    workspace.lastMessageAt ?? workspace.lastActivityAt ?? workspace.statusEnteredAt;
+  if (trailing === "timestamp" && lastActiveAt) {
+    return <WorkspaceTimestamp enteredAt={lastActiveAt} />;
   }
   return null;
 }
@@ -79,5 +86,6 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.normal,
     flexShrink: 0,
+    fontVariant: ["tabular-nums"],
   },
 }));

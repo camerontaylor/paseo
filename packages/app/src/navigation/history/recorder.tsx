@@ -40,6 +40,10 @@ export function NavigationHistoryRecorder({
   const { serverId, workspaceId, dir, name, projectId, draftId, changeRequest } = params;
   const hydrated = useWorkspaceLayoutStoreHydrated();
 
+  useEffect(() => {
+    void store.hydrateRecentVisits();
+  }, [store]);
+
   const location = useMemo(
     () =>
       classifyLocation({

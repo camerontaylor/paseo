@@ -9,7 +9,7 @@ import type {
   SidebarProjectEntry,
   SidebarWorkspaceEntry,
 } from "@/hooks/use-sidebar-workspaces-list";
-import type { SidebarGroupMode } from "@/stores/sidebar-view-store";
+import type { SidebarGroupMode, SidebarSortMode } from "@/stores/sidebar-view-store";
 import {
   resolveSidebarProjectIconTargets,
   type SidebarProjectIconTarget,
@@ -43,6 +43,7 @@ export interface SidebarProjectionInput {
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   projectNamesByViewKey: Map<string, string>;
   groupMode: SidebarGroupMode;
+  sortMode?: SidebarSortMode;
   pinnedCollapsed: boolean;
   collapsedProjectKeys: ReadonlySet<string>;
   collapsedWorkspaceGroupKeys: ReadonlySet<string>;
@@ -102,7 +103,12 @@ function buildWorkspaceGroups(
       return [];
     case "status":
       return statusWorkspaceGroups(
-        buildStatusGroups(unpinnedWorkspaces, input.projectNamesByViewKey, input.t),
+        buildStatusGroups(
+          unpinnedWorkspaces,
+          input.projectNamesByViewKey,
+          input.t,
+          input.sortMode ?? "manual",
+        ),
       );
   }
 }

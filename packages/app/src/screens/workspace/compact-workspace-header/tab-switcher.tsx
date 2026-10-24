@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { Keyboard, Pressable, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { SquarePen, SquareTerminal } from "lucide-react-native";
+import { Search, SquarePen, SquareTerminal } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
@@ -127,6 +127,7 @@ function getFallbackTabOptionDescription(
 
 interface MobileWorkspaceTabSwitcherProps {
   tabs: WorkspaceTabDescriptor[];
+  unreadTabIds: Set<string>;
   activeTabKey: string;
   normalizedServerId: string;
   normalizedWorkspaceId: string;
@@ -156,6 +157,7 @@ function MobileWorkspaceTabOption({
   normalizedWorkspaceId,
   selected,
   active,
+  unread,
   onPress,
   onCopyResumeCommand,
   onCopyAgentId,
@@ -177,6 +179,7 @@ function MobileWorkspaceTabOption({
   normalizedWorkspaceId: string;
   selected: boolean;
   active: boolean;
+  unread: boolean;
   onPress: () => void;
   onCopyResumeCommand: (agentId: string) => Promise<void> | void;
   onCopyAgentId: (agentId: string) => Promise<void> | void;
@@ -272,11 +275,12 @@ function MobileWorkspaceTabOption({
         presentation={presentation}
         selected={selected}
         active={active}
+        unread={unread}
         onPress={onPress}
         trailingAccessory={trailingAccessory}
       />
     ),
-    [selected, active, onPress, trailingAccessory],
+    [selected, active, unread, onPress, trailingAccessory],
   );
 
   return (
@@ -292,6 +296,7 @@ function MobileWorkspaceTabOption({
 
 export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
   tabs,
+  unreadTabIds,
   activeTabKey,
   normalizedServerId,
   normalizedWorkspaceId,
@@ -355,6 +360,11 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
     Keyboard.dismiss();
     setIsOpen(true);
   }, []);
+  const activeTab = tabs.find((tab) => tab.key === activeTabKey);
+  const currentAgentId = activeTab?.target.kind === "agent" ? activeTab.target.agentId : null;
+  const handleFindCurrentChat = useCallback(() => {
+    if (currentAgentId) onFindInChat(currentAgentId);
+  }, [currentAgentId, onFindInChat]);
 
   const handleNewAgent = useCallback(() => {
     setIsOpen(false);
@@ -422,6 +432,7 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
           normalizedWorkspaceId={normalizedWorkspaceId}
           selected={selected}
           active={active}
+          unread={unreadTabIds.has(tab.tabId)}
           onPress={onPress}
           onCopyResumeCommand={onCopyResumeCommand}
           onCopyAgentId={onCopyAgentId}
@@ -440,6 +451,7 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
     },
     [
       tabByKey,
+      unreadTabIds,
       tabIndexByKey,
       tabs.length,
       normalizedServerId,
@@ -474,6 +486,19 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
           <Text style={styles.tabCountText}>{tabs.length}</Text>
         </View>
       </Pressable>
+
+      {currentAgentId ? (
+        <Button
+          testID="workspace-current-chat-find"
+          variant="ghost"
+          size="md"
+          leftIcon={Search}
+          accessibilityLabel={t("workspace.tabs.menu.findInChat")}
+          onPress={handleFindCurrentChat}
+        >
+          {t("paneFind.title")}
+        </Button>
+      ) : null}
 
       <Combobox
         options={tabSwitcherOptions}

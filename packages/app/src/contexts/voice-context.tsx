@@ -10,6 +10,8 @@ import {
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useTranslation } from "react-i18next";
 import { useToast } from "@/contexts/toast-context";
+import { recordClientDiagnostic } from "@/diagnostics/client-errors/record";
+import { resolveAppVersion } from "@/utils/app-version";
 import { useSessionStore } from "@/stores/session-store";
 import { createAudioEngine } from "@/audio";
 import type { AudioEngine } from "@/audio";
@@ -21,7 +23,8 @@ import {
 } from "@/voice/voice-runtime";
 
 interface VoiceContextValue extends VoiceRuntimeSnapshot {
-  startVoice: (serverId: string, agentId: string) => Promise<void>;
+  startVoice: VoiceRuntime["startVoice"];
+  controlRealtime: VoiceRuntime["controlRealtime"];
   stopVoice: () => Promise<void>;
   isVoiceModeForAgent: (serverId: string, agentId: string) => boolean;
   toggleMute: () => void;
@@ -32,6 +35,7 @@ const EMPTY_SNAPSHOT: VoiceRuntimeSnapshot = {
   isVoiceMode: false,
   isVoiceSwitching: false,
   isMuted: false,
+  isCaptureInterrupted: false,
   failure: null,
   lastInputStatus: null,
   activeServerId: null,
@@ -81,6 +85,7 @@ export function useVoiceOptional(): VoiceContextValue | null {
       stopVoice: runtime.stopVoice,
       isVoiceModeForAgent: runtime.isVoiceModeForAgent,
       toggleMute: runtime.toggleMute,
+      controlRealtime: runtime.controlRealtime,
     };
   }, [snapshot, runtime]);
 }
@@ -137,6 +142,9 @@ export function VoiceProvider({ children }: VoiceProviderProps) {
       onVolumeLevel: (level) => {
         runtime?.handleCaptureVolume(level);
       },
+      onCaptureAvailabilityChange: (available) => {
+        runtime?.handleCaptureAvailabilityChange(available);
+      },
       onInterruption: () => {
         if (!runtime?.getSnapshot().isVoiceMode) return;
         notifyMicrophoneLostRef.current();
@@ -159,6 +167,8 @@ export function VoiceProvider({ children }: VoiceProviderProps) {
       deactivateKeepAwake: async (tag) => {
         await deactivateKeepAwake(tag);
       },
+      recordDiagnostic: (input) =>
+        recordClientDiagnostic({ ...input, appVersion: resolveAppVersion() }),
     });
 
     engineRef.current = engine;

@@ -93,6 +93,96 @@ describe("voice runtime", () => {
     vi.useRealTimers();
   });
 
+  it("pauses upload during an audio interruption and resumes the same attachment", async () => {
+    const adapter = createSessionAdapter();
+    const { runtime } = createRuntime();
+    runtime.registerSession(adapter);
+    await runtime.startVoice("server-1", "agent-1");
+
+    runtime.handleCaptureAvailabilityChange(false);
+    expect(runtime.getSnapshot().isCaptureInterrupted).toBe(true);
+    runtime.handleCapturePcm(new Uint8Array(320));
+    expect(adapter.sendVoiceAudioChunk).not.toHaveBeenCalled();
+
+    runtime.handleCaptureAvailabilityChange(true);
+    expect(runtime.getSnapshot()).toMatchObject({
+      isVoiceMode: true,
+      isCaptureInterrupted: false,
+      activeAgentId: "agent-1",
+    });
+    await runtime.destroy();
+  });
+
+  it("keeps capture on for Paseo verbal mute and acknowledges host state", async () => {
+    const adapter = createSessionAdapter();
+    vi.mocked(adapter.setVoiceMode).mockImplementation(async (_enabled, _agentId, input) => ({
+      attachmentId: input?.attachmentId,
+      generation: "generation",
+      voiceCommandsEnabled: true,
+      isMuted: false,
+    }));
+    adapter.setVoiceInputMuted = vi.fn().mockResolvedValue(true);
+    const { runtime, engine } = createRuntime({
+      getServerInfo: () => ({
+        ...createServerInfo(),
+        features: { durableVoiceInputV1: true, voiceVerbalMute: true },
+      }),
+    });
+    runtime.registerSession(adapter);
+    await runtime.startVoice("server-1", "agent-1");
+    runtime.toggleMute();
+    await vi.waitFor(() => expect(runtime.getSnapshot().isMuted).toBe(true));
+    expect(adapter.setVoiceInputMuted).toHaveBeenCalledWith(true, {
+      attachmentId: expect.any(String),
+      generation: "generation",
+    });
+    expect(engine.stopCapture).not.toHaveBeenCalled();
+    expect(engine.toggleMute).not.toHaveBeenCalled();
+    await runtime.destroy();
+  });
+
+  it("turns GPT capture off while waiting for host mute acknowledgement", async () => {
+    const adapter = createSessionAdapter();
+    const realtime = {
+      provider: "openai-realtime" as const,
+      destination: "assistant" as const,
+      connection: "connected" as const,
+      mode: "conversation" as const,
+      epoch: "epoch",
+      draft: "",
+      muted: false,
+      error: null,
+      omittedContextEntries: 0,
+    };
+    vi.mocked(adapter.setVoiceMode).mockImplementation(async (_enabled, _agentId, input) => ({
+      attachmentId: input?.attachmentId,
+      generation: "generation",
+      realtime,
+    }));
+    let acknowledge!: (value: typeof realtime) => void;
+    adapter.controlRealtimeVoice = vi.fn().mockReturnValue(
+      new Promise<typeof realtime>((resolve) => {
+        acknowledge = resolve;
+      }),
+    );
+    const { runtime, engine } = createRuntime({
+      getServerInfo: () => ({
+        ...createServerInfo(),
+        features: { durableVoiceInputV1: true, openaiRealtimeVoice: true },
+      }),
+    });
+    runtime.registerSession(adapter);
+    await runtime.startVoice("server-1", "agent-1", "openai-realtime");
+    runtime.toggleMute();
+    await vi.waitFor(() => expect(adapter.controlRealtimeVoice).toHaveBeenCalled());
+    expect(engine.stopCapture).toHaveBeenCalled();
+    expect(runtime.getSnapshot().isMuted).toBe(false);
+    acknowledge({ ...realtime, muted: true });
+    await vi.waitFor(() => expect(runtime.getSnapshot().isMuted).toBe(true));
+    expect(engine.toggleMute).not.toHaveBeenCalled();
+    await runtime.destroy();
+  });
+
   it("starts voice when adapter is ready", async () => {
     const adapter = createSessionAdapter();
     const { runtime, engine } = createRuntime();

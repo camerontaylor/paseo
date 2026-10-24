@@ -3,7 +3,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
 
-import { AgentQueueStore, type AgentQueueJournalEntry, type StoredQueuedMessage } from "./store.js";
+import {
+  AgentQueueStore,
+  reconcileDrainedLog,
+  type AgentQueueJournalEntry,
+  type StoredQueuedMessage,
+} from "./store.js";
 
 function storedItem(id: string, text = "keep this message"): StoredQueuedMessage {
   return {
@@ -191,4 +196,24 @@ test("an unknown agent parses as an empty queue at revision 0", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("drain inspection history is bounded and drops restored claims", () => {
+  const before = {
+    agentId: "agent",
+    revision: 1,
+    items: [storedItem("a", "first \n second")],
+    drainedIds: [],
+  };
+  const after = { ...before, items: [], drainedIds: ["a"] };
+  expect(reconcileDrainedLog(before, after, "t1")).toEqual([
+    { id: "a", drainedAt: "t1", preview: "first second" },
+  ]);
+  expect(
+    reconcileDrainedLog(
+      { ...after, drainedLog: [{ id: "a", drainedAt: "t1", preview: "x" }] },
+      before,
+      "t2",
+    ),
+  ).toBeUndefined();
 });

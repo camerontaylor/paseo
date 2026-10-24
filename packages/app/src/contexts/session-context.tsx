@@ -1,6 +1,6 @@
 import { useRef, ReactNode, useCallback, useEffect } from "react";
 import { Buffer } from "buffer";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
 import { observeOpenWorkspaceAgentIds } from "@/stores/workspace-layout-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -16,9 +16,24 @@ import { deriveAgentStreamTurnLiveness } from "@/timeline/session-stream-reducer
 import { planTimelineTailFetch } from "@/timeline/timeline-sync-plan";
 import { requestTimelineReplacement } from "@/timeline/timeline-replacement";
 import { type ViewedTimelineOwner } from "@/timeline/viewed-timeline-sync";
-import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
+import type { SessionOutboundMessage, ServerInfoStatusPayload } from "@getpaseo/protocol/messages";
 import { parseServerInfoStatusPayload } from "@getpaseo/protocol/messages";
-import { flushQueueOutboxForServer } from "@/stores/queue-outbox-store";
+import {
+  awaitOutboxHydration,
+  flushDirectOutboxForServer,
+  flushQueueOutboxForServer,
+  supportsDurableDirectSend,
+  useQueueOutboxStore,
+} from "@/stores/queue-outbox-store";
+import { createDirectSendAcceptanceHandler } from "@/composer/submission/direct-send-outbox";
+import { startOutboxReconnectFlush } from "./session-outbox-flush";
+import { buildOutboxReportAgents } from "./outbox-report";
+import { createServerQueueFlushClient } from "@/composer/server-queue-flush-client";
+import {
+  flushClientDiagnosticsForServer,
+  onClientDiagnosticQueued,
+} from "@/diagnostics/client-errors/store";
+import { createClientDiagnosticsFlushScheduler } from "@/diagnostics/client-errors/scheduler";
 import {
   buildAgentAttentionNotificationPayload,
   type AgentAttentionReason,
@@ -330,6 +345,14 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         }
         return client.setVoiceMode(enabled, agentId, input);
       },
+      controlRealtimeVoice: async (input) => {
+        if (!client) throw new Error(t("common.errors.daemonUnavailable"));
+        return client.controlRealtimeVoice(input);
+      },
+      setVoiceInputMuted: async (muted, transport) => {
+        if (!client) throw new Error(t("common.errors.daemonUnavailable"));
+        return client.setVoiceInputMuted(muted, transport);
+      },
       sendVoiceAudioChunk: async (audioData, mimeType, transport) => {
         if (!client) {
           throw new Error(t("common.errors.daemonUnavailable"));
@@ -542,6 +565,105 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     viewedTimelineSyncRef.current?.setConnected(isConnected);
   }, [isConnected]);
 
+  useEffect(() => {
+    const flush = (features: ServerInfoStatusPayload["features"]) => {
+      const supported = supportsDurableDirectSend(features);
+      void useQueueOutboxStore
+        .getState()
+        .rememberHostSupport(serverId, supported)
+        .catch((error) => {
+          console.error("[direct-outbox] support persistence failed:", error);
+        });
+      if (!supported) return;
+      void flushDirectOutboxForServer({
+        serverId,
+        client,
+        onAccepted: createDirectSendAcceptanceHandler(serverId),
+      }).catch((error) => console.error("[direct-outbox] reconnect flush failed:", error));
+      void flushQueueOutboxForServer({
+        serverId,
+        client: createServerQueueFlushClient({ client, serverId }),
+        applySnapshot: (snapshot) =>
+          useSessionStore.getState().applyAgentQueueSnapshot(serverId, snapshot),
+      }).catch((error) => console.error("[queue-outbox] reconnect flush failed:", error));
+    };
+    return startOutboxReconnectFlush({
+      client,
+      subscribeStatus: (handler) => client.on("status", (message) => handler(message.payload)),
+      flush,
+    });
+  }, [client, serverId]);
+
+  useEffect(() => {
+    const priorAgentIds = new Set<string>();
+    let enabled = client.getLastServerInfoMessage()?.features?.deliveryInspect === true;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let reporting = false;
+    let pending = false;
+    const report = async () => {
+      if (disposed || !enabled || !client.isConnected) return;
+      if (reporting) {
+        pending = true;
+        return;
+      }
+      reporting = true;
+      try {
+        await awaitOutboxHydration();
+        if (disposed || !client.isConnected) return;
+        const state = useQueueOutboxStore.getState();
+        const agents = buildOutboxReportAgents({
+          serverId,
+          agentIds: [...priorAgentIds],
+          queued: state.entriesForServer(serverId),
+          direct: state.directEntriesForServer(serverId),
+        });
+        for (const agent of agents) {
+          await client.reportClientOutbox({
+            ...agent,
+            deviceLabel: "Paseo device",
+            platform: Platform.OS,
+          });
+          priorAgentIds.add(agent.agentId);
+        }
+      } catch (error) {
+        console.warn("[Session] Outbox report failed", error);
+        pending = true;
+      } finally {
+        reporting = false;
+        if (pending) {
+          pending = false;
+          if (!disposed && enabled && client.isConnected)
+            timer = setTimeout(() => {
+              timer = null;
+              void report();
+            }, 5000);
+        }
+      }
+    };
+    const schedule = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void report();
+      }, 500);
+    };
+    const unsubscribeStore = useQueueOutboxStore.subscribe(schedule);
+    const unsubscribeStatus = client.on("status", (message) => {
+      const info = parseServerInfoStatusPayload(message.payload);
+      if (!info) return;
+      enabled = info.features?.deliveryInspect === true;
+      if (enabled) schedule();
+    });
+    if (enabled) schedule();
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      unsubscribeStore();
+      unsubscribeStatus();
+    };
+  }, [client, serverId]);
+
   // Daemon message handlers - directly update Zustand store
   useEffect(() => {
     const feeds = client.observeEvents(
@@ -621,11 +743,33 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       applyWorkspaceSetupProgress(message.payload);
     });
 
+    let hostRecordsDiagnostics = false;
+    const diagnosticsScheduler = createClientDiagnosticsFlushScheduler({
+      flush: () =>
+        hostRecordsDiagnostics && client.isConnected
+          ? flushClientDiagnosticsForServer({
+              serverId,
+              client,
+              device: { deviceLabel: "Paseo device", platform: Platform.OS },
+            })
+          : Promise.resolve("skipped" as const),
+      onError: (error) => console.warn("[Session] Failed to report client diagnostics", error),
+    });
+    const unsubDiagnosticsQueued = onClientDiagnosticQueued(() => {
+      if (hostRecordsDiagnostics && client.isConnected) diagnosticsScheduler.trigger();
+    });
+    hostRecordsDiagnostics =
+      client.getLastServerInfoMessage()?.features?.clientDiagnostics === true;
+    if (hostRecordsDiagnostics && client.isConnected) diagnosticsScheduler.flushNow();
+
     const unsubStatus = onFeed("status", (message) => {
       if (message.type !== "status") return;
       const serverInfo = parseServerInfoStatusPayload(message.payload);
       if (serverInfo) {
         updateSessionServerInfo(serverId, toDaemonServerInfo(serverInfo));
+        hostRecordsDiagnostics = serverInfo.features?.clientDiagnostics === true;
+        if (hostRecordsDiagnostics) diagnosticsScheduler.flushNow();
+        else diagnosticsScheduler.stop();
         // COMPAT(durableAgentQueue): added in v0.11.0-beta.3+custom (TM-02/TM-03).
         // Server info arrives on every (re)connect, which is exactly when an
         // enqueue the daemon never acknowledged should be retried. Hosts without
@@ -763,6 +907,12 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     const unsubVoiceInputState = client.on("voice_input_state", (message) => {
       if (message.type !== "voice_input_state") return;
       if (voiceRuntime && !voiceRuntime.acceptsVoiceTransport(serverId, message.payload)) return;
+      if (message.payload.realtime) {
+        voiceRuntime?.onRealtimeState(serverId, message.payload.realtime);
+      }
+      if (message.payload.isMuted !== undefined) {
+        voiceRuntime?.onInputMutedChanged(serverId, message.payload.isMuted);
+      }
       if (message.payload.error) {
         voiceRuntime?.onInputError(serverId, message.payload.error);
       }
@@ -805,6 +955,8 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       unsubCheckoutStatusUpdate();
       unsubWorkspaceSetupProgress();
       unsubStatus();
+      unsubDiagnosticsQueued();
+      diagnosticsScheduler.stop();
       unsubPermissionRequest();
       unsubPermissionResolved();
       unsubAudioOutput();

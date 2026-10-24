@@ -126,6 +126,43 @@ export function openWorkspaceTargetAtLocation(
   });
 }
 
+/**
+ * Shows an agent- or CLI-requested target in the side pane without moving focus from the
+ * caller. Explicitly opened agents remain pinned through workspace reconciliation.
+ */
+export function showWorkspaceTargetBeside(input: {
+  workspaceKey: string;
+  target: WorkspaceTabTarget;
+  isCompact: boolean;
+}): string | null {
+  const store = useWorkspaceLayoutStore.getState();
+  if (input.isCompact) {
+    return store.openTab({
+      workspaceKey: input.workspaceKey,
+      target: input.target,
+      intent: "background",
+      pin: input.target.kind === "agent",
+    });
+  }
+  const sidePaneId = store.ensureSidePane(input.workspaceKey, { focus: false });
+  const tabId = store.openTab({
+    workspaceKey: input.workspaceKey,
+    target: input.target,
+    intent: "background",
+    placement: sidePaneId ? { mode: "prefer", paneId: sidePaneId } : undefined,
+    pin: input.target.kind === "agent",
+  });
+  if (!tabId) return null;
+  const layout = useWorkspaceLayoutStore.getState().layoutByWorkspace[input.workspaceKey];
+  const pane = layout
+    ? collectAllPanes(layout.root).find((candidate) => candidate.tabIds.includes(tabId))
+    : null;
+  if (pane && sidePaneId && pane.id === sidePaneId) {
+    store.selectTabInPane(input.workspaceKey, pane.id, tabId);
+  }
+  return tabId;
+}
+
 /** Opens a tree selection while reusing an unmodified preview in its destination pane. */
 export function openPreferredWorkspacePreview(
   input: OpenPreferredWorkspacePreviewInput,

@@ -53,6 +53,9 @@ const StoredAgentQueueSchema = z.object({
   // Ids of items that have already been drained. An enqueue retry (same id) that
   // arrives after its item was delivered must be a no-op, not a resend.
   drainedIds: z.array(z.string()).optional(),
+  drainedLog: z
+    .array(z.object({ id: z.string(), drainedAt: z.string(), preview: z.string() }))
+    .optional(),
 });
 
 export type StoredQueuedImage = z.infer<typeof StoredQueuedImageSchema>;
@@ -73,6 +76,32 @@ export const MAX_REMEMBERED_DRAINED_IDS = 100;
 export function recordDrainedId(ids: readonly string[] | undefined, id: string): string[] {
   const next = [...(ids ?? []).filter((existing) => existing !== id), id];
   return next.slice(-MAX_REMEMBERED_DRAINED_IDS);
+}
+
+const DRAINED_PREVIEW_CHARS = 120;
+
+/** Keeps inspection history aligned with the bounded dedupe window. */
+export function reconcileDrainedLog(
+  before: StoredAgentQueue,
+  after: StoredAgentQueue,
+  now: string,
+): StoredAgentQueue["drainedLog"] {
+  const drained = new Set(after.drainedIds ?? []);
+  const previous = new Set(before.drainedIds ?? []);
+  const kept = (after.drainedLog ?? before.drainedLog ?? []).filter((entry) =>
+    drained.has(entry.id),
+  );
+  const logged = new Set(kept.map((entry) => entry.id));
+  for (const id of after.drainedIds ?? []) {
+    if (previous.has(id) || logged.has(id)) continue;
+    const text = before.items.find((item) => item.id === id)?.text ?? "";
+    kept.push({
+      id,
+      drainedAt: now,
+      preview: text.replace(/\s+/g, " ").trim().slice(0, DRAINED_PREVIEW_CHARS),
+    });
+  }
+  return kept.length ? kept.slice(-MAX_REMEMBERED_DRAINED_IDS) : undefined;
 }
 
 /**
@@ -260,15 +289,17 @@ export class AgentQueueStore {
     if (next === current) {
       return { queue: current, changed: false };
     }
+    const recordedAt = new Date().toISOString();
     const updated = StoredAgentQueueSchema.parse({
       ...next,
       agentId,
       revision: current.revision + 1,
+      drainedLog: reconcileDrainedLog(current, next, recordedAt),
     });
     // Record the recoverable state before replacing the queue file. If the
     // journal cannot be written, leave the existing queue untouched.
     await this.appendJournal({
-      recordedAt: new Date().toISOString(),
+      recordedAt,
       before: current,
       after: updated,
     });

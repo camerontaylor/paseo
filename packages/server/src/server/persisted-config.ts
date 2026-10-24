@@ -345,6 +345,10 @@ export const PersistedConfigSchema = z
         dictation: FeatureDictationSchema.optional(),
         voiceMode: FeatureVoiceModeSchema.optional(),
         webUi: FeatureWebUiSchema.optional(),
+        sessionSearch: z
+          .object({ provider: z.literal("openai"), model: z.string().trim().min(1) })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

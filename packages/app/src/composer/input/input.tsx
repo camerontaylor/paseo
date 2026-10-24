@@ -25,6 +25,7 @@ import {
 } from "react";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
+import { i18n } from "@/i18n/i18next";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { ArrowUp, Mic, MicOff, CornerDownLeft, Plus, Square } from "lucide-react-native";
 import { useDictation } from "@/hooks/use-dictation";
@@ -62,6 +63,7 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
 import { RenderProfile } from "@/utils/render-profiler";
 import { useComposerHeight } from "./height";
+import { ComposerKeyboardDismissButton } from "./keyboard-dismiss-button";
 import { ComposerInputPresentation } from "./presentation";
 import { resolveComposerInputMode, type ComposerInputMode } from "@/composer/input-mode";
 import type { NativePastedFile } from "@/composer/native-pasted-image";
@@ -83,6 +85,7 @@ import {
 import {
   applyDictationTranscript,
   computeCanStartDictation,
+  queueInputMessage,
   resolveComposerSurfacePresentation,
   resolveComposerSurfaceText,
   resolveRetainedSelection,
@@ -169,7 +172,9 @@ export interface MessageInputProps {
    *  lives only in DEFAULT_CLIENT_SETTINGS. */
   defaultSendBehavior: "interrupt" | "steer" | "queue";
   /** Callback for queue button when agent is running */
-  onQueue?: (payload: MessagePayload) => void;
+  onQueue?: (payload: MessagePayload) => void | Promise<void>;
+  /** Surfaces a queue failure once through rendered app UI. */
+  onQueueError?: (message: string) => void;
   /** Optional handler used when submit button is in loading state. */
   onSubmitLoadingPress?: () => void;
   /** Intercept key press events before default handling. Return true to prevent default. */
@@ -403,7 +408,7 @@ interface DesktopKeyPressContext {
   input: ComposerKeyPressEvent["input"];
   submitOnEnter: boolean;
   isAgentRunning: boolean;
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => void | Promise<void>) | undefined;
   isSubmitDisabled: boolean;
   isSubmitLoading: boolean;
   disabled: boolean;
@@ -561,10 +566,22 @@ function MessageInputOverlay({
   voice:
     | {
         isMuted: boolean;
+        voiceCommandsEnabled?: boolean;
+        realtime?: import("@getpaseo/protocol/messages").RealtimeVoiceState;
+        isCaptureInterrupted: boolean;
         isVoiceSwitching: boolean;
         failure: import("@/voice/voice-failure").VoiceFailureKind | null;
         lastInputStatus: import("@/voice/voice-runtime").VoiceInputStatus | null;
         toggleMute: () => void;
+        controlRealtime: (
+          action:
+            | "listen"
+            | "end_listening"
+            | "clear"
+            | "retry"
+            | "focus_agent"
+            | "back_to_assistant",
+        ) => Promise<void>;
       }
     | null
     | undefined;
@@ -605,6 +622,10 @@ function MessageInputOverlay({
     return (
       <RealtimeVoiceOverlay
         isMuted={voice.isMuted}
+        voiceCommandsEnabled={voice.voiceCommandsEnabled}
+        realtime={voice.realtime}
+        onRealtimeControl={voice.controlRealtime}
+        isCaptureInterrupted={voice.isCaptureInterrupted}
         isSwitching={voice.isVoiceSwitching}
         failure={voice.failure}
         lastInputStatus={voice.lastInputStatus}
@@ -994,10 +1015,14 @@ interface QueueMessageContext {
   value: string;
   attachments: ComposerAttachment[];
   cwd: string;
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => void | Promise<void>) | undefined;
   replaceText: (text: string) => void;
   onMinimizeHeight: () => void;
   exitFullscreen: () => void;
+  /** The live input text, so the clear never drops text typed during the queue. */
+  getLiveText: () => string;
+  /** Surfaces a queue failure once; the input text stays. */
+  onQueueError?: (message: string) => void;
 }
 
 function queueMessageImpl(ctx: QueueMessageContext): void {
@@ -1005,9 +1030,23 @@ function queueMessageImpl(ctx: QueueMessageContext): void {
   const trimmed = ctx.value.trim();
   if (!trimmed && ctx.attachments.length === 0) return;
   ctx.exitFullscreen();
-  ctx.onQueue({ text: trimmed, attachments: ctx.attachments, cwd: ctx.cwd });
-  ctx.replaceText("");
-  ctx.onMinimizeHeight();
+  void queueInputMessage({ text: trimmed, attachments: ctx.attachments, cwd: ctx.cwd }, ctx.onQueue)
+    .then(() => {
+      if (ctx.getLiveText() === ctx.value) {
+        ctx.replaceText("");
+        ctx.onMinimizeHeight();
+      } else if (ctx.getLiveText().length === 0) {
+        ctx.onMinimizeHeight();
+      }
+      return undefined;
+    })
+    .catch((error: unknown) => {
+      ctx.onQueueError?.(
+        error instanceof Error && error.message
+          ? error.message
+          : i18n.t("composer.errors.queuedPersistFailed"),
+      );
+    });
 }
 
 function computeIsRealtimeVoiceForAgent(
@@ -1127,7 +1166,8 @@ interface ResolvedMessageInputProps {
   isCancellingAgent: boolean | undefined;
   onCancelAgent: (() => void) | undefined;
   defaultSendBehavior: "interrupt" | "steer" | "queue";
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => void | Promise<void>) | undefined;
+  onQueueError: ((message: string) => void) | undefined;
   onSubmitLoadingPress: (() => void) | undefined;
   onKeyPressCallback: ((event: ComposerKeyPressEvent) => boolean) | undefined;
   onSelectionChangeCallback: ((selection: { start: number; end: number }) => void) | undefined;
@@ -1178,6 +1218,7 @@ function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInpu
     onCancelAgent: props.onCancelAgent,
     defaultSendBehavior: props.defaultSendBehavior,
     onQueue: props.onQueue,
+    onQueueError: props.onQueueError,
     onSubmitLoadingPress: props.onSubmitLoadingPress,
     onKeyPressCallback: props.onKeyPress,
     onSelectionChangeCallback: props.onSelectionChange,
@@ -1258,6 +1299,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       onCancelAgent,
       defaultSendBehavior,
       onQueue,
+      onQueueError,
       onSubmitLoadingPress,
       onKeyPressCallback,
       onSelectionChangeCallback,
@@ -1482,12 +1524,23 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           onQueue,
           onSubmit,
           replaceText,
+          getLiveText: () => textInputRef.current?.getText() ?? valueRef.current,
+          onQueueError,
           attachments,
           cwd,
           autoSend,
         });
       },
-      [replaceText, onSubmit, onQueue, attachments, cwd, isAgentRunning, defaultSendBehavior],
+      [
+        replaceText,
+        onSubmit,
+        onQueue,
+        onQueueError,
+        attachments,
+        cwd,
+        isAgentRunning,
+        defaultSendBehavior,
+      ],
     );
 
     const handleDictationError = useCallback(
@@ -1705,8 +1758,10 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           replaceText,
           onMinimizeHeight: minimizeInputHeight,
           exitFullscreen,
+          getLiveText: () => textInputRef.current?.getText() ?? valueRef.current,
+          onQueueError,
         }),
-      [attachments, cwd, onQueue, replaceText, minimizeInputHeight, exitFullscreen],
+      [attachments, cwd, onQueue, onQueueError, replaceText, minimizeInputHeight, exitFullscreen],
     );
 
     const handleDefaultSendAction = useCallback(() => {
@@ -2089,6 +2144,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
               attachmentMenuItems={attachmentMenuItems}
               addAttachmentLabel={t("composer.input.addAttachment")}
             />
+            <ComposerKeyboardDismissButton />
             {leftContent}
           </View>
 

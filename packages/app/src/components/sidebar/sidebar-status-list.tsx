@@ -66,6 +66,7 @@ import { selectWorkspaceServiceSummary } from "@/components/sidebar/workspace-me
 import {
   SidebarWorkspaceTrailingContent,
   useSidebarWorkspaceTrailing,
+  workspaceLastActiveAt,
   type SidebarWorkspaceTrailing,
 } from "@/components/sidebar/workspace-trailing";
 import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
@@ -124,6 +125,8 @@ interface StatusWorkspaceListProps {
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
   onPinnedWorkspaceReorder: (workspaces: SidebarWorkspaceEntry[]) => void;
   listHeaderComponent?: ReactNode;
+  listFooterComponent?: ReactNode;
+  hasActiveSearchFilter?: boolean;
   /** Swaps the group list for the label filter's empty state. Never the header above it. */
   sidebarFilterEmpty?: boolean;
   parentGestureRef?: MutableRefObject<GestureType | undefined>;
@@ -142,6 +145,8 @@ export function SidebarStatusWorkspaceList({
   onToggleWorkspacePin,
   onPinnedWorkspaceReorder,
   listHeaderComponent,
+  listFooterComponent,
+  hasActiveSearchFilter = false,
   sidebarFilterEmpty = false,
   parentGestureRef,
   dragGestureHostActive,
@@ -235,7 +240,7 @@ export function SidebarStatusWorkspaceList({
         </View>
       ) : null}
       {listHeaderComponent}
-      {sidebarFilterEmpty ? (
+      {sidebarFilterEmpty && !hasActiveSearchFilter ? (
         <SidebarFilterEmptyState />
       ) : (
         <StatusGroupList
@@ -250,6 +255,7 @@ export function SidebarStatusWorkspaceList({
           onToggleWorkspacePin={onToggleWorkspacePin}
         />
       )}
+      {listFooterComponent}
     </>
   );
 
@@ -1012,6 +1018,7 @@ function StatusWorkspaceActionSlot({
             archiveShortcutKeys={archiveShortcutKeys}
             isPinned={isPinned}
             onTogglePin={onTogglePin}
+            lastActiveAt={workspaceLastActiveAt(workspace)}
           />
         ) : null}
       </SidebarWorkspaceTrailingActionOverlay>

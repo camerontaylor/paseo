@@ -1,3 +1,6 @@
+import { MessagePinItem } from "@/companion-stream/message-pin-control";
+import type { MessagePinHandler } from "@/companion-stream/message-pin-operations";
+import { useMessagePin } from "@/companion-stream/use-message-pin";
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -44,7 +47,10 @@ import {
 } from "@/components/message";
 import { PlanCard } from "@/components/plan-card";
 import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
-import type { StreamItem } from "@/types/stream";
+import { isUnreconciledLocalUserMessage, type StreamItem } from "@/types/stream";
+import { resolveChatMessageDeliveryState } from "@/composer/delivery-state";
+import { promptDirectSendAttention } from "@/composer/delivery-actions";
+import { useQueueOutboxStore } from "@/stores/queue-outbox-store";
 import type { PendingMessageSubmission } from "@/composer/submission/model";
 import type { TurnPresentation } from "@/timeline/turn-liveness";
 import type { PendingPermission } from "@/types/shared";
@@ -92,6 +98,7 @@ import {
   type BottomAnchorRouteRequest,
 } from "./bottom-anchor-controller";
 import { createAssistantImageOccurrenceKey } from "@/assistant-image/acquisition-cache";
+import { findThreadAnchorMessageId } from "@/threads/model";
 import { AssistantSelectionCopySurface } from "@/assistant-selection-copy/surface";
 import { AssistantFileLinkResolverProvider, createInlinePathOpener } from "@/assistant-file-links";
 import {
@@ -190,7 +197,8 @@ function renderStreamItemWithTurnFooter(input: {
   strategy: TurnContentStrategy;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
-  onPin?: (text: string) => void;
+  onPin?: MessagePinHandler;
+  onReplyInThread?: (anchor: string) => void;
 }): ReactNode {
   if (!input.content) {
     return null;
@@ -206,6 +214,7 @@ function renderStreamItemWithTurnFooter(input: {
       supportsTimelineCursor={input.supportsTimelineCursor}
       onForkAssistantTurn={input.onForkAssistantTurn}
       onPin={input.onPin}
+      onReplyInThread={input.onReplyInThread}
     />
   ) : null;
   const content = (
@@ -289,7 +298,9 @@ function renderStreamRow(input: {
 }
 
 export interface AgentStreamViewHandle {
+  jumpToSource(seq: number, epoch: string): void;
   scrollToBottom(reason?: BottomAnchorLocalRequest["reason"]): void;
+  scrollToAnchor(anchor: string): boolean;
   prepareForViewportChange(): void;
 }
 
@@ -311,6 +322,7 @@ export interface AgentStreamViewProps {
   toast?: ToastApi | null;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   readOnly?: boolean;
+  onReplyInThread?: (anchor: string) => void;
   historyPagination?: {
     hasOlder: boolean;
     isLoadingOlder: boolean;
@@ -365,6 +377,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       readOnly = false,
+      onReplyInThread,
       historyPagination,
     },
     ref,
@@ -377,6 +390,16 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const viewportRef = useRef<StreamViewportHandle | null>(null);
     const pendingClientMessageIds = useMemo(
       () => new Set(pendingMessageSubmissions.map((submission) => submission.clientMessageId)),
+      [pendingMessageSubmissions],
+    );
+    const submissionsByClientMessageId = useMemo(
+      () =>
+        new Map(
+          pendingMessageSubmissions.map((submission) => [
+            submission.clientMessageId,
+            { rpcSettled: submission.rpcSettled === true },
+          ]),
+        ),
       [pendingMessageSubmissions],
     );
     const isMobile = useIsCompactFormFactor();
@@ -403,6 +426,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const transformTimelineItem = useInstalledTimelineTransform(resolvedServerId);
 
     const client = useSessionStore((state) => state.sessions[resolvedServerId]?.client ?? null);
+    const directEntries = useQueueOutboxStore((state) => state.directEntries);
     const sessionStreamHead = useSessionStore((state) =>
       state.sessions[resolvedServerId]?.agentStreamHead?.get(agentId),
     );
@@ -668,14 +692,37 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     useImperativeHandle(
       ref,
       () => ({
+        jumpToSource(seq, epoch) {
+          if (timelineEpoch !== epoch) {
+            handleTimelineHistoryLoadError();
+            return;
+          }
+          chatOutline.jumpToPrompt(seq);
+        },
         scrollToBottom(reason = "jump-to-bottom") {
           viewportRef.current?.scrollToBottom(reason);
+        },
+        scrollToAnchor(anchor: string) {
+          const messageId = findThreadAnchorMessageId(
+            [...effectiveStreamItems, ...(effectiveStreamHead ?? [])],
+            anchor,
+          );
+          const scrollToMessage = viewportRef.current?.scrollToMessage;
+          if (!messageId || !scrollToMessage) return false;
+          scrollToMessage(messageId);
+          return true;
         },
         prepareForViewportChange() {
           viewportRef.current?.prepareForViewportChange();
         },
       }),
-      [],
+      [
+        chatOutline,
+        effectiveStreamHead,
+        effectiveStreamItems,
+        handleTimelineHistoryLoadError,
+        timelineEpoch,
+      ],
     );
 
     const scrollToBottom = useCallback(() => {
@@ -723,15 +770,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       });
     }, []);
 
-    const handlePin = useCallback(
-      (text: string) => {
-        if (!agentId || !client) return;
-        client
-          .updateCompanionEntry({ agentId, action: "add_pin", text })
-          .catch(() => toast?.error(t("agentPanel.stream.mutationFailed")));
-      },
-      [agentId, client, t, toast],
-    );
+    const handlePin = useMessagePin(resolvedServerId, agentId, client, readOnly);
 
     const handleQAndA = useCallback(
       (text: string, messageId?: string) => {
@@ -746,6 +785,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           .catch(() => toast?.error(t("agentPanel.stream.mutationFailed")));
       },
       [agentId, client, t, toast],
+    );
+
+    const handleDeliveryAttention = useCallback(
+      (id: string) => {
+        const entry = useQueueOutboxStore.getState().directEntries[id];
+        if (entry) void promptDirectSendAttention({ entry, client });
+      },
+      [client],
     );
 
     const renderUserMessageItem = useCallback(
@@ -769,6 +816,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               item.clientMessageId !== undefined &&
               pendingClientMessageIds.has(item.clientMessageId)
             }
+            deliveryState={resolveChatMessageDeliveryState({
+              isCanonical: !isUnreconciledLocalUserMessage(item),
+              submission: item.clientMessageId
+                ? submissionsByClientMessageId.get(item.clientMessageId)
+                : undefined,
+              outboxEntry: item.clientMessageId ? directEntries[item.clientMessageId] : undefined,
+            })}
+            clientMessageId={item.clientMessageId}
+            onDeliveryAttentionPress={handleDeliveryAttention}
           />
         );
       },
@@ -779,6 +835,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         handlePin,
         handleQAndA,
         pendingClientMessageIds,
+        submissionsByClientMessageId,
+        directEntries,
+        handleDeliveryAttention,
         resolvedServerId,
       ],
     );
@@ -795,23 +854,29 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           >
             <ChatFindExpansion messageId={getStreamItemMessageId(item)}>
               {(renderFullContent) => (
-                <AssistantMessage
-                  renderFullContent={renderFullContent}
-                  occurrenceKey={createAssistantImageOccurrenceKey({ agentId, itemId: item.id })}
-                  message={item.text}
-                  timestamp={item.timestamp.getTime()}
-                  workspaceRoot={workspaceRoot}
-                  serverId={resolvedServerId}
-                  client={client}
-                  spacing={layoutItem.assistantSpacing}
-                  phase={layoutItem.phase}
-                />
+                <MessagePinItem
+                  text={item.text}
+                  onPin={handlePin}
+                  sourceId={`msg:${getStreamItemMessageId(item)}`}
+                >
+                  <AssistantMessage
+                    renderFullContent={renderFullContent}
+                    occurrenceKey={createAssistantImageOccurrenceKey({ agentId, itemId: item.id })}
+                    message={item.text}
+                    timestamp={item.timestamp.getTime()}
+                    workspaceRoot={workspaceRoot}
+                    serverId={resolvedServerId}
+                    client={client}
+                    spacing={layoutItem.assistantSpacing}
+                    phase={layoutItem.phase}
+                  />
+                </MessagePinItem>
               )}
             </ChatFindExpansion>
           </AssistantFileLinkResolverProvider>
         );
       },
-      [agentId, client, handleInlinePathPress, resolvedServerId, toast, workspaceRoot],
+      [agentId, client, handleInlinePathPress, handlePin, resolvedServerId, toast, workspaceRoot],
     );
 
     const renderThoughtItem = useCallback(
@@ -994,11 +1059,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
           onPin: handlePin,
+          onReplyInThread: onReplyInThread,
         });
       },
       [
         handleForkAssistantTurn,
         handlePin,
+        onReplyInThread,
         readOnly,
         renderStreamItemContent,
         streamRenderStrategy,
@@ -1032,12 +1099,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             onForkAssistantTurn={readOnly ? undefined : handleForkAssistantTurn}
             onForkInFlightTurn={readOnly ? undefined : handleForkInFlightTurn}
             onPin={handlePin}
+            onReplyInThread={onReplyInThread}
           />
         ) : null,
       [
         handleForkAssistantTurn,
         handleForkInFlightTurn,
         handlePin,
+        onReplyInThread,
         readOnly,
         isTurnActive,
         baseRenderModel.turnTiming.runningStartedAt,

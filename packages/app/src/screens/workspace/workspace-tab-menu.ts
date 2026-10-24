@@ -58,7 +58,9 @@ export type WorkspaceTabMenuEntry =
         | "message-circle-plus"
         | "file-code-2"
         | "x"
-        | "search";
+        | "search"
+        | "circle"
+        | "layout-panel-left";
       hint?: string;
       tooltip?: string;
       disabled?: boolean;
@@ -77,11 +79,11 @@ interface BuildWorkspaceTabMenuEntriesInput {
   index: number;
   tabCount: number;
   menuTestIDBase: string;
-  onCopyResumeCommand: (agentId: string) => Promise<void> | void;
+  onCopyResumeCommand: (agentId: string, tab?: WorkspaceTabDescriptor) => Promise<void> | void;
   onCopyAgentId: (agentId: string) => Promise<void> | void;
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
-  onReloadAgent: (agentId: string) => Promise<void> | void;
+  onReloadAgent: (agentId: string, tab?: WorkspaceTabDescriptor) => Promise<void> | void;
   /**
    * Absent when the host has no side conversations. The entry is dropped rather than disabled —
    * a greyed row with nothing to explain it is worse than one that was never offered.
@@ -101,11 +103,11 @@ interface BuildWorkspaceDesktopTabActionsInput {
   tab: WorkspaceTabDescriptor;
   index: number;
   tabCount: number;
-  onCopyResumeCommand: (agentId: string) => Promise<void> | void;
+  onCopyResumeCommand: (agentId: string, tab?: WorkspaceTabDescriptor) => Promise<void> | void;
   onCopyAgentId: (agentId: string) => Promise<void> | void;
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
-  onReloadAgent: (agentId: string) => Promise<void> | void;
+  onReloadAgent: (agentId: string, tab?: WorkspaceTabDescriptor) => Promise<void> | void;
   onStartSideConversation?: (agentId: string, options: { parentTabId: string }) => void;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
@@ -272,7 +274,7 @@ export function buildWorkspaceTabMenuEntries(
       icon: "copy",
       testID: `${menuTestIDBase}-copy-resume-command`,
       onSelect: () => {
-        void onCopyResumeCommand(agentId);
+        void onCopyResumeCommand(agentId, tab);
       },
     });
     entries.push({
@@ -377,7 +379,7 @@ export function buildWorkspaceTabMenuEntries(
       tooltip: labels.reloadAgentTooltip,
       testID: `${menuTestIDBase}-reload-agent`,
       onSelect: () => {
-        void onReloadAgent(agentId);
+        void onReloadAgent(agentId, tab);
       },
     });
   }

@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { WorkspaceLayoutStorageSchema } from "@/stores/workspace-layout-storage";
 import {
   refreshSideConversations,
   sideConversationKey,
   sideConversationTitle,
+  mergeSideConversationOrigins,
+  mergeSideConversationSendBacks,
   useSideConversationStore,
   type SideConversationRecord,
 } from "./store";
@@ -35,7 +38,39 @@ function threadIds(serverId: string, parentAgentId: string): string[] {
 }
 
 describe("side conversation store", () => {
-  beforeEach(() => useSideConversationStore.setState({ records: new Map() }));
+  it("accepts persisted side-conversation tab targets", () => {
+    const parsed = WorkspaceLayoutStorageSchema.safeParse({
+      root: {
+        kind: "pane",
+        pane: {
+          id: "pane-a",
+          tabIds: ["tab-a"],
+          focusedTabId: "tab-a",
+          tabs: [
+            {
+              tabId: "tab-a",
+              target: {
+                kind: "side_conversation",
+                parentAgentId: "parent-a",
+                threadId: "thread-a",
+              },
+              createdAt: 1,
+            },
+          ],
+        },
+      },
+      focusedPaneId: "pane-a",
+    });
+    expect(parsed.success).toBe(true);
+  });
+  beforeEach(() =>
+    useSideConversationStore.setState({
+      records: new Map(),
+      originsHydrated: true,
+      origins: {},
+      sendBacks: {},
+    }),
+  );
 
   it("isolates snapshots by server, parent, and thread", () => {
     const snapshot = {
@@ -162,6 +197,89 @@ describe("side conversation store", () => {
         .getState()
         .records.get(sideConversationKey("server-a", "parent", "thread-1"))?.items,
     ).toEqual([{ type: "user_message", text: "Now asked" }]);
+  });
+
+  it("retains source origin metadata and one send-back identity independently of the ephemeral timeline", () => {
+    const store = useSideConversationStore.getState();
+    store.setOrigin("server-a", "parent", "thread-1", {
+      parentAgentId: "parent",
+      anchor: "message-7",
+    });
+
+    expect(
+      useSideConversationStore.getState().origins[
+        sideConversationKey("server-a", "parent", "thread-1")
+      ],
+    ).toEqual({ parentAgentId: "parent", anchor: "message-7" });
+
+    const itemId = store.prepareSendBack("server-a", "parent", "thread-1", "answer", "item-1");
+    store.updateSendBackStatus("server-a", "parent", "thread-1", itemId, "failed");
+    expect(
+      useSideConversationStore
+        .getState()
+        .prepareSendBack("server-a", "parent", "thread-1", "answer", "item-2"),
+    ).toBe("item-1");
+    store.updateSendBackStatus("server-a", "parent", "thread-1", itemId, "queued");
+    expect(
+      useSideConversationStore.getState().sendBacks[
+        sideConversationKey("server-a", "parent", "thread-1")
+      ],
+    ).toEqual({ answer: "answer", itemId: "item-1", status: "queued" });
+    store.remove("server-a", "parent", "thread-1");
+    expect(
+      useSideConversationStore.getState().sendBacks[
+        sideConversationKey("server-a", "parent", "thread-1")
+      ],
+    ).toBeUndefined();
+    expect(
+      useSideConversationStore.getState().origins[
+        sideConversationKey("server-a", "parent", "thread-1")
+      ],
+    ).toBeUndefined();
+  });
+
+  it("keeps origin writes made before hydration and honors pre-hydration removals", () => {
+    const oldKey = sideConversationKey("server-a", "parent", "old");
+    const newKey = sideConversationKey("server-a", "parent", "new");
+    const hydrated = mergeSideConversationOrigins(
+      {
+        origins: {
+          [oldKey]: { parentAgentId: "parent", anchor: "message-old" },
+          [newKey]: { parentAgentId: "parent", anchor: "stale" },
+        },
+        sendBacks: {
+          [oldKey]: { answer: "stale", itemId: "old-item", status: "queued" },
+        },
+      },
+      { [newKey]: { parentAgentId: "parent", anchor: "message-new" } },
+      [oldKey],
+    );
+
+    expect(hydrated).toEqual({
+      [newKey]: { parentAgentId: "parent", anchor: "message-new" },
+    });
+    expect(
+      mergeSideConversationSendBacks(
+        {
+          origins: {},
+          sendBacks: {
+            [oldKey]: { answer: "stale", itemId: "old-item", status: "queued" },
+            [newKey]: { answer: "old answer", itemId: "old-sendback", status: "pending" },
+          },
+        },
+        { [newKey]: { answer: "new answer", itemId: "new-sendback", status: "pending" } },
+        [oldKey],
+      ),
+    ).toEqual({
+      [newKey]: { answer: "new answer", itemId: "new-sendback", status: "pending" },
+    });
+    expect(
+      mergeSideConversationOrigins(
+        { origins: { [oldKey]: { parentAgentId: "parent", anchor: "message-old" } } },
+        {},
+        [],
+      ),
+    ).toEqual({ [oldKey]: { parentAgentId: "parent", anchor: "message-old" } });
   });
 
   it("hydrates a parent from one list request and shares an in-flight one", async () => {

@@ -7,6 +7,7 @@ import {
   AgentQueueMutationRequestSchema,
   AgentQueueUpdateMessageSchema,
   SendAgentMessageRequestSchema,
+  SendAgentMessageResponseMessageSchema,
   ServerInfoStatusPayloadSchema,
   SessionEventSubscriptionSchema,
   SessionEventsSetSubscriptionRequestSchema,
@@ -24,6 +25,20 @@ const ReleasedSendRequestSchema = z.object({
   agentId: z.string(),
   text: z.string(),
   messageId: z.string().optional(),
+});
+
+/**
+ * A released client's view of the send response. It knows nothing about the
+ * queued flag: a new daemon's response must still parse for it.
+ */
+const ReleasedSendResponseSchema = z.object({
+  type: z.literal("send_agent_message_response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+  }),
 });
 
 describe("durable agent queue wire contract", () => {
@@ -49,6 +64,35 @@ describe("durable agent queue wire contract", () => {
         text: "follow-up",
       }),
     ).toThrow();
+  });
+
+  it("keeps route destination fields optional and advertises an independent guard capability", () => {
+    const bare = AgentQueueEnqueueRequestSchema.parse({
+      type: "agent.queue.enqueue.request",
+      requestId: "req-1",
+      agentId: "agent-1",
+      itemId: "item-1",
+      text: "hello",
+      intent: "queue",
+    });
+    expect(bare.expectedWorkspaceId).toBeUndefined();
+    const routed = AgentQueueEnqueueRequestSchema.parse({
+      ...bare,
+      expectedWorkspaceId: "workspace-a",
+      expectedProjectId: "project-a",
+    });
+    expect(routed).toMatchObject({
+      expectedWorkspaceId: "workspace-a",
+      expectedProjectId: "project-a",
+    });
+    expect(
+      ServerInfoStatusPayloadSchema.parse({
+        status: "server_info",
+        protocolVersion: 1,
+        serverId: "server-1",
+        features: { routedQueueAdmission: true },
+      }).features?.routedQueueAdmission,
+    ).toBe(true);
   });
 
   it("registers every queue RPC on the session unions", () => {
@@ -161,6 +205,32 @@ describe("mixed-version send compatibility", () => {
     const legacyView = ReleasedSendRequestSchema.parse(parsed);
     expect("activeTurnBehavior" in legacyView).toBe(false);
     expect(Object.keys(legacyView)).not.toContain("intent");
+  });
+
+  it("a queued response parses for a released client and the current schema carries the flag", () => {
+    const newDaemonResponse = SendAgentMessageResponseMessageSchema.parse({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: "req-1",
+        agentId: "agent-1",
+        accepted: true,
+        error: null,
+        queued: true,
+      },
+    });
+    expect(newDaemonResponse.payload.queued).toBe(true);
+
+    const legacyView = ReleasedSendResponseSchema.parse({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: "req-1",
+        agentId: "agent-1",
+        accepted: true,
+        error: null,
+        queued: true,
+      },
+    });
+    expect("queued" in legacyView.payload).toBe(false);
   });
 
   it("gates the queue on an optional feature flag an old daemon never sets", () => {

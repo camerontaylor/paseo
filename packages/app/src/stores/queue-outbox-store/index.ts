@@ -7,10 +7,26 @@ import type { AgentQueueSnapshot } from "@getpaseo/protocol/messages";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import {
   flushQueueOutbox,
+  serializeQueueOperation,
   PendingQueueEnqueueSchema,
   type PendingQueueEnqueue,
   type QueueOutboxFlushClient,
 } from "./model";
+import {
+  flushSendOutbox,
+  PendingDirectSendSchema,
+  type PendingDirectSend,
+  type SendOutboxFlushClient,
+} from "./direct-model";
+
+export {
+  SEND_OUTBOX_MAX_ATTEMPTS,
+  isDefinitiveSendFailure,
+  isUncertainSendOutcome,
+  canEditRefusedSend,
+  supportsDurableDirectSend,
+  type PendingDirectSend,
+} from "./direct-model";
 
 export {
   QUEUE_OUTBOX_MAX_ATTEMPTS,
@@ -18,48 +34,301 @@ export {
   type QueueOutboxFlushClient,
 } from "./model";
 
+const RoutingReceiptSchema = z.object({
+  itemId: z.string(),
+  serverId: z.string(),
+  agentId: z.string(),
+  workspaceId: z.string(),
+  projectId: z.string(),
+  text: z.string(),
+  draftVersion: z.number().int().nonnegative(),
+  draftUpdatedAt: z.number(),
+  acceptedAt: z.number(),
+});
+export type RoutingReceipt = z.infer<typeof RoutingReceiptSchema>;
+
 const PersistedQueueOutboxSchema = z.object({
   entries: z.record(z.string(), PendingQueueEnqueueSchema),
+  routingReceipt: RoutingReceiptSchema.nullable().optional(),
+  directEntries: z.record(z.string(), PendingDirectSendSchema).optional(),
+  durableHosts: z.record(z.string(), z.literal(true)).optional(),
 });
 
-type PersistedQueueOutbox = z.infer<typeof PersistedQueueOutboxSchema>;
-
-interface QueueOutboxActions {
-  add: (entry: Omit<PendingQueueEnqueue, "createdAt" | "attempts">) => void;
-  remove: (itemId: string) => void;
-  bumpAttempts: (itemId: string) => void;
-  /** Parks an exhausted entry in the visible failed state. */
-  markFailed: (itemId: string) => void;
-  /** Explicit retry: clears the failed state and the attempt streak. */
-  retryEntry: (itemId: string) => void;
-  entriesForServer: (serverId: string) => PendingQueueEnqueue[];
-  entriesForAgent: (serverId: string, agentId: string) => PendingQueueEnqueue[];
+interface QueueOutboxState {
+  entries: Record<string, PendingQueueEnqueue>;
+  directEntries: Record<string, PendingDirectSend>;
+  durableHosts: Record<string, true>;
+  routingReceipt: RoutingReceipt | null;
+  /**
+   * The last queue-storage write failure, surfaced so the queue track can show
+   * a rendered, actionable error instead of leaving a silent persistence gap.
+   * Never persisted — it describes this process's storage health only.
+   */
+  storageError: { itemId: string | null; at: number } | null;
 }
 
-type QueueOutboxStore = PersistedQueueOutbox & QueueOutboxActions;
+interface QueueOutboxActions {
+  addDirect: (entry: Omit<PendingDirectSend, "createdAt" | "attempts">) => Promise<void>;
+  removeDirectDurably: (clientMessageId: string) => Promise<void>;
+  bumpDirectAttemptsDurably: (clientMessageId: string) => Promise<void>;
+  markDirectRejectedDurably: (clientMessageId: string, error: string) => Promise<void>;
+  clearDirectRejectionDurably: (clientMessageId: string) => Promise<void>;
+  directEntriesForServer: (serverId: string) => PendingDirectSend[];
+  rememberHostSupport: (serverId: string, supported: boolean) => Promise<void>;
+  /** Persists the entry before resolving; rolls the in-memory entry back when the write fails. */
+  add: (entry: Omit<PendingQueueEnqueue, "createdAt" | "attempts">) => Promise<void>;
+  remove: (itemId: string) => void;
+  removeDurably: (itemId: string, preserveRemovalIntent?: boolean) => Promise<void>;
+  /**
+   * The user-facing discard: rechecks the tombstone INSIDE the serialized
+   * mutation, so a cancellation requested while a confirmation dialog was
+   * open is refused instead of silently dropped.
+   */
+  discardQueuedEntryDurably: (itemId: string) => Promise<void>;
+  bumpAttempts: (itemId: string) => void;
+  /** The pre-send attempt reservation: resolving means the increment is persisted. */
+  bumpAttemptsDurably: (itemId: string) => Promise<void>;
+  markFailed: (itemId: string) => void;
+  markFailedDurably: (itemId: string) => Promise<void>;
+  retryEntry: (itemId: string) => void;
+  /** The explicit retry reset; the park fence clears only once the reset persists. */
+  retryEntryDurably: (itemId: string) => Promise<void>;
+  /**
+   * Durable cancellation intent for a queued row. Fenced for the whole write
+   * (no dispatch can escape); the volatile park fence lifts only after the
+   * tombstone persists, and a failed write restores the prior park.
+   */
+  requestRemoval: (entry: PendingQueueEnqueue) => Promise<void>;
+  markRemovalFailedDurably: (itemId: string) => Promise<void>;
+  reportStorageError: (itemId: string | null) => void;
+  clearStorageError: () => void;
+  entriesForServer: (serverId: string) => PendingQueueEnqueue[];
+  entriesForAgent: (serverId: string, agentId: string) => PendingQueueEnqueue[];
+  acknowledgeRoutingEntry: (entry: PendingQueueEnqueue) => Promise<void>;
+}
+
+type QueueOutboxStore = QueueOutboxState & QueueOutboxActions;
 
 function sortByCreation(entries: PendingQueueEnqueue[]): PendingQueueEnqueue[] {
   return entries.sort((a, b) => a.createdAt - b.createdAt);
 }
 
+const writesInFlight = new Set<string>();
+const directWritesInFlight = new Set<string>();
+/**
+ * Waiters held while hydration is in flight. Zustand's persist reports a
+ * failed READ through `onRehydrateStorage` without firing the finish
+ * listeners, so without this list a rejected read would leave every gated
+ * operation pending forever.
+ */
+const hydrationWaiters: Array<(failure: Error) => void> = [];
+let hydrationFailure: Error | undefined;
+function failHydrationWaiters(): void {
+  hydrationFailure = new Error("Unable to load saved queued messages");
+  for (const notify of hydrationWaiters.splice(0)) notify(hydrationFailure);
+}
+/**
+ * In-process fence for entries whose park write failed: failedAt stays in
+ * memory and the volatile fence keeps them out of every flush listing even
+ * though storage never recorded the park. Cleared only when the park or an
+ * explicit retry reset persists.
+ */
+const parkedVolatile = new Set<string>();
+let pendingWrite: Promise<void> = Promise.resolve();
+/**
+ * The validated storage seam under the write chain. Failures injected here (in
+ * tests) flow through the chain and surface to the awaiting mutation, never to
+ * zustand's fire-and-forget reference.
+ */
+export const outboxPersistedStorage = createValidatedPersistStorage(
+  AsyncStorage,
+  PersistedQueueOutboxSchema,
+);
+const durableStorage: typeof outboxPersistedStorage = {
+  ...outboxPersistedStorage,
+  setItem: (name, value) => {
+    if (!useQueueOutboxStore.persist.hasHydrated()) {
+      // Before hydration the in-memory entries do not describe the saved
+      // outbox — persisting them could replace saved payloads with an empty
+      // set. Real mutations and the probe await hydration first, so this
+      // guard only skips incidental writes (storage-error flags during a
+      // failed read) that must never erase unknown entries.
+      return Promise.resolve();
+    }
+    // Each write chains behind the previous one but resolves on its own: the
+    // caller's promise carries only its own write's outcome, and a rejection
+    // never poisons the chain for the writes queued behind it. The void catch
+    // keeps zustand's fire-and-forget setItem reference from becoming an
+    // unhandled rejection — awaiters decide how failures surface.
+    const write = pendingWrite
+      .catch(() => {})
+      .then(async () => {
+        await outboxPersistedStorage.setItem(name, value);
+        return undefined;
+      });
+    pendingWrite = write;
+    void write.catch(() => {});
+    return write;
+  },
+};
+
+/**
+ * Holds every mutation and flush until the persisted entries are in memory.
+ * Waiting on `onFinishHydration` (instead of calling `rehydrate()` again)
+ * matters: a second rehydrate bumps zustand's hydration version and silently
+ * aborts the run in flight. A read that never completes keeps the gate closed —
+ * no mutation or send may run against an unknown durable state.
+ */
+export function awaitOutboxHydration(): Promise<void> {
+  const persistApi = useQueueOutboxStore.persist;
+  if (persistApi.hasHydrated()) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    if (hydrationFailure) {
+      // A failed read is recoverable: re-attempt hydration for this caller.
+      hydrationFailure = undefined;
+      void persistApi.rehydrate();
+    }
+    let unsubscribe: () => void = () => {};
+    const waiter = (failure: Error) => {
+      unsubscribe();
+      reject(failure);
+    };
+    hydrationWaiters.push(waiter);
+    unsubscribe = persistApi.onFinishHydration(() => {
+      unsubscribe();
+      const index = hydrationWaiters.indexOf(waiter);
+      if (index !== -1) hydrationWaiters.splice(index, 1);
+      if (persistApi.hasHydrated()) {
+        resolve();
+      } else {
+        reject(hydrationFailure ?? new Error("Unable to load saved queued messages"));
+      }
+    });
+    // Hydration may have completed between the first check and subscribing.
+    if (persistApi.hasHydrated()) {
+      unsubscribe();
+      const index = hydrationWaiters.indexOf(waiter);
+      if (index !== -1) hydrationWaiters.splice(index, 1);
+      resolve();
+    }
+  });
+}
+
+/**
+ * Proves storage health before an automatic flush sends anything: a no-op
+ * rewrite whose payload is captured synchronously with the set(). The
+ * serialized write chain executes in set() order, so the probe can never
+ * overwrite a later mutation with an older snapshot — the final persisted
+ * state always equals the last set's value. A failed probe sends nothing.
+ */
+function probeOutboxStorage(): Promise<void> {
+  useQueueOutboxStore.setState((state) => ({ entries: { ...state.entries } }));
+  return pendingWrite;
+}
+
 /**
  * The durable outbox for daemon-owned queue writes. Entries are keyed by item
  * id (unique across servers by construction) and survive app restarts, so an
- * enqueue that never reached the daemon is retried instead of lost.
+ * enqueue that never reached the daemon is retried instead of lost. Every
+ * mutation awaits the serialized write chain: `add` rolls back when its write
+ * fails (the draft survives because the composer clears only after this
+ * resolves), removal restores the entry, and park/retry fences hold even when
+ * their writes fail.
  */
 export const useQueueOutboxStore = create<QueueOutboxStore>()(
   persist(
     (set, get) => ({
       entries: {},
+      directEntries: {},
+      durableHosts: {},
+      routingReceipt: null,
+      storageError: null,
+      addDirect: (entry) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          await awaitOutboxHydration();
+          directWritesInFlight.add(entry.clientMessageId);
+          set((state) => ({
+            directEntries: {
+              ...state.directEntries,
+              [entry.clientMessageId]: { ...entry, createdAt: Date.now(), attempts: 0 },
+            },
+          }));
+          try {
+            await pendingWrite;
+          } catch (error) {
+            set((state) => {
+              const directEntries = { ...state.directEntries };
+              delete directEntries[entry.clientMessageId];
+              return { directEntries };
+            });
+            get().reportStorageError(entry.clientMessageId);
+            throw error;
+          } finally {
+            directWritesInFlight.delete(entry.clientMessageId);
+          }
+          get().clearStorageError();
+        }),
+      removeDirectDurably: (id) => replaceDirectDurably(id, () => null),
+      bumpDirectAttemptsDurably: (id) =>
+        replaceDirectDurably(id, (entry) => ({ ...entry, attempts: entry.attempts + 1 })),
+      markDirectRejectedDurably: (id, error) =>
+        replaceDirectDurably(id, (entry) => ({ ...entry, rejectedError: error })),
+      clearDirectRejectionDurably: (id) =>
+        replaceDirectDurably(id, ({ rejectedError: _rejected, ...entry }) => ({
+          ...entry,
+          attempts: 0,
+        })),
+      directEntriesForServer: (serverId) =>
+        Object.values(get().directEntries)
+          .filter(
+            (entry) =>
+              entry.serverId === serverId && !directWritesInFlight.has(entry.clientMessageId),
+          )
+          .sort((a, b) => a.createdAt - b.createdAt),
+      rememberHostSupport: (serverId, supported) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          await awaitOutboxHydration();
+          const known = get().durableHosts[serverId] === true;
+          if (known === supported) return;
+          const previous = get().durableHosts;
+          const durableHosts = { ...previous };
+          if (supported) durableHosts[serverId] = true;
+          else delete durableHosts[serverId];
+          set({ durableHosts });
+          try {
+            await pendingWrite;
+          } catch (error) {
+            set({ durableHosts: previous });
+            throw error;
+          }
+        }),
 
-      add: (entry) => {
-        set((state) => ({
-          entries: {
-            ...state.entries,
-            [entry.itemId]: { ...entry, createdAt: Date.now(), attempts: 0 },
-          },
-        }));
-      },
+      add: async (entry) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(entry.itemId);
+            throw error;
+          }
+          writesInFlight.add(entry.itemId);
+          set((state) => ({
+            entries: {
+              ...state.entries,
+              [entry.itemId]: { ...entry, createdAt: Date.now(), attempts: 0 },
+            },
+          }));
+          try {
+            await pendingWrite;
+          } catch (error) {
+            get().remove(entry.itemId);
+            get().reportStorageError(entry.itemId);
+            throw error;
+          } finally {
+            writesInFlight.delete(entry.itemId);
+          }
+          get().clearStorageError();
+        }),
 
       remove: (itemId) => {
         set((state) => {
@@ -71,6 +340,63 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
           return { entries };
         });
       },
+
+      removeDurably: (itemId, preserveRemovalIntent = false) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          const entry = get().entries[itemId];
+          if (!entry) return;
+          // A snapshot containing the item never acknowledges a tombstone.
+          if (preserveRemovalIntent && entry.removalRequested) return;
+          get().remove(itemId);
+          try {
+            await pendingWrite;
+          } catch (error) {
+            // Restore only when no newer mutation replaced the entry meanwhile.
+            if (!get().entries[itemId]) {
+              set((state) => ({ entries: { ...state.entries, [itemId]: entry } }));
+            }
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          get().clearStorageError();
+        }),
+
+      discardQueuedEntryDurably: (itemId) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          const entry = get().entries[itemId];
+          if (!entry) return;
+          // The serialized recheck: a tombstone created while the discard's
+          // confirmation dialog was open is an unresolved cancellation — it
+          // must reach the host (or be explicitly retried), never be dropped
+          // locally.
+          if (entry.removalRequested) {
+            throw new Error("queue_removal_pending");
+          }
+          get().remove(itemId);
+          try {
+            await pendingWrite;
+          } catch (error) {
+            // Restore only when no newer mutation replaced the entry meanwhile.
+            if (!get().entries[itemId]) {
+              set((state) => ({ entries: { ...state.entries, [itemId]: entry } }));
+            }
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          get().clearStorageError();
+        }),
 
       bumpAttempts: (itemId) => {
         set((state) => {
@@ -87,6 +413,26 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
         });
       },
 
+      bumpAttemptsDurably: (itemId) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          get().bumpAttempts(itemId);
+          try {
+            await pendingWrite;
+          } catch (error) {
+            // The unpersisted increment stays in memory: it can only
+            // over-count toward the park cap, never under-count it.
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          get().clearStorageError();
+        }),
+
       markFailed: (itemId) => {
         set((state) => {
           const entry = state.entries[itemId];
@@ -101,6 +447,31 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
           };
         });
       },
+
+      markFailedDurably: (itemId) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          const previous = get().entries[itemId];
+          if (!previous || previous.failedAt !== undefined) return;
+          // The fence is set before the write so a failing write can never
+          // leave the entry eligible for automatic delivery.
+          get().markFailed(itemId);
+          parkedVolatile.add(itemId);
+          try {
+            await pendingWrite;
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          // The persisted failedAt supersedes the volatile fence.
+          parkedVolatile.delete(itemId);
+          get().clearStorageError();
+        }),
 
       retryEntry: (itemId) => {
         set((state) => {
@@ -117,8 +488,155 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
         });
       },
 
-      entriesForServer: (serverId) =>
-        sortByCreation(Object.values(get().entries).filter((entry) => entry.serverId === serverId)),
+      retryEntryDurably: (itemId) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          const entry = get().entries[itemId];
+          if (!entry) return;
+          if (entry.failedAt === undefined && !parkedVolatile.has(itemId)) return;
+          const parked = { attempts: entry.attempts, failedAt: entry.failedAt };
+          get().retryEntry(itemId);
+          try {
+            await pendingWrite;
+          } catch (error) {
+            // An unpersisted retry must not lift the park fence.
+            set((state) => {
+              const current = state.entries[itemId];
+              if (!current) return state;
+              return {
+                entries: {
+                  ...state.entries,
+                  [itemId]: {
+                    ...current,
+                    attempts: parked.attempts,
+                    failedAt: parked.failedAt,
+                  },
+                },
+              };
+            });
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          parkedVolatile.delete(itemId);
+          get().clearStorageError();
+        }),
+
+      requestRemoval: (entry) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(entry.itemId);
+            throw error;
+          }
+          const previous = get().entries[entry.itemId];
+          const merged: PendingQueueEnqueue = {
+            ...(previous ?? entry),
+            removalRequested: true,
+            removalFailedAt: undefined,
+            // The tombstone is an active removal intent: the persisted park
+            // clears with it (the in-process fence lifts after the write).
+            failedAt: undefined,
+            attempts: 0,
+          };
+          // The dispatch fence holds for the whole write: failedAt and the
+          // volatile fence stay set until the tombstone persists, so no lane
+          // can dispatch a removal or enqueue for this entry mid-write.
+          writesInFlight.add(entry.itemId);
+          set((state) => ({
+            entries: {
+              ...state.entries,
+              [entry.itemId]: merged,
+            },
+          }));
+          try {
+            await pendingWrite;
+          } catch (error) {
+            // Restore the full prior state: the park (if any) stays intact.
+            set((state) => {
+              const current = state.entries[entry.itemId];
+              if (previous) {
+                return { entries: { ...state.entries, [entry.itemId]: previous } };
+              }
+              if (current?.removalRequested) {
+                const next = { ...state.entries };
+                delete next[entry.itemId];
+                return { entries: next };
+              }
+              return state;
+            });
+            get().reportStorageError(entry.itemId);
+            throw error;
+          } finally {
+            writesInFlight.delete(entry.itemId);
+          }
+          // The persisted tombstone supersedes the volatile park fence.
+          if (previous?.failedAt !== undefined || parkedVolatile.has(entry.itemId)) {
+            parkedVolatile.delete(entry.itemId);
+          }
+          get().clearStorageError();
+        }),
+
+      markRemovalFailedDurably: (itemId) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          try {
+            await awaitOutboxHydration();
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          set((state) => {
+            const entry = state.entries[itemId];
+            if (!entry || !entry.removalRequested) return state;
+            return {
+              entries: {
+                ...state.entries,
+                [itemId]: { ...entry, removalFailedAt: Date.now() },
+              },
+            };
+          });
+          try {
+            await pendingWrite;
+          } catch (error) {
+            get().reportStorageError(itemId);
+            throw error;
+          }
+          get().clearStorageError();
+        }),
+
+      reportStorageError: (itemId) => {
+        set({ storageError: { itemId, at: Date.now() } });
+      },
+
+      clearStorageError: () => {
+        if (get().storageError !== null) {
+          set({ storageError: null });
+        }
+      },
+
+      entriesForServer: (serverId) => {
+        // An agent with ANY durable write in flight is excluded wholesale, so
+        // a flush can never race that write with its own dispatch — including
+        // the agent's older entries that were listed before the write started.
+        const blockedAgents = new Set<string>();
+        for (const entry of Object.values(get().entries)) {
+          if (writesInFlight.has(entry.itemId)) blockedAgents.add(entry.agentId);
+        }
+        return sortByCreation(
+          Object.values(get().entries).filter(
+            (entry) =>
+              entry.serverId === serverId &&
+              entry.failedAt === undefined &&
+              !parkedVolatile.has(entry.itemId) &&
+              !blockedAgents.has(entry.agentId),
+          ),
+        );
+      },
 
       entriesForAgent: (serverId, agentId) =>
         sortByCreation(
@@ -126,19 +644,61 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
             (entry) => entry.serverId === serverId && entry.agentId === agentId,
           ),
         ),
+      acknowledgeRoutingEntry: (entry) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          await awaitOutboxHydration();
+          if (
+            !entry.routingOrigin ||
+            !entry.expectedWorkspaceId ||
+            !entry.expectedProjectId ||
+            entry.routingDraftVersion === undefined
+          )
+            return;
+          const previous = get().routingReceipt;
+          const receipt: RoutingReceipt = {
+            itemId: entry.itemId,
+            serverId: entry.serverId,
+            agentId: entry.agentId,
+            workspaceId: entry.expectedWorkspaceId,
+            projectId: entry.expectedProjectId,
+            text: entry.text,
+            draftVersion: entry.routingDraftVersion,
+            draftUpdatedAt: entry.routingDraftUpdatedAt ?? 0,
+            acceptedAt: Date.now(),
+          };
+          set({ routingReceipt: receipt });
+          try {
+            await pendingWrite;
+          } catch (error) {
+            set({ routingReceipt: previous });
+            get().reportStorageError(entry.itemId);
+            throw error;
+          }
+          get().clearStorageError();
+        }),
     }),
     {
       name: "paseo-queue-outbox",
       version: 1,
-      storage: createValidatedPersistStorage(AsyncStorage, PersistedQueueOutboxSchema),
-      partialize: ({ entries }) => ({ entries }),
+      storage: durableStorage,
+      partialize: ({ entries, directEntries, durableHosts, routingReceipt }) => ({
+        entries,
+        directEntries,
+        durableHosts,
+        routingReceipt,
+      }),
+      onRehydrateStorage: () => (_state, error) => {
+        if (error) failHydrationWaiters();
+      },
     },
   ),
 );
 
 /**
  * Retries one failed entry — the explicit user action — without touching any
- * other pending entry for the server.
+ * other pending entry for the server. The park fence clears only after the
+ * retry reset persists, so a failed reset leaves the entry parked and nothing
+ * is sent.
  */
 export async function retryFailedOutboxEntry(input: {
   itemId: string;
@@ -147,64 +707,122 @@ export async function retryFailedOutboxEntry(input: {
 }): Promise<void> {
   const store = useQueueOutboxStore.getState();
   const entry = store.entries[input.itemId];
-  if (!entry || entry.failedAt === undefined) {
-    return;
-  }
-  store.retryEntry(input.itemId);
+  if (!entry) return;
+  if (entry.failedAt === undefined && !parkedVolatile.has(input.itemId)) return;
+  await store.retryEntryDurably(input.itemId);
   await flushQueueOutbox({
     serverId: entry.serverId,
     outbox: {
       list: () => {
         const current = useQueueOutboxStore.getState().entries[input.itemId];
-        return current && current.failedAt === undefined ? [current] : [];
+        return current && current.failedAt === undefined && !parkedVolatile.has(input.itemId)
+          ? [current]
+          : [];
       },
-      remove: store.remove,
-      bumpAttempts: store.bumpAttempts,
-      markFailed: store.markFailed,
+      remove: useQueueOutboxStore.getState().removeDurably,
+      get: (itemId) => useQueueOutboxStore.getState().entries[itemId],
+      bumpAttempts: useQueueOutboxStore.getState().bumpAttemptsDurably,
+      markFailed: useQueueOutboxStore.getState().markFailedDurably,
+      markRemovalFailed: useQueueOutboxStore.getState().markRemovalFailedDurably,
     },
     client: input.client,
     applySnapshot: input.applySnapshot,
   });
 }
 
-const flushesInFlight = new Set<string>();
-
 /**
  * Flushes this store's un-acked enqueues for one server. Called on every
- * (re)connect that advertises the durable queue feature; concurrent calls for
- * the same server coalesce so a burst of status messages cannot double-send.
- * Failed entries are skipped: retrying one is an explicit user decision, never
- * an automatic side effect of a reconnect.
+ * (re)connect that advertises the durable queue feature. A persistence probe
+ * runs first: with storage failing, nothing is sent and no attempt is
+ * consumed. Dispatch is serialized per agent, so concurrent calls cannot
+ * double-send. Failed entries are skipped: retrying one is an explicit user
+ * decision, never an automatic side effect of a reconnect.
  */
 export async function flushQueueOutboxForServer(input: {
   serverId: string;
   client: QueueOutboxFlushClient;
   applySnapshot: (snapshot: AgentQueueSnapshot) => void;
   onEntryExhausted?: (entry: PendingQueueEnqueue) => void;
+  onRejected?: (entry: PendingQueueEnqueue, message: string) => void;
 }): Promise<void> {
-  if (flushesInFlight.has(input.serverId)) {
-    return;
-  }
-  flushesInFlight.add(input.serverId);
   try {
-    const store = useQueueOutboxStore.getState();
-    await flushQueueOutbox({
-      serverId: input.serverId,
-      outbox: {
-        list: (serverId) =>
-          useQueueOutboxStore
-            .getState()
-            .entriesForServer(serverId)
-            .filter((entry) => entry.failedAt === undefined),
-        remove: store.remove,
-        bumpAttempts: store.bumpAttempts,
-        markFailed: store.markFailed,
-      },
-      client: input.client,
-      applySnapshot: input.applySnapshot,
-      ...(input.onEntryExhausted ? { onEntryExhausted: input.onEntryExhausted } : {}),
-    });
-  } finally {
-    flushesInFlight.delete(input.serverId);
+    await awaitOutboxHydration();
+  } catch (error) {
+    useQueueOutboxStore.getState().reportStorageError(null);
+    throw error;
   }
+  try {
+    await probeOutboxStorage();
+  } catch (error) {
+    useQueueOutboxStore.getState().reportStorageError(null);
+    throw error;
+  }
+  const store = useQueueOutboxStore.getState();
+  await flushQueueOutbox({
+    ...input,
+    onAccepted: (entry) => useQueueOutboxStore.getState().acknowledgeRoutingEntry(entry),
+    outbox: {
+      list: (serverId) => useQueueOutboxStore.getState().entriesForServer(serverId),
+      get: (itemId) => useQueueOutboxStore.getState().entries[itemId],
+      remove: store.removeDurably,
+      bumpAttempts: store.bumpAttemptsDurably,
+      markFailed: store.markFailedDurably,
+      markRemovalFailed: store.markRemovalFailedDurably,
+    },
+  });
+}
+
+/** Direct sends share the queue outbox hydration and serialized write chain. */
+async function replaceDirectDurably(
+  clientMessageId: string,
+  update: (entry: PendingDirectSend) => PendingDirectSend | null,
+): Promise<void> {
+  await serializeQueueOperation("queue-outbox-mutation", async () => {
+    await awaitOutboxHydration();
+    const previous = useQueueOutboxStore.getState().directEntries[clientMessageId];
+    if (!previous) return;
+    directWritesInFlight.add(clientMessageId);
+    const next = update(previous);
+    useQueueOutboxStore.setState((state) => {
+      const directEntries = { ...state.directEntries };
+      if (next) directEntries[clientMessageId] = next;
+      else delete directEntries[clientMessageId];
+      return { directEntries };
+    });
+    try {
+      await pendingWrite;
+    } catch (error) {
+      useQueueOutboxStore.setState((state) => ({
+        directEntries: { ...state.directEntries, [clientMessageId]: previous },
+      }));
+      useQueueOutboxStore.getState().reportStorageError(clientMessageId);
+      throw error;
+    } finally {
+      directWritesInFlight.delete(clientMessageId);
+    }
+    useQueueOutboxStore.getState().clearStorageError();
+  });
+}
+
+export async function flushDirectOutboxForServer(input: {
+  serverId: string;
+  agentId?: string;
+  client: SendOutboxFlushClient;
+  onAccepted?: (entry: PendingDirectSend, result: { queued: boolean }) => void;
+  onRejected?: (entry: PendingDirectSend, message: string) => void;
+  onRetryLimit?: (entry: PendingDirectSend) => void;
+}): Promise<void> {
+  await awaitOutboxHydration();
+  await probeOutboxStorage();
+  const store = useQueueOutboxStore.getState();
+  await flushSendOutbox({
+    ...input,
+    outbox: {
+      list: (serverId) => useQueueOutboxStore.getState().directEntriesForServer(serverId),
+      get: (id) => useQueueOutboxStore.getState().directEntries[id],
+      remove: store.removeDirectDurably,
+      bumpAttempts: store.bumpDirectAttemptsDurably,
+      markRejected: store.markDirectRejectedDurably,
+    },
+  });
 }

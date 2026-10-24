@@ -66,6 +66,21 @@ describe("voice microphone controls", () => {
     });
   }
 
+  it("distinguishes Paseo command listening from GPT capture off", async () => {
+    await render({ isMuted: true, voiceCommandsEnabled: true });
+    expect(container.textContent).toContain("Listening for “unmute microphone”");
+    expect(container.textContent).not.toContain("Not listening");
+    await render({ isMuted: true, voiceCommandsEnabled: false });
+    expect(container.textContent).toContain("Not listening");
+    expect(container.textContent).not.toContain("Listening for “unmute microphone”");
+  });
+
+  it("shows the microphone interruption instead of claiming to listen", async () => {
+    await render({ isMuted: false, isCaptureInterrupted: true });
+    expect(container.textContent).toContain("Microphone interrupted");
+    expect(container.textContent).not.toContain("Microphone on");
+  });
+
   it("says it is not listening and why when input stops reaching the agent", async () => {
     await render({ isMuted: false, failure: "host-disconnected" });
     expect(container.textContent).toContain("Not listening");

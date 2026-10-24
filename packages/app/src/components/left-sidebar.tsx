@@ -1,3 +1,4 @@
+import { PinnedSessions } from "@/session-pins/sidebar";
 import { router } from "expo-router";
 import {
   CircleGauge,
@@ -36,6 +37,8 @@ import {
 } from "@/components/sidebar-resize-handle-layout";
 import { HostPicker } from "@/components/hosts/host-picker";
 import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/display-preferences/menu";
+import { SidebarFindControls } from "@/components/sidebar/sidebar-find-controls";
+import { SidebarFilterResultsTail } from "@/components/sidebar/sidebar-filter-results";
 import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
 import { SidebarNavRows } from "@/components/sidebar/sidebar-nav-rows";
 import { SidebarFooterIconHighlight } from "@/components/sidebar/sidebar-footer-icon-highlight";
@@ -80,6 +83,7 @@ import {
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
+import { SidebarViewsSection } from "@/views/sidebar-views-section";
 
 const ThemedX = withUnistyles(X);
 
@@ -95,6 +99,7 @@ interface SidebarSharedProps {
   projects: SidebarProjectEntry[];
   hasProjectsBeforeFilter: boolean;
   hasActiveProjectFilter: boolean;
+  hasActiveSearchFilter: boolean;
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   isInitialLoad: boolean;
   isRevalidating: boolean;
@@ -144,6 +149,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     projects,
     hasProjectsBeforeFilter,
     resolvedProjectFilters,
+    searchQuery,
     workspaceEntriesByKey,
     isInitialLoad,
     isRevalidating,
@@ -238,6 +244,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     projects,
     hasProjectsBeforeFilter,
     hasActiveProjectFilter: resolvedProjectFilters.length > 0,
+    hasActiveSearchFilter: searchQuery.trim().length > 0,
     workspaceEntriesByKey,
     isInitialLoad,
     isRevalidating,
@@ -528,6 +535,7 @@ function MobileSidebar({
   projects,
   hasProjectsBeforeFilter,
   hasActiveProjectFilter,
+  hasActiveSearchFilter,
   workspaceEntriesByKey,
   isInitialLoad,
   isRevalidating,
@@ -548,6 +556,14 @@ function MobileSidebar({
   closeSidebar,
 }: MobileSidebarProps) {
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
+  const filterResults = useMemo(
+    () => (
+      <SidebarFilterResultsTail
+        treeEmpty={projects.length === 0 && pinnedGroups.pinnedChats.length === 0}
+      />
+    ),
+    [projects.length, pinnedGroups.pinnedChats.length],
+  );
   const { gesture: closeGesture, gestureRef: closeGestureRef } = useCloseAgentListGesture();
 
   const handleWorkspacePress = useCallback(() => {
@@ -581,6 +597,7 @@ function MobileSidebar({
           onBeforeNavigate={closeSidebar}
           firstRowTrailing={closeButton}
         />
+        <SidebarFindControls />
 
         {isInitialLoad && !hasActiveHostFilter ? (
           <SidebarAgentListSkeleton />
@@ -596,6 +613,7 @@ function MobileSidebar({
             projects={projects}
             hasProjectsBeforeFilter={hasProjectsBeforeFilter}
             hasActiveProjectFilter={hasActiveProjectFilter}
+            hasActiveSearchFilter={hasActiveSearchFilter}
             workspaceEntriesByKey={workspaceEntriesByKey}
             isRefreshing={isManualRefresh && isRevalidating}
             onRefresh={handleRefresh}
@@ -604,7 +622,14 @@ function MobileSidebar({
             onImportSession={handleImportSession}
             parentGestureRef={closeGestureRef}
             dragGestureHostActive={active}
-            listHeaderComponent={workspacesSectionHeaderElement}
+            listHeaderComponent={
+              <>
+                <PinnedSessions onNavigate={closeSidebar} />
+                <SidebarViewsSection />
+                {workspacesSectionHeaderElement}
+              </>
+            }
+            listFooterComponent={filterResults}
           />
         )}
 
@@ -657,6 +682,7 @@ function DesktopSidebar({
   projects,
   hasProjectsBeforeFilter,
   hasActiveProjectFilter,
+  hasActiveSearchFilter,
   workspaceEntriesByKey,
   isInitialLoad,
   isRevalidating,
@@ -677,6 +703,14 @@ function DesktopSidebar({
 }: DesktopSidebarProps) {
   const ownsTopLeft = useOwnsWindowChromeCorner("top-left");
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
+  const filterResults = useMemo(
+    () => (
+      <SidebarFilterResultsTail
+        treeEmpty={projects.length === 0 && pinnedGroups.pinnedChats.length === 0}
+      />
+    ),
+    [projects.length, pinnedGroups.pinnedChats.length],
+  );
   const sidebarWidth = usePanelStore((state) => state.sidebarWidth);
   const setSidebarWidth = usePanelStore((state) => state.setSidebarWidth);
   const { width: viewportWidth } = useWindowDimensions();
@@ -785,6 +819,7 @@ function DesktopSidebar({
             <TitlebarDragRegion />
           )}
           <SidebarNavRows style={sidebarHeaderGroupStyle} />
+          <SidebarFindControls />
         </View>
 
         {isInitialLoad && !hasActiveHostFilter ? (
@@ -801,12 +836,20 @@ function DesktopSidebar({
             projects={projects}
             hasProjectsBeforeFilter={hasProjectsBeforeFilter}
             hasActiveProjectFilter={hasActiveProjectFilter}
+            hasActiveSearchFilter={hasActiveSearchFilter}
             workspaceEntriesByKey={workspaceEntriesByKey}
             isRefreshing={isManualRefresh && isRevalidating}
             onRefresh={handleRefresh}
             onAddProject={handleOpenProject}
             onImportSession={handleImportSession}
-            listHeaderComponent={workspacesSectionHeaderElement}
+            listHeaderComponent={
+              <>
+                <PinnedSessions />
+                <SidebarViewsSection />
+                {workspacesSectionHeaderElement}
+              </>
+            }
+            listFooterComponent={filterResults}
           />
         )}
 

@@ -35,6 +35,7 @@ import type {
   AgentPersistenceHandle,
 } from "@getpaseo/protocol/agent-types";
 import type {
+  AgentSnapshotPayload,
   ServerInfoStatusPayload,
   ProjectPlacementPayload,
   ServerCapabilities,
@@ -48,11 +49,7 @@ import {
   resolveWorkspaceMapKeyByIdentity,
 } from "@/utils/workspace-identity";
 import type { QueuedComposerMessage } from "@/composer/actions";
-import {
-  appendPendingQueueRows,
-  shouldApplyAgentQueueSnapshot,
-  toQueuedComposerMessages,
-} from "@/composer/queue-sync";
+import { shouldApplyAgentQueueSnapshot, toQueuedComposerMessages } from "@/composer/queue-sync";
 import { useQueueOutboxStore } from "@/stores/queue-outbox-store";
 import {
   createAgentLastActivityCoalescer,
@@ -87,6 +84,7 @@ export interface Agent {
   createdAt: Date;
   updatedAt: Date;
   lastUserMessageAt: Date | null;
+  messageActivity?: AgentSnapshotPayload["messageActivity"];
   lastActivityAt: Date;
   capabilities: AgentCapabilityFlags;
   currentModeId: string | null;
@@ -111,6 +109,8 @@ export interface Agent {
   projectPlacement?: ProjectPlacementPayload | null;
   artifacts?: AgentArtifact[];
   companionEntries?: CompanionEntry[];
+  // COMPAT(captureDegraded): added in v0.11.1-fork (C2), remove after 2027-04-07.
+  captureDegraded?: boolean;
 }
 
 export interface WorkspaceDescriptor {
@@ -189,6 +189,8 @@ export interface ProjectDescriptor {
   projectIconRevision?: string;
   projectRootPath: string;
   projectKind: WorkspaceDescriptorPayload["projectKind"];
+  projectPinnedAt?: string | null;
+  projectDefaultAt?: string | null;
 }
 
 export function normalizeProjectDescriptor(
@@ -203,6 +205,8 @@ export function normalizeProjectDescriptor(
     projectIconRevision: payload.projectIconRevision,
     projectRootPath: payload.projectRootPath,
     projectKind: payload.projectKind,
+    ...(payload.projectPinnedAt ? { projectPinnedAt: payload.projectPinnedAt } : {}),
+    ...(payload.projectDefaultAt ? { projectDefaultAt: payload.projectDefaultAt } : {}),
   };
 }
 
@@ -443,12 +447,22 @@ export interface SessionState {
   fileExplorer: Map<string, AgentFileExplorerState>;
 
   // Queued messages
+  /**
+   * Daemon snapshot rows only. Un-acked outbox rows are overlaid by the
+   * composer at render time, so acknowledging an outbox entry removes its row
+   * without needing another snapshot. See docs/queue-mirroring.md.
+   */
   queuedMessages: Map<string, QueuedComposerMessage[]>;
   /**
    * Last daemon queue revision applied per agent, so an out-of-order broadcast
    * cannot erase a newer state. See docs/queue-mirroring.md.
    */
   queuedMessageRevisions: Map<string, number>;
+  /**
+   * Item ids the last applied snapshot contained, per agent. Outbox entries
+   * still holding an accepted id are waiting for their durable acknowledgement.
+   */
+  acceptedQueueMessageIds: Map<string, ReadonlySet<string>>;
 }
 
 // Global store state
@@ -627,7 +641,7 @@ interface SessionStoreActions {
       | ((prev: Map<string, QueuedComposerMessage[]>) => Map<string, QueuedComposerMessage[]>),
   ) => void;
   /** Applies a daemon queue snapshot, dropping it if it is older than what is shown. */
-  applyAgentQueueSnapshot: (serverId: string, snapshot: AgentQueueSnapshot) => void;
+  applyAgentQueueSnapshot: (serverId: string, snapshot: AgentQueueSnapshot) => Promise<void>;
 
   // Hydration
   setHasHydratedAgents: (serverId: string, hydrated: boolean) => void;
@@ -682,6 +696,7 @@ function createInitialSessionState(
     fileExplorer: new Map(),
     queuedMessages: new Map(),
     queuedMessageRevisions: new Map(),
+    acceptedQueueMessageIds: new Map(),
   };
 }
 
@@ -1827,13 +1842,40 @@ export const useSessionStore = create<SessionStore>()(
         });
       },
 
-      applyAgentQueueSnapshot: (serverId, snapshot) => {
+      applyAgentQueueSnapshot: async (serverId, snapshot) => {
+        // Acknowledge outbox entries the snapshot contains before anything is
+        // stored: the removal is durable, and a failure leaves both the stored
+        // rows and the outbox untouched so the next snapshot retries the ack.
+        const outbox = useQueueOutboxStore.getState();
+        const acceptedIds = new Set(snapshot.items.map((item) => item.id));
+        const acknowledged = outbox.entriesForAgent(serverId, snapshot.agentId).filter(
+          (entry) =>
+            acceptedIds.has(entry.itemId) &&
+            entry.failedAt === undefined &&
+            // A snapshot containing the item never acknowledges a pending
+            // cancellation — the host row must actually be removed first.
+            !entry.removalRequested,
+        );
+        if (acknowledged.length > 0) {
+          try {
+            await Promise.all(
+              acknowledged.map((entry) => outbox.removeDurably(entry.itemId, true)),
+            );
+          } catch {
+            outbox.reportStorageError(null);
+            return;
+          }
+        }
         set((prev) => {
           const session = prev.sessions[serverId];
           if (!session) {
             return prev;
           }
+          // An equal revision still applies: it reconciles rows against the
+          // live outbox (a ghost from a raced ack) without letting an older
+          // snapshot through.
           if (
+            snapshot.revision !== session.queuedMessageRevisions.get(snapshot.agentId) &&
             !shouldApplyAgentQueueSnapshot({
               incomingRevision: snapshot.revision,
               appliedRevision: session.queuedMessageRevisions.get(snapshot.agentId),
@@ -1842,20 +1884,21 @@ export const useSessionStore = create<SessionStore>()(
             return prev;
           }
           const queuedMessages = new Map(session.queuedMessages);
-          queuedMessages.set(
-            snapshot.agentId,
-            appendPendingQueueRows(
-              toQueuedComposerMessages(snapshot),
-              useQueueOutboxStore.getState().entriesForAgent(serverId, snapshot.agentId),
-            ),
-          );
+          queuedMessages.set(snapshot.agentId, toQueuedComposerMessages(snapshot));
+          const acceptedQueueMessageIds = new Map(session.acceptedQueueMessageIds);
+          acceptedQueueMessageIds.set(snapshot.agentId, acceptedIds);
           const queuedMessageRevisions = new Map(session.queuedMessageRevisions);
           queuedMessageRevisions.set(snapshot.agentId, snapshot.revision);
           return {
             ...prev,
             sessions: {
               ...prev.sessions,
-              [serverId]: { ...session, queuedMessages, queuedMessageRevisions },
+              [serverId]: {
+                ...session,
+                queuedMessages,
+                queuedMessageRevisions,
+                acceptedQueueMessageIds,
+              },
             },
           };
         });

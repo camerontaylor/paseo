@@ -69,6 +69,7 @@ export function projectAgentSnapshot(agent: Agent): AgentSnapshotPayload {
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     lastUserMessageAt: agent.lastUserMessageAt?.toISOString() ?? null,
+    messageActivity: agent.messageActivity,
     status: agent.status,
     ...projectActiveTurn(agent),
     capabilities: agent.capabilities,
@@ -113,6 +114,7 @@ export function normalizeAgentSnapshot(snapshot: AgentSnapshotPayload, serverId:
     createdAt,
     updatedAt,
     lastUserMessageAt,
+    messageActivity: snapshot.messageActivity,
     lastActivityAt: updatedAt,
     capabilities: snapshot.capabilities,
     currentModeId: snapshot.currentModeId,
@@ -136,5 +138,6 @@ export function normalizeAgentSnapshot(snapshot: AgentSnapshotPayload, serverId:
     labels: snapshot.labels,
     artifacts: snapshot.artifacts,
     companionEntries: snapshot.companionEntries,
+    captureDegraded: snapshot.captureDegraded === true,
   };
 }

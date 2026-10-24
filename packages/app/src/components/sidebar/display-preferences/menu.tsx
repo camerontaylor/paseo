@@ -23,6 +23,7 @@ import {
   Globe,
   Server,
   Settings2,
+  SortDesc,
   Tag,
   Type,
 } from "lucide-react-native";
@@ -49,6 +50,7 @@ import {
   hasActiveSidebarLabelFilter,
   SIDEBAR_UNLABELLED_LABEL_KEY,
   type SidebarGroupMode,
+  type SidebarSortMode,
 } from "@/stores/sidebar-view-store";
 import { workspaceLabelKey, type WorkspaceLabelColor } from "@getpaseo/protocol/workspace-labels";
 import type { WorkspaceTitleSource } from "@/hooks/use-settings";
@@ -56,6 +58,7 @@ import { SIDEBAR_CHECKS_DISPLAYS, type SidebarChecksDisplay } from "./checks-dis
 import { useSidebarDisplayPreferences, type SidebarTrailingChoice } from "./model";
 import { SIDEBAR_ROW_ITEMS, type SidebarRowItem } from "./row-items";
 import { useWorkspaceLabelProjection } from "@/workspace-labels";
+import { useSessionStore } from "@/stores/session-store";
 import { WorkspaceLabelDot } from "@/workspace-labels/swatch";
 import { WorkspaceLabelManagerModal } from "@/workspace-labels/manager-modal";
 
@@ -91,6 +94,22 @@ const GROUPING_ICONS: Record<SidebarGroupMode, OptionIcon> = {
   status: withUnistyles(CircleDashed),
 };
 
+const SORT_ICONS: Record<SidebarSortMode, OptionIcon> = {
+  manual: withUnistyles(SortDesc),
+  recent: withUnistyles(Clock),
+  user: withUnistyles(Circle),
+  assistant: withUnistyles(CircleCheck),
+  title: withUnistyles(Type),
+};
+
+const SORT_LABEL_KEYS: Record<SidebarSortMode, string> = {
+  manual: "sidebar.display.sort.manual",
+  recent: "sidebar.display.sort.recent",
+  user: "sidebar.display.sort.user",
+  assistant: "sidebar.display.sort.assistant",
+  title: "sidebar.display.sort.title",
+};
+
 const TITLE_SOURCE_ICONS: Record<WorkspaceTitleSource, OptionIcon> = {
   title: withUnistyles(Type),
   branch: withUnistyles(GitBranch),
@@ -119,6 +138,9 @@ const TRAILING_ICONS: Record<SidebarTrailingChoice, OptionIcon> = {
   diff: withUnistyles(Diff),
   timestamp: withUnistyles(Clock),
 };
+
+const SORT_CHOICES: readonly SidebarSortMode[] = ["recent", "user", "assistant", "manual", "title"];
+const SORT_CHOICES_LEGACY: readonly SidebarSortMode[] = ["manual", "title"];
 
 const GROUPING_MODES: readonly SidebarGroupMode[] = ["project", "status"];
 const TITLE_SOURCES: readonly WorkspaceTitleSource[] = ["title", "branch"];
@@ -165,6 +187,19 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
   const { t } = useTranslation();
   const preferences = useSidebarDisplayPreferences();
   const hosts = useHosts();
+  const hostFilters = preferences.hostFilters;
+  const sortSupport = useSessionStore((state) =>
+    hosts
+      .filter((host) => hostFilters.length === 0 || hostFilters.includes(host.serverId))
+      .map((host) =>
+        state.sessions[host.serverId]?.serverInfo?.features?.conversationMessageActivity === true
+          ? "1"
+          : "0",
+      )
+      .join(""),
+  );
+  const sortAvailable = sortSupport.length > 0 && !sortSupport.includes("0");
+  const sortChoices = sortAvailable ? SORT_CHOICES : SORT_CHOICES_LEGACY;
   // `allProjects`, never `projects`: the model's `projects` is already filtered, so a picker fed
   // from it would lose the row that undoes the filter as soon as the filter narrowed to one.
   const { allProjects, resolvedProjectFilters } = useSidebarModel();
@@ -202,6 +237,20 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
             selectedValue={preferences.grouping}
             onSelect={preferences.setGrouping}
             testIDPrefix="sidebar-grouping"
+          />
+        ),
+      },
+      {
+        id: "sort",
+        title: t("sidebar.display.sort.label"),
+        content: (
+          <OptionList
+            values={sortChoices}
+            icons={SORT_ICONS}
+            labelKeys={SORT_LABEL_KEYS}
+            selectedValue={sortAvailable ? preferences.sortMode : "manual"}
+            onSelect={preferences.setSortMode}
+            testIDPrefix="sidebar-sort"
           />
         ),
       },
@@ -273,6 +322,8 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
   }, [
     t,
     preferences,
+    sortChoices,
+    sortAvailable,
     hosts,
     showHostFilter,
     showProjectFilter,
@@ -307,6 +358,13 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
             testID="sidebar-display-grouping"
           >
             {t("sidebar.display.grouping.label")}
+          </MenuSubTrigger>
+          <MenuSubTrigger
+            id="sort"
+            value={t(SORT_LABEL_KEYS[sortAvailable ? preferences.sortMode : "manual"])}
+            testID="sidebar-display-sort"
+          >
+            {t("sidebar.display.sort.label")}
           </MenuSubTrigger>
           <MenuSubTrigger
             id="titleSource"

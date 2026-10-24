@@ -232,6 +232,12 @@ const StoredAgentSnapshotSchema = z.strictObject({
   createdAt: IsoDateSchema,
   updatedAt: IsoDateSchema,
   lastUserMessageAt: IsoDateSchema.nullable(),
+  messageActivity: z
+    .strictObject({
+      lastUserMessageAt: IsoDateSchema.nullable(),
+      lastAssistantMessageAt: IsoDateSchema.nullable(),
+    })
+    .optional(),
   status: AgentStatusSchema,
   activeTurn: z
     .strictObject({
@@ -254,6 +260,7 @@ const StoredAgentSnapshotSchema = z.strictObject({
   archivedAt: IsoDateSchema.nullable().optional(),
   artifacts: z.array(AgentArtifactSchema).optional(),
   companionEntries: z.array(CompanionEntrySchema).optional(),
+  captureDegraded: z.boolean().optional(),
 });
 
 const StoredAgentSchema = z.strictObject({
@@ -340,6 +347,8 @@ const StoredProjectSchema = z.strictObject({
   projectIconRevision: z.string().optional(),
   projectRootPath: z.string(),
   projectKind: z.enum(["git", "non_git", "directory"]),
+  projectPinnedAt: z.string().nullable().optional(),
+  projectDefaultAt: z.string().nullable().optional(),
 });
 
 const StoredTimelineSchema = z.strictObject({
@@ -615,10 +624,11 @@ function serializeAgentTurn(agent: Agent): NonNullable<StoredAgent["turn"]> {
 
 function serializeStreamStateFields(
   agent: Agent,
-): Pick<StoredAgent["snapshot"], "artifacts" | "companionEntries"> {
+): Pick<StoredAgent["snapshot"], "artifacts" | "companionEntries" | "captureDegraded"> {
   return {
     ...(agent.artifacts ? { artifacts: agent.artifacts } : {}),
     ...(agent.companionEntries ? { companionEntries: agent.companionEntries } : {}),
+    ...(agent.captureDegraded ? { captureDegraded: agent.captureDegraded } : {}),
   };
 }
 
@@ -633,6 +643,7 @@ function serializeAgent(agent: Agent): StoredAgent {
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     lastUserMessageAt: agent.lastUserMessageAt?.toISOString() ?? null,
+    messageActivity: agent.messageActivity,
     status: agent.status,
     ...(agent.turn.phase === "open" && agent.turn.turnId
       ? {
@@ -755,6 +766,8 @@ function serializeProject(project: ProjectDescriptor): StoredProject {
     projectIconRevision: project.projectIconRevision,
     projectRootPath: project.projectRootPath,
     projectKind: project.projectKind,
+    ...(project.projectPinnedAt ? { projectPinnedAt: project.projectPinnedAt } : {}),
+    ...(project.projectDefaultAt ? { projectDefaultAt: project.projectDefaultAt } : {}),
   };
 }
 

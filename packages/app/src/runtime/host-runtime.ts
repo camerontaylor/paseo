@@ -29,6 +29,7 @@ import {
   shouldUseTlsForDefaultHostedRelay,
 } from "@/utils/daemon-endpoints";
 import { resolveAppVersion } from "@/utils/app-version";
+import { recordClientDiagnostic } from "@/diagnostics/client-errors/record";
 import { ConnectionOfferSchema, type ConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import { HostConfirmations, type HostConfirmationRequest } from "./host-confirmation";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
@@ -550,6 +551,16 @@ function createDefaultDeps(): HostRuntimeControllerDeps {
         providerSnapshots: "wire",
         ...(host.password ? { password: host.password } : {}),
         localCredential: () => readDesktopManagedLocalCredential(connection),
+        onRequestError: (event) =>
+          recordClientDiagnostic({
+            source: "rpc",
+            severity: "warning",
+            code: event.code && /^[A-Za-z0-9_.-]{1,80}$/.test(event.code) ? event.code : event.kind,
+            operation: event.requestType,
+            message: event.message,
+            serverId: host.serverId,
+            appVersion: resolveAppVersion(),
+          }),
       } satisfies Omit<DaemonClientConfig, "url">;
       if (connection.type === "directSocket" || connection.type === "directPipe") {
         return new DaemonClient({

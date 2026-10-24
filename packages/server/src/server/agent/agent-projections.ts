@@ -25,6 +25,8 @@ import {
   toAgentPersistenceHandle,
 } from "../persistence-hooks.js";
 import { restoreCompanionEntries } from "./companion-stream.js";
+import { STREAM_SNAPSHOT_ENTRY_LIMIT, boundEntryTextForTransport } from "./global-stream.js";
+import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 export type { ManagedAgent };
 
 interface ProjectionOptions {
@@ -83,6 +85,7 @@ export function toStoredAgentRecord(
     updatedAt: agent.updatedAt.toISOString(),
     lastActivityAt: agent.updatedAt.toISOString(),
     lastUserMessageAt: agent.lastUserMessageAt ? agent.lastUserMessageAt.toISOString() : null,
+    messageActivity: agent.messageActivity,
     title: options?.title ?? null,
     labels: agent.labels,
     lastStatus: agent.lifecycle,
@@ -127,6 +130,7 @@ export function toAgentPayload(
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     lastUserMessageAt: agent.lastUserMessageAt ? agent.lastUserMessageAt.toISOString() : null,
+    messageActivity: agent.messageActivity,
     status: agent.lifecycle,
     activeTurn: agent.activeTurnId
       ? {
@@ -144,7 +148,8 @@ export function toAgentPayload(
     labels: agent.labels,
     ...(agent.internal ? { internal: true } : {}),
     artifacts: agent.artifacts ?? [],
-    companionEntries: agent.companionEntries ?? [],
+    companionEntries: projectCompanionEntriesForWire(agent.companionEntries),
+    ...(agent.streamCaptureDegraded ? { captureDegraded: true } : {}),
   };
 
   const usage = sanitizeUsage(agent.lastUsage);
@@ -207,7 +212,7 @@ function buildStoredStreamFacts(
 ): Pick<AgentSnapshotPayload, "artifacts" | "companionEntries"> {
   return {
     artifacts: record.artifacts ?? [],
-    companionEntries: restoreCompanionEntries(record),
+    companionEntries: projectCompanionEntriesForWire(restoreCompanionEntries(record)),
   };
 }
 
@@ -252,6 +257,7 @@ export function buildStoredAgentPayload(
     createdAt: createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
     lastUserMessageAt: lastUserMessageAt ? lastUserMessageAt.toISOString() : null,
+    messageActivity: record.messageActivity,
     status: record.lastStatus,
     capabilities: defaultCapabilities,
     currentModeId: record.lastModeId ?? null,
@@ -271,6 +277,18 @@ export function buildStoredAgentPayload(
   };
 }
 
+/**
+ * Wire bound for the snapshot payload's companion entries: the stored history
+ * is unbounded by design, the payload is a transport view of it. Last 50
+ * entries, each read-time bounded to the excerpt limit. Storage is untouched.
+ */
+function projectCompanionEntriesForWire(entries: CompanionEntry[] | undefined): CompanionEntry[] {
+  return (entries ?? []).slice(-STREAM_SNAPSHOT_ENTRY_LIMIT).map((entry) => {
+    const bounded = boundEntryTextForTransport(entry);
+    return bounded === entry ? entry : bounded;
+  });
+}
+
 export function toAgentListItemPayload(agent: AgentSnapshotPayload): AgentListItemPayload {
   return {
     id: agent.id,
@@ -285,6 +303,7 @@ export function toAgentListItemPayload(agent: AgentSnapshotPayload): AgentListIt
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
     lastUserMessageAt: agent.lastUserMessageAt,
+    messageActivity: agent.messageActivity,
     archivedAt: agent.archivedAt ?? null,
     requiresAttention: agent.requiresAttention ?? false,
     attentionReason: agent.attentionReason ?? null,

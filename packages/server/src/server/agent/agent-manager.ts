@@ -1,13 +1,20 @@
+import { indexStreamMessages } from "./stream-message-inventory.js";
+import { isSystemInjectedEnvelope } from "./agent-messages/index.js";
+import {
+  advanceMessageActivity,
+  deriveHistoricalMessageActivity,
+  emptyMessageActivity,
+  type MessageActivity,
+} from "./message-activity.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
-import {
-  appendManualCompanionEntry,
-  CompanionStreamCollector,
-  restoreCompanionEntries,
-} from "./companion-stream.js";
+import { CompanionStreamCollector, restoreCompanionEntries } from "./companion-stream.js";
+import { applyStreamEntryUpdate } from "./stream-entry-update.js";
+import { listStreamRows, type StreamSource } from "./global-stream.js";
+import type { StreamEntryUpdate, StreamListOptions } from "@getpaseo/protocol/global-stream";
 import { AgentArtifactCollector } from "./artifacts/collector.js";
 import type { AgentArtifact } from "@getpaseo/protocol/agent-types";
 import { randomUUID } from "node:crypto";
@@ -464,6 +471,8 @@ interface ManagedAgentBase {
   persistence: AgentPersistenceHandle | null;
   historyPrimed: boolean;
   lastUserMessageAt: Date | null;
+  messageActivity?: MessageActivity;
+  assistantActivityTurnId?: string;
   activeTurnId: string | null;
   activeTurnStartedAt: Date | null;
   lastUsage?: AgentUsage;
@@ -482,6 +491,15 @@ interface ManagedAgentBase {
   labels: Record<string, string>;
   artifacts: AgentArtifact[];
   companionEntries?: CompanionEntry[];
+  /**
+   * Durable-capture degraded state: set when a background snapshot persist
+   * failed with ENOSPC/EIO. Capture continues in memory and is flushed by the
+   * first persist that starts after the failing one; both transitions emit
+   * with persist:false so degradation never reschedules persistence.
+   */
+  streamCaptureDegraded?: boolean;
+  persistSeq: number;
+  captureDegradedSeq: number | null;
 }
 
 type ManagedAgentWithSession = ManagedAgentBase & {
@@ -820,6 +838,13 @@ export class AgentManager {
   private acceptingAgentRegistrations = true;
   private readonly artifactCollector = new AgentArtifactCollector();
   private readonly companionCollector = new CompanionStreamCollector();
+  // Dormant degraded bookkeeping lives in manager memory only: never persisted
+  // (nothing diagnostic is written into failing storage), never exposed on
+  // stored snapshots. Cleared on close/archive/remove.
+  private readonly dormantPersistSeq = new Map<string, number>();
+  private readonly dormantDegradedSeq = new Map<string, number>();
+  // Read-cap observability: debug-log once per agent per daemon run the first
+  // time a read observes more stored entries than a wire page carries.
 
   constructor(options: AgentManagerOptions) {
     this.pluginLifecycle = options.pluginLifecycle;
@@ -1317,6 +1342,61 @@ export class AgentManager {
     return this.timelineStore.fetch(id, options);
   }
 
+  async readSessionSearchText(
+    id: string,
+    query: string,
+  ): Promise<import("../session-search.js").SessionSearchExcerpt[]> {
+    let rows = this.timelineStore.has(id)
+      ? this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows
+      : [];
+    if (this.durableTimelineStore) {
+      rows = (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 400 }))
+        .rows;
+    }
+    const excerpts = projectTimelineRows({ rows, mode: "projected" })
+      .filter(
+        (entry) => entry.item.type === "user_message" || entry.item.type === "assistant_message",
+      )
+      .map((entry): import("../session-search.js").SessionSearchExcerpt => ({
+        text: (
+          entry.item as Extract<typeof entry.item, { type: "user_message" | "assistant_message" }>
+        ).text,
+        source: entry.item.type === "user_message" ? "user_message" : "assistant_message",
+        timestamp: entry.timestamp,
+      }));
+    return (await import("../session-search.js")).selectSessionSearchExcerpts(excerpts, query);
+  }
+
+  /** Recent projected user and assistant messages without resuming an agent. */
+  async readRecentConversationMessages(id: string): Promise<
+    Array<{
+      text: string;
+      role: "user" | "assistant";
+      timestamp: string;
+      seq: number;
+    }>
+  > {
+    let rows = this.timelineStore.has(id)
+      ? this.timelineStore.fetch(id, { direction: "tail", limit: 400 }).rows
+      : [];
+    if (this.durableTimelineStore) {
+      rows = (await this.durableTimelineStore.fetchCommitted(id, { direction: "tail", limit: 400 }))
+        .rows;
+    }
+    return projectTimelineRows({ rows, mode: "projected" })
+      .filter(
+        (entry) => entry.item.type === "user_message" || entry.item.type === "assistant_message",
+      )
+      .map((entry) => ({
+        text: (
+          entry.item as Extract<typeof entry.item, { type: "user_message" | "assistant_message" }>
+        ).text,
+        role: entry.item.type === "user_message" ? ("user" as const) : ("assistant" as const),
+        timestamp: entry.timestamp,
+        seq: entry.seqEnd,
+      }));
+  }
+
   listProviderSubagents(parentAgentId: string): ProviderSubagentDescriptor[] {
     this.requirePublicAgent(parentAgentId);
     return this.providerSubagents.list(parentAgentId);
@@ -1524,6 +1604,7 @@ export class AgentManager {
       createdAt?: Date;
       updatedAt?: Date;
       lastUserMessageAt?: Date | null;
+      messageActivity?: MessageActivity;
       labels?: Record<string, string>;
       workspaceId?: string;
       owner?: AgentOwner;
@@ -1558,6 +1639,7 @@ export class AgentManager {
       createdAt?: Date;
       updatedAt?: Date;
       lastUserMessageAt?: Date | null;
+      messageActivity?: MessageActivity;
       labels?: Record<string, string>;
       workspaceId?: string;
       owner?: AgentOwner;
@@ -1808,6 +1890,7 @@ export class AgentManager {
         createdAt: existing.createdAt,
         updatedAt: existing.updatedAt,
         lastUserMessageAt: existing.lastUserMessageAt,
+        messageActivity: existing.messageActivity,
         historyPrimed: rehydrateFromDisk ? false : preservedHistoryPrimed,
         lastUsage: preservedLastUsage,
         lastError: preservedLastError,
@@ -2207,6 +2290,7 @@ export class AgentManager {
         persistence: record.persistence ?? null,
         historyPrimed: true,
         lastUserMessageAt: record.lastUserMessageAt ? new Date(record.lastUserMessageAt) : null,
+        messageActivity: record.messageActivity ?? emptyMessageActivity(),
         lastUsage: undefined,
         lastError: record.lastError ?? undefined,
         attention,
@@ -2214,6 +2298,9 @@ export class AgentManager {
         labels: record.labels,
         artifacts: record.artifacts ?? [],
         companionEntries: restoreCompanionEntries(record),
+        streamCaptureDegraded: false,
+        persistSeq: 0,
+        captureDegradedSeq: null,
       },
     });
   }
@@ -2362,72 +2449,137 @@ export class AgentManager {
     return nextRecord;
   }
 
-  async updateCompanionEntry(input: {
-    agentId: string;
-    entryId?: string;
-    action: "update_status" | "add_pin" | "remove_pin" | "add_q_and_a";
-    status?: "open" | "reviewed" | "done";
-    text?: string;
-    answerText?: string;
-    sourceId?: string;
-  }): Promise<void> {
-    const liveAgent = this.getAgent(input.agentId);
+  async listGlobalStream(options: StreamListOptions) {
+    if (options.includeMessageInventory && options.agentId) {
+      await this.runLifecycleMutation(options.agentId, async () => {
+        const agent = this.agents.get(options.agentId!);
+        if (!agent || !this.timelineStore.has(agent.id)) return;
+        const entries = agent.companionEntries ?? [];
+        const indexed = indexStreamMessages(
+          entries,
+          this.timelineStore.getRows(agent.id),
+          this.timelineStore.getEpoch(agent.id),
+        );
+        if (indexed !== entries) agent.companionEntries = indexed;
+        await this.persistSnapshot(agent);
+      });
+    }
+    const sources = new Map<string, StreamSource>();
+    for (const record of (await this.registry?.list()) ?? []) {
+      sources.set(record.id, { ...record, companionEntries: restoreCompanionEntries(record) });
+    }
+    for (const agent of this.agents.values()) {
+      sources.set(agent.id, {
+        ...agent,
+        title: sources.get(agent.id)?.title ?? agent.config.title,
+        archivedAt: sources.get(agent.id)?.archivedAt,
+      });
+    }
+    let coverage: "loaded_history" | "not_loaded" | undefined;
+    if (options.includeMessageInventory) {
+      coverage =
+        options.agentId && this.agents.get(options.agentId)?.historyPrimed
+          ? "loaded_history"
+          : "not_loaded";
+    }
+    return { ...listStreamRows(sources.values(), options), coverage };
+  }
+
+  async updateCompanionEntry(input: StreamEntryUpdate): Promise<void> {
+    return this.runLifecycleMutation(input.agentId, () =>
+      this.updateCompanionEntrySerialized(input),
+    );
+  }
+
+  private async updateCompanionEntrySerialized(input: StreamEntryUpdate): Promise<void> {
+    // getAgent() hands out a copy; mutate the live record so the next snapshot carries the change.
+    const liveAgent = this.agents.get(input.agentId) ?? null;
     let entries = liveAgent?.companionEntries;
     if (!liveAgent) {
-      if (!this.registry) return;
+      if (!this.registry) throw new Error("Stream storage unavailable");
       const stored = await this.registry.get(input.agentId);
-      if (!stored) return;
+      if (!stored) throw new Error("Conversation no longer exists");
       entries = restoreCompanionEntries({ companionEntries: stored.companionEntries });
     } else {
       entries = entries ?? [];
     }
 
-    if (!entries) return;
-    let next = [...entries];
-
-    if (input.action === "update_status" && input.entryId && input.status) {
-      next = next.map((e) =>
-        e.id === input.entryId && (e.kind === "question" || e.kind === "feature_request")
-          ? { ...e, status: input.status as "open" | "reviewed" | "done" }
-          : e,
-      );
-    } else if (input.action === "add_pin") {
-      const pinId = `pin:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const appended = appendManualCompanionEntry(next, {
-        id: pinId,
-        kind: "pin",
-        timestamp: new Date().toISOString(),
-        text: input.text ?? "",
-        truncated: false,
-        sourceId: input.sourceId,
-      });
-      if (appended.error) {
-        throw new Error(appended.error);
-      }
-      next = appended.entries;
-    } else if (input.action === "remove_pin" && input.entryId) {
-      next = next.filter((e) => !(e.id === input.entryId && e.kind === "pin"));
-    } else if (input.action === "add_q_and_a") {
-      const qnaId = `qa:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const appended = appendManualCompanionEntry(next, {
-        id: qnaId,
-        kind: "q_and_a",
-        timestamp: new Date().toISOString(),
-        text: input.text ?? "",
-        answer: input.answerText,
-        truncated: false,
-      });
-      if (appended.error) {
-        throw new Error(appended.error);
-      }
-      next = appended.entries;
-    }
+    const next = applyStreamEntryUpdate(entries, input);
 
     if (liveAgent) {
+      this.requireRegistry();
       liveAgent.companionEntries = next;
-      this.emitState(liveAgent, { persist: true });
+      // Ack follows durable storage: the response is only sent after the
+      // record write settles, and a failed write propagates as a rejection
+      // (never acknowledged as persisted).
+      const seq = ++liveAgent.persistSeq;
+      try {
+        await this.persistSnapshot(liveAgent);
+      } catch (error) {
+        this.notePersistFailure(liveAgent, seq, error);
+        throw error;
+      }
+      this.notePersistSuccess(liveAgent, seq);
+      this.emitState(liveAgent, { persist: false });
     } else {
-      await this.writeStoredMetadata(input.agentId, { companionEntries: next });
+      const seq = (this.dormantPersistSeq.get(input.agentId) ?? 0) + 1;
+      this.dormantPersistSeq.set(input.agentId, seq);
+      try {
+        await this.writeStoredMetadata(input.agentId, { companionEntries: next });
+      } catch (error) {
+        this.noteDormantPersistFailure(input.agentId, seq, error);
+        throw error;
+      }
+      this.noteDormantPersistSuccess(input.agentId, seq);
+    }
+  }
+
+  private notePersistFailure(agent: ManagedAgent, seq: number, error: unknown): void {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOSPC" && code !== "EIO") {
+      this.logger.error({ err: error, agentId: agent.id }, "Failed to persist agent snapshot");
+      return;
+    }
+    // Monotonic highest failed generation: a late OLDER failure never moves
+    // the marker backward past a newer failure.
+    const previous = agent.captureDegradedSeq;
+    agent.captureDegradedSeq = previous === null ? seq : Math.max(previous, seq);
+    this.logger.error(
+      { err: error, agentId: agent.id, code, path: this.registry?.describeRecordPath(agent.id) },
+      "agent.manager.capture_degraded",
+    );
+    if (agent.streamCaptureDegraded !== true) {
+      agent.streamCaptureDegraded = true;
+      this.emitState(agent, { persist: false });
+    }
+  }
+
+  private notePersistSuccess(agent: ManagedAgent, seq: number): void {
+    if (agent.captureDegradedSeq === null || seq <= agent.captureDegradedSeq) {
+      return;
+    }
+    agent.captureDegradedSeq = null;
+    if (agent.streamCaptureDegraded === true) {
+      agent.streamCaptureDegraded = false;
+      this.emitState(agent, { persist: false });
+    }
+  }
+
+  private noteDormantPersistFailure(agentId: string, seq: number, error: unknown): void {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOSPC" && code !== "EIO") return;
+    const previous = this.dormantDegradedSeq.get(agentId);
+    this.dormantDegradedSeq.set(agentId, previous === undefined ? seq : Math.max(previous, seq));
+    this.logger.error(
+      { err: error, agentId, code, path: this.registry?.describeRecordPath(agentId) },
+      "agent.manager.capture_degraded",
+    );
+  }
+
+  private noteDormantPersistSuccess(agentId: string, seq: number): void {
+    const failedSeq = this.dormantDegradedSeq.get(agentId);
+    if (failedSeq !== undefined && seq > failedSeq) {
+      this.dormantDegradedSeq.delete(agentId);
     }
   }
 
@@ -2633,7 +2785,7 @@ export class AgentManager {
     agentId: string,
     updates: {
       title?: string;
-      labels?: Record<string, string>;
+      labels?: AgentLabelPatch;
     },
   ): Promise<void> {
     await this.runLifecycleMutation(agentId, () =>
@@ -2645,7 +2797,7 @@ export class AgentManager {
     agentId: string,
     updates: {
       title?: string;
-      labels?: Record<string, string>;
+      labels?: AgentLabelPatch;
     },
   ): Promise<void> {
     const liveAgent = this.getAgent(agentId);
@@ -2662,7 +2814,7 @@ export class AgentManager {
     await this.writeStoredMetadata(agentId, updates);
   }
 
-  private async runLifecycleMutation<T>(agentId: string, mutation: () => Promise<T>): Promise<T> {
+  async runLifecycleMutation<T>(agentId: string, mutation: () => Promise<T>): Promise<T> {
     // Parent cascade classifies a child inside the same lane used by open-tab
     // label writes, so a received ownership update cannot be overtaken.
     const previous = this.lifecycleMutationTails.get(agentId) ?? Promise.resolve();
@@ -3063,6 +3215,7 @@ export class AgentManager {
   }
 
   private openActiveTurn(agent: ActiveManagedAgent, turnId: string, startedAt: Date): void {
+    agent.assistantActivityTurnId = undefined;
     agent.activeTurnId = turnId;
     agent.activeTurnStartedAt = startedAt;
   }
@@ -3632,8 +3785,14 @@ export class AgentManager {
   }
 
   async deleteAgentState(agentId: string): Promise<void> {
-    this.discardRetainedAgentState(agentId);
-    await this.deleteCommittedTimeline(agentId);
+    // Serialize the cleanup against dormant Stream mutations on the same
+    // lane: an in-flight dormant write finishes (and repopulates its
+    // generation maps) BEFORE the discard runs, so a late completion can
+    // never resurrect the bookkeeping after cleanup.
+    return this.runLifecycleMutation(agentId, async () => {
+      this.discardRetainedAgentState(agentId);
+      await this.deleteCommittedTimeline(agentId);
+    });
   }
 
   async deleteCommittedTimeline(agentId: string): Promise<void> {
@@ -3877,6 +4036,7 @@ export class AgentManager {
       createdAt?: Date;
       updatedAt?: Date;
       lastUserMessageAt?: Date | null;
+      messageActivity?: MessageActivity;
       labels?: Record<string, string>;
       timeline?: AgentTimelineItem[];
       timelineRows?: AgentTimelineRow[];
@@ -4068,6 +4228,7 @@ export class AgentManager {
           createdAt?: Date;
           updatedAt?: Date;
           lastUserMessageAt?: Date | null;
+          messageActivity?: MessageActivity;
           labels?: Record<string, string>;
           historyPrimed?: boolean;
           lastUsage?: AgentUsage;
@@ -4113,6 +4274,7 @@ export class AgentManager {
       ),
       historyPrimed: options?.historyPrimed ?? durableTimelineHasRows,
       lastUserMessageAt: options?.lastUserMessageAt ?? null,
+      messageActivity: resolveInitialMessageActivity(options),
       lastUsage: options?.lastUsage,
       lastError: options?.lastError,
       attention: resolveInitialAttention(options?.attention),
@@ -4120,6 +4282,9 @@ export class AgentManager {
       labels: options?.labels ?? {},
       artifacts: resolveInitialArtifacts(options?.artifacts),
       companionEntries: restoreCompanionEntries(options),
+      streamCaptureDegraded: false,
+      persistSeq: 0,
+      captureDegradedSeq: null,
     } as ActiveManagedAgent;
   }
 
@@ -4177,6 +4342,11 @@ export class AgentManager {
     this.companionCollector.clear(agentId);
     this.timelineStore.delete(agentId);
     this.paseoToolPolicies.delete(agentId);
+    // Dormant degraded bookkeeping dies with the record. This runs inside the
+    // archive/delete lifecycle lane, so no dormant write for this agent can
+    // be in flight; the next dormant write starts a fresh generation.
+    this.dormantPersistSeq.delete(agentId);
+    this.dormantDegradedSeq.delete(agentId);
     for (const event of this.sideConversations.deleteParent(agentId)) {
       this.dispatch({ type: "side_conversation", event });
     }
@@ -4518,6 +4688,7 @@ export class AgentManager {
         });
       }
     }
+    this.mergeHistoricalMessageActivity(agent, historyEvents);
     this.touchUpdatedAt(agent);
     this.emitState(agent);
   }
@@ -4590,6 +4761,7 @@ export class AgentManager {
       }
     }
     agent.historyPrimed = true;
+    this.mergeHistoricalMessageActivity(agent, historyEvents);
 
     if (typeof broadcast !== "function" || !broadcast()) {
       return;
@@ -4603,6 +4775,24 @@ export class AgentManager {
         epoch: this.timelineStore.getEpoch(agent.id),
         timestamp: row.timestamp,
       });
+    }
+  }
+
+  private mergeHistoricalMessageActivity(
+    agent: ActiveManagedAgent,
+    events: Iterable<Extract<AgentStreamEvent, { type: "timeline" }>>,
+  ): void {
+    const historical = deriveHistoricalMessageActivity(events);
+    const previous = agent.messageActivity ?? emptyMessageActivity();
+    let next = advanceMessageActivity(previous, "user", historical.lastUserMessageAt ?? undefined);
+    next = advanceMessageActivity(
+      next,
+      "assistant",
+      historical.lastAssistantMessageAt ?? undefined,
+    );
+    if (next !== previous) {
+      agent.messageActivity = next;
+      this.emitState(agent);
     }
   }
 
@@ -4892,6 +5082,18 @@ export class AgentManager {
     }
 
     event.item = item;
+    if (options?.fromHistory) {
+      this.recordTimeline(
+        agent.id,
+        event.item,
+        event.timestamp ? { timestamp: event.timestamp } : undefined,
+      );
+      this.mergeHistoricalMessageActivity(agent, [event]);
+      flags.shouldDispatchEvent = false;
+      flags.shouldNotifyWaiters = false;
+      return;
+    }
+
     if (
       event.item.type === "user_message" &&
       event.item.clientMessageId &&
@@ -4902,20 +5104,14 @@ export class AgentManager {
       return;
     }
 
-    if (options?.fromHistory) {
-      this.recordTimeline(
-        agent.id,
-        event.item,
-        event.timestamp ? { timestamp: event.timestamp } : undefined,
-      );
-      flags.shouldDispatchEvent = false;
-      flags.shouldNotifyWaiters = false;
-      return;
-    }
-
     this.recordAndDispatchTimelineItem(agent.id, event.item, event.provider, event.turnId);
     if (event.item.type === "user_message") {
       agent.lastUserMessageAt = new Date();
+      agent.messageActivity = advanceMessageActivity(
+        agent.messageActivity ?? emptyMessageActivity(),
+        "user",
+        event.timestamp ?? agent.lastUserMessageAt,
+      );
       this.emitState(agent);
     }
     flags.shouldDispatchEvent = false;
@@ -4942,6 +5138,19 @@ export class AgentManager {
       "agent.manager.turn.completed",
     );
     if (terminalDisposition === "stale") return;
+    if (
+      eventTurnId &&
+      terminalDisposition === "closed_current" &&
+      agent.assistantActivityTurnId === eventTurnId
+    ) {
+      agent.messageActivity = advanceMessageActivity(
+        agent.messageActivity ?? emptyMessageActivity(),
+        "assistant",
+        new Date(),
+      );
+      agent.assistantActivityTurnId = undefined;
+      this.emitState(agent);
+    }
     if (event.usage) {
       agent.lastUsage = { ...agent.lastUsage, ...event.usage };
     }
@@ -5194,6 +5403,7 @@ export class AgentManager {
           provider,
           requestId,
           resolution: { behavior: "deny", message },
+          disposition: "expired",
         });
       }
     }
@@ -5217,6 +5427,12 @@ export class AgentManager {
       ...(turnId !== undefined ? { turnId } : {}),
     };
     const timelineAgent = this.agents.get(agentId);
+    if (timelineAgent && item.type === "assistant_message" && item.text.trim()) {
+      const messageTurnId = turnId ?? timelineAgent.activeTurnId;
+      if (messageTurnId && messageTurnId === timelineAgent.activeTurnId) {
+        timelineAgent.assistantActivityTurnId = messageTurnId;
+      }
+    }
     if (timelineAgent) this.collectCompanionEvent(timelineAgent, event);
     this.dispatchStream(agentId, event, {
       seq: row.seq,
@@ -5255,13 +5471,14 @@ export class AgentManager {
     if (!item) return;
     // Human attempts stay in history on rejection; delivery notifications require acceptance.
     if (outcome === "rejected" && item.type !== "user_message") return;
-    this.recordSubmittedPromptItem(agent, item, options);
+    this.recordSubmittedPromptItem(agent, item, options, outcome === "accepted");
   }
 
   private recordSubmittedPromptItem(
     agent: ActiveManagedAgent,
     item: AgentTimelineItem,
     options?: { providerMessageId?: string; turnId?: string },
+    accepted = true,
   ): void {
     if (
       item.type === "user_message" &&
@@ -5270,7 +5487,16 @@ export class AgentManager {
     )
       return;
     this.touchUpdatedAt(agent);
-    if (item.type === "user_message") agent.lastUserMessageAt = new Date();
+    if (item.type === "user_message") {
+      agent.lastUserMessageAt = new Date();
+      if (accepted && !isSystemInjectedEnvelope(item.text)) {
+        agent.messageActivity = advanceMessageActivity(
+          agent.messageActivity ?? emptyMessageActivity(),
+          "user",
+          agent.lastUserMessageAt,
+        );
+      }
+    }
     this.recordAndDispatchTimelineItem(agent.id, item, agent.provider, options?.turnId, options);
   }
 
@@ -5300,7 +5526,10 @@ export class AgentManager {
         clientMessageId,
         messageId,
       );
-      if (enriched) this.enqueueDurableTimelineUpdate(agent.id, enriched);
+      if (enriched) {
+        this.enqueueDurableTimelineUpdate(agent.id, enriched);
+        this.indexUserMessageSources(agent.id);
+      }
     }
     return existing;
   }
@@ -5371,7 +5600,22 @@ export class AgentManager {
     item = limitAgentTimelineItemContent(item);
     const row = this.timelineStore.append(agentId, item, options);
     this.enqueueDurableTimelineAppend(agentId, row);
+    if (item.type === "user_message") this.indexUserMessageSources(agentId);
     return row;
+  }
+
+  private indexUserMessageSources(agentId: string): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+    const entries = agent.companionEntries ?? [];
+    const indexed = indexStreamMessages(
+      entries,
+      this.timelineStore.getRows(agentId).filter((row) => row.item.type === "user_message"),
+      this.timelineStore.getEpoch(agentId),
+    );
+    if (indexed === entries) return;
+    agent.companionEntries = indexed;
+    this.enqueueBackgroundPersist(agent);
   }
 
   private emitState(agent: ManagedAgent, options?: { persist?: boolean }): void {
@@ -5445,9 +5689,18 @@ export class AgentManager {
   }
 
   private enqueueBackgroundPersist(agent: ManagedAgent): void {
-    const task = this.persistSnapshot(agent).catch((err) => {
-      this.logger.error({ err, agentId: agent.id }, "Failed to persist agent snapshot");
-    });
+    // Async IIFE so a SYNCHRONOUS throw from persistSnapshot routes through the
+    // same classifier as a rejection — it cannot bypass the degraded policy.
+    const task = (async () => {
+      const seq = ++agent.persistSeq;
+      try {
+        await this.persistSnapshot(agent);
+      } catch (err) {
+        this.notePersistFailure(agent, seq, err);
+        return;
+      }
+      this.notePersistSuccess(agent, seq);
+    })();
     this.trackBackgroundTask(task);
   }
 
@@ -5977,4 +6230,10 @@ export function commandMayHaveChangedExternalState(command: string): boolean {
     // ahead/behind counts can drift stale until the next refresh.
     /\bgit\s+fetch\b/.test(normalized)
   );
+}
+
+function resolveInitialMessageActivity(options?: {
+  messageActivity?: MessageActivity;
+}): MessageActivity {
+  return options?.messageActivity ?? emptyMessageActivity();
 }

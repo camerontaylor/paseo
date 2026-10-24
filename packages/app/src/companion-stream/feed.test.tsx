@@ -22,6 +22,20 @@ vi.mock("@/components/ui/button", () => ({ Button: () => null }));
 vi.mock("@/components/ui/text-input", () => ({ EditingTextInput: () => null }));
 vi.mock("@/components/ui/segmented-control", () => ({ SegmentedControl: () => null }));
 vi.mock("@/components/markdown/renderer", () => ({ MarkdownRenderer: () => null }));
+vi.mock("@/utils/copy-to-clipboard", () => ({ copyToClipboard: vi.fn() }));
+vi.mock("@/utils/open-external-url", () => ({ openExternalUrl: vi.fn() }));
+vi.mock("@/utils/navigate-to-agent", () => ({ navigateToAgent: vi.fn() }));
+vi.mock("./use-global-stream", () => ({
+  useGlobalStream: () => ({
+    rows: [],
+    notices: [],
+    refetch: vi.fn(),
+    fetchNextPage: vi.fn(),
+    isLoading: false,
+    isFetching: false,
+    hasNextPage: false,
+  }),
+}));
 vi.mock("lucide-react-native", () => ({
   FileCode2: () => null,
   FileDiff: () => null,
@@ -52,6 +66,7 @@ function mountUnsupported(artifacts: readonly AgentArtifact[]) {
       entries={[]}
       artifacts={artifacts}
       isSupported={false}
+      artifactsSupported={false}
       onOpenWorkspaceFile={openFile}
       onReturnToChat={returnToChat}
       onReplyInChat={vi.fn()}

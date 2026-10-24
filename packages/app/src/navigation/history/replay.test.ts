@@ -9,6 +9,16 @@ vi.hoisted(() => {
 vi.mock("expo-router", () => ({
   router: { navigate: vi.fn(), push: vi.fn(), replace: vi.fn(), dismissTo: vi.fn() },
 }));
+vi.mock("@/stores/navigation-active-workspace-store", () => ({
+  navigateToWorkspace: vi.fn(),
+}));
+vi.mock("@/stores/session-store", () => ({
+  useSessionStore: { getState: () => ({ sessions: {} }) },
+}));
+vi.mock("@/stores/workspace-layout-store", () => ({
+  useWorkspaceLayoutStore: { getState: () => ({ layoutByWorkspace: {} }) },
+  findPaneContainingTab: () => null,
+}));
 vi.mock("@react-native-async-storage/async-storage", () => {
   const storage = new Map<string, string>();
   return {

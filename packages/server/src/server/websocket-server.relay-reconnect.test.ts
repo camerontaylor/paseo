@@ -18,7 +18,10 @@ import {
   TerminalStreamOpcode,
 } from "@getpaseo/protocol/terminal-stream-protocol";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
-import { APPLICATION_SOCKET_LEASE_MS } from "./websocket/physical-socket.js";
+import {
+  APPLICATION_SOCKET_LEASE_MS,
+  MAX_PHYSICAL_SOCKET_BUFFERED_BYTES,
+} from "./websocket/physical-socket.js";
 
 type SocketListener = (...args: unknown[]) => void;
 
@@ -67,6 +70,7 @@ const sessionMock = vi.hoisted(() => {
     clearAgentTimelineSubscription = vi.fn((source: object) => {
       void this.delivery.detach(source);
     });
+    clearClientOutboxReport = vi.fn();
     getClientActivity = vi.fn(() => null);
     wantsSourceEvent = (source: object) => !this.delivery.isModern(source);
     getSessionId = vi.fn(() => "mock-session-id");
@@ -847,6 +851,71 @@ describe("relay external socket reconnect behavior", () => {
     });
     expect(sessionMock.instances).toHaveLength(2);
 
+    await server.close();
+  });
+
+  test("UI broadcast count excludes a socket rejected at physical high-water", async () => {
+    const server = createServer();
+    const socket = new MockSocket();
+    await server.attachExternalSocket(socket, { transport: "relay" });
+    socket.emit(
+      "message",
+      JSON.stringify(
+        createHelloMessage("cid-ui-high-water", {
+          capabilities: { [CLIENT_CAPS.uiCommands]: true },
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
+    socket.bufferedAmount = MAX_PHYSICAL_SOCKET_BUFFERED_BYTES - 1;
+
+    expect(
+      server.broadcastToTrustedClients({
+        type: "session",
+        message: {
+          type: "ui.command",
+          payload: {
+            command: "tab.open",
+            workspaceId: "workspace-1",
+            target: { kind: "draft" },
+          },
+        },
+      }),
+    ).toBe(0);
+    expect(sentEnvelopes(socket).filter((item) => item.message?.type === "ui.command")).toEqual([]);
+    await server.close();
+  });
+
+  test("UI broadcast count excludes a socket whose send throws", async () => {
+    const server = createServer();
+    const socket = new MockSocket();
+    await server.attachExternalSocket(socket, { transport: "relay" });
+    socket.emit(
+      "message",
+      JSON.stringify(
+        createHelloMessage("cid-ui-send-failed", {
+          capabilities: { [CLIENT_CAPS.uiCommands]: true },
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
+    vi.spyOn(socket, "send").mockImplementation(() => {
+      throw new Error("send failed");
+    });
+
+    expect(
+      server.broadcastToTrustedClients({
+        type: "session",
+        message: {
+          type: "ui.command",
+          payload: {
+            command: "tab.open",
+            workspaceId: "workspace-1",
+            target: { kind: "draft" },
+          },
+        },
+      }),
+    ).toBe(0);
     await server.close();
   });
 

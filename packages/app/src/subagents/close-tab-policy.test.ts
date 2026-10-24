@@ -14,6 +14,15 @@ describe("resolveCloseAgentTabPolicy", () => {
     });
   });
 
+  it("removes a root session shown in another workspace without archiving it", () => {
+    expect(
+      resolveCloseAgentTabPolicy({ parentAgentId: null, workspaceId: "home" }, "viewing-workspace"),
+    ).toEqual({ kind: "layout-only" });
+    expect(
+      resolveCloseAgentTabPolicy({ parentAgentId: null, workspaceId: "home" }, "home"),
+    ).toEqual({ kind: "archive-on-close" });
+  });
+
   it("preserves the existing archive fallback when the agent is missing", () => {
     expect(resolveCloseAgentTabPolicy(null)).toEqual({ kind: "archive-on-close" });
     expect(resolveCloseAgentTabPolicy(undefined)).toEqual({ kind: "archive-on-close" });

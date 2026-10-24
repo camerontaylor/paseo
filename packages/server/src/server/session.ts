@@ -1,6 +1,19 @@
 import { AgentDirectory } from "./agent/directory.js";
 import { TIMELINE_PAGE_BYTE_BUDGET } from "./websocket/physical-socket.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
+import {
+  searchExistingSessions,
+  selectSessionSearchExcerpts,
+  type SessionSearchCandidate,
+} from "./session-search.js";
+import {
+  generateSessionSearchRanking,
+  resolveSessionSearchMatcherConfig,
+} from "./session-search-matcher.js";
+import { searchSessionText, type SessionTextSearchCandidate } from "./session-text-search.js";
+import { getSharedPersistedConversationReader } from "./session-text-history.js";
+import { parseSessionIdQuery } from "@getpaseo/protocol/search/session-id";
+import { configurationEnvironment } from "./config-environment.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type {
@@ -106,6 +119,8 @@ import {
 
 import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
 import type { AgentQueueService } from "./agent-queue/service.js";
+import type { ClientDiagnosticsStore } from "./client-diagnostics/store.js";
+import { resolveUiTabOpenCommand } from "./ui-commands.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
 import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import type {
@@ -168,6 +183,7 @@ import {
   type WorkspaceMutation,
   type WorkspaceRegistry,
 } from "./workspace-registry.js";
+import { setProjectDefault, setProjectPinned } from "./project-pins.js";
 import { isVoicePermissionAllowed } from "./voice-permission-policy.js";
 import {
   ProjectIconReader,
@@ -446,6 +462,10 @@ const nodeSessionFileSystem: SessionFileSystem = {
 type AgentMcpTransportFactory = () => Promise<unknown>;
 
 /** Collapses an optional injected subsystem to its settled nullable form. */
+function daemonServerId(value?: string): string {
+  return value ?? "";
+}
+
 function nullable<T>(value?: T | null): T | null {
   return value ?? null;
 }
@@ -475,6 +495,7 @@ export interface SessionOptions {
   clientCapabilities?: Record<string, unknown> | null;
   onMessage: (msg: SessionOutboundMessage) => void;
   onMessageToSource?: (source: object, msg: SessionOutboundMessage) => void;
+  broadcastToClients?: (msg: SessionOutboundMessage) => number;
   onBinaryMessage?: (frame: Uint8Array) => void;
   onBinaryMessageToSource?: (source: object, frame: Uint8Array) => Promise<void>;
   getTransportBufferedAmount?: (source?: object) => number | null;
@@ -490,6 +511,7 @@ export interface SessionOptions {
   agentStorage: AgentStorage;
   /** Absent when the daemon runs without the durable queue (pre-fork peer). */
   agentQueueService?: AgentQueueService | null;
+  clientDiagnostics?: ClientDiagnosticsStore | null;
   messageReceipts: Pick<MessageReceipts, "send" | "listForAttachment">;
   creationService: Pick<CreationService, "create" | "subscribe">;
   projectRegistry: ProjectRegistry;
@@ -758,6 +780,9 @@ export class Session {
   private readonly clientId: string;
   private readonly authorization: SessionAuthorization;
   private readonly agentQueueService: AgentQueueService | null;
+  private readonly clientDiagnostics: ClientDiagnosticsStore | null;
+  private readonly daemonServerId: string;
+  private readonly broadcastToClients: ((msg: SessionOutboundMessage) => number) | null;
   private unsubscribeAgentQueue: (() => void) | null = null;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
@@ -807,6 +832,8 @@ export class Session {
   private registryMutationQueue: Promise<void> = Promise.resolve();
   private projectUpdateQueue: Promise<void> = Promise.resolve();
   private isCleanedUp = false;
+  private sessionSearchActive: AbortController | null = null;
+  private sessionTextSearchActive: AbortController | null = null;
   private readonly timelineSubscriptions = new Map<
     string,
     { owner: OwnedSubscription; agentIds: Set<string> }
@@ -960,6 +987,9 @@ export class Session {
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.agentQueueService = nullable(options.agentQueueService);
+    this.clientDiagnostics = nullable(options.clientDiagnostics);
+    this.daemonServerId = daemonServerId(serverId);
+    this.broadcastToClients = nullable(options.broadcastToClients);
     this.unsubscribeAgentQueue = this.subscribeToAgentQueueMutations();
     this.projectRegistry = projectRegistry;
     this.workspaceRegistry = workspaceRegistry;
@@ -1285,11 +1315,13 @@ export class Session {
         },
         logger: this.sessionLogger,
         sessionId: this.sessionId,
+        realtimeHome: this.paseoHome,
         sttLanguage,
         tts,
         stt,
         voice,
         voiceBridge,
+        reportDiagnostic: (input) => this.clientDiagnostics?.recordHost(input),
         dictation,
       },
       this.delivery,
@@ -2749,6 +2781,8 @@ export class Session {
       case "abort_request":
       case "audio_played":
       case "set_voice_mode":
+      case "voice.realtime.control.request":
+      case "voice.input.set_muted.request":
       case "dictation_stream_start":
       case "dictation_stream_chunk":
       case "dictation_stream_finish":
@@ -2809,6 +2843,10 @@ export class Session {
         return this.handleFetchAgentTimelineRequest(msg, source);
       case "agent.timeline.append.request":
         return this.handleAgentTimelineAppendRequest(msg);
+      case "session.search.request":
+        return this.handleSessionSearchRequest(msg, source);
+      case "session.text_search.request":
+        return this.handleSessionTextSearchRequest(msg, source);
       case "agent.timeline.search.request":
         return this.handleAgentTimelineSearchRequest(msg, source);
       case "agent.timeline.list_prompts.request":
@@ -2898,7 +2936,12 @@ export class Session {
   }
 
   private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
-    return this.dispatchAgentQueueMessage(msg) ?? this.dispatchAgentLifecycleOperation(msg);
+    return (
+      this.dispatchUiCommandMessage(msg) ??
+      this.dispatchClientDiagnosticsMessage(msg) ??
+      this.dispatchAgentQueueMessage(msg) ??
+      this.dispatchAgentLifecycleOperation(msg)
+    );
   }
 
   private dispatchAgentLifecycleOperation(msg: SessionInboundMessage): Promise<void> | undefined {
@@ -3104,6 +3147,10 @@ export class Session {
         return this.handleWorkspaceTitleSetRequest(msg.workspaceId, msg.title, msg.requestId);
       case "workspace.pin.set.request":
         return this.handleWorkspacePinSetRequest(msg.workspaceId, msg.pinned, msg.requestId);
+      case "project.pin.set.request":
+        return this.handleProjectPinSetRequest(msg);
+      case "project.default.set.request":
+        return this.handleProjectDefaultSetRequest(msg);
       default:
         return undefined;
     }
@@ -3255,6 +3302,12 @@ export class Session {
     switch (msg.type) {
       case "agent.companion.update_entry.request":
         await this.handleCompanionUpdateEntryRequest(msg);
+        return;
+      case "stream.list.request":
+        await this.handleStreamListRequest(msg);
+        return;
+      case "stream.entry.update.request":
+        await this.handleStreamUpdateRequest(msg);
         return;
       case "agent.artifacts.scan.request":
         await this.handleAgentArtifactsScanRequest(msg.agentId, msg.requestId, msg.limit);
@@ -3665,6 +3718,65 @@ export class Session {
     });
   }
 
+  // COMPAT(globalStream): added in TMAD intake 2026-10-24, remove after 2027-04-24.
+  // The stream RPCs are served only to sessions declaring the capability, so
+  // an unknown response type can never reach a client whose outbound union
+  // cannot parse it. A capability-absent request is dropped: no response of
+  // either new type, and no mutation for update requests.
+  private streamRpcAdmitted(): boolean {
+    if (this.supports(CLIENT_CAPS.globalStream)) return true;
+    this.sessionLogger.info(
+      { sessionId: this.sessionId },
+      "session: stream request dropped (capability absent)",
+    );
+    return false;
+  }
+
+  private async handleStreamListRequest(
+    msg: Extract<SessionInboundMessage, { type: "stream.list.request" }>,
+  ): Promise<void> {
+    if (!this.streamRpcAdmitted()) return;
+    try {
+      const page = await this.agentManager.listGlobalStream(msg);
+      this.emit({
+        type: "stream.list.response",
+        payload: { requestId: msg.requestId, ...page, error: null },
+      });
+    } catch (error) {
+      this.emit({
+        type: "stream.list.response",
+        payload: {
+          requestId: msg.requestId,
+          rows: [],
+          nextCursor: null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  private async handleStreamUpdateRequest(
+    msg: Extract<SessionInboundMessage, { type: "stream.entry.update.request" }>,
+  ): Promise<void> {
+    if (!this.streamRpcAdmitted()) return;
+    try {
+      await this.agentManager.updateCompanionEntry(msg);
+      this.emit({
+        type: "stream.entry.update.response",
+        payload: { requestId: msg.requestId, accepted: true },
+      });
+    } catch (error) {
+      this.emit({
+        type: "stream.entry.update.response",
+        payload: {
+          requestId: msg.requestId,
+          accepted: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
   private async handleUpdateAgentRequest(
     agentId: string,
     name: string | undefined,
@@ -4040,6 +4152,78 @@ export class Session {
           error: getErrorMessageOr(error, "Failed to set workspace title"),
         },
       });
+    }
+  }
+
+  private async handleProjectPinSetRequest(
+    request: Extract<SessionInboundMessage, { type: "project.pin.set.request" }>,
+  ): Promise<void> {
+    const { projectId, pinned, requestId } = request;
+    const logContext = { projectId, pinned, requestId };
+    this.sessionLogger.info(logContext, "session: project.pin.set.request");
+    const emitResponse = (accepted: boolean, pinnedAt: string | null, error: string | null) => {
+      this.emit({
+        type: "project.pin.set.response",
+        payload: { requestId, projectId, accepted, pinnedAt, error },
+      });
+    };
+    try {
+      const updated = await setProjectPinned({
+        registry: this.projectRegistry,
+        projectId,
+        pinned,
+        now: new Date().toISOString(),
+      });
+      if (!updated) {
+        emitResponse(false, null, "Project not found");
+        return;
+      }
+      emitResponse(true, updated.pinnedAt ?? null, null);
+      // The registry mutation also broadcasts to every client; this keeps the requester current
+      // even when it is the only observer, matching project rename.
+      await this.emitProjectUpdate({ kind: "upsert", project: updated });
+    } catch (error) {
+      this.sessionLogger.error(
+        { ...logContext, err: error },
+        "session: project.pin.set.request error",
+      );
+      emitResponse(false, null, getErrorMessageOr(error, "Failed to pin project"));
+    }
+  }
+
+  private async handleProjectDefaultSetRequest(
+    request: Extract<SessionInboundMessage, { type: "project.default.set.request" }>,
+  ): Promise<void> {
+    const { projectId, isDefault, requestId } = request;
+    const logContext = { projectId, isDefault, requestId };
+    this.sessionLogger.info(logContext, "session: project.default.set.request");
+    const emitResponse = (accepted: boolean, defaultAt: string | null, error: string | null) => {
+      this.emit({
+        type: "project.default.set.response",
+        payload: { requestId, projectId, accepted, defaultAt, error },
+      });
+    };
+    try {
+      const result = await setProjectDefault({
+        registry: this.projectRegistry,
+        projectId,
+        isDefault,
+        now: new Date().toISOString(),
+      });
+      if (!result.project) {
+        emitResponse(false, null, "Project not found");
+        return;
+      }
+      emitResponse(true, result.project.defaultAt ?? null, null);
+      for (const project of result.changed) {
+        await this.emitProjectUpdate({ kind: "upsert", project });
+      }
+    } catch (error) {
+      this.sessionLogger.error(
+        { ...logContext, err: error },
+        "session: project.default.set.request error",
+      );
+      emitResponse(false, null, getErrorMessageOr(error, "Failed to set the default project"));
     }
   }
 
@@ -6087,6 +6271,8 @@ export class Session {
       projectIconRevision: icon.revision,
       projectRootPath: project.rootPath,
       projectKind: project.kind,
+      ...(project.pinnedAt ? { projectPinnedAt: project.pinnedAt } : {}),
+      ...(project.defaultAt ? { projectDefaultAt: project.defaultAt } : {}),
     };
   }
 
@@ -7844,7 +8030,7 @@ export class Session {
   private async handleWorkspaceMarkUnreadRequest(
     request: Extract<SessionInboundMessage, { type: "workspace.mark_unread.request" }>,
   ): Promise<void> {
-    const { requestId, workspaceId } = request;
+    const { requestId, workspaceId, agentId } = request;
     let markedAgentId: string | null = null;
     try {
       const workspace = await this.workspaceRegistry.get(workspaceId);
@@ -7856,6 +8042,19 @@ export class Session {
         this.isProviderVisibleToClient(agent.provider),
       );
       const agentsById = new Map(agents.map((agent) => [agent.id, agent] as const));
+      if (agentId) {
+        const target = agentsById.get(agentId);
+        if (!target || target.archivedAt || target.workspaceId !== workspace.workspaceId) {
+          throw new Error(`Agent not found in workspace: ${agentId}`);
+        }
+        await this.agentManager.markAgentUnread(target.id);
+        markedAgentId = target.id;
+        this.emit({
+          type: "workspace.mark_unread.response",
+          payload: { requestId, workspaceId, markedAgentId, success: true, error: null },
+        });
+        return;
+      }
       const candidates = agents
         .filter((agent) => !agent.archivedAt && agent.workspaceId === workspace.workspaceId)
         .filter((agent) => resolveWorkspaceRootAgent(agent, agentsById)?.id === agent.id)
@@ -8073,6 +8272,239 @@ export class Session {
       type: "agent.timeline.append.response",
       payload: { requestId: msg.requestId, seq, epoch },
     });
+  }
+
+  private async getSessionSearchCandidates(
+    workspaceIds: string[],
+    query: string,
+    signal: AbortSignal,
+  ): Promise<SessionSearchCandidate[]> {
+    const [records, workspaces, projects] = await Promise.all([
+      this.agentStorage.list(),
+      this.workspaceRegistry.list(),
+      this.projectRegistry.list(),
+    ]);
+    const workspaceById = new Map(
+      workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+    );
+    const projectById = new Map(projects.map((project) => [project.projectId, project]));
+    const allowed = new Set(workspaceIds);
+    const candidates: SessionSearchCandidate[] = [];
+    for (const record of records) {
+      const workspace = record.workspaceId ? workspaceById.get(record.workspaceId) : undefined;
+      const project = workspace ? projectById.get(workspace.projectId) : undefined;
+      if (
+        !workspace ||
+        !project ||
+        workspace.archivedAt ||
+        project.archivedAt ||
+        !allowed.has(workspace.workspaceId)
+      )
+        continue;
+      if (record.internal || record.archivedAt || record.labels["paseo.parent-agent-id"]) continue;
+      const title = record.title || resolveWorkspaceDisplayName(workspace);
+      const queued = this.agentQueueService
+        ? (await this.agentQueueService.list(record.id)).items
+        : [];
+      const queuedExcerpts = selectSessionSearchExcerpts(
+        queued.map((item) => ({
+          text: item.text,
+          source: "queued_message" as const,
+          timestamp: item.createdAt,
+        })),
+        query,
+      );
+      const updatedAt = queued.reduce(
+        (latest, item) => (item.createdAt > latest ? item.createdAt : latest),
+        record.updatedAt,
+      );
+      candidates.push({
+        agentId: record.id,
+        workspaceId: workspace.workspaceId,
+        projectId: project.projectId,
+        projectName: resolveProjectDisplayName(project),
+        title,
+        cwd: workspace.cwd,
+        updatedAt,
+        excerpts: [{ text: title, source: "title" }, ...queuedExcerpts],
+      });
+      signal.throwIfAborted();
+    }
+    return candidates;
+  }
+
+  private async handleSessionSearchRequest(
+    msg: Extract<SessionInboundMessage, { type: "session.search.request" }>,
+    source?: object,
+  ): Promise<void> {
+    this.sessionSearchActive?.abort();
+    const active = new AbortController();
+    this.sessionSearchActive = active;
+    const signal = AbortSignal.any([active.signal, AbortSignal.timeout(45000)]);
+    try {
+      const candidates = await this.getSessionSearchCandidates(msg.workspaceIds, msg.query, signal);
+      let matcher: ReturnType<typeof resolveSessionSearchMatcherConfig> = null;
+      let matcherSetupError: string | null = null;
+      try {
+        matcher = resolveSessionSearchMatcherConfig({
+          persisted: loadPersistedConfig(this.paseoHome),
+          env: configurationEnvironment(process.env),
+        });
+      } catch (error) {
+        matcherSetupError = errorToFriendlyMessage(error);
+      }
+      if (!matcher && !parseSessionIdQuery(msg.query)) {
+        this.emitForSource(
+          {
+            type: "session.search.response",
+            payload: {
+              requestId: msg.requestId,
+              results: [],
+              searchedCount: 0,
+              totalCount: candidates.length,
+              error:
+                matcherSetupError ??
+                "Configure features.sessionSearch and providers.openai to use intelligent Find.",
+              errorCode: "setup_required",
+            },
+          },
+          source,
+        );
+        return;
+      }
+      const result = await searchExistingSessions({
+        query: msg.query,
+        workspaceIds: msg.workspaceIds,
+        candidates,
+        readContext: async (agentId) => {
+          signal.throwIfAborted();
+          return this.agentManager.readSessionSearchText(agentId, msg.query);
+        },
+        generate: ({ prompt }) => {
+          if (!matcher)
+            throw Object.assign(
+              new Error(matcherSetupError ?? "Session search matcher is not configured."),
+              { code: "setup_required" },
+            );
+          return generateSessionSearchRanking({ config: matcher, prompt, signal });
+        },
+      });
+      signal.throwIfAborted();
+      this.emitForSource(
+        {
+          type: "session.search.response",
+          payload: { requestId: msg.requestId, ...result, error: null },
+        },
+        source,
+      );
+    } catch (error) {
+      this.emitForSource(
+        {
+          type: "session.search.response",
+          payload: {
+            requestId: msg.requestId,
+            results: [],
+            searchedCount: 0,
+            totalCount: 0,
+            error: errorToFriendlyMessage(error),
+            errorCode:
+              error instanceof Error && "code" in error && error.code === "setup_required"
+                ? "setup_required"
+                : undefined,
+          },
+        },
+        source,
+      );
+    } finally {
+      if (this.sessionSearchActive === active) this.sessionSearchActive = null;
+    }
+  }
+
+  private async handleSessionTextSearchRequest(
+    msg: Extract<SessionInboundMessage, { type: "session.text_search.request" }>,
+    source?: object,
+  ): Promise<void> {
+    this.sessionTextSearchActive?.abort();
+    const active = new AbortController();
+    this.sessionTextSearchActive = active;
+    const signal = active.signal;
+    try {
+      const [records, workspaces, projects] = await Promise.all([
+        this.agentStorage.list(),
+        this.workspaceRegistry.list(),
+        this.projectRegistry.list(),
+      ]);
+      const workspaceById = new Map(
+        workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+      );
+      const projectById = new Map(projects.map((project) => [project.projectId, project]));
+      const allowed = msg.workspaceIds ? new Set(msg.workspaceIds) : null;
+      const candidates: SessionTextSearchCandidate[] = [];
+      const recordsById = new Map<string, (typeof records)[number]>();
+      for (const record of records) {
+        const workspace = record.workspaceId ? workspaceById.get(record.workspaceId) : undefined;
+        const project = workspace ? projectById.get(workspace.projectId) : undefined;
+        if (!workspace || !project || workspace.archivedAt || project.archivedAt) continue;
+        if (allowed && !allowed.has(workspace.workspaceId)) continue;
+        // Same exclusions as intelligent Find: archived, internal, and child sessions.
+        if (record.internal || record.archivedAt || record.labels["paseo.parent-agent-id"])
+          continue;
+        const workspaceTitle = resolveWorkspaceDisplayName(workspace);
+        recordsById.set(record.id, record);
+        candidates.push({
+          agentId: record.id,
+          workspaceId: workspace.workspaceId,
+          workspaceTitle,
+          projectName: resolveProjectDisplayName(project),
+          title: record.title || workspaceTitle,
+          provider: record.provider,
+          activityAt: record.lastActivityAt ?? record.updatedAt,
+        });
+      }
+      const result = await searchSessionText({
+        query: msg.query,
+        candidates,
+        // Loaded agents answer from the daemon's timeline. Everything else is read, never resumed,
+        // from the provider transcript its record points to (see session-text-history.ts).
+        readMessages: async (agentId) => {
+          const live = await this.agentManager.readRecentConversationMessages(agentId);
+          const record = recordsById.get(agentId);
+          if (live.length > 0 || !record) return live;
+          return getSharedPersistedConversationReader().read({
+            agentId,
+            provider: record.provider,
+            cwd: record.cwd,
+            persistence: record.persistence,
+            activityStamp: `${record.lastActivityAt ?? ""}|${record.updatedAt}`,
+          });
+        },
+        signal,
+      });
+      this.emitForSource(
+        {
+          type: "session.text_search.response",
+          payload: { requestId: msg.requestId, ...result, error: null },
+        },
+        source,
+      );
+    } catch (error) {
+      this.emitForSource(
+        {
+          type: "session.text_search.response",
+          payload: {
+            requestId: msg.requestId,
+            hits: [],
+            searchedCount: 0,
+            totalCount: 0,
+            truncated: false,
+            error: signal.aborted ? "Superseded by a newer search" : errorToFriendlyMessage(error),
+          },
+        },
+        source,
+      );
+    } finally {
+      if (this.sessionTextSearchActive === active) this.sessionTextSearchActive = null;
+    }
   }
 
   private async handleAgentTimelineSearchRequest(
@@ -8596,12 +9028,102 @@ export class Session {
     });
   }
 
+  private dispatchUiCommandMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    if (msg.type !== "ui.tab.open.request") return undefined;
+    return this.handleUiTabOpenRequest(msg);
+  }
+
+  private async handleUiTabOpenRequest(
+    msg: Extract<SessionInboundMessage, { type: "ui.tab.open.request" }>,
+  ): Promise<void> {
+    const result = await resolveUiTabOpenCommand(msg, {
+      serverId: this.daemonServerId,
+      workspaceExists: async (workspaceId) =>
+        (await this.workspaceRegistry.get(workspaceId)) != null,
+      validateTarget: async (target, workspaceId, placement) => {
+        if (target.kind === "agent" || target.kind === "provider_subagent") {
+          const agentId = target.kind === "agent" ? target.agentId : target.parentAgentId;
+          const home =
+            this.agentManager.getAgent(agentId)?.workspaceId ??
+            (await this.agentStorage.get(agentId))?.workspaceId;
+          if (!home) return `Agent not found: ${agentId}`;
+          if (placement !== "side" && home !== workspaceId)
+            return `Agent ${agentId} belongs to workspace ${home}`;
+        }
+        if (target.kind === "terminal") {
+          const terminal = this.terminalManager?.getTerminal(target.terminalId);
+          if (!terminal) return `Terminal not found: ${target.terminalId}`;
+          if (terminal.workspaceId !== workspaceId)
+            return `Terminal ${target.terminalId} belongs to workspace ${terminal.workspaceId}`;
+        }
+        return null;
+      },
+    });
+    const deliveredTo = result.ok ? (this.broadcastToClients?.(result.command) ?? 0) : 0;
+    this.emit({
+      type: "ui.tab.open.response",
+      payload: {
+        requestId: msg.requestId,
+        serverId: result.serverId,
+        workspaceId: result.workspaceId,
+        deliveredTo,
+        error: result.ok ? null : result.error,
+      },
+    });
+  }
+
+  private dispatchClientDiagnosticsMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    if (msg.type === "client.diagnostics.report.request") {
+      return (async () => {
+        const result = await this.clientDiagnostics?.recordPersisted(
+          {
+            clientId: this.clientId,
+            deviceLabel: msg.deviceLabel ?? null,
+            platform: msg.platform ?? null,
+            appVersion: this.appVersion,
+          },
+          msg.events,
+        );
+        this.emit({
+          type: "client.diagnostics.report.response",
+          payload: {
+            requestId: msg.requestId,
+            acknowledgedIds: result?.acknowledgedIds ?? [],
+            deferredIds: result?.deferredIds ?? msg.events.map((event) => event.id),
+            error: result ? null : "This daemon does not record client diagnostics.",
+          },
+        });
+      })();
+    }
+    if (msg.type === "client.diagnostics.list.request") {
+      const store = this.clientDiagnostics;
+      this.emit({
+        type: "client.diagnostics.list.response",
+        payload: {
+          requestId: msg.requestId,
+          events: store?.list({ limit: msg.limit, since: msg.since, source: msg.source }) ?? [],
+          rateLimited: store?.rateLimitedCount ?? 0,
+          retention: store?.retention ?? { maxEvents: 1, maxAgeDays: 1 },
+          error: store ? null : "This daemon does not record client diagnostics.",
+        },
+      });
+      return Promise.resolve();
+    }
+    return undefined;
+  }
+
   private dispatchAgentQueueMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     if (msg.type === "voice.input.receipts.read.request") {
       return this.handleVoiceInputReceiptsRead(msg);
     }
     if (msg.type === "agent.queue.get_item_images.request") {
       return this.handleAgentQueueGetItemImagesRequest(msg);
+    }
+    if (msg.type === "agent.queue.inspect.request") {
+      return this.handleAgentQueueInspectRequest(msg);
+    }
+    if (msg.type === "client.outbox.report.request") {
+      return this.handleClientOutboxReportRequest(msg);
     }
     if ((AGENT_QUEUE_RESPONSE_TYPES as Record<string, string>)[msg.type]) {
       return this.handleAgentQueueRequest(msg as AgentQueueRequestMessage);
@@ -8718,6 +9240,79 @@ export class Session {
     return errorToFriendlyMessage(error);
   }
 
+  private async handleAgentQueueInspectRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.queue.inspect.request" }>,
+  ): Promise<void> {
+    const failure = (error: string, agentId = msg.agentId) => {
+      this.emit({
+        type: "agent.queue.inspect.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId,
+          queue: null,
+          drained: [],
+          receipts: [],
+          deviceReports: [],
+          error,
+        },
+      });
+    };
+    if (!this.agentQueueService) {
+      failure("This daemon does not support delivery inspection.");
+      return;
+    }
+    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    if (!resolved.ok) {
+      failure(resolved.error);
+      return;
+    }
+    try {
+      const inspection = await this.agentQueueService.inspect(resolved.agentId);
+      this.emit({
+        type: "agent.queue.inspect.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId: resolved.agentId,
+          ...inspection,
+          error: null,
+        },
+      });
+    } catch (error) {
+      failure(this.agentQueueErrorText(error), resolved.agentId);
+    }
+  }
+
+  private async handleClientOutboxReportRequest(
+    msg: Extract<SessionInboundMessage, { type: "client.outbox.report.request" }>,
+  ): Promise<void> {
+    let error: string | null = null;
+    const service = this.agentQueueService;
+    if (!service) {
+      error = "This daemon does not support device outbox reports.";
+    } else {
+      const resolved = await this.resolveAgentIdentifier(msg.agentId);
+      if (!resolved.ok) {
+        error = resolved.error;
+      } else {
+        service.recordOutboxReport({
+          agentId: resolved.agentId,
+          clientId: this.clientId,
+          deviceLabel: msg.deviceLabel ?? null,
+          platform: msg.platform ?? null,
+          reportedAt: new Date().toISOString(),
+          pending: msg.pending,
+          failed: msg.failed,
+          uncertain: msg.uncertain,
+          oldestCreatedAt: msg.oldestCreatedAt ?? null,
+        });
+      }
+    }
+    this.emit({
+      type: "client.outbox.report.response",
+      payload: { requestId: msg.requestId, error },
+    });
+  }
+
   private async handleAgentQueueRequest(msg: AgentQueueRequestMessage): Promise<void> {
     const responseType = AGENT_QUEUE_RESPONSE_TYPES[msg.type];
     const service = this.agentQueueService;
@@ -8734,7 +9329,13 @@ export class Session {
       return;
     }
 
-    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    const routed =
+      msg.type === "agent.queue.enqueue.request" &&
+      (msg.expectedWorkspaceId !== undefined || msg.expectedProjectId !== undefined);
+    // A routed intent carries an exact agent id. Prefix resolution could retarget it.
+    const resolved = routed
+      ? { ok: true as const, agentId: msg.agentId }
+      : await this.resolveAgentIdentifier(msg.agentId);
     if (!resolved.ok) {
       this.emit({
         type: responseType,
@@ -8778,16 +9379,25 @@ export class Session {
     msg: AgentQueueRequestMessage,
   ): Promise<AgentQueueSnapshot> {
     switch (msg.type) {
-      case "agent.queue.enqueue.request":
-        return service.enqueue({
-          agentId,
-          itemId: msg.itemId,
-          text: msg.text,
-          intent: msg.intent,
-          images: msg.images,
-          attachments: msg.attachments,
-          composerAttachments: msg.composerAttachments,
-        });
+      case "agent.queue.enqueue.request": {
+        const enqueue = () =>
+          service.enqueue({
+            agentId,
+            itemId: msg.itemId,
+            text: msg.text,
+            intent: msg.intent,
+            images: msg.images,
+            attachments: msg.attachments,
+            composerAttachments: msg.composerAttachments,
+            validateDestination:
+              msg.expectedWorkspaceId !== undefined || msg.expectedProjectId !== undefined
+                ? () => this.validateRoutingDestination(agentId, msg)
+                : undefined,
+          });
+        return msg.expectedWorkspaceId !== undefined || msg.expectedProjectId !== undefined
+          ? this.agentManager.runLifecycleMutation(agentId, enqueue)
+          : enqueue();
+      }
       case "agent.queue.update.request":
         return service.update(agentId, msg.itemId, msg.expectedRevision, {
           text: msg.text,
@@ -8805,6 +9415,30 @@ export class Session {
         return service.sendNow(agentId, msg.itemId, msg.expectedRevision);
       case "agent.queue.list.request":
         return service.list(agentId);
+    }
+  }
+
+  private async validateRoutingDestination(
+    agentId: string,
+    msg: Extract<AgentQueueRequestMessage, { type: "agent.queue.enqueue.request" }>,
+  ): Promise<void> {
+    const record = await this.agentStorage.get(agentId);
+    const live = this.agentManager.getAgent(agentId);
+    if (!record && !live) throw new Error("session_route_destination_missing");
+    const workspaceId = live?.workspaceId ?? record?.workspaceId;
+    const workspace = workspaceId ? await this.workspaceRegistry.get(workspaceId) : null;
+    const project = workspace ? await this.projectRegistry.get(workspace.projectId) : null;
+    if (
+      !workspace ||
+      workspace.archivedAt ||
+      !project ||
+      project.archivedAt ||
+      !msg.expectedWorkspaceId ||
+      workspace.workspaceId !== msg.expectedWorkspaceId ||
+      (msg.expectedProjectId && workspace.projectId !== msg.expectedProjectId) ||
+      record?.archivedAt
+    ) {
+      throw new Error("session_route_destination_changed");
     }
   }
 
@@ -9185,12 +9819,18 @@ export class Session {
     this.emit(msg);
   }
 
+  public clearClientOutboxReport(): void {
+    this.agentQueueService?.clearOutboxReport(this.clientId);
+  }
+
   /**
    * Clean up session resources
    */
   public async cleanup(): Promise<void> {
     this.sessionLogger.trace({}, "agent.session.lifecycle.cleanup");
     this.isCleanedUp = true;
+    this.sessionSearchActive?.abort();
+    this.sessionTextSearchActive?.abort();
     await this.delivery.close();
 
     if (this.unsubscribeAgentEvents) {
@@ -9205,6 +9845,7 @@ export class Session {
     this.unsubscribeWorkspaceMutations = null;
     this.unsubscribeAgentQueue?.();
     this.unsubscribeAgentQueue = null;
+    this.clearClientOutboxReport();
     this.agentUpdates.dispose();
     await this.hubExecutionController?.cleanup();
     if (this.unsubscribeTerminalWorkspaceContributionEvents) {

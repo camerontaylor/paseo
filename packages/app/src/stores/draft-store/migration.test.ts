@@ -318,3 +318,77 @@ describe("draft-store migration", () => {
     expect(backing.values.has("paseo-drafts")).toBe(true);
   });
 });
+
+describe("draft-store queueEdit metadata", () => {
+  it("survives a round trip through the validated storage and a fresh rehydrate", async () => {
+    const backing = createMemoryStorage();
+    const storage = createValidatedPersistStorage(backing, PersistedDraftStoreSchema);
+    const queuedEditState = {
+      drafts: {
+        "queued-edit:srv:agent-1:item-1:baseline": {
+          input: {
+            text: "row text at edit start",
+            attachments: [],
+            queueEdit: { itemId: "item-1", baselineRevision: 4 },
+          },
+          lifecycle: "active",
+          updatedAt: 1,
+          version: 1,
+        },
+        "queued-edit:srv:agent-1:item-1": {
+          input: {
+            text: "work in progress",
+            attachments: [],
+            queueEdit: { itemId: "item-1", baselineRevision: 4, conflicted: true },
+          },
+          lifecycle: "active",
+          updatedAt: 2,
+          version: 3,
+        },
+      },
+      createModalDraft: null,
+    };
+    // The validated storage expects the zustand-persist envelope.
+    await storage.setItem("paseo-drafts", { state: queuedEditState, version: 5 } as never);
+
+    const reloaded = await createValidatedPersistStorage(
+      backing,
+      PersistedDraftStoreSchema,
+    ).getItem("paseo-drafts");
+    const migrated = await migratePersistedState(reloaded?.state, {
+      migrateLegacyImages: passThroughMigrateLegacyImages,
+      nowMs: 3,
+    });
+
+    expect(migrated.drafts["queued-edit:srv:agent-1:item-1:baseline"]?.input.queueEdit).toEqual({
+      itemId: "item-1",
+      baselineRevision: 4,
+    });
+    expect(migrated.drafts["queued-edit:srv:agent-1:item-1"]?.input.queueEdit).toEqual({
+      itemId: "item-1",
+      baselineRevision: 4,
+      conflicted: true,
+    });
+  });
+
+  it("a legacy payload without queueEdit migrates unchanged", async () => {
+    const backing = createMemoryStorage();
+    const legacyState = {
+      drafts: {
+        "draft:plain": { text: "plain draft", attachments: [] },
+      },
+      createModalDraft: null,
+    };
+    backing.values.set("paseo-drafts", JSON.stringify({ state: legacyState, version: 4 }));
+    const storage = createValidatedPersistStorage(backing, PersistedDraftStoreSchema);
+
+    const stored = await storage.getItem("paseo-drafts");
+    const migrated = await migratePersistedState(stored?.state, {
+      migrateLegacyImages: passThroughMigrateLegacyImages,
+      nowMs: 1,
+    });
+
+    expect(migrated.drafts["draft:plain"]?.input.text).toBe("plain draft");
+    expect(migrated.drafts["draft:plain"]?.input.queueEdit).toBeUndefined();
+  });
+});

@@ -128,6 +128,42 @@ export class MessageReceipts {
     return [...byId.values()];
   }
 
+  /** Newest receipt summaries for occasional host inspection. */
+  async listForAgent(
+    agentId: string,
+  ): Promise<Array<{ messageId: string; state: string; createdAt: string | null }>> {
+    const files = await readdir(this.directory).catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+      throw error;
+    });
+    const summaries: Array<{ messageId: string; state: string; createdAt: string | null }> = [];
+    const receiptFiles = files.filter((name) => name.endsWith(".json"));
+    // Receipt filenames are content hashes, so newest records cannot be found
+    // from directory order. Keep I/O and memory bounded while scanning.
+    for (let offset = 0; offset < receiptFiles.length; offset += 8) {
+      const batch = await Promise.all(
+        receiptFiles
+          .slice(offset, offset + 8)
+          .map((name) => readReceipt(path.join(this.directory, name))),
+      );
+      for (const record of batch) {
+        if (!record || record.agentId !== agentId || !record.messageId) continue;
+        summaries.push({
+          messageId: record.messageId,
+          state:
+            record.state === "pending" &&
+            this.pending.has(digest(["send", record.agentId, record.messageId]))
+              ? "sending"
+              : record.state,
+          createdAt: record.createdAt ?? null,
+        });
+      }
+      summaries.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+      summaries.length = Math.min(summaries.length, 50);
+    }
+    return summaries;
+  }
+
   /**
    * Records that one queued item was deleted before delivery, so a later
    * admission of the same speech id stays removed. Refuses while a dispatch is

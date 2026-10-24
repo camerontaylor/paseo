@@ -151,6 +151,23 @@ describe("AgentQueueService", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  test("a destination change aborts queue admission before any host row is saved", async () => {
+    harness.agents.lifecycle = "running";
+    await expect(
+      harness.service.enqueue({
+        agentId: AGENT_ID,
+        itemId: "routed-1",
+        text: "wrong workspace",
+        intent: "queue",
+        validateDestination: async () => {
+          throw new Error("session_route_destination_changed");
+        },
+      }),
+    ).rejects.toThrow("session_route_destination_changed");
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+    expect(harness.sent).toEqual([]);
+  });
+
   test("broadcasts the queue to subscribers when an item is enqueued while the agent is busy", async () => {
     harness.agents.lifecycle = "running";
 
@@ -170,6 +187,66 @@ describe("AgentQueueService", () => {
       deliveryState: "pending",
       attempts: 0,
     });
+  });
+
+  test("inspection distinguishes host history from ephemeral device backlog", async () => {
+    harness.agents.lifecycle = "running";
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "inspect-1",
+      text: "a \n private prompt",
+      intent: "queue",
+    });
+    const waiting = await harness.service.inspect(AGENT_ID);
+    expect(waiting.queue.items.map((item) => item.id)).toEqual(["inspect-1"]);
+    expect(waiting.drained).toEqual([]);
+    harness.service.recordOutboxReport({
+      agentId: AGENT_ID,
+      clientId: "phone",
+      deviceLabel: "iPhone",
+      platform: "ios",
+      reportedAt: "2026-10-22T01:00:00Z",
+      pending: 1,
+      failed: 2,
+      uncertain: 3,
+      oldestCreatedAt: "2026-10-22T00:00:00Z",
+    });
+    expect((await harness.service.inspect(AGENT_ID)).deviceReports).toEqual([
+      {
+        clientId: "phone",
+        deviceLabel: "iPhone",
+        platform: "ios",
+        reportedAt: "2026-10-22T01:00:00Z",
+        pending: 1,
+        failed: 2,
+        uncertain: 3,
+        oldestCreatedAt: "2026-10-22T00:00:00Z",
+      },
+    ]);
+    harness.service.clearOutboxReport("phone");
+    expect((await harness.service.inspect(AGENT_ID)).deviceReports).toEqual([]);
+  });
+
+  test("device inspection bounds agents per client and refreshes recent agents", async () => {
+    const report = (agentId: string) =>
+      harness.service.recordOutboxReport({
+        agentId,
+        clientId: "phone",
+        deviceLabel: null,
+        platform: null,
+        reportedAt: "2026-10-22T01:00:00Z",
+        pending: 1,
+        failed: 0,
+        uncertain: 0,
+        oldestCreatedAt: null,
+      });
+    report(AGENT_ID);
+    for (let index = 0; index < 127; index += 1) report("old-" + index);
+    report(AGENT_ID); // Refresh the active chat before a new chat arrives.
+    report("new-chat");
+    expect((await harness.service.inspect(AGENT_ID)).deviceReports).toHaveLength(1);
+    expect((await harness.service.inspect("old-0")).deviceReports).toHaveLength(0);
+    expect((await harness.service.inspect("new-chat")).deviceReports).toHaveLength(1);
   });
 
   test("a second client reads the same queue the first client wrote", async () => {
@@ -967,6 +1044,52 @@ describe("AgentQueueService", () => {
     await harness.service.flushDrains();
 
     expect(harness.sent.map((input) => input.messageId)).toEqual(["item-1"]);
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+  });
+
+  test("a cancelled pre-submission start does not poison the queue receipt", async () => {
+    const receipts = new MessageReceipts(join(dir, "agent-requests-not-submitted"));
+    harness.service.setMessageReceipts(receipts);
+    // Composition coverage for the Codex fix: the provider error carries
+    // AGENT_PROMPT_NOT_SUBMITTED, so MessageReceipts strips the attempt receipt
+    // (the prompt never reached the provider) and the item stays queued.
+    harness.failSends(
+      Object.assign(new Error("cancelled before submission"), {
+        code: "AGENT_PROMPT_NOT_SUBMITTED",
+      }),
+    );
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "notice",
+      text: "notification",
+      intent: "queue",
+    });
+    await harness.service.flushDrains();
+    expect(await receipts.outcome(AGENT_ID, "notice#1")).toBeNull();
+    expect((await harness.service.list(AGENT_ID)).items.map((item) => item.id)).toEqual(["notice"]);
+    expect((await harness.service.list(AGENT_ID)).items[0]?.deliveryState).toBe("pending");
+
+    // The next idle boundary retries "notice" before "question" and both drain.
+    harness.agents.emitLifecycle("running");
+    await harness.service.enqueue({
+      agentId: AGENT_ID,
+      itemId: "question",
+      text: "follow-up",
+      intent: "queue",
+    });
+    await harness.service.flushDrains();
+    harness.failSends(null);
+    harness.agents.emitLifecycle("idle");
+    await harness.service.flushDrains();
+    expect(await receipts.outcome(AGENT_ID, "notice#2")).toBe("completed");
+    expect((await harness.service.list(AGENT_ID)).items.map((item) => item.id)).toEqual([
+      "question",
+    ]);
+
+    harness.agents.emitLifecycle("running");
+    harness.agents.emitLifecycle("idle");
+    await harness.service.flushDrains();
+    expect(harness.sent.map((item) => item.messageId)).toEqual(["notice", "question"]);
     expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
   });
 });

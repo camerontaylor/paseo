@@ -29,20 +29,17 @@ import {
   type ReactElement,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { QueuedMessageRow, type QueuedRowDurableControls } from "@/composer/queued-message-row";
+import type { QueuedRowSaveResult } from "@/composer/queued-row-save";
+import { createServerQueueFlushClient } from "@/composer/server-queue-flush-client";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { usePanelStore } from "@/stores/panel-store";
 import { useHasFinePointer } from "@/hooks/use-fine-pointer";
 import { useShallow } from "zustand/shallow";
 import {
-  ArrowUp,
-  ChevronDown,
-  ChevronUp,
-  MoreVertical,
   RotateCcw,
   Square,
-  Pencil,
-  Trash2,
   X,
   AudioLines,
   CircleDot,
@@ -65,6 +62,8 @@ import { selectAgentTurnPresentation, useSessionStore } from "@/stores/session-s
 import { useFilePicker } from "@/hooks/use-file-picker";
 import { useFileDrop } from "@/components/file-drop/use-file-drop";
 import type { DroppedItem } from "@/components/file-drop/types";
+import { prepareDirectSendOutbox } from "@/composer/submission/direct-send-outbox";
+import { UnsentTrack } from "@/composer/unsent-track";
 import {
   MessageInput,
   type AttachmentMenuItem,
@@ -78,7 +77,6 @@ import { encodeImages } from "@/utils/encode-images";
 import { focusWithRetries } from "@/utils/web-focus";
 import {
   cancelComposerAgent,
-  deleteQueuedComposerMessage,
   dispatchComposerAgentMessage,
   editQueuedComposerMessage,
   findForgeItemByOption,
@@ -87,10 +85,14 @@ import {
   pickAndPersistImages,
   queueComposerMessage,
   queueComposerMessageOnServer,
+  isQueueRevisionConflictError,
+  resolveQueuedEditRpcPayload,
+  resolveQueueSubmitClearing,
   removeComposerAttachmentAtIndex,
   removeQueuedComposerMessageLocally,
   reorderQueuedComposerMessages,
   retryQueuedComposerMessage,
+  runQueuedSubmission,
   sendQueuedComposerMessageNow,
   takeQueuedComposerMessage,
   toggleForgeAttachmentFromPicker,
@@ -101,18 +103,19 @@ import {
   type QueuedComposerMessage,
   type QueuedMutationResult,
 } from "@/composer/actions";
-import { toComposerAttachments } from "@/composer/queue-sync";
-import { retryFailedOutboxEntry, useQueueOutboxStore } from "@/stores/queue-outbox-store";
-import { StatusBadge } from "@/components/ui/status-badge";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  annotateQueueRows,
+  getPendingQueueMessageIds,
+  resolveQueueStorageErrorRow,
+} from "@/composer/queue-sync";
+import {
+  flushQueueOutboxForServer,
+  retryFailedOutboxEntry,
+  useQueueOutboxStore,
+} from "@/stores/queue-outbox-store";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { useVoiceOptional } from "@/contexts/voice-context";
+import { startDraftVoiceOnce, startPreferredVoice } from "@/voice/preferred-voice";
 import { useToast } from "@/contexts/toast-context";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Shortcut } from "@/components/ui/shortcut";
@@ -389,32 +392,47 @@ function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | nu
   );
 }
 
-interface QueuedRowActionLabels {
-  menu: string;
-  moveUp: string;
-  moveDown: string;
-  remove: string;
-  retry: string;
-  discard: string;
-}
-
 interface RenderQueueTrackArgs {
   queuedMessages: readonly QueuedMessage[];
   handleEditQueuedMessage: (id: string) => void;
   handleSendQueuedNow: (id: string) => Promise<void>;
   editLabel: string;
   sendNowLabel: string;
+  pendingMessageIds: ReadonlySet<string>;
+  pendingLabel: string;
+  appliedRevision: number;
+  draftScope: string;
+  onSaveQueuedMessage: (
+    id: string,
+    text: string,
+    baselineRevision: number,
+  ) => Promise<QueuedRowSaveResult>;
+  onRemoveQueuedMessage: (id: string) => Promise<boolean>;
+  onQueueRowError: (message: string) => void;
+  onMoveToComposer: (id: string) => void;
+  moveToComposerLabel: string;
+  readLabel: string;
+  removeLabel: string;
+  removeFailedLabel: string;
+  doneLabel: string;
+  saveAnywayLabel: string;
+  discardEditLabel: string;
+  removalPendingLabel: string;
+  removalFailedLabel: string;
+  removalPendingIds: ReadonlySet<string>;
+  removalFailedIds: ReadonlySet<string>;
+  conflictLabel: string;
+  persistFailedLabel: string;
+  storageError: {
+    message: string;
+    entryText: string | null;
+    retryLabel: string;
+    dismissLabel: string;
+  } | null;
+  onRetryStorageError: () => void;
+  onDismissStorageError: () => void;
   /** Durable-queue controls; absent on old hosts, whose rows stay exactly as before. */
-  durable?: {
-    onDelete: (id: string) => void;
-    onMove: (id: string, direction: -1 | 1) => void;
-    onRetry: (id: string) => void;
-    onDiscard: (id: string) => void;
-    labels: QueuedRowActionLabels;
-    sendingLabel: string;
-    unconfirmedLabel: string;
-    failedLabel: string;
-  };
+  durable?: QueuedRowDurableControls;
 }
 
 function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
@@ -424,11 +442,64 @@ function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
     handleSendQueuedNow,
     editLabel,
     sendNowLabel,
+    pendingMessageIds,
+    pendingLabel,
+    appliedRevision,
+    draftScope,
+    onSaveQueuedMessage,
+    onRemoveQueuedMessage,
+    onQueueRowError,
+    onMoveToComposer,
+    moveToComposerLabel,
+    readLabel,
+    removeLabel,
+    removeFailedLabel,
+    doneLabel,
+    saveAnywayLabel,
+    discardEditLabel,
+    removalPendingLabel,
+    removalFailedLabel,
+    conflictLabel,
+    persistFailedLabel,
+    removalPendingIds,
+    removalFailedIds,
+    storageError,
+    onRetryStorageError,
+    onDismissStorageError,
     durable,
   } = args;
-  if (queuedMessages.length === 0) return null;
+  if (queuedMessages.length === 0 && !storageError) return null;
   return (
     <View style={styles.queueTrack}>
+      {storageError ? (
+        <View style={styles.queueItem} testID="queue-storage-error">
+          <View style={styles.queueItemContent}>
+            <Text style={styles.queueErrorText} numberOfLines={2} ellipsizeMode="tail">
+              {storageError.entryText
+                ? `${storageError.message}: ${storageError.entryText}`
+                : storageError.message}
+            </Text>
+          </View>
+          <View style={styles.queueActions}>
+            <Pressable
+              onPress={onRetryStorageError}
+              style={styles.queueActionButton}
+              accessibilityRole="button"
+              accessibilityLabel={storageError.retryLabel}
+            >
+              <ThemedRotateCcw size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
+            </Pressable>
+            <Pressable
+              onPress={onDismissStorageError}
+              style={styles.queueActionButton}
+              accessibilityRole="button"
+              accessibilityLabel={storageError.dismissLabel}
+            >
+              <ThemedX size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
       {queuedMessages.map((item, index) => (
         <QueuedMessageRow
           key={item.id}
@@ -439,6 +510,28 @@ function renderQueueTrack(args: RenderQueueTrackArgs): ReactElement | null {
           sendNowLabel={sendNowLabel}
           isFirst={index === 0}
           isLast={index === queuedMessages.length - 1}
+          isPending={pendingMessageIds.has(item.id)}
+          pendingLabel={pendingLabel}
+          draftKey={`${draftScope}:${item.id}`}
+          baselineKey={`${draftScope}:${item.id}:baseline`}
+          onSave={onSaveQueuedMessage}
+          onRemove={onRemoveQueuedMessage}
+          onError={onQueueRowError}
+          onMoveToComposer={onMoveToComposer}
+          moveToComposerLabel={moveToComposerLabel}
+          readLabel={readLabel}
+          removeLabel={removeLabel}
+          removeFailedLabel={removeFailedLabel}
+          doneLabel={doneLabel}
+          saveAnywayLabel={saveAnywayLabel}
+          discardEditLabel={discardEditLabel}
+          removalPendingLabel={removalPendingLabel}
+          removalFailedLabel={removalFailedLabel}
+          isRemovalPending={removalPendingIds.has(item.id)}
+          isRemovalFailed={removalFailedIds.has(item.id)}
+          conflictLabel={conflictLabel}
+          persistFailedLabel={persistFailedLabel}
+          appliedRevision={appliedRevision}
           durable={durable}
         />
       ))}
@@ -544,21 +637,44 @@ interface AttemptStartRealtimeVoiceArgs {
   hasAgent: boolean;
   serverId: string;
   agentId: string;
+  preferRealtimeGpt: boolean;
   toastErrorRef: { current: (message: string) => void };
+  createAgentForVoice?: () => Promise<string | null>;
 }
 
 function attemptStartRealtimeVoice(args: AttemptStartRealtimeVoiceArgs): void {
-  const { voice, isConnected, hasAgent, serverId, agentId, toastErrorRef } = args;
-  if (!voice || !isConnected || !hasAgent) return;
+  const {
+    voice,
+    isConnected,
+    hasAgent,
+    serverId,
+    agentId,
+    preferRealtimeGpt,
+    toastErrorRef,
+    createAgentForVoice,
+  } = args;
+  if (!voice || !isConnected || (!hasAgent && !createAgentForVoice)) return;
   if (voice.isVoiceSwitching) return;
-  if (voice.isVoiceModeForAgent(serverId, agentId)) return;
-  void voice.startVoice(serverId, agentId).catch((error) => {
+  if (hasAgent && voice.isVoiceModeForAgent(serverId, agentId)) return;
+
+  const key = JSON.stringify([serverId, agentId]);
+  const start = async () => {
+    const targetId = hasAgent ? agentId : await createAgentForVoice?.();
+    if (!targetId) return;
+    await startPreferredVoice({
+      startVoice: voice.startVoice,
+      serverId,
+      agentId: targetId,
+      preferRealtimeGpt,
+    });
+  };
+  const reportFailure = (error: unknown) => {
     console.error("[Composer] Failed to start voice mode", error);
     const message = resolveErrorMessage(error);
-    if (message && message.trim().length > 0) {
-      toastErrorRef.current(message);
-    }
-  });
+    if (message && message.trim().length > 0) toastErrorRef.current(message);
+  };
+  if (hasAgent) void start().catch(reportFailure);
+  else void startDraftVoiceOnce(key, start).catch(reportFailure);
 }
 
 function focusMessageInputWithPlatformStrategy(messageInputRef: {
@@ -704,188 +820,6 @@ function resolveMessageInputPassthroughAction(
     default:
       return null;
   }
-}
-
-interface QueuedMessageRowProps {
-  item: QueuedMessage;
-  onEdit: (id: string) => void;
-  onSendNow: (id: string) => void;
-  editLabel: string;
-  sendNowLabel: string;
-  isFirst: boolean;
-  isLast: boolean;
-  durable?: RenderQueueTrackArgs["durable"];
-}
-
-type QueuedRowState = "queued" | "sending" | "unconfirmed" | "failed";
-
-function resolveQueueRowState(item: QueuedMessage): QueuedRowState {
-  if (item.syncState === "failed" || item.deliveryState === "failed") return "failed";
-  if (item.deliveryState === "uncertain") return "unconfirmed";
-  if (item.deliveryState === "dispatching") return "sending";
-  return "queued";
-}
-
-function resolveQueueStateBadge(
-  state: QueuedRowState,
-  labels: { sendingLabel: string; unconfirmedLabel: string; failedLabel: string },
-): { variant: "muted" | "warning" | "error"; label: string } | null {
-  if (state === "failed") return { variant: "error", label: labels.failedLabel };
-  if (state === "unconfirmed") return { variant: "warning", label: labels.unconfirmedLabel };
-  if (state === "sending") return { variant: "muted", label: labels.sendingLabel };
-  return null;
-}
-
-function QueuedMessageRow({
-  item,
-  onEdit,
-  onSendNow,
-  editLabel,
-  sendNowLabel,
-  isFirst,
-  isLast,
-  durable,
-}: QueuedMessageRowProps) {
-  const handleEdit = useCallback(() => {
-    onEdit(item.id);
-  }, [onEdit, item.id]);
-  const handleSendNow = useCallback(() => {
-    onSendNow(item.id);
-  }, [onSendNow, item.id]);
-  const state = resolveQueueRowState(item);
-  const needsAttention = state === "failed" || state === "unconfirmed";
-  const handleDelete = useCallback(() => {
-    durable?.onDelete(item.id);
-  }, [durable, item.id]);
-  const handleMoveUp = useCallback(() => {
-    durable?.onMove(item.id, -1);
-  }, [durable, item.id]);
-  const handleMoveDown = useCallback(() => {
-    durable?.onMove(item.id, 1);
-  }, [durable, item.id]);
-  const handleRetry = useCallback(() => {
-    durable?.onRetry(item.id);
-  }, [durable, item.id]);
-  const handleDiscard = useCallback(() => {
-    durable?.onDiscard(item.id);
-  }, [durable, item.id]);
-
-  const badge = durable ? resolveQueueStateBadge(state, durable) : null;
-  const menuIcons = useMemo(
-    () => ({
-      moveUp: <ThemedChevronUp size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />,
-      moveDown: <ThemedChevronDown size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />,
-      remove: <ThemedTrash2 size={ICON_SIZE.sm} uniProps={iconForegroundMutedMapping} />,
-    }),
-    [],
-  );
-
-  const stateBadge = badge ? (
-    <StatusBadge size="xs" variant={badge.variant} label={badge.label} />
-  ) : null;
-
-  return (
-    <View style={styles.queueItem}>
-      <View style={styles.queueItemContent}>
-        <Text style={styles.queueText} numberOfLines={2} ellipsizeMode="tail">
-          {item.text}
-        </Text>
-        {stateBadge !== null || item.lastError ? (
-          <View style={styles.queueItemState}>
-            {stateBadge}
-            {item.lastError && needsAttention ? (
-              <Text style={styles.queueErrorText} numberOfLines={1} ellipsizeMode="tail">
-                {item.lastError}
-              </Text>
-            ) : null}
-          </View>
-        ) : null}
-      </View>
-      <View style={styles.queueActions}>
-        {durable && needsAttention ? (
-          <>
-            <Pressable
-              onPress={handleRetry}
-              style={styles.queueActionButton}
-              accessibilityLabel={durable.labels.retry}
-              accessibilityRole="button"
-            >
-              <ThemedRotateCcw size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
-            </Pressable>
-            <Pressable
-              onPress={handleDiscard}
-              style={styles.queueActionButton}
-              accessibilityLabel={durable.labels.discard}
-              accessibilityRole="button"
-            >
-              <ThemedX size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
-            </Pressable>
-          </>
-        ) : (
-          <>
-            {!item.deliveryState || item.deliveryState === "pending" ? (
-              <>
-                <Pressable
-                  onPress={handleEdit}
-                  style={styles.queueActionButton}
-                  accessibilityLabel={editLabel}
-                  accessibilityRole="button"
-                >
-                  <ThemedPencil size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
-                </Pressable>
-                <Pressable
-                  onPress={handleSendNow}
-                  style={[styles.queueActionButton, styles.queueSendButton]}
-                  accessibilityLabel={sendNowLabel}
-                  accessibilityRole="button"
-                >
-                  <ThemedArrowUp size={ICON_SIZE.sm} uniProps={iconAccentForegroundMapping} />
-                </Pressable>
-              </>
-            ) : null}
-            {durable ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  accessibilityLabel={durable.labels.menu}
-                  accessibilityRole="button"
-                  style={styles.queueActionButton}
-                >
-                  {({ hovered, open }) => (
-                    <ThemedMoreVertical
-                      size={ICON_SIZE.sm}
-                      uniProps={
-                        hovered || open ? iconForegroundMapping : iconForegroundMutedMapping
-                      }
-                    />
-                  )}
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" minWidth={200}>
-                  <DropdownMenuItem
-                    disabled={isFirst}
-                    leading={menuIcons.moveUp}
-                    onSelect={handleMoveUp}
-                  >
-                    {durable.labels.moveUp}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={isLast}
-                    leading={menuIcons.moveDown}
-                    onSelect={handleMoveDown}
-                  >
-                    {durable.labels.moveDown}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem destructive leading={menuIcons.remove} onSelect={handleDelete}>
-                    {durable.labels.remove}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : null}
-          </>
-        )}
-      </View>
-    </View>
-  );
 }
 
 interface ImageAttachmentPillProps {
@@ -1113,6 +1047,8 @@ interface ComposerProps {
   submitIcon?: "arrow" | "return";
   /** Externally controlled loading state. When true, disables the submit button. */
   isSubmitLoading?: boolean;
+  /** Empty draft only: create one agent without a prompt before starting voice. */
+  createAgentForVoice?: () => Promise<string | null>;
   /** When true, waits for pasted forge links to resolve before enabling submit. */
   waitForForgeAutoAttachOnSubmit?: boolean;
   submitBehavior?: "clear" | "preserve-and-lock";
@@ -1169,6 +1105,7 @@ interface ComposerProps {
 }
 
 const EMPTY_ARRAY: readonly QueuedMessage[] = [];
+const EMPTY_SET: ReadonlySet<string> = new Set();
 const StableMessageInput = memo(MessageInput);
 
 interface ComposerAutocompleteHandle {
@@ -1300,6 +1237,7 @@ function ComposerCancelButton({
 
 interface ComposerVoiceModeButtonProps {
   buttonIconSize: number;
+  preferRealtimeGpt: boolean;
   handleToggleRealtimeVoice: () => void;
   isConnected: boolean;
   isVoiceSwitching: boolean;
@@ -1313,8 +1251,10 @@ interface ComposerVoiceModeButtonProps {
 interface ComposerRightControlsSlotProps extends ComposerVoiceModeButtonProps {
   isVoiceModeForAgent: boolean;
   hasAgent: boolean;
+  canCreateAgentForVoice: boolean;
   isAgentRunning: boolean;
   supportsVoiceConcurrentInput: boolean;
+  preferRealtimeGpt: boolean;
   hasSendableContent: boolean;
   isCompact: boolean;
   showVoice: boolean;
@@ -1323,8 +1263,10 @@ interface ComposerRightControlsSlotProps extends ComposerVoiceModeButtonProps {
 function ComposerRightControlsSlot({
   isVoiceModeForAgent,
   hasAgent,
+  canCreateAgentForVoice,
   isAgentRunning,
   supportsVoiceConcurrentInput,
+  preferRealtimeGpt,
   hasSendableContent,
   isCompact,
   showVoice,
@@ -1334,19 +1276,20 @@ function ComposerRightControlsSlot({
   const showVoiceModeButton =
     showVoice &&
     !isVoiceModeForAgent &&
-    hasAgent &&
-    (!isAgentRunning || supportsVoiceConcurrentInput) &&
+    (hasAgent || canCreateAgentForVoice) &&
+    (!isAgentRunning || supportsVoiceConcurrentInput || preferRealtimeGpt) &&
     !hideVoiceForCompactInput;
   if (!showVoiceModeButton) return null;
   return (
     <View style={styles.rightControls}>
-      <ComposerVoiceModeButton {...voiceProps} />
+      <ComposerVoiceModeButton {...voiceProps} preferRealtimeGpt={preferRealtimeGpt} />
     </View>
   );
 }
 
 function ComposerVoiceModeButton({
   buttonIconSize,
+  preferRealtimeGpt,
   handleToggleRealtimeVoice,
   isConnected,
   isVoiceSwitching,
@@ -1361,16 +1304,22 @@ function ComposerVoiceModeButton({
         return <LoadingSpinner size="small" color="white" />;
       }
       const colorMapping = hovered ? iconForegroundMapping : iconForegroundMutedMapping;
-      return <ThemedAudioLines size={buttonIconSize} uniProps={colorMapping} />;
+      return preferRealtimeGpt ? (
+        <ThemedCircleDot size={buttonIconSize} uniProps={colorMapping} />
+      ) : (
+        <ThemedAudioLines size={buttonIconSize} uniProps={colorMapping} />
+      );
     },
-    [buttonIconSize, isVoiceSwitching],
+    [buttonIconSize, isVoiceSwitching, preferRealtimeGpt],
   );
   return (
     <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
       <TooltipTrigger
         onPress={handleToggleRealtimeVoice}
         disabled={!isConnected || isVoiceSwitching}
-        accessibilityLabel={t("composer.voice.enableVoiceMode")}
+        accessibilityLabel={
+          preferRealtimeGpt ? "Start GPT Realtime voice" : t("composer.voice.enableVoiceMode")
+        }
         accessibilityRole="button"
         style={realtimeVoiceButtonStyle}
       >
@@ -1378,7 +1327,9 @@ function ComposerVoiceModeButton({
       </TooltipTrigger>
       <TooltipContent side="top" align="center" offset={8}>
         <View style={styles.tooltipRow}>
-          <Text style={styles.tooltipText}>{t("composer.voice.voiceMode")}</Text>
+          <Text style={styles.tooltipText}>
+            {preferRealtimeGpt ? "GPT Realtime voice" : t("composer.voice.voiceMode")}
+          </Text>
           {shortcutNode}
         </View>
       </TooltipContent>
@@ -1424,6 +1375,7 @@ function ComposerContentImpl({
   submitButtonTestID,
   submitIcon = "arrow",
   isSubmitLoading = false,
+  createAgentForVoice,
   waitForForgeAutoAttachOnSubmit = false,
   submitBehavior = "clear",
   blurOnSubmit = false,
@@ -1480,6 +1432,24 @@ function ComposerContentImpl({
   const queuedMessagesRaw = useSessionStore((state) =>
     state.sessions[serverId]?.queuedMessages?.get(agentId),
   );
+  // Stored rows are daemon snapshot rows only; the outbox overlay is computed
+  // here, so acknowledging an outbox entry drops its row without another
+  // snapshot. See docs/queue-mirroring.md.
+  const outboxEntries = useQueueOutboxStore((state) => state.entries);
+  const outboxEntriesForAgent = useMemo(
+    () =>
+      Object.values(outboxEntries)
+        .filter((entry) => entry.serverId === serverId && entry.agentId === agentId)
+        .sort((left, right) => left.createdAt - right.createdAt),
+    [outboxEntries, serverId, agentId],
+  );
+  const acceptedQueueMessageIds = useSessionStore((state) =>
+    state.sessions[serverId]?.acceptedQueueMessageIds.get(agentId),
+  );
+  const pendingMessageIds = useMemo(
+    () => getPendingQueueMessageIds(outboxEntriesForAgent, acceptedQueueMessageIds),
+    [outboxEntriesForAgent, acceptedQueueMessageIds],
+  );
   const queuedMessages = queuedMessagesRaw ?? EMPTY_ARRAY;
 
   const setQueuedMessages = useSessionStore((state) => state.setQueuedMessages);
@@ -1529,9 +1499,15 @@ function ComposerContentImpl({
       state.entriesForAgent(serverId, agentId).filter((entry) => entry.failedAt !== undefined),
     ),
   );
+  const outboxStorageError = useQueueOutboxStore((state) => state.storageError);
+  const clearStorageError = useQueueOutboxStore((state) => state.clearStorageError);
   // COMPAT(durableVoiceInputV1): fork feature (TM-04), added on 2026-10-08; keep while stock peers are supported.
   const supportsVoiceConcurrentInput = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.durableVoiceInputV1 === true,
+  );
+  // COMPAT(openaiRealtimeVoice): added in fork v0.12, remove after 2027-04-24.
+  const preferRealtimeGpt = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.openaiRealtimeVoice === true,
   );
   const forgeAutoAttachRef = useRef<ReturnType<typeof useComposerForgeAutoAttach>>(null);
   const [isForgeResolving, setIsForgeResolving] = useState(false);
@@ -1772,6 +1748,7 @@ function ComposerContentImpl({
         }),
         encodeImages,
         submission: createMessageSubmissionWriter(serverId),
+        outbox: await prepareDirectSendOutbox(serverId, client),
         activeTurnBehavior,
         activeTurnId:
           activeTurnBehavior === "steer"
@@ -1820,14 +1797,6 @@ function ComposerContentImpl({
     [serverId, setQueuedMessages],
   );
 
-  const queueOutbox = useMemo<QueueOutboxWriter>(
-    () => ({
-      add: (entry) => useQueueOutboxStore.getState().add({ ...entry, serverId }),
-      remove: (itemId) => useQueueOutboxStore.getState().remove(itemId),
-    }),
-    [serverId],
-  );
-
   const refreshQueuedMessages = useCallback(async () => {
     if (!supportsDurableQueue || !client) {
       return;
@@ -1850,6 +1819,25 @@ function ComposerContentImpl({
     [agentId, serverId],
   );
 
+  const queueOutbox = useMemo<QueueOutboxWriter>(
+    () => ({
+      serverId,
+      add: (entry) => useQueueOutboxStore.getState().add({ ...entry, serverId }),
+      remove: (itemId) => useQueueOutboxStore.getState().removeDurably(itemId),
+      ...(client
+        ? {
+            flush: () =>
+              flushQueueOutboxForServer({
+                serverId,
+                client: createServerQueueFlushClient({ client, serverId }),
+                applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+              }),
+          }
+        : {}),
+    }),
+    [serverId, client, applyAgentQueueSnapshot],
+  );
+
   const handleQueuedMutationResult = useCallback(
     (result: QueuedMutationResult): boolean => {
       if (result.status === "conflict") {
@@ -1869,47 +1857,91 @@ function ComposerContentImpl({
     [refreshQueuedMessages, t],
   );
 
+  const latestAttachmentsRef = useRef(attachments);
+  latestAttachmentsRef.current = attachments;
+  const queueSubmissionInFlight = useRef(new Set<string>());
   const queueMessage = useCallback(
-    (queuedMessage: string, queuedAttachments: ComposerAttachment[]) => {
-      const clearComposer = () => {
-        setUserInput("");
-        setSelectedAttachments([]);
-        resetSuppression();
-        clearSentAttachments(queuedAttachments);
-      };
-
-      if (supportsDurableQueue && client) {
-        void (async () => {
-          const result = await queueComposerMessageOnServer({
-            client,
-            agentId,
-            text: queuedMessage,
-            attachments: queuedAttachments,
-            attachmentSubmitFormat: resolveComposerAttachmentSubmitFormat({
-              supportsForgeAttachments: supportsForgeSearch,
-            }),
-            encodeImages,
-            queue: queueWriter,
-            applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
-            outbox: queueOutbox,
-          });
-          if (result.error) {
-            setSendError(result.error);
-          }
-        })();
-        clearComposer();
-        return;
+    async (queuedMessage: string, queuedAttachments: ComposerAttachment[]) => {
+      const submissionKey = JSON.stringify([queuedMessage.trim(), queuedAttachments]);
+      if (queueSubmissionInFlight.current.has(submissionKey)) {
+        // The entry point surfaces this; queueMessage stays a pure submit.
+        throw new Error(t("composer.errors.queueSubmissionInFlight"));
       }
+      queueSubmissionInFlight.current.add(submissionKey);
+      const submittedText = queuedMessage;
+      // The clearing decision compares what the user can see, not the
+      // outgoing payload: `queuedAttachments` may be a rebuilt array (workspace
+      // attachments) that never equals the live list, and the submitted text
+      // is trimmed while the live input keeps its whitespace.
+      const submittedLiveText = messageInputRef.current?.getText() ?? queuedMessage;
+      const submittedLiveAttachments = latestAttachmentsRef.current;
+      try {
+        if (supportsDurableQueue && client) {
+          // Clearing follows durable acceptance; input the user replaced
+          // during the await survives. Errors propagate to the entry point —
+          // submit or the direct queue press — which surfaces them once.
+          await runQueuedSubmission(
+            {
+              submittedText: submittedLiveText,
+              submittedAttachments: submittedLiveAttachments,
+              submittedOutgoing: queuedAttachments,
+              getLiveText: () => messageInputRef.current?.getText() ?? submittedLiveText,
+              getLiveAttachments: () => latestAttachmentsRef.current,
+              clearText: () => {
+                messageInputRef.current?.replaceText("");
+                setUserInput("");
+              },
+              clearAttachments: () => {
+                setSelectedAttachments([]);
+                resetSuppression();
+              },
+              resetSuppression,
+              clearSentAttachments,
+            },
+            () =>
+              queueComposerMessageOnServer({
+                client,
+                agentId,
+                text: submittedText,
+                attachments: queuedAttachments,
+                attachmentSubmitFormat: resolveComposerAttachmentSubmitFormat({
+                  supportsForgeAttachments: supportsForgeSearch,
+                }),
+                encodeImages,
+                queue: queueWriter,
+                applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+                outbox: queueOutbox,
+              }),
+          );
+          return;
+        }
 
-      const result = queueComposerMessage({
-        agentId,
-        text: queuedMessage,
-        attachments: queuedAttachments,
-        queue: queueWriter,
-      });
-      if (!result.queued) return;
+        const result = queueComposerMessage({
+          agentId,
+          text: queuedMessage,
+          attachments: queuedAttachments,
+          queue: queueWriter,
+        });
+        if (!result.queued) return;
 
-      clearComposer();
+        const decision = resolveQueueSubmitClearing({
+          liveText: messageInputRef.current?.getText() ?? submittedLiveText,
+          submittedText: submittedLiveText,
+          liveAttachments: latestAttachmentsRef.current,
+          submittedAttachments: submittedLiveAttachments,
+        });
+        if (decision.clearText) {
+          messageInputRef.current?.replaceText("");
+          setUserInput("");
+          resetSuppression();
+        }
+        if (decision.clearAttachments) {
+          setSelectedAttachments([]);
+        }
+        clearSentAttachments(queuedAttachments);
+      } finally {
+        queueSubmissionInFlight.current.delete(submissionKey);
+      }
     },
     [
       agentId,
@@ -1924,6 +1956,7 @@ function ComposerContentImpl({
       setUserInput,
       supportsDurableQueue,
       supportsForgeSearch,
+      t,
     ],
   );
 
@@ -1944,9 +1977,8 @@ function ComposerContentImpl({
         // Parent-managed submits are still valid submit paths even when the
         // transport is disconnected, because the parent decides the failure mode.
         canSubmit: Boolean(sendAgentMessageRef.current || onSubmitMessageRef.current),
-        queueMessage: ({ message: queuedText, attachments: queuedAttachments }) => {
-          queueMessage(queuedText, queuedAttachments);
-        },
+        queueMessage: ({ message: queuedText, attachments: queuedAttachments }) =>
+          queueMessage(queuedText, queuedAttachments),
         submitMessage: async ({ message: submitText, attachments: submitAttachments }) => {
           if (submitBehavior !== "preserve-and-lock") {
             beginSubmit(submitAttachments);
@@ -2193,7 +2225,10 @@ function ComposerContentImpl({
     focusMessageInputWithPlatformStrategy(messageInputRef);
   }, []);
 
+  const hasSendableContent = hasText || selectedAttachments.length > 0;
   const isVoiceModeForAgent = resolveIsVoiceModeForAgent(voice, serverId, agentId);
+  const canCreateAgentForVoice =
+    !hasAgent && !!createAgentForVoice && !isSubmitLoading && !hasSendableContent;
 
   const handleToggleRealtimeVoice = useCallback(() => {
     attemptStartRealtimeVoice({
@@ -2203,8 +2238,19 @@ function ComposerContentImpl({
       serverId,
       agentId,
       toastErrorRef,
+      createAgentForVoice: canCreateAgentForVoice ? createAgentForVoice : undefined,
+      preferRealtimeGpt,
     });
-  }, [agentId, hasAgent, isConnected, serverId, voice]);
+  }, [
+    agentId,
+    canCreateAgentForVoice,
+    createAgentForVoice,
+    hasAgent,
+    isConnected,
+    preferRealtimeGpt,
+    serverId,
+    voice,
+  ]);
 
   const handleEditQueuedMessage = useCallback(
     (id: string) => {
@@ -2337,6 +2383,105 @@ function ComposerContentImpl({
     ],
   );
 
+  const handleSaveQueuedMessage = useCallback(
+    async (id: string, text: string, baselineRevision: number): Promise<QueuedRowSaveResult> => {
+      if (!(supportsDurableQueue && client)) return { status: "unsaved" };
+      const row = queuedMessages.find((candidate) => candidate.id === id);
+      let images: Array<{ data: string; mimeType: string }> = [];
+      try {
+        images = await client.getQueuedAgentMessageImages(agentId, id);
+      } catch {
+        // Retrieval failure aborts the save: no destructive update is issued.
+        throw new Error(t("composer.errors.queueEditFailed"));
+      }
+      // The update RPC clears omitted fields, so the full attachment payload
+      // rides along; only the text differs.
+      const payload = resolveQueuedEditRpcPayload({
+        text,
+        expectedRevision: baselineRevision,
+        images,
+        wireAttachments: row?.wireAttachments,
+        attachments: row?.attachments,
+      });
+      try {
+        const snapshot = await client.updateQueuedAgentMessage({
+          agentId,
+          itemId: id,
+          ...payload,
+        });
+        // Awaited: the row's baseline must not advance before the confirmed
+        // rows are applied, or a racing snapshot could revert them.
+        await applyAgentQueueSnapshot(serverId, snapshot);
+        // The snapshot is the host-confirmed generation: finalization re-bases
+        // the edit to ITS revision and the host's (trimmed) row text, never
+        // the request's.
+        const confirmedRow = snapshot.items.find((item) => item.id === id);
+        if (!confirmedRow) {
+          // The host no longer lists the row (removed remotely mid-save).
+          return { status: "vanished" };
+        }
+        return {
+          status: "saved",
+          confirmedRevision: snapshot.revision,
+          confirmedText: confirmedRow.text,
+        };
+      } catch (error) {
+        if (isQueueRevisionConflictError(error)) {
+          // A remote change intervened. The draft is retained with its conflict
+          // fence (implicit saves blocked); the refresh shows the remote state.
+          void refreshQueuedMessages();
+        }
+        throw error;
+      }
+    },
+    [
+      agentId,
+      applyAgentQueueSnapshot,
+      client,
+      queuedMessages,
+      refreshQueuedMessages,
+      serverId,
+      supportsDurableQueue,
+      t,
+    ],
+  );
+
+  const handleRemoveQueuedMessage = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!(supportsDurableQueue && client)) return false;
+      const pendingEntry = useQueueOutboxStore.getState().entries[id];
+      const row = queuedMessages.find((candidate) => candidate.id === id);
+      if (!pendingEntry && !row) return false;
+      await useQueueOutboxStore.getState().requestRemoval(
+        pendingEntry ?? {
+          serverId,
+          agentId,
+          itemId: id,
+          text: row?.text ?? "",
+          intent: "queue",
+          images: [],
+          attachments: [],
+          composerAttachments: [],
+          createdAt: Date.now(),
+          attempts: 0,
+          removalRequested: true,
+        },
+      );
+      if (isConnected) {
+        await (queueOutbox.flush?.() ?? Promise.resolve());
+      }
+      return true;
+    },
+    [agentId, client, isConnected, queueOutbox, queuedMessages, serverId, supportsDurableQueue],
+  );
+
+  const handleMoveToComposer = useCallback(
+    (id: string) => {
+      handleEditQueuedMessage(id);
+    },
+    [handleEditQueuedMessage],
+  );
+
   const handleDeleteQueuedMessage = useCallback(
     (id: string) => {
       if (!(supportsDurableQueue && client)) return;
@@ -2349,27 +2494,19 @@ function ComposerContentImpl({
           destructive: true,
         });
         if (!confirmed) return;
-        handleQueuedMutationResult(
-          await deleteQueuedComposerMessage({
-            client,
-            agentId,
-            messageId: id,
-            expectedRevision: getAppliedQueueRevision(),
-            applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
-          }),
+        // The durable removal is a tombstone: the intent persists before the
+        // host is asked, surviving lost responses and reconnects.
+        await handleRemoveQueuedMessage(id);
+      })().catch((error) => {
+        // The menu path owns its feedback exactly once, same as the row path.
+        setSendError(
+          error instanceof Error && error.message
+            ? error.message
+            : t("composer.errors.queueRemoveFailed"),
         );
-      })();
+      });
     },
-    [
-      agentId,
-      applyAgentQueueSnapshot,
-      client,
-      getAppliedQueueRevision,
-      handleQueuedMutationResult,
-      serverId,
-      supportsDurableQueue,
-      t,
-    ],
+    [client, handleRemoveQueuedMessage, setSendError, supportsDurableQueue, t],
   );
 
   const handleMoveQueuedMessage = useCallback(
@@ -2409,12 +2546,17 @@ function ComposerContentImpl({
     (id: string) => {
       if (failedOutboxEntries.some((entry) => entry.itemId === id)) {
         // The daemon never accepted this enqueue: retry re-sends the original
-        // payload rather than mutating a durable item.
+        // payload rather than mutating a durable item. A failure (the reset
+        // write did not persist, so the park fence holds) surfaces here.
         if (!client) return;
-        void retryFailedOutboxEntry({
+        retryFailedOutboxEntry({
           itemId: id,
-          client,
+          client: createServerQueueFlushClient({ client, serverId }),
           applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+        }).catch((error) => {
+          setSendError(
+            error instanceof Error ? error.message : t("composer.errors.queuedPersistFailed"),
+          );
         });
         return;
       }
@@ -2440,11 +2582,18 @@ function ComposerContentImpl({
       handleQueuedMutationResult,
       serverId,
       supportsDurableQueue,
+      t,
     ],
   );
 
   const handleDiscardQueuedMessage = useCallback(
     (id: string) => {
+      // An unresolved tombstone must not be discarded: its cancellation has to
+      // reach the host (or be explicitly retried), never silently dropped.
+      if (useQueueOutboxStore.getState().entries[id]?.removalRequested === true) {
+        setSendError(t("composer.errors.queueRemoveFailed"));
+        return;
+      }
       if (failedOutboxEntries.some((entry) => entry.itemId === id)) {
         void (async () => {
           const confirmed = await confirmDialog({
@@ -2455,7 +2604,20 @@ function ComposerContentImpl({
             destructive: true,
           });
           if (!confirmed) return;
-          useQueueOutboxStore.getState().remove(id);
+          try {
+            // The discard must be durable and rechecked at the serialized
+            // boundary: a tombstone requested while this confirmation was
+            // open is refused, and a failed write keeps the row visible
+            // instead of letting a restart resurrect it silently.
+            await useQueueOutboxStore.getState().discardQueuedEntryDurably(id);
+          } catch (error) {
+            setSendError(
+              error instanceof Error && error.message
+                ? error.message
+                : t("composer.errors.queuedPersistFailed"),
+            );
+            return;
+          }
           removeQueuedComposerMessageLocally({
             agentId,
             messageId: id,
@@ -2466,11 +2628,11 @@ function ComposerContentImpl({
       }
       handleDeleteQueuedMessage(id);
     },
-    [agentId, failedOutboxEntries, handleDeleteQueuedMessage, queueWriter, t],
+    [agentId, failedOutboxEntries, handleDeleteQueuedMessage, queueWriter, setSendError, t],
   );
 
   const handleQueue = useCallback(
-    (payload: MessagePayload) => {
+    async (payload: MessagePayload) => {
       const outgoingAttachments = buildOutgoingAttachments(attachments);
       const clientSlashCommand = resolveClientSlashCommand({
         text: payload.text,
@@ -2485,7 +2647,9 @@ function ComposerContentImpl({
         commands: pluginClientSlashCommands,
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
-      queueMessage(payload.text, outgoingAttachments);
+      // Errors propagate to the invoking path (queue button or dictation),
+      // which surfaces them once.
+      await queueMessage(payload.text, outgoingAttachments);
     },
     [
       attachments,
@@ -2496,8 +2660,6 @@ function ComposerContentImpl({
       runPluginClientSlashCommand,
     ],
   );
-
-  const hasSendableContent = hasText || selectedAttachments.length > 0;
 
   // Handle keyboard navigation for command autocomplete.
   const handleCommandKeyPress = useCallback(
@@ -2546,8 +2708,10 @@ function ComposerContentImpl({
       <ComposerRightControlsSlot
         isVoiceModeForAgent={isVoiceModeForAgent}
         hasAgent={hasAgent}
+        canCreateAgentForVoice={canCreateAgentForVoice}
         isAgentRunning={isAgentRunning}
         supportsVoiceConcurrentInput={supportsVoiceConcurrentInput}
+        preferRealtimeGpt={preferRealtimeGpt}
         hasSendableContent={hasSendableContent}
         isCompact={isCompactLayout}
         showVoice={mode.showVoice}
@@ -2564,6 +2728,8 @@ function ComposerContentImpl({
       buttonIconSize,
       handleToggleRealtimeVoice,
       hasAgent,
+      canCreateAgentForVoice,
+      preferRealtimeGpt,
       hasSendableContent,
       isAgentRunning,
       isConnected,
@@ -2845,31 +3011,53 @@ function ComposerContentImpl({
     ],
   );
 
-  // Failed outbox entries annotate their optimistic rows (and append rows this
-  // device lost, e.g. after a restart) so an enqueue that exhausted its retries
-  // stays visible with explicit retry/discard instead of dropping.
+  // The single reconciliation point for the queue track: failed outbox entries
+  // annotate their rows (and append rows this device lost, e.g. after a
+  // restart), and un-acked entries are overlaid so an enqueue the daemon has
+  // not acknowledged stays visible without living in session state.
   const queueRows = useMemo(() => {
-    if (!supportsDurableQueue || failedOutboxEntries.length === 0) {
+    if (!supportsDurableQueue) {
       return queuedMessages;
     }
-    const failedIds = new Set(failedOutboxEntries.map((entry) => entry.itemId));
-    const annotated = queuedMessages.map(
-      (row): QueuedMessage =>
-        failedIds.has(row.id) && row.syncState !== "failed" ? { ...row, syncState: "failed" } : row,
-    );
-    const present = new Set(annotated.map((row) => row.id));
-    const missing = failedOutboxEntries
-      .filter((entry) => !present.has(entry.itemId))
-      .map(
-        (entry): QueuedMessage => ({
-          id: entry.itemId,
-          text: entry.text,
-          attachments: toComposerAttachments(entry.composerAttachments),
-          syncState: "failed",
-        }),
-      );
-    return missing.length === 0 ? annotated : [...annotated, ...missing];
-  }, [failedOutboxEntries, queuedMessages, supportsDurableQueue]);
+    return annotateQueueRows({ rows: queuedMessages, entries: outboxEntriesForAgent });
+  }, [outboxEntriesForAgent, queuedMessages, supportsDurableQueue]);
+
+  const storageErrorRow = useMemo(
+    () =>
+      supportsDurableQueue
+        ? resolveQueueStorageErrorRow(outboxStorageError, outboxEntriesForAgent)
+        : null,
+    [outboxEntriesForAgent, outboxStorageError, supportsDurableQueue],
+  );
+
+  // Retry re-verifies storage (the flush probes before sending anything) and
+  // re-lists the queue so a failed snapshot acknowledgement is re-attempted.
+  const handleRetryStorageError = useCallback(() => {
+    clearStorageError();
+    if (!(supportsDurableQueue && client)) return;
+    void flushQueueOutboxForServer({
+      serverId,
+      client,
+      applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
+    })
+      .catch(() => {
+        // surfaced through the storage-error state; the refresh below re-lists
+      })
+      .finally(() => {
+        void refreshQueuedMessages();
+      });
+  }, [
+    applyAgentQueueSnapshot,
+    clearStorageError,
+    client,
+    refreshQueuedMessages,
+    serverId,
+    supportsDurableQueue,
+  ]);
+
+  const handleDismissStorageError = useCallback(() => {
+    clearStorageError();
+  }, [clearStorageError]);
 
   const queueList = useMemo(() => {
     const durable = supportsDurableQueue
@@ -2897,16 +3085,71 @@ function ComposerContentImpl({
       handleSendQueuedNow,
       editLabel: t("composer.attachments.editQueuedMessage"),
       sendNowLabel: t("composer.attachments.sendQueuedMessageNow"),
+      pendingMessageIds: supportsDurableQueue ? pendingMessageIds : EMPTY_SET,
+      pendingLabel: t("composer.attachments.queueWaitingToSync"),
+      appliedRevision: getAppliedQueueRevision(),
+      draftScope: `queued-edit:${serverId}:${agentId}`,
+      onSaveQueuedMessage: handleSaveQueuedMessage,
+      onRemoveQueuedMessage: handleRemoveQueuedMessage,
+      onQueueRowError: setSendError,
+      onMoveToComposer: handleMoveToComposer,
+      moveToComposerLabel: t("composer.attachments.moveToComposer"),
+      readLabel: t("composer.attachments.readQueuedMessage"),
+      removeFailedLabel: t("composer.errors.queueRemoveFailed"),
+      removeLabel: t("composer.attachments.removeQueuedMessage"),
+      doneLabel: t("composer.attachments.doneQueuedMessage"),
+      saveAnywayLabel: t("composer.attachments.queueEditSaveAnyway"),
+      discardEditLabel: t("composer.attachments.queueEditDiscard"),
+      removalPendingLabel: t("composer.attachments.queueRemovalPending"),
+      removalFailedLabel: t("composer.attachments.queueRemovalFailed"),
+      conflictLabel: t("composer.queued.changedOnAnotherDevice"),
+      persistFailedLabel: t("composer.errors.queuedPersistFailed"),
+      removalPendingIds: supportsDurableQueue
+        ? new Set(
+            outboxEntriesForAgent
+              .filter((entry) => entry.removalRequested && entry.removalFailedAt === undefined)
+              .map((entry) => entry.itemId),
+          )
+        : EMPTY_SET,
+      removalFailedIds: supportsDurableQueue
+        ? new Set(
+            outboxEntriesForAgent
+              .filter((entry) => entry.removalRequested && entry.removalFailedAt !== undefined)
+              .map((entry) => entry.itemId),
+          )
+        : EMPTY_SET,
+      storageError: storageErrorRow
+        ? {
+            message: t(storageErrorRow.messageKey),
+            entryText: storageErrorRow.entryText,
+            retryLabel: t("common.actions.retry"),
+            dismissLabel: t("common.actions.dismiss"),
+          }
+        : null,
+      onRetryStorageError: handleRetryStorageError,
+      onDismissStorageError: handleDismissStorageError,
       durable,
     });
   }, [
+    agentId,
+    getAppliedQueueRevision,
     handleDeleteQueuedMessage,
     handleDiscardQueuedMessage,
     handleEditQueuedMessage,
     handleMoveQueuedMessage,
+    handleMoveToComposer,
+    handleRemoveQueuedMessage,
     handleRetryQueuedMessage,
+    handleRetryStorageError,
+    handleDismissStorageError,
+    handleSaveQueuedMessage,
     handleSendQueuedNow,
+    outboxEntriesForAgent,
+    pendingMessageIds,
     queueRows,
+    serverId,
+    setSendError,
+    storageErrorRow,
     supportsDurableQueue,
     t,
   ]);
@@ -2988,6 +3231,15 @@ function ComposerContentImpl({
         {/* Input area */}
         <View style={inputAreaContainerStyle}>
           <View style={inputAreaContentStyle}>
+            {isFullscreen ? null : (
+              <UnsentTrack
+                serverId={serverId}
+                agentId={agentId}
+                client={client}
+                getComposerText={textSource.getSnapshot}
+                restoreComposerText={replaceUserInput}
+              />
+            )}
             {isFullscreen ? null : queueList}
             {!isFullscreen && sendErrorNode}
 
@@ -3049,6 +3301,7 @@ function ComposerContentImpl({
                   onCancelAgent={handleCancelAgent}
                   defaultSendBehavior={activeSendBehavior}
                   onQueue={handleQueue}
+                  onQueueError={setSendError}
                   onSubmitLoadingPress={submitLoadingPressHandler}
                   onKeyPress={handleCommandKeyPress}
                   onSelectionChange={handleSelectionChange}
@@ -3220,20 +3473,10 @@ const styles = StyleSheet.create((theme: Theme) => ({
     borderColor: theme.colors.border,
     gap: theme.spacing[2],
   },
-  queueText: {
-    flex: 1,
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-  },
   queueItemContent: {
     flex: 1,
     flexDirection: "column",
     gap: theme.spacing[1],
-  },
-  queueItemState: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
   },
   queueErrorText: {
     flexShrink: 1,
@@ -3253,9 +3496,6 @@ const styles = StyleSheet.create((theme: Theme) => ({
     justifyContent: "center",
     backgroundColor: theme.colors.surface2,
   },
-  queueSendButton: {
-    backgroundColor: theme.colors.accent,
-  },
   sendErrorText: {
     color: theme.colors.palette.red[500],
     fontSize: theme.fontSize.base,
@@ -3263,14 +3503,8 @@ const styles = StyleSheet.create((theme: Theme) => ({
 })) as unknown as Record<string, object>;
 
 const ThemedAttachmentSpinner = withUnistyles(LoadingSpinner);
-const ThemedPencil = withUnistyles(Pencil);
-const ThemedArrowUp = withUnistyles(ArrowUp);
-const ThemedChevronUp = withUnistyles(ChevronUp);
-const ThemedChevronDown = withUnistyles(ChevronDown);
-const ThemedMoreVertical = withUnistyles(MoreVertical);
 const ThemedRotateCcw = withUnistyles(RotateCcw);
 const ThemedX = withUnistyles(X);
-const ThemedTrash2 = withUnistyles(Trash2);
 const ThemedGitPullRequest = withUnistyles(GitPullRequest);
 const ThemedCircleDot = withUnistyles(CircleDot);
 const ThemedAudioLines = withUnistyles(AudioLines);
@@ -3280,8 +3514,6 @@ const ThemedClipboardPaste = withUnistyles(ClipboardPaste);
 const ThemedFileText = withUnistyles(FileText);
 const iconForegroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const iconForegroundMutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const iconAccentForegroundMapping = (theme: Theme) => ({ color: theme.colors.accentForeground });
-
 function renderForgeAttachmentIcon(icon: string): ReactElement {
   return (
     <ForgeBrandIcon iconKind={icon} size={ICON_SIZE.md} uniProps={iconForegroundMutedMapping} />

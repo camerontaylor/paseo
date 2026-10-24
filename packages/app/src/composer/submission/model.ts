@@ -1,5 +1,6 @@
 export interface PendingMessageSubmission {
   clientMessageId: string;
+  rpcSettled?: boolean;
 }
 
 export type MessageSubmissionRecord = PendingMessageSubmission & {

@@ -2,7 +2,15 @@ import React, { useCallback, useMemo, useState } from "react";
 import { View } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { useTranslation } from "react-i18next";
-import { Copy, Ellipsis, Globe, Import as ImportIcon, Settings } from "lucide-react-native";
+import {
+  Copy,
+  Ellipsis,
+  Globe,
+  Link,
+  Import as ImportIcon,
+  Pencil,
+  Settings,
+} from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { TerminalProfile } from "@getpaseo/protocol/messages";
 import {
@@ -11,6 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -20,6 +29,8 @@ import {
   useIconButtonChromeStyle,
 } from "@/components/ui/icon-button-chrome";
 import { TerminalProfileIcon } from "@/components/terminal-profile-icon";
+import { RecentNavigationItems } from "@/components/headers/workspace-navigation-controls";
+import { useRecentVisits } from "@/navigation/history/use-recent-session-rows";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import {
   getTerminalProfileIcon,
@@ -33,6 +44,8 @@ import {
 } from "@/screens/workspace/scripts";
 
 const ThemedEllipsis = withUnistyles(Ellipsis);
+const ThemedPencil = withUnistyles(Pencil);
+const ThemedLink = withUnistyles(Link);
 const ThemedCopy = withUnistyles(Copy);
 const ThemedGlobe = withUnistyles(Globe);
 const ThemedImport = withUnistyles(ImportIcon);
@@ -42,6 +55,8 @@ const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMut
 
 const MENU_NEW_BROWSER_ICON = <ThemedGlobe size={16} uniProps={mutedColorMapping} />;
 const MENU_IMPORT_ICON = <ThemedImport size={16} uniProps={mutedColorMapping} />;
+const MENU_LINK_ICON = <ThemedLink size={16} uniProps={mutedColorMapping} />;
+const MENU_RENAME_ICON = <ThemedPencil size={16} uniProps={mutedColorMapping} />;
 const MENU_COPY_ICON = <ThemedCopy size={16} uniProps={mutedColorMapping} />;
 const MENU_SETTINGS_ICON = <ThemedSettings size={16} uniProps={mutedColorMapping} />;
 function WorkspaceHeaderMenuTriggerIcon() {
@@ -151,10 +166,62 @@ function workspaceHeaderMenuButtonStyle({
   return iconButtonChromeStyle({ size: "large", state: { hovered, pressed, open } });
 }
 
+export interface WorkspaceHeaderTabActions {
+  canCopyTabLink: boolean;
+  onCopyTabLink: () => void;
+  onCopyWorkspaceLink: () => void;
+  renameTabKind: "agent" | "terminal" | null;
+  onRenameCurrentTab: () => void;
+}
+
+function WorkspaceHeaderTabActionItems({
+  canCopyTabLink,
+  onCopyTabLink,
+  onCopyWorkspaceLink,
+  renameTabKind,
+  onRenameCurrentTab,
+}: WorkspaceHeaderTabActions) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {renameTabKind ? (
+        <DropdownMenuItem
+          testID="workspace-header-rename-tab"
+          leading={MENU_RENAME_ICON}
+          onSelect={onRenameCurrentTab}
+        >
+          {renameTabKind === "agent"
+            ? t("workspace.tabs.menu.renameAgent")
+            : t("workspace.tabs.menu.renameTerminal")}
+        </DropdownMenuItem>
+      ) : null}
+      {canCopyTabLink ? (
+        <DropdownMenuItem
+          testID="workspace-header-copy-tab-link"
+          leading={MENU_LINK_ICON}
+          onSelect={onCopyTabLink}
+        >
+          {t("workspace.header.actions.copyTabLink")}
+        </DropdownMenuItem>
+      ) : null}
+      <DropdownMenuItem
+        testID="workspace-header-copy-workspace-link"
+        leading={MENU_LINK_ICON}
+        onSelect={onCopyWorkspaceLink}
+      >
+        {t("workspace.header.actions.copyWorkspaceLink")}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+    </>
+  );
+}
+
 /**
  * Wide layouts make tabs from the tab strip's `+` menu, so this one carries workspace actions only.
  */
-export function WorkspaceHeaderMenuDesktop(props: WorkspaceHeaderWorkspaceActions) {
+export function WorkspaceHeaderMenuDesktop(
+  props: WorkspaceHeaderWorkspaceActions & WorkspaceHeaderTabActions,
+) {
   const { t } = useTranslation();
   return (
     <DropdownMenu>
@@ -167,6 +234,7 @@ export function WorkspaceHeaderMenuDesktop(props: WorkspaceHeaderWorkspaceAction
         <WorkspaceHeaderMenuTriggerIcon />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" width={220} testID="workspace-header-menu">
+        <WorkspaceHeaderTabActionItems {...props} />
         <WorkspaceHeaderWorkspaceActionItems {...props} />
       </DropdownMenuContent>
     </DropdownMenu>
@@ -204,7 +272,8 @@ function HeaderMenuProfileItem({
   );
 }
 
-export interface WorkspaceHeaderMenuMobileProps extends WorkspaceHeaderWorkspaceActions {
+export interface WorkspaceHeaderMenuMobileProps
+  extends WorkspaceHeaderWorkspaceActions, WorkspaceHeaderTabActions {
   normalizedServerId: string;
   scripts: UseWorkspaceScriptsMenuPagesInput;
   showCreateBrowserTab: boolean;
@@ -227,6 +296,11 @@ export function WorkspaceHeaderMenuMobile({
   createTerminalDisabled,
   onCreateTerminalWithProfile,
   onCreateBrowser,
+  renameTabKind,
+  onRenameCurrentTab,
+  canCopyTabLink,
+  onCopyTabLink,
+  onCopyWorkspaceLink,
   ...workspaceActions
 }: WorkspaceHeaderMenuMobileProps) {
   const { t } = useTranslation();
@@ -242,9 +316,21 @@ export function WorkspaceHeaderMenuMobile({
     router.push(buildSettingsHostSectionRoute(normalizedServerId, "terminals") as Href);
   }, [normalizedServerId, router]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const recentVisits = useRecentVisits();
   // Discovery belongs to the open menu: the scripts page asks for package scripts only once the
   // user opens it, so a compact workspace does not poll for scripts it never shows.
   const scriptsMenu = useWorkspaceScriptsMenuPages({ ...scripts, menuOpen });
+  const menuPages = useMemo(
+    () => [
+      ...scriptsMenu.pages,
+      {
+        id: "recent-navigation",
+        title: t("agentList.dateSections.recent"),
+        content: <RecentNavigationItems />,
+      },
+    ],
+    [scriptsMenu.pages, t],
+  );
 
   return (
     <DropdownMenu compactMode="sheet" onOpenChange={setMenuOpen}>
@@ -269,10 +355,22 @@ export function WorkspaceHeaderMenuMobile({
         align="start"
         width={220}
         testID="workspace-header-menu"
-        pages={scriptsMenu.pages}
+        pages={menuPages}
         sheetTitle={t("workspace.header.actions.workspaceActions")}
       >
+        <WorkspaceHeaderTabActionItems
+          renameTabKind={renameTabKind}
+          onRenameCurrentTab={onRenameCurrentTab}
+          canCopyTabLink={canCopyTabLink}
+          onCopyTabLink={onCopyTabLink}
+          onCopyWorkspaceLink={onCopyWorkspaceLink}
+        />
         {scriptsMenu.trigger}
+        {recentVisits.length > 0 ? (
+          <DropdownMenuSubTrigger id="recent-navigation" testID="workspace-header-recent">
+            {t("agentList.dateSections.recent")}
+          </DropdownMenuSubTrigger>
+        ) : null}
         {showCreateBrowserTab ? (
           <DropdownMenuItem
             testID="workspace-header-new-browser"

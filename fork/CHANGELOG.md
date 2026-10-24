@@ -4,6 +4,41 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## TMAD feature intake — 2026-10-24 (pending release)
+
+Intake of the TMAD Stream/all-new-feature register into the Desvio release,
+executed per `fork/plans/tmad-desvio-full-intake-2026-10-24.md`. The source
+deltas are carried on `fork/tmad-2026-10-24-carry`, appended to the Desvio
+manifest after the unchanged `origin/custom` and
+`origin/upgrade/basket-0.12.0` lines; neither prior line moved. The release
+version is resolved from the registry union at release time.
+
+Landed, per the [feature matrix](plans/tmad-desvio-feature-matrix-2026-10-24.json):
+
+- Durable typed-send queue with delivery marks, Unsent recovery and queue
+  defaults (D1).
+- Durable Stream asks across restart, message/excerpt pins, artifacts,
+  Activity/Checklist views, cross-project saved views and side surfaces
+  (D2/D4).
+- Session navigation: favorites, unread, conversation sort, focus history,
+  topbar rename, footer time, mobile keyboard dismissal, long-message clamp
+  (D3).
+- Scoped session search, Find-or-start, guarded Route-to-best-match and Quick
+  launch (D5).
+- Delivery inspection and client diagnostics CLIs, persistent CLI target,
+  created-session tab exposure, offline alias maintenance (D6).
+- Realtime voice entry, queued voice attachment recovery, opt-in verbal
+  mute/unmute (D7).
+- Threaded replies on side conversations (D8).
+
+Exclusions unchanged from the plan: the source's unfinished restart-continuity
+request, historic Stream reconstruction and individual-session timestamp
+request stay out; source beta-release plumbing, private ChatGPT endpoints and
+Ideaflow identity are replaced by our release channel, configured providers
+and existing identity. Physical iOS (including background dictation) remains
+unverified — no iPhone in the fleet; Android evidence comes from the
+SM-S921B/API 36 device runs recorded in the matrix.
+
 ## 0.12.0 base decision — 2026-10-20
 
 Advance the preserved beta.3 custom merge to upstream stable `v0.12.0`

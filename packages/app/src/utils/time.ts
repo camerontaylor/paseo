@@ -16,10 +16,9 @@ const DAY_MS = 24 * HOUR_MS;
 const ABSOLUTE_AFTER_MS = 7 * DAY_MS;
 
 /**
- * How long ago something was, before it's worded. The prose and compact formatters share this so
- * their thresholds can't drift apart; they differ only in how much room they have to say it.
- *
- * `elapsed` takes an "ago" in prose, `now` and `date` read as absolutes and never do.
+ * How long ago something was, before it is worded. The prose and compact formatters share
+ * thresholds; a date from an earlier year includes its year.
+
  *
  * Deliberately never sub-minute. A seconds label is only correct for the second it was rendered,
  * so it either lies or forces a once-a-second re-render of a list that has nothing new to say.
@@ -53,14 +52,16 @@ function describeAge(date: Date, now: Date): Age {
     return { kind: "elapsed", value: `${Math.floor(elapsedMs / DAY_MS)}d`, resolution: "day" };
   }
 
+  // A bare "Sep 23" would read as this year, so an earlier year keeps a two-digit tail.
   const month = date.toLocaleDateString("en-US", { month: "short" });
-  return { kind: "date", value: `${month} ${date.getDate()}`, resolution: "static" };
+  const value =
+    date.getFullYear() !== now.getFullYear()
+      ? `${month} '${String(date.getFullYear()).slice(-2)}`
+      : `${month} ${date.getDate()}`;
+  return { kind: "date", value, resolution: "static" };
 }
 
-/**
- * A human-friendly relative time, with the resolution it changes at.
- * Examples: "just now", "5m ago", "2h ago", "3d ago", "Jan 15".
- */
+/** A human-friendly relative time, with the resolution it changes at. */
 export function describeTimeAgo(date: Date, now: Date = new Date()): RelativeTimeLabel {
   const age = describeAge(date, now);
   if (age.kind === "now") return { label: "just now", resolution: age.resolution };
@@ -72,11 +73,7 @@ export function formatTimeAgo(date: Date, now: Date = new Date()): string {
   return describeTimeAgo(date, now).label;
 }
 
-/**
- * The same instant with the prose removed, for somewhere with no room for it — a dense list
- * where the column is understood to be a timestamp and "ago" is the only word on the line.
- * Examples: "now", "5m", "2h", "3d", "Jan 15".
- */
+/** Compact display for the same relative time. */
 export function describeCompactTimeAgo(date: Date, now: Date = new Date()): RelativeTimeLabel {
   const age = describeAge(date, now);
   if (age.kind === "now") return { label: "now", resolution: age.resolution };

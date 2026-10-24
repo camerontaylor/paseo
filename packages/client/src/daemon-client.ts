@@ -9,14 +9,27 @@ import {
   type TimelineSubscription,
 } from "./connection/index.js";
 import { CreationClient } from "./creation/index.js";
-import type { AgentQueueSnapshot, CreationSnapshot } from "@getpaseo/protocol/messages";
+import type {
+  AgentQueueSnapshot,
+  CreationSnapshot,
+  UiWorkspaceTabTarget,
+} from "@getpaseo/protocol/messages";
 import type { z } from "zod";
+import type {
+  ClientDiagnosticEvent,
+  ClientDiagnosticSource,
+} from "@getpaseo/protocol/client-diagnostics";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 // Split value/type imports: the desvio basket drops the value import once no
 // basket-side code uses CLIENT_CAPS, which orphans the fork's sideConversations
 // declaration at merge time. A separate value-import line survives that merge.
 import type { ClientCapability } from "@getpaseo/protocol/client-capabilities";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
+import type {
+  StreamEntryUpdate,
+  StreamListOptions,
+  StreamListResult,
+} from "@getpaseo/protocol/global-stream";
 import type { AgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
 import { MAX_WEBSOCKET_MESSAGE_BYTES } from "@getpaseo/protocol/websocket-message-limit";
 import {
@@ -395,6 +408,14 @@ export type DaemonEventHandler = (event: DaemonEvent) => void;
 export type BrowserAutomationExecuteRequestMessage = BrowserAutomationExecuteRequest;
 export type BrowserAutomationExecuteResponseMessage = BrowserAutomationExecuteResponse;
 
+export interface DaemonRequestErrorEvent {
+  kind: "rpc_error" | "timeout";
+  requestType: string;
+  requestId: string;
+  code?: string;
+  message: string;
+}
+
 export interface DaemonClientConfig {
   /** Deliver compact bodies/hash references to a caller-owned snapshot cache.
    * The default keeps public SDK snapshot entries expanded. */
@@ -425,6 +446,7 @@ export interface DaemonClientConfig {
   runtimeMetricsWindowMs?: number;
   trace?: DaemonClientTrace;
   capabilities?: Partial<Record<ClientCapability, unknown>>;
+  onRequestError?: (event: DaemonRequestErrorEvent) => void;
 }
 
 export interface DaemonClientTrace {
@@ -1019,6 +1041,20 @@ type CorrelatedResponsePayloads = {
 };
 type CorrelatedResponsePayload<TType extends CorrelatedResponseType> =
   CorrelatedResponsePayloads[TType];
+
+export class AgentMessageRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentMessageRejectedError";
+  }
+}
+
+export class AgentQueueDestinationChangedError extends Error {
+  constructor() {
+    super("The selected chat moved, was archived, or was deleted. Choose its destination again.");
+    this.name = "AgentQueueDestinationChangedError";
+  }
+}
 
 export class DaemonConnectionError extends Error {
   constructor(
@@ -2019,8 +2055,36 @@ export class DaemonClient {
       const result = await promise;
       if (result.kind === "error") throw result.error;
       return result.value;
+    } catch (error) {
+      this.notifyRequestError(params.message.type, params.requestId, error);
+      throw error;
     } finally {
       await wire.finish();
+    }
+  }
+
+  private notifyRequestError(requestType: string, requestId: string, error: unknown): void {
+    const hook = this.config.onRequestError;
+    if (
+      !hook ||
+      requestType.startsWith("client.diagnostics.") ||
+      requestType.startsWith("client.outbox.")
+    )
+      return;
+    let kind: DaemonRequestErrorEvent["kind"];
+    if (error instanceof DaemonRpcError) kind = "rpc_error";
+    else if (isWaiterTimeoutError(error)) kind = "timeout";
+    else return;
+    try {
+      hook({
+        kind,
+        requestType,
+        requestId,
+        code: error instanceof DaemonRpcError ? error.code : undefined,
+        message: "Host request failed",
+      });
+    } catch {
+      // A diagnostics hook cannot change request behavior.
     }
   }
 
@@ -2174,6 +2238,15 @@ export class DaemonClient {
     if (!response.success) {
       throw new Error(response.error ?? "Failed to mark workspace unread");
     }
+  }
+
+  async markAgentUnread(workspaceId: string, agentId: string, requestId?: string): Promise<void> {
+    const response =
+      await this.sendNamespacedCorrelatedSessionRequest<"workspace.mark_unread.response">({
+        requestId,
+        message: { type: "workspace.mark_unread.request", workspaceId, agentId },
+      });
+    if (!response.success) throw new Error(response.error ?? "Failed to mark agent unread");
   }
 
   sendHeartbeat(params: {
@@ -3160,6 +3233,27 @@ export class DaemonClient {
     }
   }
 
+  // COMPAT(globalStream): added in TMAD intake 2026-10-24, remove after 2027-04-24.
+  // Callers must check server_info.features.globalStream first; the daemon
+  // serves these RPCs only to sessions advertising CLIENT_CAPS.globalStream.
+  async listGlobalStream(options: StreamListOptions = {}): Promise<StreamListResult> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"stream.list.response">({
+      message: { type: "stream.list.request", ...options },
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async updateStreamEntry(input: StreamEntryUpdate): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"stream.entry.update.response">({
+        message: { type: "stream.entry.update.request", ...input },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "Could not save Stream item");
+    }
+  }
+
   /**
    * Backfills an agent's artifact feed from files already on disk. Needed for
    * agents whose work predates the artifact feed, whose feeds are otherwise
@@ -3230,6 +3324,47 @@ export class DaemonClient {
       throw new Error(payload.error ?? "removeProject rejected");
     }
     return { removedWorkspaceIds: payload.removedWorkspaceIds };
+  }
+
+  // COMPAT(projectPinning): callers gate on server_info.features.projectPinning.
+  async setProjectPinned(
+    projectId: string,
+    pinned: boolean,
+    requestId?: string,
+  ): Promise<{ pinnedAt: string | null }> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"project.pin.set.response">({
+      requestId,
+      message: {
+        type: "project.pin.set.request",
+        projectId,
+        pinned,
+      },
+    });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "setProjectPinned rejected");
+    }
+    return { pinnedAt: payload.pinnedAt };
+  }
+
+  // COMPAT(projectPinning): callers gate on server_info.features.projectPinning.
+  async setProjectDefault(
+    projectId: string,
+    isDefault: boolean,
+    requestId?: string,
+  ): Promise<{ defaultAt: string | null }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"project.default.set.response">({
+        requestId,
+        message: {
+          type: "project.default.set.request",
+          projectId,
+          isDefault,
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "setProjectDefault rejected");
+    }
+    return { defaultAt: payload.defaultAt };
   }
 
   async setWorkspaceTitle(
@@ -3449,6 +3584,41 @@ export class DaemonClient {
       responseType: "agent.timeline.append.response",
     });
     return { seq: payload.seq, epoch: payload.epoch };
+  }
+
+  async searchSessions(input: { query: string; workspaceIds: string[] }): Promise<{
+    results: import("@getpaseo/protocol/messages").SessionSearchResult[];
+    searchedCount: number;
+    totalCount: number;
+  }> {
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "session.search.request", requestId, ...input },
+      responseType: "session.search.response",
+      timeout: 50_000,
+    });
+    if (payload.error) {
+      const error = new Error(payload.error);
+      if (payload.errorCode) Object.assign(error, { code: payload.errorCode });
+      throw error;
+    }
+    return payload;
+  }
+
+  /**
+   * Lexical message search across sessions (`session.text_search`). Gate on
+   * `server_info.features.sessionTextSearch`. The daemon supersedes an older request from the
+   * same connection; the superseded call rejects with the daemon's error.
+   */
+  async searchSessionText(input: { query: string; workspaceIds?: string[] }) {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"session.text_search.response">({
+        message: { type: "session.text_search.request", ...input },
+        timeout: 10000,
+      });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
   }
 
   async searchAgentTimeline({
@@ -3704,7 +3874,7 @@ export class DaemonClient {
     agentId: string,
     text: string,
     options?: SendMessageOptions,
-  ): Promise<void> {
+  ): Promise<{ queued: boolean }> {
     if (
       options?.sourceAgentId &&
       this.lastServerInfoMessage?.features?.agentMessageProvenance !== true
@@ -3739,8 +3909,9 @@ export class DaemonClient {
       },
     });
     if (!payload.accepted) {
-      throw new Error(payload.error ?? "sendAgentMessage rejected");
+      throw new AgentMessageRejectedError(payload.error ?? "sendAgentMessage rejected");
     }
+    return { queued: payload.queued === true };
   }
 
   async sendMessage(agentId: string, text: string, options?: SendMessageOptions): Promise<void> {
@@ -3769,6 +3940,8 @@ export class DaemonClient {
     images?: Array<{ data: string; mimeType: string }>;
     attachments?: AgentAttachmentWire[];
     composerAttachments?: QueuedComposerAttachment[];
+    expectedWorkspaceId?: string;
+    expectedProjectId?: string;
   }): Promise<AgentQueueSnapshot> {
     return this.requireAgentQueuePayload(
       await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.enqueue.response">({
@@ -3782,6 +3955,12 @@ export class DaemonClient {
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           ...(input.composerAttachments?.length
             ? { composerAttachments: input.composerAttachments }
+            : {}),
+          ...(input.expectedWorkspaceId !== undefined
+            ? { expectedWorkspaceId: input.expectedWorkspaceId }
+            : {}),
+          ...(input.expectedProjectId !== undefined
+            ? { expectedProjectId: input.expectedProjectId }
             : {}),
         },
       }),
@@ -3863,6 +4042,86 @@ export class DaemonClient {
     );
   }
 
+  async reportClientDiagnostics(input: {
+    deviceLabel?: string;
+    platform?: string;
+    events: ClientDiagnosticEvent[];
+  }): Promise<{ acknowledgedIds: string[]; deferredIds: string[] }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"client.diagnostics.report.response">({
+        message: { type: "client.diagnostics.report.request", ...input },
+      });
+    if (payload.error) throw new Error(payload.error);
+    return { acknowledgedIds: payload.acknowledgedIds, deferredIds: payload.deferredIds };
+  }
+
+  async listClientDiagnostics(
+    options: { limit?: number; since?: string; source?: ClientDiagnosticSource } = {},
+  ): Promise<CorrelatedResponsePayload<"client.diagnostics.list.response">> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"client.diagnostics.list.response">({
+        message: { type: "client.diagnostics.list.request", ...options },
+      });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  supportsUiCommands(): boolean {
+    return this.lastServerInfoMessage?.features?.uiCommands === true;
+  }
+
+  supportsUiTabPlacement(): boolean {
+    return this.lastServerInfoMessage?.features?.uiTabPlacement === true;
+  }
+
+  async openWorkspaceTab(input: {
+    workspaceId: string;
+    target: UiWorkspaceTabTarget;
+    focus?: boolean;
+    placement?: "main" | "side";
+    serverId?: string;
+  }): Promise<CorrelatedResponsePayload<"ui.tab.open.response">> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"ui.tab.open.response">({
+      message: {
+        type: "ui.tab.open.request",
+        workspaceId: input.workspaceId,
+        target: input.target,
+        ...(input.focus === false ? { focus: false } : {}),
+        ...(input.placement === "side" ? { placement: "side" as const } : {}),
+        ...(input.serverId ? { serverId: input.serverId } : {}),
+      },
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async inspectAgentDelivery(
+    agentId: string,
+  ): Promise<CorrelatedResponsePayload<"agent.queue.inspect.response">> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.inspect.response">({
+        message: { type: "agent.queue.inspect.request", agentId },
+      });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async reportClientOutbox(input: {
+    agentId: string;
+    deviceLabel?: string | null;
+    platform?: string | null;
+    pending: number;
+    failed: number;
+    uncertain: number;
+    oldestCreatedAt?: string | null;
+  }): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"client.outbox.report.response">({
+        message: { type: "client.outbox.report.request", ...input },
+      });
+    if (payload.error) throw new Error(payload.error);
+  }
+
   async listQueuedAgentMessages(agentId: string): Promise<AgentQueueSnapshot> {
     return this.requireAgentQueuePayload(
       await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.list.response">({
@@ -3895,6 +4154,12 @@ export class DaemonClient {
     error: string | null;
   }): AgentQueueSnapshot {
     if (!payload.queue) {
+      if (
+        payload.error === "session_route_destination_changed" ||
+        payload.error === "session_route_destination_missing"
+      ) {
+        throw new AgentQueueDestinationChangedError();
+      }
       throw new Error(payload.error ?? "Agent queue request rejected");
     }
     return payload.queue;
@@ -4202,6 +4467,9 @@ export class DaemonClient {
     enabled: boolean,
     agentId?: string,
     input?: {
+      voiceProvider?: "paseo" | "openai-realtime";
+      voiceCommandsEnabled?: boolean;
+      isMuted?: boolean;
       /** Voice attachment identity; the host binds its transport generation to it. */
       attachmentId?: string;
       /** Supplied when an existing attachment reclaims itself after a reconnect. */
@@ -4215,6 +4483,11 @@ export class DaemonClient {
       ...(agentId ? { agentId } : {}),
       ...(input?.attachmentId ? { attachmentId: input.attachmentId } : {}),
       ...(input?.generation ? { generation: input.generation } : {}),
+      ...(input?.voiceProvider ? { voiceProvider: input.voiceProvider } : {}),
+      ...(input?.voiceCommandsEnabled !== undefined
+        ? { voiceCommandsEnabled: input.voiceCommandsEnabled }
+        : {}),
+      ...(input?.isMuted !== undefined ? { isMuted: input.isMuted } : {}),
       requestId,
     });
     const response = await this.sendRequest({
@@ -4238,6 +4511,42 @@ export class DaemonClient {
       throw new Error((response.error ?? "Failed to set voice mode") + codeSuffix);
     }
     return response;
+  }
+
+  async setVoiceInputMuted(
+    muted: boolean,
+    transport: { attachmentId: string; generation: string },
+  ): Promise<boolean> {
+    const requestId = this.createRequestId();
+    const response = await this.sendRequest({
+      requestId,
+      message: { type: "voice.input.set_muted.request", requestId, muted, ...transport },
+      select: (msg) =>
+        msg.type === "voice.input.set_muted.response" && msg.payload.requestId === requestId
+          ? msg.payload
+          : null,
+    });
+    if (response.error) throw new Error(response.error);
+    return response.muted;
+  }
+
+  async controlRealtimeVoice(
+    input: Omit<
+      Extract<SessionInboundMessage, { type: "voice.realtime.control.request" }>,
+      "type" | "requestId"
+    >,
+  ) {
+    const requestId = this.createRequestId();
+    const response = await this.sendRequest({
+      requestId,
+      message: { type: "voice.realtime.control.request", requestId, ...input },
+      select: (msg) =>
+        msg.type === "voice.realtime.control.response" && msg.payload.requestId === requestId
+          ? msg.payload
+          : null,
+    });
+    if (response.error) throw new Error(response.error);
+    return response.state;
   }
 
   /** Reads this attachment's delivery receipts so the panel can show truthful state. */

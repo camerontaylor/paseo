@@ -1,3 +1,4 @@
+import { useWorkspaceLinks } from "./use-workspace-links";
 import {
   AssistantFileLinkResolverProvider,
   createInlinePathOpener,
@@ -35,6 +36,10 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
 import invariant from "tiny-invariant";
 import { SidebarMenuToggle } from "@/components/headers/sidebar-menu-toggle";
+import {
+  RecentNavigationButton,
+  WorkspaceHistoryButtons,
+} from "@/components/headers/workspace-navigation-controls";
 import { ScreenHeader } from "@/components/headers/screen-header";
 import { MenuHeader } from "@/components/headers/menu-header";
 import { FloatingHeaderLayout } from "@/components/floating-header";
@@ -80,6 +85,7 @@ import { traceInstant } from "@/performance/native-trace";
 import { useSessionStore, type WorkspaceDescriptor } from "@/stores/session-store";
 import {
   canDismissPaneInLayout,
+  collectAllPanes,
   collectAllTabs,
   DEFAULT_PANE_ID,
   findPaneById,
@@ -147,6 +153,11 @@ import {
 import { useDesktopBrowserNewTabRequests } from "@/desktop/browser/new-tab-requests";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
 import {
+  reconcileTabActivity,
+  sortTabsByActivity,
+  type TabActivityState,
+} from "@/screens/workspace/workspace-tab-activity";
+import {
   resolveWorkspaceExplorerToggleOwner,
   EXPLORER_TOGGLE_KEYS,
   WorkspaceExplorerSidebarToggle,
@@ -195,6 +206,17 @@ import {
 } from "@/screens/workspace/workspace-bulk-close";
 import { resolveCloseAgentTabPolicy } from "@/subagents";
 import {
+  SplitWithSessionContext,
+  type SplitWithSessionPosition,
+  type SplitWithSessionValue,
+} from "@/workspace-tabs/split-with-session";
+import { ViewSessionPicker, type ViewSessionPickerRequest } from "@/views/view-session-picker";
+import type { ViewTabInput } from "@/stores/views-store";
+import {
+  buildForeignSessionPaneContentModel,
+  useForeignSessionWorkspaces,
+} from "@/screens/workspace/foreign-sessions";
+import {
   getPanelInstanceAttributes,
   useModifiedPanelTabIds,
 } from "@/panels/panel-instance-attributes";
@@ -207,6 +229,7 @@ import type { TerminalProfile } from "@getpaseo/protocol/messages";
 import {
   WorkspaceHeaderMenuDesktop,
   WorkspaceHeaderMenuMobile,
+  type WorkspaceHeaderTabActions,
 } from "@/screens/workspace/workspace-header-menu";
 import { PluginHeaderButtons } from "@/plugins";
 import {
@@ -460,7 +483,7 @@ function useCloseTabs(): UseCloseTabsResult {
   return { closingTabIds, closeTab };
 }
 
-interface WorkspaceHeaderTitleBarProps {
+interface WorkspaceHeaderTitleBarProps extends WorkspaceHeaderTabActions {
   isLoading: boolean;
   title: string;
   subtitle: string;
@@ -480,6 +503,11 @@ interface WorkspaceHeaderTitleBarProps {
 }
 
 function WorkspaceHeaderTitleBar({
+  canCopyTabLink,
+  onCopyTabLink,
+  onCopyWorkspaceLink,
+  renameTabKind,
+  onRenameCurrentTab,
   isLoading,
   title,
   subtitle,
@@ -529,6 +557,11 @@ function WorkspaceHeaderTitleBar({
       )}
       <View style={styles.compactHeaderMenuCluster}>
         <WorkspaceHeaderMenuDesktop
+          canCopyTabLink={canCopyTabLink}
+          onCopyTabLink={onCopyTabLink}
+          onCopyWorkspaceLink={onCopyWorkspaceLink}
+          renameTabKind={renameTabKind}
+          onRenameCurrentTab={onRenameCurrentTab}
           currentBranchName={currentBranchName}
           showWorkspaceSetup={showWorkspaceSetup}
           importAgentDisabled={importAgentDisabled}
@@ -1031,6 +1064,18 @@ function useLastMainPane(input: {
   return lastMainPaneRef;
 }
 
+function useWorkspaceHeaderRename(
+  tab: WorkspaceTabDescriptor | null,
+  onRenameTab: (tab: WorkspaceTabDescriptor) => void,
+) {
+  const renameTabKind =
+    tab?.target.kind === "agent" || tab?.target.kind === "terminal" ? tab.target.kind : null;
+  const onRenameCurrentTab = useCallback(() => {
+    if (tab) onRenameTab(tab);
+  }, [tab, onRenameTab]);
+  return { renameTabKind, onRenameCurrentTab };
+}
+
 function WorkspaceScreenContent({
   serverId,
   workspaceId,
@@ -1360,6 +1405,26 @@ function WorkspaceScreenContent({
     () => (workspaceLayout ? collectAllTabs(workspaceLayout.root) : EMPTY_UI_TABS),
     [workspaceLayout],
   );
+  const { homeByAgentId: foreignSessionWorkspaces, archivedAgentIds: archivedForeignAgentIds } =
+    useForeignSessionWorkspaces({
+      serverId: normalizedServerId,
+      workspaceId: normalizedWorkspaceId,
+      tabs: uiTabs,
+    });
+  const foreignSessionWorkspacesRef = useRef(foreignSessionWorkspaces);
+  foreignSessionWorkspacesRef.current = foreignSessionWorkspaces;
+  const closePolicyFor = useCallback(
+    (agentId: string) => {
+      const session = useSessionStore.getState().sessions[normalizedServerId];
+      const agent = session?.agents?.get(agentId) ?? session?.agentDetails?.get(agentId) ?? null;
+      const home = foreignSessionWorkspacesRef.current.get(agentId);
+      return resolveCloseAgentTabPolicy(
+        agent ?? (home ? { parentAgentId: null, workspaceId: home } : null),
+        normalizedWorkspaceId,
+      );
+    },
+    [normalizedServerId, normalizedWorkspaceId],
+  );
   useOpenAgentTabLabels({
     client,
     serverId: normalizedServerId,
@@ -1609,6 +1674,53 @@ function WorkspaceScreenContent({
   const tabs = useMemo<WorkspaceTabDescriptor[]>(
     () => focusedPaneTabState.tabs.map((tab) => tab.descriptor),
     [focusedPaneTabState.tabs],
+  );
+  const allActivityTabs = useMemo<WorkspaceTabDescriptor[]>(
+    () =>
+      uiTabs.map((tab) => ({
+        key: tab.tabId,
+        tabId: tab.tabId,
+        kind: tab.target.kind,
+        target: tab.target,
+      })),
+    [uiTabs],
+  );
+  const activityAgents = useSessionStore((state) => state.sessions[normalizedServerId]?.agents);
+  const activityByAgentId = useMemo(() => {
+    const activity = new Map<string, number>();
+    for (const tab of allActivityTabs) {
+      if (tab.target.kind !== "agent") continue;
+      const timestamp = activityAgents?.get(tab.target.agentId)?.lastActivityAt.getTime() ?? 0;
+      if (Number.isFinite(timestamp) && timestamp > 0) activity.set(tab.target.agentId, timestamp);
+    }
+    return activity;
+  }, [activityAgents, allActivityTabs]);
+  const viewedTabIds = useMemo(() => {
+    if (!isRouteFocused) return new Set<string>();
+    if (!workspaceLayout) return new Set(activeTabId ? [activeTabId] : []);
+    return new Set(
+      collectAllPanes(workspaceLayout.root)
+        .filter((pane) => !pane.hidden && pane.focusedTabId)
+        .map((pane) => pane.focusedTabId as string),
+    );
+  }, [activeTabId, isRouteFocused, workspaceLayout]);
+  const activitySortedTabs = useMemo(
+    () =>
+      sortTabsByActivity(
+        tabs.map((tab) => ({ tab })),
+        activityByAgentId,
+      ).map(({ tab }) => tab),
+    [activityByAgentId, tabs],
+  );
+  const [tabActivity, setTabActivity] = useState<Map<string, TabActivityState>>(() => new Map());
+  useEffect(() => {
+    setTabActivity((previous) =>
+      reconcileTabActivity(previous, allActivityTabs, activityByAgentId, viewedTabIds),
+    );
+  }, [activityByAgentId, allActivityTabs, viewedTabIds]);
+  const unreadTabIds = useMemo(
+    () => new Set([...tabActivity].filter(([, state]) => state.unread).map(([tabId]) => tabId)),
+    [tabActivity],
   );
   const hasSetupTab = useMemo(
     () =>
@@ -1997,6 +2109,56 @@ function WorkspaceScreenContent({
     [persistenceKey, splitWorkspacePaneEmpty],
   );
 
+  const [splitSessionRequest, setSplitSessionRequest] = useState<{
+    paneId: string;
+    position: SplitWithSessionPosition;
+  } | null>(null);
+  const splitWithSessionValue = useMemo<SplitWithSessionValue>(
+    () => ({ request: (paneId, position) => setSplitSessionRequest({ paneId, position }) }),
+    [],
+  );
+  const splitSessionPickerRequest = useMemo<ViewSessionPickerRequest | null>(
+    () =>
+      splitSessionRequest
+        ? {
+            mode: "split",
+            paneId: splitSessionRequest.paneId,
+            position: splitSessionRequest.position,
+          }
+        : null,
+    [splitSessionRequest],
+  );
+  const closeSplitSessionPicker = useCallback(() => setSplitSessionRequest(null), []);
+  const handlePickSplitSession = useCallback(
+    (input: ViewTabInput) => {
+      const request = splitSessionRequest;
+      setSplitSessionRequest(null);
+      if (!request || !persistenceKey || input.target.kind !== "agent") return;
+      if (input.scope.serverId !== normalizedServerId) return;
+      const newPaneId = splitWorkspacePaneEmpty(persistenceKey, {
+        targetPaneId: request.paneId,
+        position: request.position,
+      });
+      const tabId = openTab({
+        workspaceKey: persistenceKey,
+        target: input.target,
+        intent: "reveal",
+        placement: { mode: "pane", paneId: newPaneId ?? request.paneId },
+        pin: input.scope.workspaceId !== normalizedWorkspaceId,
+      });
+      if (tabId) navigateToTabId(tabId);
+    },
+    [
+      navigateToTabId,
+      normalizedServerId,
+      normalizedWorkspaceId,
+      openTab,
+      persistenceKey,
+      splitSessionRequest,
+      splitWorkspacePaneEmpty,
+    ],
+  );
+
   const killTerminalAsync = killTerminalMutation.mutateAsync;
 
   const handleCloseTerminalTab = useCallback(
@@ -2047,7 +2209,7 @@ function WorkspaceScreenContent({
 
         const agent =
           useSessionStore.getState().sessions[normalizedServerId]?.agents?.get(agentId) ?? null;
-        let closePolicy = resolveCloseAgentTabPolicy(agent);
+        let closePolicy = closePolicyFor(agentId);
         const isRunning = agent?.status === "running";
 
         if (isRunning && closePolicy.kind === "archive-on-close") {
@@ -2063,7 +2225,10 @@ function WorkspaceScreenContent({
           }
         }
 
-        if (closePolicy.kind === "layout-only") {
+        if (
+          closePolicy.kind === "layout-only" &&
+          !foreignSessionWorkspacesRef.current.has(agentId)
+        ) {
           const sessionClient = useSessionStore.getState().sessions[normalizedServerId]?.client;
           if (!sessionClient) {
             toast.error(t("common.errors.daemonClientUnavailable"));
@@ -2074,9 +2239,7 @@ function WorkspaceScreenContent({
             await sessionClient.updateAgent(agentId, {
               labels: { [getOpenAgentTabLabel(clientId)]: "false" },
             });
-            const latestAgent =
-              useSessionStore.getState().sessions[normalizedServerId]?.agents?.get(agentId) ?? null;
-            closePolicy = resolveCloseAgentTabPolicy(latestAgent);
+            closePolicy = closePolicyFor(agentId);
           } catch (error) {
             console.error("[WorkspaceScreen] Failed to close subagent tab", { error, agentId });
             toast.error(t("workspace.tabs.toasts.failedToCloseAgent"));
@@ -2104,12 +2267,23 @@ function WorkspaceScreenContent({
       archiveAgent,
       closeTab,
       closeWorkspaceTabWithCleanup,
+      closePolicyFor,
       normalizedServerId,
       persistenceKey,
       t,
       toast,
     ],
   );
+
+  useEffect(() => {
+    if (!persistenceKey) return;
+    for (const agentId of archivedForeignAgentIds) {
+      const tab = uiTabs.find(
+        (candidate) => candidate.target.kind === "agent" && candidate.target.agentId === agentId,
+      );
+      if (tab) closeWorkspaceTabWithCleanup({ tabId: tab.tabId, target: tab.target });
+    }
+  }, [archivedForeignAgentIds, closeWorkspaceTabWithCleanup, persistenceKey, uiTabs]);
 
   const handleClosePassiveTab = useCallback(
     function handleClosePassiveTab(input: { tabId: string; target?: WorkspaceTabTarget | null }) {
@@ -2373,10 +2547,9 @@ function WorkspaceScreenContent({
         return true;
       }
 
-      const groups = classifyBulkClosableTabs(tabsToClose, (agentId) => {
-        const agent = useSessionStore.getState().sessions[normalizedServerId]?.agents?.get(agentId);
-        return resolveCloseAgentTabPolicy(agent).kind === "layout-only" ? "layout-only" : "archive";
-      });
+      const groups = classifyBulkClosableTabs(tabsToClose, (agentId) =>
+        closePolicyFor(agentId).kind === "layout-only" ? "layout-only" : "archive",
+      );
       const modifiedCount = tabsToClose.filter(
         (tab) =>
           getPanelInstanceAttributes({
@@ -2408,14 +2581,14 @@ function WorkspaceScreenContent({
           if (!client) {
             throw new Error(t("common.errors.daemonClientUnavailable"));
           }
-          const clientId = await getOrCreateClientId();
-          await client.updateAgent(agentId, {
-            labels: { [getOpenAgentTabLabel(clientId)]: "false" },
-          });
-          const latestAgent =
-            useSessionStore.getState().sessions[normalizedServerId]?.agents?.get(agentId) ?? null;
-          if (resolveCloseAgentTabPolicy(latestAgent).kind === "archive-on-close") {
-            await archiveAgent({ serverId: normalizedServerId, agentId });
+          if (!foreignSessionWorkspacesRef.current.has(agentId)) {
+            const clientId = await getOrCreateClientId();
+            await client.updateAgent(agentId, {
+              labels: { [getOpenAgentTabLabel(clientId)]: "false" },
+            });
+            if (closePolicyFor(agentId).kind === "archive-on-close") {
+              await archiveAgent({ serverId: normalizedServerId, agentId });
+            }
           }
         },
         closeWorkspaceTabWithCleanup: (cleanupInput) => {
@@ -2438,6 +2611,7 @@ function WorkspaceScreenContent({
       archiveAgent,
       bulkCloseConfirmationLabels,
       client,
+      closePolicyFor,
       closeTab,
       closeWorkspaceTabWithCleanup,
       normalizedServerId,
@@ -3017,6 +3191,15 @@ function WorkspaceScreenContent({
   });
 
   const activeTabDescriptor = useMemo(() => activeTab?.descriptor ?? null, [activeTab]);
+  const { canCopyTabLink, onCopyTabLink, onCopyWorkspaceLink } = useWorkspaceLinks(
+    normalizedServerId,
+    normalizedWorkspaceId,
+    activeTabDescriptor,
+  );
+  const { renameTabKind, onRenameCurrentTab: handleRenameCurrentTab } = useWorkspaceHeaderRename(
+    activeTabDescriptor,
+    handleRenameTab,
+  );
   const activeFileFields = getWorkspaceFileLocationFields(activeTabDescriptor);
   const activeFilePath = activeFileFields.path;
   const activeFileLineStart = activeFileFields.lineStart;
@@ -3047,8 +3230,26 @@ function WorkspaceScreenContent({
       paneId?: string | null;
       focusPaneBeforeOpen?: boolean;
       host?: PaneHost;
-    }) =>
-      buildWorkspacePaneContentModel({
+    }) => {
+      const homeWorkspaceId =
+        input.tab.target.kind === "agent"
+          ? foreignSessionWorkspaces.get(input.tab.target.agentId)
+          : undefined;
+      if (homeWorkspaceId) {
+        return buildForeignSessionPaneContentModel({
+          tab: input.tab,
+          serverId: normalizedServerId,
+          homeWorkspaceId,
+          layoutWorkspaceId: normalizedWorkspaceId,
+          onCloseCurrentTab: () => {
+            void handleCloseTabById(input.tab.tabId);
+          },
+          onRetargetCurrentTab: (target) => {
+            if (persistenceKey) replaceWorkspaceTabTarget(persistenceKey, input.tab.tabId, target);
+          },
+        });
+      }
+      return buildWorkspacePaneContentModel({
         tab: input.tab,
         normalizedServerId,
         normalizedWorkspaceId,
@@ -3127,8 +3328,10 @@ function WorkspaceScreenContent({
           });
         },
         onOpenImportSheet: openImportSheet,
-      }),
+      });
+    },
     [
+      foreignSessionWorkspaces,
       handleCloseTabById,
       fileNavigationRevisionByTabId,
       handleOpenWorkspaceFileFromPane,
@@ -3225,13 +3428,20 @@ function WorkspaceScreenContent({
 
   const desktopTabRowItems = useMemo<WorkspaceDesktopTabRowItem[]>(
     () =>
-      tabs.map((tab) => ({
+      activitySortedTabs.map((tab) => ({
         tab,
         isActive: tab.tabId === activeTabDescriptor?.tabId,
         isCloseHovered: hoveredCloseTabKey === tab.key,
         isClosingTab: closingTabIds.has(tab.tabId),
+        unread: unreadTabIds.has(tab.tabId),
       })),
-    [activeTabDescriptor?.tabId, closingTabIds, hoveredCloseTabKey, tabs],
+    [
+      activeTabDescriptor?.tabId,
+      activitySortedTabs,
+      closingTabIds,
+      hoveredCloseTabKey,
+      unreadTabIds,
+    ],
   );
 
   const handleSplitPane = useCallback(
@@ -3429,7 +3639,14 @@ function WorkspaceScreenContent({
           left={
             <>
               <SidebarMenuToggle />
+              <WorkspaceHistoryButtons />
+              <RecentNavigationButton />
               <WorkspaceHeaderTitleBar
+                canCopyTabLink={canCopyTabLink}
+                onCopyTabLink={onCopyTabLink}
+                onCopyWorkspaceLink={onCopyWorkspaceLink}
+                renameTabKind={renameTabKind}
+                onRenameCurrentTab={handleRenameCurrentTab}
                 isLoading={isWorkspaceHeaderLoading}
                 title={workspaceHeaderTitle}
                 subtitle={workspaceHeaderSubtitle}
@@ -3454,6 +3671,11 @@ function WorkspaceScreenContent({
       ) : null,
     [
       baseRefName,
+      renameTabKind,
+      handleRenameCurrentTab,
+      canCopyTabLink,
+      onCopyTabLink,
+      onCopyWorkspaceLink,
       canOpenImportSheet,
       currentBranchName,
       handleCopyBranchName,
@@ -3506,7 +3728,8 @@ function WorkspaceScreenContent({
           explorerToggleAccessibilityState={explorerSidebarToggleAccessibilityState}
         >
           <MobileWorkspaceTabSwitcher
-            tabs={tabs}
+            tabs={activitySortedTabs}
+            unreadTabIds={unreadTabIds}
             activeTabKey={activeTabKey}
             normalizedServerId={normalizedServerId}
             normalizedWorkspaceId={normalizedWorkspaceId}
@@ -3528,6 +3751,11 @@ function WorkspaceScreenContent({
             onFindInChat={handleFindInChat}
           />
           <WorkspaceHeaderMenuMobile
+            canCopyTabLink={canCopyTabLink}
+            onCopyTabLink={onCopyTabLink}
+            onCopyWorkspaceLink={onCopyWorkspaceLink}
+            renameTabKind={renameTabKind}
+            onRenameCurrentTab={handleRenameCurrentTab}
             normalizedServerId={normalizedServerId}
             scripts={compactHeaderScripts}
             currentBranchName={currentBranchName}
@@ -3546,6 +3774,11 @@ function WorkspaceScreenContent({
         </CompactWorkspaceHeader>
       ) : null,
     [
+      renameTabKind,
+      handleRenameCurrentTab,
+      canCopyTabLink,
+      onCopyTabLink,
+      onCopyWorkspaceLink,
       activeTabKey,
       canOpenImportSheet,
       compactHeaderScripts,
@@ -3582,7 +3815,8 @@ function WorkspaceScreenContent({
       openImportSheet,
       showCreateBrowserTab,
       showWorkspaceSetup,
-      tabs,
+      activitySortedTabs,
+      unreadTabIds,
       workspaceDirectory,
       workspaceHeaderSubtitle,
       workspaceHeaderTitle,
@@ -3604,6 +3838,8 @@ function WorkspaceScreenContent({
         normalizedWorkspaceId={normalizedWorkspaceId}
         isWorkspaceFocused={isRouteFocused}
         uiTabs={uiTabs}
+        activityByAgentId={activityByAgentId}
+        unreadTabIds={unreadTabIds}
         hoveredCloseTabKey={hoveredCloseTabKey}
         setHoveredCloseTabKey={setHoveredCloseTabKey}
         closingTabIds={closingTabIds}
@@ -3641,6 +3877,8 @@ function WorkspaceScreenContent({
     normalizedWorkspaceId,
     isRouteFocused,
     uiTabs,
+    activityByAgentId,
+    unreadTabIds,
     hoveredCloseTabKey,
     closingTabIds,
     navigateToTabId,
@@ -3664,7 +3902,19 @@ function WorkspaceScreenContent({
     handleResizePaneSplit,
     handleReorderTabsInPane,
   ]);
-  const desktopContent = desktopSplitContent ?? content;
+  const desktopContent = desktopSplitContent ? (
+    <SplitWithSessionContext.Provider value={splitWithSessionValue}>
+      {desktopSplitContent}
+      <ViewSessionPicker
+        request={splitSessionPickerRequest}
+        serverId={normalizedServerId}
+        onClose={closeSplitSessionPicker}
+        onPick={handlePickSplitSession}
+      />
+    </SplitWithSessionContext.Provider>
+  ) : (
+    content
+  );
   const rendersDesktopSplitContent = !isMobile && desktopSplitContent !== null;
 
   const workspacePanelTabIds = useMemo(

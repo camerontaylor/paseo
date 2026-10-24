@@ -1,5 +1,5 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -9,6 +9,7 @@ import { useVoiceTelemetry } from "@/contexts/voice-context";
 import type { VoiceFailureKind } from "@/voice/voice-failure";
 import { isVoiceFailureBlocking } from "@/voice/voice-failure";
 import type { VoiceInputStatus } from "@/voice/voice-runtime";
+import type { RealtimeVoiceState } from "@getpaseo/protocol/messages";
 import type { Theme } from "@/styles/theme";
 import { VolumeMeter } from "./volume-meter";
 
@@ -30,6 +31,12 @@ const whiteSpinner = (theme: Theme) => ({ color: theme.colors.palette.white });
 
 interface RealtimeVoiceOverlayProps {
   isMuted: boolean;
+  voiceCommandsEnabled?: boolean;
+  realtime?: RealtimeVoiceState;
+  onRealtimeControl?: (
+    action: "listen" | "end_listening" | "clear" | "retry" | "focus_agent" | "back_to_assistant",
+  ) => Promise<void>;
+  isCaptureInterrupted?: boolean;
   isSwitching: boolean;
   failure: VoiceFailureKind | null;
   lastInputStatus?: VoiceInputStatus | null;
@@ -49,8 +56,29 @@ const inputStatusLabels = {
   unknown: { key: "realtimeVoice.inputUnknown", defaultValue: "Speech delivery uncertain" },
 } as const;
 
+function voiceStatusLabel(input: {
+  isCaptureInterrupted: boolean;
+  listeningForUnmute: boolean;
+  notListening: boolean;
+  t: ReturnType<typeof useTranslation>["t"];
+}): string {
+  if (input.isCaptureInterrupted)
+    return input.t("realtimeVoice.interrupted", { defaultValue: "Microphone interrupted" });
+  if (input.listeningForUnmute)
+    return input.t("realtimeVoice.listeningForUnmute", {
+      defaultValue: "Listening for “unmute microphone”",
+    });
+  return input.t(input.notListening ? "realtimeVoice.notListening" : "realtimeVoice.listening");
+}
+
+// Status, controls and native interruption each contribute a branch to this compact overlay.
+// oxlint-disable-next-line complexity
 export function RealtimeVoiceOverlay({
   isMuted,
+  voiceCommandsEnabled = false,
+  realtime,
+  onRealtimeControl,
+  isCaptureInterrupted = false,
   isSwitching,
   failure,
   lastInputStatus,
@@ -62,6 +90,23 @@ export function RealtimeVoiceOverlay({
 }: RealtimeVoiceOverlayProps) {
   const { t } = useTranslation();
   const { volume, isSpeaking } = useVoiceTelemetry();
+  const [controlError, setControlError] = useState<string | null>(null);
+  const runControl = useCallback(
+    async (action: "listen" | "end_listening" | "clear" | "retry") => {
+      if (!onRealtimeControl) return;
+      setControlError(null);
+      try {
+        await onRealtimeControl(action);
+      } catch (error) {
+        setControlError(error instanceof Error ? error.message : "Voice control failed");
+      }
+    },
+    [onRealtimeControl],
+  );
+  const handleRetry = useCallback(() => void runControl("retry"), [runControl]);
+  const handleListen = useCallback(() => void runControl("listen"), [runControl]);
+  const handleEndListening = useCallback(() => void runControl("end_listening"), [runControl]);
+  const handleClear = useCallback(() => void runControl("clear"), [runControl]);
   const muteButtonStyle = useMemo(
     () => [
       styles.actionButton,
@@ -75,17 +120,61 @@ export function RealtimeVoiceOverlay({
     () => [styles.actionButton, styles.stopButton, isSwitching ? styles.buttonDisabled : undefined],
     [isSwitching],
   );
-  const notListening = isMuted || (failure !== null && isVoiceFailureBlocking(failure));
+  const listeningForUnmute = isMuted && voiceCommandsEnabled && !isCaptureInterrupted;
+  const notListening =
+    isCaptureInterrupted ||
+    (isMuted && !listeningForUnmute) ||
+    (failure !== null && isVoiceFailureBlocking(failure));
   return (
     <View style={styles.container}>
       <View accessibilityLiveRegion="polite" style={styles.status}>
         <Text style={notListening ? styles.mutedLabel : styles.label}>
-          {notListening ? t("realtimeVoice.notListening") : t("realtimeVoice.listening")}
+          {voiceStatusLabel({ isCaptureInterrupted, listeningForUnmute, notListening, t })}
         </Text>
         {failure && (
           <Text accessibilityRole="alert" style={styles.error}>
             {t(`realtimeVoice.failure.${failure}`)}
           </Text>
+        )}
+        {realtime?.error && (
+          <Text accessibilityRole="alert" style={styles.error}>
+            {realtime.error}
+          </Text>
+        )}
+        {controlError && (
+          <Text accessibilityRole="alert" style={styles.error}>
+            {controlError}
+          </Text>
+        )}
+        {realtime && onRealtimeControl && (
+          <View style={styles.realtimeActions}>
+            {realtime.connection === "unavailable" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Retry GPT Realtime"
+                onPress={handleRetry}
+              >
+                <Text style={styles.realtimeActionText}>Retry</Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={realtime.mode === "listen" ? "End listening" : "Listen only"}
+                onPress={realtime.mode === "listen" ? handleEndListening : handleListen}
+              >
+                <Text style={styles.realtimeActionText}>
+                  {realtime.mode === "listen" ? "End listening" : "Listen only"}
+                </Text>
+              </Pressable>
+            )}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Clear voice context"
+              onPress={handleClear}
+            >
+              <Text style={styles.realtimeActionText}>Clear</Text>
+            </Pressable>
+          </View>
         )}
         {lastInputStatus && (
           <Text accessibilityLiveRegion="polite" style={styles.hint}>
@@ -132,7 +221,7 @@ export function RealtimeVoiceOverlay({
           }
           style={muteButtonStyle}
         >
-          {isMuted ? (
+          {isMuted && !listeningForUnmute ? (
             <VoiceMicOff uniProps={whiteIcon} strokeWidth={2.5} />
           ) : (
             <VoiceMic uniProps={muteIcon} strokeWidth={2.5} />
@@ -190,6 +279,15 @@ const styles = StyleSheet.create((theme) => ({
   meterContainer: {
     alignItems: "center",
     justifyContent: "center",
+  },
+  realtimeActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  realtimeActionText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
   },
   actionsContainer: {
     flexDirection: "row",

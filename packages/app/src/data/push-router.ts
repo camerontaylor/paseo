@@ -6,6 +6,8 @@ import type {
   SessionOutboundMessage,
 } from "@getpaseo/protocol/messages";
 import { agentCommandsQueryRoot } from "@/hooks/agent-commands-query";
+import { enqueueUiCommand } from "@/ui-commands/queue";
+import { resolveUiCommand } from "@/ui-commands/resolve";
 import { shareCheckoutDiff } from "@/git/diff-sharing";
 import { orderCheckoutDiffFiles } from "@/git/diff-order";
 import { daemonConfigQueryKey } from "@/data/daemon-config";
@@ -72,6 +74,7 @@ export interface ServerDataQueryMeta extends Record<string, unknown> {
 export type ProvidersSnapshotUpdate = ProvidersSnapshotUpdateMessage;
 
 interface ServerDataPushClient {
+  on: import("@getpaseo/client/internal/daemon-client").DaemonClient["on"];
   getProvidersSnapshot: import("@getpaseo/client/internal/daemon-client").DaemonClient["getProvidersSnapshot"];
   observeEvents: import("@getpaseo/client/internal/daemon-client").DaemonClient["observeEvents"];
   observeCheckoutDiff: import("@getpaseo/client/internal/daemon-client").DaemonClient["observeCheckoutDiff"];
@@ -305,10 +308,19 @@ export function mountServerDataPushRouter(input: PushRouterInput): () => void {
     },
   });
 
+  const unsubscribeUiCommand = input.client.on("ui.command", (message) => {
+    const command = resolveUiCommand({
+      connectionServerId: input.serverId,
+      payload: message.payload,
+    });
+    if (command) enqueueUiCommand(command);
+  });
+
   reconcileSubscriptions();
 
   return () => {
     disposed = true;
+    unsubscribeUiCommand();
     unsubscribeQueryCache();
     void events.release().catch(console.error);
     for (const current of activeCheckoutDiffSubscriptions.values()) {

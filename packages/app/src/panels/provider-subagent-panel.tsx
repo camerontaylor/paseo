@@ -119,7 +119,7 @@ function useProviderSubagentDescriptor(
   };
 }
 
-function ProviderSubagentPanel() {
+export function ProviderSubagentPanel() {
   const { t } = useTranslation();
   const { serverId, workspaceId, target, openFileInWorkspace, openTab } = usePaneContext();
   invariant(target.kind === "provider_subagent", "ProviderSubagentPanel requires provider target");

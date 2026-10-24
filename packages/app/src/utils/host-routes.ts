@@ -424,6 +424,10 @@ export function buildSessionsRoute() {
   return "/sessions" as const;
 }
 
+export function buildStreamRoute() {
+  return "/stream" as const;
+}
+
 export function buildSchedulesRoute() {
   return "/schedules" as const;
 }
@@ -593,4 +597,9 @@ export function buildProjectSettingsRoute(serverId: string, projectId: string) {
 export function normalizeProjectSettingsRouteId(value: string | string[] | undefined): string {
   const id = Array.isArray(value) ? value[0] : value;
   return typeof id === "string" ? id : "";
+}
+
+/** Client-owned saved View route, independent of any host boundary. */
+export function buildViewRoute(viewId: string): string {
+  return `/views/${encodeSegment(viewId)}`;
 }

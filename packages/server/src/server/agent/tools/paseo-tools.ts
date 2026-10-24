@@ -1,6 +1,8 @@
 import { AgentDirectory } from "../directory.js";
+import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { z } from "zod";
+import { TrackedAskInputSchema } from "@getpaseo/protocol/companion-stream";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
 
@@ -19,9 +21,17 @@ import {
   AgentListItemPayloadSchema,
   AgentPermissionResponseSchema,
   AgentSnapshotPayloadSchema,
+  UiTabPlacementSchema,
+  UiWorkspaceTabTargetSchema,
   WorkspaceScriptPayloadSchema,
 } from "../../messages.js";
 import type { AgentListItemPayload } from "../../messages.js";
+import { AUTO_OPEN_AGENT_TAB_LABEL, isOpenAgentTabLabel } from "@getpaseo/protocol/agent-labels";
+import {
+  resolveUiTabCloseCommand,
+  resolveUiTabOpenCommand,
+  type UiCommandMessage,
+} from "../../ui-commands.js";
 import {
   buildStoredAgentPayload,
   toAgentListItemPayload,
@@ -151,6 +161,7 @@ export interface PaseoToolHostDependencies {
   ) => Promise<string>;
   browserToolsEnabled?: boolean;
   browserToolsBroker?: BrowserToolsBroker | null;
+  uiCommands?: { serverId: string; broadcast: (command: UiCommandMessage) => number } | null;
   paseoToolPolicy?: ProviderPaseoToolsPolicy;
   paseoHome?: string;
   worktreesRoot?: string;
@@ -2332,6 +2343,134 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     },
   );
 
+  // Resolves a Stream write target the way set_stream_ask/set_stream_question do
+  // (explicit value, else the caller), additionally accepting a conversation title
+  // so an orchestrator can curate a named hub conversation. An id is accepted as-is
+  // when it names a live or stored conversation; anything else must match exactly
+  // one visible conversation title.
+  const resolveStreamTargetAgentId = async (target: string | undefined): Promise<string> => {
+    const explicit = target?.trim();
+    if (!explicit) {
+      if (!callerAgentId) throw new Error("An agentId is required");
+      return callerAgentId;
+    }
+    const liveById = agentManager.getAgent(explicit);
+    if (liveById) {
+      if (liveById.internal) throw new Error("Internal conversations cannot be Stream targets");
+      return explicit;
+    }
+    const storedById = await agentStorage.get(explicit);
+    if (storedById && !storedById.internal) return explicit;
+    const titles = new Map<string, string>();
+    for (const record of await agentStorage.list()) {
+      if (record.internal || !record.title) continue;
+      titles.set(record.id, record.title);
+    }
+    for (const agent of agentManager.listAgents()) {
+      if (agent.internal) continue;
+      if (!titles.has(agent.id) && agent.config.title) titles.set(agent.id, agent.config.title);
+    }
+    const matchIds = (matches: (title: string) => boolean) =>
+      [...titles.entries()].filter(([, title]) => matches(title)).map(([id]) => id);
+    let ids = matchIds((title) => title.trim() === explicit);
+    if (ids.length === 0) {
+      const lower = explicit.toLocaleLowerCase();
+      ids = matchIds((title) => title.trim().toLocaleLowerCase() === lower);
+    }
+    if (ids.length === 1) return ids[0];
+    if (ids.length > 1)
+      throw new Error(
+        `Conversation title "${explicit}" matches several conversations (${ids.join(", ")}); use an agent id`,
+      );
+    throw new Error(`Conversation not found: ${explicit}`);
+  };
+
+  registerTool(
+    "set_stream_pin",
+    {
+      title: "Pin a Stream note",
+      description:
+        "Create, update or remove a pinned note in a conversation's Stream Pinned tab. A pin is durable curated context, not a question or ask. Create returns a stable pinId; reuse that pinId to edit the same pin (full replacement: resend sourceAgentId/link you want kept) or pass remove=true to delete it. Removing an already-removed pin succeeds. Defaults to the calling conversation; agentId also accepts another conversation's id or exact title so an orchestrator can curate its own hub. This records context only and never prompts or runs an agent.",
+      inputSchema: {
+        agentId: z
+          .string()
+          .optional()
+          .describe("Target conversation id or exact title; defaults to this calling agent."),
+        pinId: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe(
+            "Stable pin ID without the pin: prefix. Omit on create to generate one; pass it back to update or remove that pin.",
+          ),
+        text: z
+          .string()
+          .min(1)
+          .max(4000)
+          .optional()
+          .describe("Pin text; required unless remove=true."),
+        sourceAgentId: z
+          .string()
+          .max(200)
+          .optional()
+          .describe("Optional Paseo conversation this pin came from; the pin links to it."),
+        link: z.string().max(2000).optional().describe("Optional URL shown on the pin."),
+        remove: z.boolean().optional().describe("Remove the pin with this pinId (idempotent)."),
+      },
+    },
+    async ({ agentId, pinId, text, sourceAgentId, link, remove }) => {
+      const targetAgentId = await resolveStreamTargetAgentId(agentId);
+      if (remove) {
+        if (!pinId) throw new Error("pinId is required to remove a pin");
+        try {
+          await agentManager.updateCompanionEntry({
+            agentId: targetAgentId,
+            entryId: `pin:${pinId}`,
+            action: "remove_pin",
+          });
+        } catch (error) {
+          // Idempotent remove: repeating a remove after a lost acknowledgement succeeds.
+          if (!(error instanceof Error) || !error.message.includes("Pinned item no longer exists"))
+            throw error;
+        }
+        return {
+          content: [],
+          structuredContent: ensureValidJson({
+            agentId: targetAgentId,
+            pinId,
+            entryId: `pin:${pinId}`,
+            removed: true,
+          }),
+        };
+      }
+      if (!text?.trim()) throw new Error("text is required to create or update a pin");
+      if (sourceAgentId) {
+        const source =
+          agentManager.getAgent(sourceAgentId) ?? (await agentStorage.get(sourceAgentId));
+        if (!source || source.internal) throw new Error("Pin source conversation not found");
+      }
+      const resolvedPinId = pinId ?? randomUUID();
+      await agentManager.updateCompanionEntry({
+        agentId: targetAgentId,
+        entryId: resolvedPinId,
+        action: "add_pin",
+        text,
+        sourceAgentId,
+        link,
+      });
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          agentId: targetAgentId,
+          pinId: resolvedPinId,
+          entryId: `pin:${resolvedPinId}`,
+          accepted: true,
+        }),
+      };
+    },
+  );
+
   registerTool(
     "rename_workspace",
     {
@@ -2391,6 +2530,228 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       };
     },
   );
+
+  const uiCommands = options.uiCommands ?? null;
+  if (uiCommands) {
+    const workspaceExists = async (workspaceId: string): Promise<boolean> =>
+      options.workspaceRegistry
+        ? (await options.workspaceRegistry.get(workspaceId)) != null
+        : false;
+
+    const validateTarget: NonNullable<
+      Parameters<typeof resolveUiTabOpenCommand>[1]["validateTarget"]
+    > = async (target, workspaceId, placement) => {
+      if (target.kind === "agent" || target.kind === "provider_subagent") {
+        const agentId = target.kind === "agent" ? target.agentId : target.parentAgentId;
+        const home =
+          agentManager.getAgent(agentId)?.workspaceId ??
+          (await agentStorage.get(agentId))?.workspaceId;
+        if (!home) return `Agent not found: ${agentId}`;
+        if (placement !== "side" && home !== workspaceId)
+          return `Agent ${agentId} belongs to workspace ${home}`;
+      }
+      if (target.kind === "terminal") {
+        const terminal = terminalManager?.getTerminal(target.terminalId);
+        if (!terminal) return `Terminal not found: ${target.terminalId}`;
+        if (terminal.workspaceId !== workspaceId)
+          return `Terminal ${target.terminalId} belongs to workspace ${terminal.workspaceId}`;
+      }
+      return null;
+    };
+
+    const resolveAgentWorkspaceId = async (agentId: string): Promise<string | null> => {
+      const live = agentManager.getAgent(agentId);
+      if (live?.workspaceId) {
+        return live.workspaceId;
+      }
+      const stored = await agentStorage.get(agentId);
+      return stored?.workspaceId ?? null;
+    };
+
+    // A main-placement agent tab must live in the agent's own workspace or client
+    // reconciliation drops it; everything else defaults to the caller. Side placement is the
+    // exception: it drops a session from any workspace on this host beside the caller's view
+    // (the client keeps it as a foreign, layout-only tab), so it defaults to the caller. A close
+    // with an explicit workspace closes the tab there, wherever the session lives.
+    const resolveTabWorkspaceId = async (
+      target: z.infer<typeof UiWorkspaceTabTargetSchema>,
+      explicitWorkspaceId: string | undefined,
+      mode: "open-main" | "open-side" | "close",
+    ): Promise<string> => {
+      const explicit = explicitWorkspaceId?.trim();
+      const agentTargetId = target.kind === "agent" ? target.agentId : null;
+      const agentWorkspaceId = agentTargetId ? await resolveAgentWorkspaceId(agentTargetId) : null;
+      const callerWorkspaceId = callerAgentId ? await resolveAgentWorkspaceId(callerAgentId) : null;
+      if (mode === "open-side" && agentTargetId && !agentWorkspaceId) {
+        throw new Error(`Agent ${agentTargetId} was not found or has no workspace.`);
+      }
+      if (mode !== "open-main") {
+        const workspaceId =
+          explicit ||
+          (mode === "open-side"
+            ? callerWorkspaceId || agentWorkspaceId
+            : agentWorkspaceId || callerWorkspaceId);
+        if (!workspaceId) {
+          throw new Error("workspaceId is required when the caller has no workspace");
+        }
+        return workspaceId;
+      }
+      if (explicit) {
+        if (agentWorkspaceId && agentWorkspaceId !== explicit) {
+          throw new Error(
+            `Agent ${agentTargetId} lives in workspace ${agentWorkspaceId}, not ${explicit}. Move it first with update_agent { workspaceId: "${explicit}" }, then open the tab.`,
+          );
+        }
+        return explicit;
+      }
+      if (agentWorkspaceId) {
+        return agentWorkspaceId;
+      }
+      if (!callerWorkspaceId) {
+        throw new Error("workspaceId is required when the caller has no workspace");
+      }
+      return callerWorkspaceId;
+    };
+
+    const tabTargetInputSchema = UiWorkspaceTabTargetSchema.describe(
+      "What the tab shows: an agent, a terminal, a file, a draft composer, the working diff, a commit diff, a browser pane, or workspace setup.",
+    );
+
+    registerTool(
+      "open_tab",
+      {
+        title: "Open tab",
+        description:
+          "Open (or focus) a tab in the workspace view every attached app client is showing. Defaults to your own workspace (agent targets default to the agent's workspace). Agent targets also get the auto-open label so clients that attach later reconcile the tab in.",
+        inputSchema: {
+          target: tabTargetInputSchema,
+          workspaceId: z
+            .string()
+            .optional()
+            .describe("Workspace whose view gets the tab. Defaults to your workspace."),
+          focus: z
+            .boolean()
+            .optional()
+            .describe("Default true. False opens the tab without stealing focus."),
+          placement: UiTabPlacementSchema.optional().describe(
+            'Default "main". "side" opens the tab in the workspace\'s side pane, beside what the user is looking at, without navigating or moving focus on any client (compact layouts keep it in the background). An agent target with "side" drops that session (from any workspace on this host) beside the caller\'s conversation; closing that tab never archives it — close it with close_tab and the same workspaceId. For a page such as a checklist, use target { kind: "browser", url } — repeating the same URL reuses its tab, and close_tab with that URL closes it. Browser tabs render in the desktop app.',
+          ),
+        },
+        outputSchema: {
+          workspaceId: z.string(),
+          delivered: z.number().int().nonnegative(),
+          guidance: z.string().optional(),
+        },
+      },
+      async ({ target, workspaceId, focus, placement }) => {
+        // Putting a page in front of the user drives the desktop browser, so it follows the same
+        // policy as the browser tools: an agent without them cannot open URLs this way either.
+        if (target.kind === "browser" && target.url && !options.browserToolsEnabled) {
+          throw new Error(
+            "Opening a page requires browser tools for this agent. Link it with the session side panel instead (update_agent labels paseo.checklist-url and paseo.side-panel).",
+          );
+        }
+        const resolvedWorkspaceId = await resolveTabWorkspaceId(
+          target,
+          workspaceId,
+          placement === "side" ? "open-side" : "open-main",
+        );
+        // A session dropped beside another workspace's view must not also auto-open in its own
+        // workspace; one opened in its own workspace keeps the label, so clients that attach
+        // later still show it.
+        const opensInHomeWorkspace =
+          target.kind === "agent" &&
+          (await resolveAgentWorkspaceId(target.agentId)) === resolvedWorkspaceId;
+        if (target.kind === "agent" && opensInHomeWorkspace) {
+          await updateAgentCommand(
+            { agentManager },
+            { agentId: target.agentId, labels: { [AUTO_OPEN_AGENT_TAB_LABEL]: "true" } },
+          );
+        }
+        const result = await resolveUiTabOpenCommand(
+          {
+            workspaceId: resolvedWorkspaceId,
+            target,
+            ...(focus === false ? { focus: false } : {}),
+            ...(placement === "side" ? { placement } : {}),
+          },
+          { serverId: uiCommands.serverId, workspaceExists, validateTarget },
+        );
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        const delivered = uiCommands.broadcast(result.command);
+        return {
+          content: [],
+          structuredContent: ensureValidJson({
+            workspaceId: result.workspaceId,
+            delivered,
+            ...(delivered === 0
+              ? {
+                  guidance:
+                    target.kind === "agent" && opensInHomeWorkspace
+                      ? "No app client is attached right now; the auto-open label makes the tab appear when one attaches."
+                      : "No app client is attached right now, so nothing acted on the command.",
+                }
+              : {}),
+          }),
+        };
+      },
+    );
+
+    registerTool(
+      "close_tab",
+      {
+        title: "Close tab",
+        description:
+          "Close a tab in the workspace view every attached app client is showing. Agent targets also lose their tab labels so reconciliation does not reopen them.",
+        inputSchema: {
+          target: tabTargetInputSchema,
+          workspaceId: z
+            .string()
+            .optional()
+            .describe("Workspace whose view loses the tab. Defaults to your workspace."),
+        },
+        outputSchema: {
+          workspaceId: z.string(),
+          delivered: z.number().int().nonnegative(),
+        },
+      },
+      async ({ target, workspaceId }) => {
+        const resolvedWorkspaceId = await resolveTabWorkspaceId(target, workspaceId, "close");
+        // Closing a session that was only dropped beside another workspace's view leaves its home
+        // workspace's tab labels alone.
+        const closesInHomeWorkspace =
+          target.kind === "agent" &&
+          (await resolveAgentWorkspaceId(target.agentId)) === resolvedWorkspaceId;
+        if (target.kind === "agent" && closesInHomeWorkspace) {
+          const stored = await agentStorage.get(target.agentId);
+          const labels = agentManager.getAgent(target.agentId)?.labels ?? stored?.labels ?? {};
+          const patch: Record<string, string | null> = {
+            [AUTO_OPEN_AGENT_TAB_LABEL]: null,
+          };
+          for (const label of Object.keys(labels)) {
+            if (isOpenAgentTabLabel(label)) {
+              patch[label] = null;
+            }
+          }
+          await agentManager.updateAgentMetadata(target.agentId, { labels: patch });
+        }
+        const result = await resolveUiTabCloseCommand(
+          { workspaceId: resolvedWorkspaceId, target },
+          { serverId: uiCommands.serverId, workspaceExists, validateTarget },
+        );
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        const delivered = uiCommands.broadcast(result.command);
+        return {
+          content: [],
+          structuredContent: ensureValidJson({ workspaceId: result.workspaceId, delivered }),
+        };
+      },
+    );
+  }
 
   registerTool(
     "list_workspace_scripts",
@@ -3291,6 +3652,168 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       return {
         content: [],
         structuredContent: ensureValidJson({ permissions }),
+      };
+    },
+  );
+
+  registerTool(
+    "set_stream_ask",
+    {
+      title: "Track a durable ask",
+      description:
+        "Create or revise an explicit ask/task in the conversation checklist. Use one stable askId per request, expectedRevision=0 to create, and list_stream_asks to read revisions before updates. Repeat identical writes safely after a lost acknowledgement. Full replacement: preserve source/delegation/subtasks when editing. Done requires evidence, no remaining work, and finished subtasks; a turn ending or child going idle is not completion. Reopen with state=open. Never infer success. This does not prompt or run any agent.",
+      inputSchema: {
+        agentId: z
+          .string()
+          .optional()
+          .describe(
+            "Owning conversation; defaults to caller. Orchestrators keep asks on their own conversation.",
+          ),
+        askId: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe(
+            "Stable caller-assigned ID without the ask: prefix; list_stream_asks returns askId.",
+          ),
+        expectedRevision: z.number().int().min(0),
+        text: z.string().min(1).max(4000),
+        ask: TrackedAskInputSchema,
+      },
+    },
+    async ({ agentId, askId, expectedRevision, text, ask }) => {
+      const targetAgentId = agentId ?? callerAgentId;
+      if (!targetAgentId) throw new Error("An agentId is required");
+      await agentManager.updateCompanionEntry({
+        agentId: targetAgentId,
+        entryId: askId,
+        action: "set_ask",
+        expectedRevision,
+        text,
+        ask,
+      });
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          agentId: targetAgentId,
+          askId,
+          entryId: `ask:${askId}`,
+          accepted: true,
+        }),
+      };
+    },
+  );
+
+  registerTool(
+    "list_stream_asks",
+    {
+      title: "Read the durable ask checklist",
+      description:
+        "Read explicit tracked asks and retained user messages needing review. Extract each separate ask with set_stream_ask, link its source.messageId, then review_stream_message with all ask IDs. Review does not mark work complete. Follow nextCursor to read all asks.",
+      inputSchema: {
+        agentId: z.string().optional(),
+        cursor: z.string().optional(),
+        unresolvedOnly: z.boolean().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ agentId, cursor, unresolvedOnly, limit }) => {
+      const targetAgentId = agentId ?? callerAgentId;
+      if (!targetAgentId) throw new Error("An agentId is required");
+      const page = await agentManager.listGlobalStream({
+        agentId: targetAgentId,
+        asksOnly: true,
+        includeMessageInventory: true,
+        includeArchived: true,
+        cursor,
+        limit,
+        filter: unresolvedOnly ? "pending" : "all",
+      });
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          ...page,
+          rows: page.rows.map((row) =>
+            Object.assign({}, row, {
+              askId:
+                row.item.kind === "entry" && row.item.entry.ask ? row.item.entry.id.slice(4) : null,
+            }),
+          ),
+        }),
+      };
+    },
+  );
+
+  registerTool(
+    "review_stream_message",
+    {
+      title: "Review a source message for asks",
+      description:
+        "After inventorying all requests in a retained user message, link their stable askIds. Review means extraction was checked, never that work succeeded. Give a note even with no asks. Reopen when extraction needs correction. No provider is started.",
+      inputSchema: {
+        agentId: z.string().optional(),
+        entryId: z.string(),
+        expectedRevision: z.number().int().min(0),
+        state: z.enum(["unreviewed", "reviewed"]),
+        note: z.string().max(4000),
+        askIds: z.array(z.string().max(200)).max(100),
+      },
+    },
+    async ({ agentId, entryId, expectedRevision, state, note, askIds }) => {
+      const targetAgentId = agentId ?? callerAgentId;
+      if (!targetAgentId) throw new Error("An agentId is required");
+      await agentManager.updateCompanionEntry({
+        agentId: targetAgentId,
+        entryId,
+        expectedRevision,
+        action: "review_message",
+        review: { state, note, askIds },
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Source review saved. Ask completion states are unchanged.",
+          },
+        ],
+      };
+    },
+  );
+
+  registerTool(
+    "set_stream_question",
+    {
+      title: "Track an open Stream question",
+      description:
+        "Keep one durable question in this conversation's Stream and the global Stream. Use a stable questionId for each needed input, including items in lists. Reuse that ID to edit or mark done only when that specific question is answered; unrelated replies do not resolve questions. This records context, never grants permission or sends a chat message.",
+      inputSchema: {
+        agentId: z.string().optional().describe("Defaults to this calling agent."),
+        questionId: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("Stable ID for this particular question; reuse for edits and resolution."),
+        text: z.string().min(1).max(4000),
+        status: z.enum(["open", "reviewed", "done"]).optional(),
+      },
+    },
+    async ({ agentId, questionId, text, status }) => {
+      const targetAgentId = agentId ?? callerAgentId;
+      if (!targetAgentId) throw new Error("An agentId is required");
+      await agentManager.updateCompanionEntry({
+        agentId: targetAgentId,
+        entryId: questionId,
+        action: "add_question",
+        text,
+        status,
+      });
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          agentId: targetAgentId,
+          entryId: `question:${questionId}`,
+          status: status ?? "open",
+        }),
       };
     },
   );

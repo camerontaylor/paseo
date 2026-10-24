@@ -119,6 +119,7 @@ import { selectWorkspaceServiceSummary } from "@/components/sidebar/workspace-me
 import {
   SidebarWorkspaceTrailingContent,
   useSidebarWorkspaceTrailing,
+  workspaceLastActiveAt,
 } from "@/components/sidebar/workspace-trailing";
 import { DensityIcon } from "@/components/ui/density-icon";
 import { PressHighlight } from "@/components/ui/press-highlight";
@@ -222,6 +223,7 @@ interface SidebarWorkspaceListProps {
   hasProjectsBeforeFilter: boolean;
   /** Whether a project filter is actually being applied — the resolved list, not the stored one. */
   hasActiveProjectFilter: boolean;
+  hasActiveSearchFilter?: boolean;
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   collapsedProjectKeys: ReadonlySet<string>;
   onToggleProjectCollapsed: (projectViewKey: string) => void;
@@ -707,6 +709,7 @@ function WorkspaceRowRightGroup({
                 isPinned={isPinned}
                 onTogglePin={onTogglePin}
                 openInFileManagerPath={workspacePath}
+                lastActiveAt={workspaceLastActiveAt(workspace)}
               />
             ) : null}
           </SidebarWorkspaceTrailingActionOverlay>
@@ -1914,6 +1917,7 @@ export function SidebarWorkspaceList({
   projects,
   hasProjectsBeforeFilter,
   hasActiveProjectFilter,
+  hasActiveSearchFilter = false,
   workspaceEntriesByKey,
   collapsedProjectKeys,
   onToggleProjectCollapsed,
@@ -1998,7 +2002,9 @@ export function SidebarWorkspaceList({
         onToggleWorkspacePin={onToggleWorkspacePin}
         onPinnedWorkspaceReorder={handlePinnedWorkspaceReorder}
         listHeaderComponent={listHeaderComponent}
+        listFooterComponent={listFooterComponent}
         sidebarFilterEmpty={sidebarFilterEmpty}
+        hasActiveSearchFilter={hasActiveSearchFilter}
         parentGestureRef={parentGestureRef}
         dragGestureHostActive={dragGestureHostActive}
       />
@@ -2018,6 +2024,7 @@ export function SidebarWorkspaceList({
         listHeaderComponent={listHeaderComponent}
         sidebarFilterEmpty={sidebarFilterEmpty}
         hasActiveProjectFilter={hasActiveProjectFilter}
+        hasActiveSearchFilter={hasActiveSearchFilter}
         parentGestureRef={parentGestureRef}
         dragGestureHostActive={dragGestureHostActive}
         pathname={pathname}
@@ -2051,6 +2058,8 @@ function SidebarGroupedModeList({
   onPinnedWorkspaceReorder,
   listHeaderComponent,
   sidebarFilterEmpty,
+  hasActiveSearchFilter,
+  listFooterComponent,
   parentGestureRef,
   dragGestureHostActive,
 }: {
@@ -2065,6 +2074,8 @@ function SidebarGroupedModeList({
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
   onPinnedWorkspaceReorder: (workspaces: SidebarWorkspacePlacement[]) => void;
   listHeaderComponent?: ReactElement | null;
+  listFooterComponent?: ReactElement | null;
+  hasActiveSearchFilter: boolean;
   sidebarFilterEmpty: boolean;
   parentGestureRef?: MutableRefObject<GestureType | undefined>;
   dragGestureHostActive?: boolean;
@@ -2092,6 +2103,8 @@ function SidebarGroupedModeList({
       onToggleWorkspacePin={onToggleWorkspacePin}
       onPinnedWorkspaceReorder={onPinnedWorkspaceReorder}
       listHeaderComponent={listHeaderComponent}
+      listFooterComponent={listFooterComponent}
+      hasActiveSearchFilter={hasActiveSearchFilter}
       sidebarFilterEmpty={sidebarFilterEmpty}
       parentGestureRef={parentGestureRef}
       dragGestureHostActive={dragGestureHostActive}
@@ -2114,6 +2127,7 @@ function ProjectModeList({
   listHeaderComponent,
   sidebarFilterEmpty,
   hasActiveProjectFilter,
+  hasActiveSearchFilter = false,
   parentGestureRef,
   dragGestureHostActive,
   pathname,
@@ -2483,10 +2497,11 @@ function ProjectModeList({
       {unpinnedProjects.length > 0 ||
       hasActiveHostFilter ||
       hasActiveProjectFilter ||
+      hasActiveSearchFilter ||
       sidebarFilterEmpty
         ? listHeaderComponent
         : null}
-      {sidebarFilterEmpty ? <SidebarFilterEmptyState /> : projectBody}
+      {sidebarFilterEmpty && !hasActiveSearchFilter ? <SidebarFilterEmptyState /> : projectBody}
       {listFooterComponent}
     </>
   );

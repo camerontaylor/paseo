@@ -107,6 +107,64 @@ describe("flushQueueOutbox", () => {
     expect(applied).toHaveLength(2);
   });
 
+  test("records a routed receipt before removing its durable delivery intent", async () => {
+    const harness = createOutbox([pendingEntry({ routingOrigin: true })]);
+    const events: string[] = [];
+    const originalRemove = harness.outbox.remove;
+    harness.outbox.remove = async (itemId, preserveRemovalIntent) => {
+      events.push("remove");
+      await originalRemove(itemId, preserveRemovalIntent);
+    };
+    await flushQueueOutbox({
+      serverId: "server-1",
+      outbox: harness.outbox,
+      client: { enqueueAgentMessage: async () => snapshotWith("item-1") },
+      applySnapshot: () => {},
+      onAccepted: async () => {
+        events.push("receipt");
+      },
+    });
+    expect(events).toEqual(["receipt", "remove"]);
+    expect(harness.entries.size).toBe(0);
+  });
+
+  test("a reconnect preserves the routed destination fence and parks a moved recipient", async () => {
+    const harness = createOutbox([
+      pendingEntry({
+        expectedWorkspaceId: "original-workspace",
+        expectedProjectId: "original-project",
+      }),
+    ]);
+    const sent: Array<{ workspace?: string; project?: string }> = [];
+    const rejected: string[] = [];
+    const client = {
+      enqueueAgentMessage: async (input: {
+        expectedWorkspaceId?: string;
+        expectedProjectId?: string;
+      }): Promise<AgentQueueSnapshot> => {
+        sent.push({
+          workspace: input.expectedWorkspaceId,
+          project: input.expectedProjectId,
+        });
+        const error = new Error("Choose its destination again.");
+        error.name = "AgentQueueDestinationChangedError";
+        throw error;
+      },
+    };
+    for (let reconnect = 0; reconnect < 2; reconnect += 1) {
+      await flushQueueOutbox({
+        serverId: "server-1",
+        outbox: harness.outbox,
+        client,
+        applySnapshot: () => {},
+        onRejected: (entry) => rejected.push(entry.itemId),
+      });
+    }
+    expect(sent).toEqual([{ workspace: "original-workspace", project: "original-project" }]);
+    expect(harness.entries.get("item-1")?.failedAt).toBeDefined();
+    expect(rejected).toEqual(["item-1"]);
+  });
+
   test("only flushes entries for the requested server", async () => {
     const harness = createOutbox([
       pendingEntry({ itemId: "item-1", serverId: "server-1" }),
@@ -240,5 +298,131 @@ describe("flushQueueOutbox", () => {
 
     await flush();
     expect(harness.entries.size).toBe(0);
+  });
+});
+
+describe("flushQueueOutbox per-agent lanes", () => {
+  function laneSnapshot(itemId: string): AgentQueueSnapshot {
+    return {
+      agentId: "agent-1",
+      revision: 1,
+      items: [
+        {
+          id: itemId,
+          text: "hello",
+          intent: "queue",
+          deliveryState: "pending",
+          attempts: 0,
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    };
+  }
+
+  test("a failed send blocks later items for that agent only — another agent still flushes", async () => {
+    const harness = createOutbox([
+      pendingEntry({ itemId: "blocked-1", agentId: "agent-a", createdAt: 1 }),
+      pendingEntry({ itemId: "blocked-2", agentId: "agent-a", createdAt: 2 }),
+      pendingEntry({ itemId: "other-1", agentId: "agent-b", createdAt: 3 }),
+    ]);
+    const sent: string[] = [];
+
+    await flushQueueOutbox({
+      serverId: "server-1",
+      outbox: harness.outbox,
+      client: {
+        enqueueAgentMessage: async (input) => {
+          sent.push(input.itemId);
+          if (input.itemId === "blocked-1") throw new Error("agent-a transport down");
+          return laneSnapshot(input.itemId);
+        },
+      },
+      applySnapshot: () => {},
+    });
+
+    // agent-a's lane stops at the failed predecessor; agent-b's lane advances.
+    expect(sent.sort()).toEqual(["blocked-1", "other-1"]);
+    expect(harness.entries.has("blocked-2")).toBe(true);
+    expect(harness.entries.has("other-1")).toBe(false);
+  });
+
+  test("an entry removed mid-flush is not sent", async () => {
+    const harness = createOutbox([
+      pendingEntry({ itemId: "gone" }),
+      pendingEntry({ itemId: "stays", createdAt: 2 }),
+    ]);
+    const sent: string[] = [];
+    const client = {
+      enqueueAgentMessage: async (input: { itemId: string }) => {
+        sent.push(input.itemId);
+        if (input.itemId === "gone") {
+          // A racing acknowledgement removes the entry while its lane runs.
+          harness.entries.delete("gone");
+          harness.entries.delete("stays");
+        }
+        return laneSnapshot(input.itemId);
+      },
+    };
+
+    await flushQueueOutbox({
+      serverId: "server-1",
+      outbox: harness.outbox,
+      client,
+      applySnapshot: () => {},
+    });
+
+    expect(sent).toEqual(["gone"]);
+  });
+
+  test("a parked entry is skipped by a lane that listed it earlier", async () => {
+    const harness = createOutbox([
+      pendingEntry({ itemId: "first", createdAt: 1 }),
+      pendingEntry({ itemId: "second", createdAt: 2 }),
+    ]);
+    const sent: string[] = [];
+
+    await flushQueueOutbox({
+      serverId: "server-1",
+      outbox: harness.outbox,
+      client: {
+        enqueueAgentMessage: async (input) => {
+          sent.push(input.itemId);
+          if (input.itemId === "first") {
+            // The predecessor exhausts its retries and parks mid-flight.
+            harness.entries.set("first", {
+              ...harness.entries.get("first")!,
+              failedAt: 1,
+              attempts: QUEUE_OUTBOX_MAX_ATTEMPTS,
+            });
+            throw new Error("transport down");
+          }
+          return laneSnapshot(input.itemId);
+        },
+      },
+      applySnapshot: () => {},
+    });
+
+    expect(sent).toEqual(["first"]);
+    expect(harness.entries.get("second")?.failedAt).toBeUndefined();
+  });
+
+  test("concurrent flushes park exactly once", async () => {
+    const harness = createOutbox([pendingEntry({ attempts: QUEUE_OUTBOX_MAX_ATTEMPTS - 1 })]);
+    const exhausted: string[] = [];
+    const input = {
+      serverId: "server-1",
+      outbox: harness.outbox,
+      client: {
+        enqueueAgentMessage: async () => {
+          throw new Error("still broken");
+        },
+      },
+      applySnapshot: () => {},
+      onEntryExhausted: (failed: PendingQueueEnqueue) => exhausted.push(failed.itemId),
+    };
+
+    await Promise.all([flushQueueOutbox(input), flushQueueOutbox(input)]);
+
+    expect(exhausted).toEqual(["item-1"]);
   });
 });

@@ -11,6 +11,7 @@ import React, {
 } from "react";
 import { Pressable, Text, View, type LayoutChangeEvent } from "react-native";
 import {
+  Circle,
   CopyX,
   ArrowLeftToLine,
   ArrowRightToLine,
@@ -52,6 +53,7 @@ import { buttonControlHeight } from "@/components/ui/control-geometry";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { Shortcut } from "@/components/ui/shortcut";
 import { useWorkspaceTabLayout } from "@/screens/workspace/use-workspace-tab-layout";
+import { useSplitWithSession } from "@/workspace-tabs/split-with-session";
 import { retainWorkspaceTabMeasuredWidth } from "@/screens/workspace/workspace-tab-layout";
 import {
   WorkspaceTabPresentationResolver,
@@ -79,6 +81,7 @@ import { formatCompactTimeAgoAsProse } from "@/utils/time";
 import { buildWorkspaceKeyboardHandlerId } from "@/keyboard/handler-id";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import { WorkspaceNewTabMenuContent } from "@/screens/workspace/workspace-new-tab-menu";
+import { useMarkTabUnreadMenuEntries } from "@/screens/workspace/use-mark-tab-unread-menu-entries";
 import { WorkspaceRecentAgentsMenuContent } from "@/screens/workspace/workspace-recent-agents-menu";
 import {
   paneContentToolbarTrailingPadding,
@@ -91,6 +94,8 @@ import {
   useHorizontalScrollBoundary,
 } from "@/components/ui/horizontal-scroll-boundary";
 import { useSessionStore } from "@/stores/session-store";
+import { useViewPaneActions } from "@/views/view-pane-actions";
+import { useOpenInViewMenuEntries } from "@/views/open-in-view-menu";
 
 const DROPDOWN_WIDTH = 220;
 const DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH = 36 + buttonControlHeight.xs;
@@ -129,6 +134,7 @@ const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedArrowLeftToLine = withUnistyles(ArrowLeftToLine);
 const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
+const ThemedCircle = withUnistyles(Circle);
 const ThemedMessageCirclePlus = withUnistyles(MessageCirclePlus);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedHistory = withUnistyles(History);
@@ -244,6 +250,24 @@ function WorkspaceNewTabButton({
 }: WorkspaceNewTabButtonProps) {
   const { t } = useTranslation();
   const tooltipText = t("workspace.tabs.actions.newTab");
+  const viewPaneActions = useViewPaneActions();
+  const addViewTab = useCallback(() => {
+    if (paneId) viewPaneActions?.onAddTab(paneId);
+  }, [paneId, viewPaneActions]);
+  if (viewPaneActions && paneId) {
+    const button = (
+      <ToolbarButton
+        label={viewPaneActions.addTabLabel}
+        shortcut={shortcutKeys}
+        testID="view-add-tab-button"
+        style={placement === "inline" ? styles.inlineNewTabButton : undefined}
+        onPress={addViewTab}
+      >
+        <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
+      </ToolbarButton>
+    );
+    return placement === "inline" ? <View style={styles.inlineAddButton}>{button}</View> : button;
+  }
   const menu = (
     <>
       <DropdownMenu>
@@ -332,6 +356,15 @@ function WorkspacePaneToolbarActions({
     () => (splitDownKeys ? <Shortcut chord={splitDownKeys} /> : null),
     [splitDownKeys],
   );
+  const splitWithSession = useSplitWithSession();
+  const requestSplitWithSession = splitWithSession?.request;
+  const handleSplitRightWithSession = useCallback(() => {
+    if (paneId) requestSplitWithSession?.(paneId, "right");
+  }, [paneId, requestSplitWithSession]);
+  const handleSplitDownWithSession = useCallback(() => {
+    if (paneId) requestSplitWithSession?.(paneId, "bottom");
+  }, [paneId, requestSplitWithSession]);
+  const showSplitWithSession = Boolean(requestSplitWithSession && paneId);
   const maximizeActionVisible = showMaximizeAction && Boolean(onTogglePaneMaximized);
   if (!showNewTabButton && !splitActionsVisible && !maximizeActionVisible) return null;
 
@@ -399,6 +432,24 @@ function WorkspacePaneToolbarActions({
             >
               {t("workspace.tabs.actions.splitDown")}
             </DropdownMenuItem>
+            {showSplitWithSession ? (
+              <>
+                <DropdownMenuItem
+                  leading={splitRightLeading}
+                  testID="workspace-split-pane-right-with-session"
+                  onSelect={handleSplitRightWithSession}
+                >
+                  {t("workspace.tabs.actions.splitRightWithSession")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  leading={splitDownLeading}
+                  testID="workspace-split-pane-down-with-session"
+                  onSelect={handleSplitDownWithSession}
+                >
+                  {t("workspace.tabs.actions.splitDownWithSession")}
+                </DropdownMenuItem>
+              </>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
@@ -460,6 +511,10 @@ function TabContextMenuItem({
         return <ThemedX size={16} uniProps={mutedColorMapping} />;
       case "search":
         return <ThemedSearch size={16} uniProps={mutedColorMapping} />;
+      case "circle":
+        return <ThemedCircle size={16} uniProps={mutedColorMapping} />;
+      case "layout-panel-left":
+        return <ThemedColumns2 size={16} uniProps={mutedColorMapping} />;
       default:
         return undefined;
     }
@@ -490,6 +545,7 @@ function tabKeyExtractor(tab: WorkspaceDesktopTabRowItem) {
 export interface WorkspaceDesktopTabRowItem {
   tab: WorkspaceTabDescriptor;
   isActive: boolean;
+  unread?: boolean;
   isCloseHovered: boolean;
   isClosingTab: boolean;
 }
@@ -502,6 +558,7 @@ interface WorkspaceTabLabel {
   key: string;
   label: string;
   modified: boolean;
+  unread: boolean;
 }
 
 interface WorkspaceTabLabelMeasurement {
@@ -525,15 +582,19 @@ function completeWorkspaceTabLabelWidths(
   measurements: Map<string, WorkspaceTabLabelMeasurement>,
 ): number[] | null {
   const widths: number[] = [];
-  for (const { key, label, modified } of labels) {
+  for (const { key, label, modified, unread } of labels) {
     const measurement = measurements.get(key);
     if (!measurement || measurement.label !== label || measurement.width <= 0) {
       return null;
     }
     // The modified dot sits in the content row, so a modified tab needs that much more width
     // before its label starts truncating.
-    const modifiedAllowance = modified ? TAB_CONTENT_GAP + TAB_MODIFIED_DOT_SIZE : 0;
-    widths.push(measurement.width + TAB_LABEL_LAYOUT_ALLOWANCE + modifiedAllowance);
+    const dotAllowance = Number(modified) + Number(unread);
+    widths.push(
+      measurement.width +
+        TAB_LABEL_LAYOUT_ALLOWANCE +
+        dotAllowance * (TAB_CONTENT_GAP + TAB_MODIFIED_DOT_SIZE),
+    );
   }
   return widths;
 }
@@ -554,11 +615,11 @@ export interface WorkspaceDesktopTabsRowProps {
   setHoveredCloseTabKey: Dispatch<SetStateAction<string | null>>;
   onNavigateTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
-  onCopyResumeCommand: (agentId: string) => Promise<void> | void;
+  onCopyResumeCommand: (agentId: string, tab?: WorkspaceTabDescriptor) => Promise<void> | void;
   onCopyAgentId: (agentId: string) => Promise<void> | void;
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
-  onReloadAgent: (agentId: string) => Promise<void> | void;
+  onReloadAgent: (agentId: string, tab?: WorkspaceTabDescriptor) => Promise<void> | void;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTabsToLeft: (tabId: string) => Promise<void> | void;
   onCloseTabsToRight: (tabId: string) => Promise<void> | void;
@@ -707,6 +768,7 @@ function TabHandleContent({
   tabLabelSkeletonStyle,
   tabLabelStyle,
   modifiedTestId,
+  unread,
 }: {
   presentation: WorkspaceTabPresentation;
   isHighlighted: boolean;
@@ -715,6 +777,7 @@ function TabHandleContent({
   tabLabelSkeletonStyle: React.ComponentProps<typeof View>["style"];
   tabLabelStyle: React.ComponentProps<typeof Text>["style"];
   modifiedTestId: string;
+  unread: boolean;
 }) {
   const { t } = useTranslation();
   const tabHandleDataSet = useMemo(
@@ -744,6 +807,9 @@ function TabHandleContent({
           testID={modifiedTestId}
         />
       ) : null}
+      {unread ? (
+        <View style={styles.tabUnreadDot} testID={`workspace-tab-unread-${presentation.key}`} />
+      ) : null}
     </View>
   );
 }
@@ -752,6 +818,7 @@ function TabChip({
   serverId,
   tab,
   isActive,
+  unread,
   isDragging,
   isFocused,
   resolvedTabWidth,
@@ -771,6 +838,7 @@ function TabChip({
   serverId: string;
   tab: WorkspaceTabDescriptor;
   isActive: boolean;
+  unread: boolean;
   isDragging: boolean;
   isFocused: boolean;
   resolvedTabWidth: number;
@@ -892,6 +960,11 @@ function TabChip({
               onPress={handleNavigateTab}
               accessibilityRole="button"
               accessibilityLabel={accessibilityLabel}
+              accessibilityHint={
+                unread
+                  ? t("workspace.tabs.newActivity", { defaultValue: "New activity" })
+                  : undefined
+              }
               accessibilityState={tabAccessibilityState}
               aria-selected={isActive}
             >
@@ -903,6 +976,7 @@ function TabChip({
                 tabLabelSkeletonStyle={tabLabelSkeletonStyle}
                 tabLabelStyle={tabLabelStyle}
                 modifiedTestId={`workspace-tab-modified-${testIdentity}`}
+                unread={unread}
               />
             </ContextMenuTrigger>
           </TooltipTrigger>
@@ -1031,8 +1105,8 @@ export function WorkspaceDesktopTabsRow(props: WorkspaceDesktopTabsRowProps) {
         <WorkspaceDesktopTabPresentationSlot
           key={`${tab.key}:${tab.kind}`}
           tab={tab}
-          serverId={props.normalizedServerId}
-          workspaceId={props.normalizedWorkspaceId}
+          serverId={tab.scope?.serverId ?? props.normalizedServerId}
+          workspaceId={tab.scope?.workspaceId ?? props.normalizedWorkspaceId}
           onResolve={handlePresentation}
         />
       ))}
@@ -1162,7 +1236,12 @@ function ResolvedWorkspaceDesktopTabsRow({
           tab.presentation.titleState === "loading"
             ? getFallbackTabLabel(tab.tab, fallbackTabLabels)
             : tab.presentation.label;
-        return { key: tab.tab.key, label, modified: tab.presentation.modified };
+        return {
+          key: tab.tab.key,
+          label,
+          modified: tab.presentation.modified,
+          unread: Boolean(tab.unread),
+        };
       }),
     [fallbackTabLabels, tabs],
   );
@@ -1312,7 +1391,8 @@ function ResolvedWorkspaceDesktopTabsRow({
       return (
         <ResolvedDesktopTabChip
           key={`${item.tab.key}:${item.tab.kind}`}
-          serverId={normalizedServerId}
+          serverId={item.tab.scope?.serverId ?? normalizedServerId}
+          workspaceId={item.tab.scope?.workspaceId ?? normalizedWorkspaceId}
           item={item}
           isFocused={isFocused}
           isDragging={isActive}
@@ -1347,6 +1427,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       layout.closeButtonPolicy,
       layout.items,
       normalizedServerId,
+      normalizedWorkspaceId,
       onCloseOtherTabs,
       onCloseTab,
       onCloseTabsToLeft,
@@ -1470,6 +1551,7 @@ function ResolvedWorkspaceDesktopTabsRow({
 }
 function ResolvedDesktopTabChip({
   serverId,
+  workspaceId,
   item,
   isFocused,
   isDragging,
@@ -1497,16 +1579,17 @@ function ResolvedDesktopTabChip({
   showDropIndicatorAfter,
 }: {
   serverId: string;
+  workspaceId: string;
   item: ResolvedWorkspaceDesktopTabRowItem;
   isFocused: boolean;
   isDragging: boolean;
   index: number;
   tabCount: number;
-  onCopyResumeCommand: (agentId: string) => Promise<void> | void;
+  onCopyResumeCommand: (agentId: string, tab?: WorkspaceTabDescriptor) => Promise<void> | void;
   onCopyAgentId: (agentId: string) => Promise<void> | void;
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
-  onReloadAgent: (agentId: string) => Promise<void> | void;
+  onReloadAgent: (agentId: string, tab?: WorkspaceTabDescriptor) => Promise<void> | void;
   onStartSideConversation?: (agentId: string, options: { parentTabId: string }) => void;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTabsToLeft: (tabId: string) => Promise<void> | void;
@@ -1525,7 +1608,7 @@ function ResolvedDesktopTabChip({
 }) {
   const { t } = useTranslation();
   const presentation = item.presentation;
-  const resolvedTab = useMemo(
+  const baseResolvedTab = useMemo(
     () =>
       buildWorkspaceDesktopTabActions({
         tab: item.tab,
@@ -1563,6 +1646,36 @@ function ResolvedDesktopTabChip({
     ],
   );
 
+  const markUnreadEntries = useMarkTabUnreadMenuEntries({
+    tab: item.tab,
+    serverId,
+    workspaceId,
+    menuTestIDBase: baseResolvedTab.contextMenuTestId,
+  });
+  const resolvedTab = useMemo(
+    () =>
+      markUnreadEntries.length === 0
+        ? baseResolvedTab
+        : {
+            ...baseResolvedTab,
+            menuEntries: [...markUnreadEntries, ...baseResolvedTab.menuEntries],
+          },
+    [baseResolvedTab, markUnreadEntries],
+  );
+  const openInViewEntries = useOpenInViewMenuEntries({
+    tab: item.tab,
+    serverId,
+    workspaceId,
+    menuTestIDBase: resolvedTab.contextMenuTestId,
+  });
+  const resolvedTabWithViews = useMemo(
+    () =>
+      openInViewEntries.length === 0
+        ? resolvedTab
+        : { ...resolvedTab, menuEntries: [...openInViewEntries, ...resolvedTab.menuEntries] },
+    [openInViewEntries, resolvedTab],
+  );
+
   const rawTooltipLabel =
     presentation.titleState === "loading" ? t("common.states.loading") : presentation.tooltip;
   const accessibilityLabel =
@@ -1583,6 +1696,7 @@ function ResolvedDesktopTabChip({
         serverId={serverId}
         tab={item.tab}
         isActive={item.isActive}
+        unread={Boolean(item.unread)}
         isDragging={isDragging}
         isFocused={isFocused}
         resolvedTabWidth={resolvedTabWidth}
@@ -1593,7 +1707,7 @@ function ResolvedDesktopTabChip({
         presentation={presentation}
         tooltipLabel={tooltipLabel}
         accessibilityLabel={accessibilityLabel}
-        resolvedTab={resolvedTab}
+        resolvedTab={resolvedTabWithViews}
         setHoveredCloseTabKey={setHoveredCloseTabKey}
         onNavigateTab={onNavigateTab}
         onCloseTab={onCloseTab}
@@ -1776,6 +1890,13 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     zIndex: 1,
+  },
+  tabUnreadDot: {
+    width: TAB_MODIFIED_DOT_SIZE,
+    height: TAB_MODIFIED_DOT_SIZE,
+    flexShrink: 0,
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.accent,
   },
   tabModifiedDot: {
     width: TAB_MODIFIED_DOT_SIZE,

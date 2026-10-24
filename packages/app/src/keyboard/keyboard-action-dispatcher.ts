@@ -4,6 +4,7 @@ export type WorkspacePanelTarget = "changes" | "files" | "pull-request";
 export type WorkspacePanelPlacement = "supporting" | "side-pane" | "focused-pane";
 
 export type KeyboardActionId =
+  | "agent.subthreads.toggle"
   | "agent.interrupt"
   | "message-input.focus"
   | "message-input.send"
@@ -48,6 +49,7 @@ export type KeyboardActionId =
   | "sidebar.toggle.right"
   | "sidebar.toggle.both"
   | "workspace.new"
+  | "quick-launch.open"
   | "workspace.project.pick"
   | "worktree.new"
   | "workspace.archive"
@@ -57,6 +59,7 @@ export type KeyboardActionId =
   | "workspace.setup.show";
 
 export type KeyboardActionDefinition =
+  | { id: "agent.subthreads.toggle"; scope: KeyboardActionScope }
   | { id: "agent.interrupt"; scope: KeyboardActionScope }
   | { id: "message-input.focus"; scope: KeyboardActionScope }
   | { id: "message-input.send"; scope: KeyboardActionScope }
@@ -106,6 +109,7 @@ export type KeyboardActionDefinition =
   | { id: "sidebar.toggle.right"; scope: KeyboardActionScope }
   | { id: "sidebar.toggle.both"; scope: KeyboardActionScope }
   | { id: "workspace.new"; scope: KeyboardActionScope }
+  | { id: "quick-launch.open"; scope: KeyboardActionScope }
   | { id: "workspace.project.pick"; scope: KeyboardActionScope }
   | { id: "worktree.new"; scope: KeyboardActionScope }
   | { id: "workspace.archive"; scope: KeyboardActionScope }

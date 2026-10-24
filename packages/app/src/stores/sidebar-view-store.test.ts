@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: vi.fn(async () => null),
+    setItem: vi.fn(async () => {}),
+    removeItem: vi.fn(async () => {}),
+  },
+}));
 import type { StateStorage } from "zustand/middleware";
 import {
   createSidebarViewStorage,
@@ -34,9 +42,11 @@ describe("sidebar view store", () => {
     useSidebarViewStore.setState({
       showBackground: false,
       groupMode: "project",
+      sortMode: "recent",
       hostFilters: [],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -87,9 +97,11 @@ describe("sidebar view store", () => {
     ).toEqual({
       showBackground: false,
       groupMode: "status",
+      sortMode: "recent",
       hostFilters: [],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -102,9 +114,11 @@ describe("sidebar view store", () => {
     ).toEqual({
       showBackground: false,
       groupMode: "status",
+      sortMode: "recent",
       hostFilters: ["host-a"],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -112,20 +126,31 @@ describe("sidebar view store", () => {
     expect(
       migrateSidebarViewState({
         groupMode: "status",
+        sortMode: "recent",
         hostFilters: ["host-a", "host-b"],
       }),
     ).toEqual({
       showBackground: false,
       groupMode: "status",
+      sortMode: "recent",
       hostFilters: ["host-a", "host-b"],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
+  });
+
+  it("persists the message search scope while keeping explicit names selection", () => {
+    expect(migrateSidebarViewState({ filterScope: "messages" }).filterScope).toBe("messages");
+    expect(migrateSidebarViewState({}).filterScope).toBe("names");
+    useSidebarViewStore.getState().setFilterScope("messages");
+    expect(useSidebarViewStore.getState().filterScope).toBe("messages");
   });
 
   it("clears only the label facet", () => {
     useSidebarViewStore.setState({
       groupMode: "status",
+      sortMode: "recent",
       hostFilters: ["host-a"],
       labelFilter: { labels: ["urgent", "blocked"] },
     });
@@ -134,8 +159,10 @@ describe("sidebar view store", () => {
 
     expect(useSidebarViewStore.getState()).toMatchObject({
       groupMode: "status",
+      sortMode: "recent",
       hostFilters: ["host-a"],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -201,6 +228,7 @@ describe("sidebar view store", () => {
   it("keeps the other facets when the project filter is cleared", () => {
     useSidebarViewStore.setState({
       groupMode: "status",
+      sortMode: "recent",
       hostFilters: ["host-a"],
       projectFilters: ["project-a"],
       labelFilter: { labels: ["urgent"] },
@@ -210,6 +238,7 @@ describe("sidebar view store", () => {
 
     expect(useSidebarViewStore.getState()).toMatchObject({
       groupMode: "status",
+      sortMode: "recent",
       hostFilters: ["host-a"],
       projectFilters: [],
       labelFilter: { labels: ["urgent"] },
@@ -222,15 +251,18 @@ describe("sidebar view store", () => {
     expect(
       migrateSidebarViewState({
         groupMode: "project",
+        sortMode: "recent",
         hostFilters: ["host-a"],
         projectFilters: ["project-a", "project-b"],
       }),
     ).toEqual({
       showBackground: false,
       groupMode: "project",
+      sortMode: "recent",
       hostFilters: ["host-a"],
       projectFilters: ["project-a", "project-b"],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -238,10 +270,18 @@ describe("sidebar view store", () => {
     expect(migrateSidebarViewState({ projectFilters: "project-a" })).toEqual({
       showBackground: false,
       groupMode: "project",
+      sortMode: "recent",
       hostFilters: [],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
+  });
+
+  it("preserves an explicit sort mode and defaults only an unset mode", () => {
+    expect(migrateSidebarViewState({ sortMode: "manual" }).sortMode).toBe("manual");
+    expect(migrateSidebarViewState({ sortMode: "user" }).sortMode).toBe("user");
+    expect(migrateSidebarViewState({}).sortMode).toBe("recent");
   });
 
   it("falls back to the legacy storage key when the new key is empty", async () => {

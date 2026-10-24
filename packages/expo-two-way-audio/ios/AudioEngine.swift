@@ -10,6 +10,7 @@ class AudioEngine {
     
     public private(set) var voiceIOFormat: AVAudioFormat
     public private(set) var isRecording = false
+    private var resumeRecordingAfterInterruption = false
     public private(set) var isSessionActive = false
     
     public var onMicDataCallback: ((Data) -> Void)?
@@ -307,6 +308,7 @@ class AudioEngine {
     }
     
     func toggleRecording(_ val: Bool) -> Bool {
+        if !val { resumeRecordingAfterInterruption = false }
         isRecording = val
         if !isRecording {
             avAudioEngine.inputNode.isVoiceProcessingInputMuted = true
@@ -393,19 +395,22 @@ class AudioEngine {
 
         switch type {
         case .began:
+            let wasRecording = isRecording
             self.stopRecordingAndPlayer()
-            onAudioInterruptionCallback?("began")
+            resumeRecordingAfterInterruption = wasRecording
+            if wasRecording {
+                onAudioInterruptionCallback?("capture_paused")
+            }
         case .ended:
-            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
-                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                if options.contains(.shouldResume) {
-                    // Interruption ended. Resume playback.
-                    self.resumeRecordingAndPlayer()
-                    onAudioInterruptionCallback?("ended")
-                } else {
-                    // Interruption ends. Don't resume playback.
-                    onAudioInterruptionCallback?("blocked")
-                }
+            guard resumeRecordingAfterInterruption else { return }
+            resumeRecordingAfterInterruption = false
+            let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+            if options.contains(.shouldResume) {
+                self.resumeRecordingAndPlayer()
+                onAudioInterruptionCallback?("capture_resumed")
+            } else {
+                onAudioInterruptionCallback?("blocked")
             }
         @unknown default:
             fatalError("Unknown type: \(type)")

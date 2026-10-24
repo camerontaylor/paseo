@@ -14,6 +14,7 @@ function makeAgent(input: {
   cwd: string;
   workspaceId?: string;
   parentAgentId?: string | null;
+  labels?: Record<string, string>;
   archivedAt?: Date | null;
   createdAt?: Date;
   lastActivityAt?: Date;
@@ -52,7 +53,7 @@ function makeAgent(input: {
     model: null,
     thinkingOptionId: null,
     parentAgentId: input.parentAgentId ?? null,
-    labels: {},
+    labels: input.labels ?? {},
     requiresAttention: false,
     attentionReason: null,
     attentionTimestamp: null,
@@ -86,6 +87,35 @@ describe("workspace agent visibility", () => {
 
     expect(result.activeAgentIds).toEqual(new Set(["parent-agent", "child-agent"]));
     expect(result.autoOpenAgentIds).toEqual(new Set(["parent-agent"]));
+  });
+
+  it("auto-opens a CLI-labeled ordinary child but still excludes archived children", () => {
+    const parent = makeAgent({ id: "parent", cwd: "/repo/worktree", workspaceId: WORKSPACE_ID });
+    const labeled = makeAgent({
+      id: "cli-child",
+      cwd: "/repo/worktree",
+      workspaceId: WORKSPACE_ID,
+      parentAgentId: parent.id,
+      labels: { "paseo.auto-open-agent-tab": "true" },
+    });
+    const archived = makeAgent({
+      id: "archived-cli-child",
+      cwd: "/repo/worktree",
+      workspaceId: WORKSPACE_ID,
+      parentAgentId: parent.id,
+      labels: { "paseo.auto-open-agent-tab": "true" },
+      archivedAt: new Date("2026-03-04T00:01:00.000Z"),
+    });
+    const result = deriveWorkspaceAgentVisibility({
+      sessionAgents: new Map([
+        [parent.id, parent],
+        [labeled.id, labeled],
+        [archived.id, archived],
+      ]),
+      workspaceId: WORKSPACE_ID,
+    });
+    expect(result.autoOpenAgentIds).toEqual(new Set([parent.id, labeled.id]));
+    expect(result.activeAgentIds).toEqual(new Set([parent.id, labeled.id]));
   });
 
   it("excludes archived subagents from active and auto-open", () => {

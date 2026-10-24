@@ -18,6 +18,9 @@ import {
   useSyncExternalStore,
 } from "react";
 import { AppState, useWindowDimensions, View } from "react-native";
+import { resolveAppVersion } from "@/utils/app-version";
+import { installGlobalErrorDiagnostics } from "@/diagnostics/client-errors/global-handlers";
+import { installClientDiagnostics } from "@/diagnostics/client-errors/store";
 import { GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
@@ -26,12 +29,14 @@ import { CommandCenter } from "@/command-center/command-center";
 import { CommandCenterRootActions } from "@/command-center/root-registration";
 import { CommandCenterProvider } from "@/command-center/provider";
 import { CommandCenterWorkspaceActions } from "@/command-center/workspace-registration";
+import { CommandCenterDefaultProjectActions } from "@/default-project/command-center";
 import { PluginCommandCenterActions } from "@/plugins/command-center/registration";
 import { AddProjectFlowHost } from "@/components/add-project-flow-host";
 import { WorktreeSetupCalloutSource } from "@/components/worktree-setup-callout-source";
 import { DownloadToast } from "@/components/download-toast";
 import { QuittingOverlay } from "@/components/quitting-overlay";
 import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
+import { QuickLaunchHost } from "@/quick-launch/host";
 import { ChangelogHost } from "@/changelog";
 import { AppDiagnosticHost } from "@/components/app-diagnostic-host";
 import { AppearanceStyleBoundary } from "@/components/appearance-style-boundary";
@@ -77,6 +82,7 @@ import { registerWorkspaceRouteNavigationRef } from "@/navigation/workspace-rout
 import { ThemedStack } from "@/navigation/themed-stack";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { AgentNavigationListener } from "@/desktop/agent-navigation";
+import { UiCommandListener } from "@/ui-commands/listener";
 import { LegacyAgentSkillsMigration } from "@/agent-skills/legacy-migration";
 import { legacyFavoriteProfileMigration } from "@/agent-profiles/migration";
 import { listenToDesktopEvent } from "@/desktop/electron/events";
@@ -604,6 +610,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
         <WorktreeSetupCalloutSource />
         <CommandCenterRootActions />
         <CommandCenterWorkspaceActions />
+        <CommandCenterDefaultProjectActions />
         <PluginCommandCenterActions />
         <WorkspacePinShortcutHandler />
         <WorkspaceRenameHost />
@@ -614,6 +621,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
         <ProviderSettingsHost />
         <WorkspaceSetupDialog />
         <KeyboardShortcutsDialog />
+        <QuickLaunchHost />
         <AppDiagnosticHost />
         <ChangelogHost />
         <QuittingOverlay />
@@ -869,7 +877,9 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
     (pathname === "/open-project" ||
       pathname === "/new" ||
       pathname === "/sessions" ||
+      pathname === "/stream" ||
       pathname === "/schedules" ||
+      pathname.startsWith("/views/") ||
       routeHasKnownHost);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
@@ -901,7 +911,9 @@ function RootStack() {
         <Stack.Screen name="new" />
         <Stack.Screen name="open-project" />
         <Stack.Screen name="sessions" />
+        <Stack.Screen name="stream" />
         <Stack.Screen name="schedules" />
+        <Stack.Screen name="views/[viewId]" />
         <Stack.Screen name="pair-scan" />
       </Stack.Protected>
       <Stack.Screen name="h/[serverId]" />
@@ -930,6 +942,7 @@ function AppShell() {
       <HorizontalScrollProvider>
         <OpenProjectListener />
         <AgentNavigationListener />
+        <UiCommandListener />
         <AppWithSidebar>
           <WorkspaceRouteNavigationBridge />
           <RootStack />
@@ -992,6 +1005,18 @@ function RootAppTree() {
 
 export default function RootLayout() {
   useEffect(() => installWebScrollbarStyles(), []);
+  useEffect(() => {
+    void installClientDiagnostics();
+    return installGlobalErrorDiagnostics({
+      errorUtils: (
+        globalThis as {
+          ErrorUtils?: Parameters<typeof installGlobalErrorDiagnostics>[0]["errorUtils"];
+        }
+      ).ErrorUtils,
+      target: isWeb && typeof window !== "undefined" ? window : null,
+      appVersion: resolveAppVersion(),
+    });
+  }, []);
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState !== "active") {
