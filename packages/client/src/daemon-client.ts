@@ -9,8 +9,16 @@ import {
   type TimelineSubscription,
 } from "./connection/index.js";
 import { CreationClient } from "./creation/index.js";
-import type { AgentQueueSnapshot, CreationSnapshot } from "@getpaseo/protocol/messages";
+import type {
+  AgentQueueSnapshot,
+  CreationSnapshot,
+  UiWorkspaceTabTarget,
+} from "@getpaseo/protocol/messages";
 import type { z } from "zod";
+import type {
+  ClientDiagnosticEvent,
+  ClientDiagnosticSource,
+} from "@getpaseo/protocol/client-diagnostics";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 // Split value/type imports: the desvio basket drops the value import once no
 // basket-side code uses CLIENT_CAPS, which orphans the fork's sideConversations
@@ -400,6 +408,14 @@ export type DaemonEventHandler = (event: DaemonEvent) => void;
 export type BrowserAutomationExecuteRequestMessage = BrowserAutomationExecuteRequest;
 export type BrowserAutomationExecuteResponseMessage = BrowserAutomationExecuteResponse;
 
+export interface DaemonRequestErrorEvent {
+  kind: "rpc_error" | "timeout";
+  requestType: string;
+  requestId: string;
+  code?: string;
+  message: string;
+}
+
 export interface DaemonClientConfig {
   /** Deliver compact bodies/hash references to a caller-owned snapshot cache.
    * The default keeps public SDK snapshot entries expanded. */
@@ -430,6 +446,7 @@ export interface DaemonClientConfig {
   runtimeMetricsWindowMs?: number;
   trace?: DaemonClientTrace;
   capabilities?: Partial<Record<ClientCapability, unknown>>;
+  onRequestError?: (event: DaemonRequestErrorEvent) => void;
 }
 
 export interface DaemonClientTrace {
@@ -2038,8 +2055,36 @@ export class DaemonClient {
       const result = await promise;
       if (result.kind === "error") throw result.error;
       return result.value;
+    } catch (error) {
+      this.notifyRequestError(params.message.type, params.requestId, error);
+      throw error;
     } finally {
       await wire.finish();
+    }
+  }
+
+  private notifyRequestError(requestType: string, requestId: string, error: unknown): void {
+    const hook = this.config.onRequestError;
+    if (
+      !hook ||
+      requestType.startsWith("client.diagnostics.") ||
+      requestType.startsWith("client.outbox.")
+    )
+      return;
+    let kind: DaemonRequestErrorEvent["kind"];
+    if (error instanceof DaemonRpcError) kind = "rpc_error";
+    else if (isWaiterTimeoutError(error)) kind = "timeout";
+    else return;
+    try {
+      hook({
+        kind,
+        requestType,
+        requestId,
+        code: error instanceof DaemonRpcError ? error.code : undefined,
+        message: "Host request failed",
+      });
+    } catch {
+      // A diagnostics hook cannot change request behavior.
     }
   }
 
@@ -3919,6 +3964,86 @@ export class DaemonClient {
         message: { type: "agent.queue.send_now.request", agentId, itemId, expectedRevision },
       }),
     );
+  }
+
+  async reportClientDiagnostics(input: {
+    deviceLabel?: string;
+    platform?: string;
+    events: ClientDiagnosticEvent[];
+  }): Promise<{ acknowledgedIds: string[]; deferredIds: string[] }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"client.diagnostics.report.response">({
+        message: { type: "client.diagnostics.report.request", ...input },
+      });
+    if (payload.error) throw new Error(payload.error);
+    return { acknowledgedIds: payload.acknowledgedIds, deferredIds: payload.deferredIds };
+  }
+
+  async listClientDiagnostics(
+    options: { limit?: number; since?: string; source?: ClientDiagnosticSource } = {},
+  ): Promise<CorrelatedResponsePayload<"client.diagnostics.list.response">> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"client.diagnostics.list.response">({
+        message: { type: "client.diagnostics.list.request", ...options },
+      });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  supportsUiCommands(): boolean {
+    return this.lastServerInfoMessage?.features?.uiCommands === true;
+  }
+
+  supportsUiTabPlacement(): boolean {
+    return this.lastServerInfoMessage?.features?.uiTabPlacement === true;
+  }
+
+  async openWorkspaceTab(input: {
+    workspaceId: string;
+    target: UiWorkspaceTabTarget;
+    focus?: boolean;
+    placement?: "main" | "side";
+    serverId?: string;
+  }): Promise<CorrelatedResponsePayload<"ui.tab.open.response">> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"ui.tab.open.response">({
+      message: {
+        type: "ui.tab.open.request",
+        workspaceId: input.workspaceId,
+        target: input.target,
+        ...(input.focus === false ? { focus: false } : {}),
+        ...(input.placement === "side" ? { placement: "side" as const } : {}),
+        ...(input.serverId ? { serverId: input.serverId } : {}),
+      },
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async inspectAgentDelivery(
+    agentId: string,
+  ): Promise<CorrelatedResponsePayload<"agent.queue.inspect.response">> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.inspect.response">({
+        message: { type: "agent.queue.inspect.request", agentId },
+      });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async reportClientOutbox(input: {
+    agentId: string;
+    deviceLabel?: string | null;
+    platform?: string | null;
+    pending: number;
+    failed: number;
+    uncertain: number;
+    oldestCreatedAt?: string | null;
+  }): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"client.outbox.report.response">({
+        message: { type: "client.outbox.report.request", ...input },
+      });
+    if (payload.error) throw new Error(payload.error);
   }
 
   async listQueuedAgentMessages(agentId: string): Promise<AgentQueueSnapshot> {

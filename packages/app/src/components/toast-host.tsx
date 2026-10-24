@@ -14,6 +14,8 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
 import { useTranslation } from "react-i18next";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { recordClientDiagnostic } from "@/diagnostics/client-errors/record";
+import { resolveAppVersion } from "@/utils/app-version";
 import { isWeb } from "@/constants/platform";
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react-native";
 import { getOverlayRoot, OVERLAY_Z } from "@/lib/overlay-root";
@@ -64,6 +66,16 @@ const successIcon = (theme: Theme) => ({ color: theme.colors.primary });
 const warningIcon = (theme: Theme) => ({ color: theme.colors.palette.amber[500] });
 const errorIcon = (theme: Theme) => ({ color: theme.colors.destructive });
 
+function recordToastCategory(message: string | null, variant: ToastVariant): void {
+  if (!message || (variant !== "error" && variant !== "warning")) return;
+  recordClientDiagnostic({
+    source: "toast",
+    severity: variant,
+    message: variant === "error" ? "Error shown" : "Warning shown",
+    appVersion: resolveAppVersion(),
+  });
+}
+
 export function useToastHost(): {
   api: ToastApi;
   toast: ToastState | null;
@@ -80,6 +92,7 @@ export function useToastHost(): {
     }
 
     const variant = options?.variant ?? "default";
+    recordToastCategory(nativeMessage, variant);
     const durationMs = options?.durationMs === undefined ? DEFAULT_DURATION_MS : options.durationMs;
     const nativeAndroid = options?.nativeAndroid ?? false;
 

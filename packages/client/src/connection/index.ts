@@ -149,6 +149,7 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   [CLIENT_CAPS.workspaceSetupBlocked]: true,
   [CLIENT_CAPS.durableAgentQueue]: true,
   [CLIENT_CAPS.durableVoiceInputV1]: true,
+  [CLIENT_CAPS.uiCommands]: true,
   [CLIENT_CAPS.explicitEventSubscriptions]: true,
   // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
   [CLIENT_CAPS.companionStreamPortV1]: true,

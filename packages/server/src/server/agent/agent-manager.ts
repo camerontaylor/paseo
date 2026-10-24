@@ -2730,7 +2730,7 @@ export class AgentManager {
     agentId: string,
     updates: {
       title?: string;
-      labels?: Record<string, string>;
+      labels?: AgentLabelPatch;
     },
   ): Promise<void> {
     await this.runLifecycleMutation(agentId, () =>
@@ -2742,7 +2742,7 @@ export class AgentManager {
     agentId: string,
     updates: {
       title?: string;
-      labels?: Record<string, string>;
+      labels?: AgentLabelPatch;
     },
   ): Promise<void> {
     const liveAgent = this.getAgent(agentId);

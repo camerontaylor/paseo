@@ -1457,6 +1457,10 @@ export async function createPaseoDaemon(
     createPaseoWorktree: createAgentCommandDependencies.createPaseoWorktree,
     browserToolsEnabled: browserToolsPolicy.isEnabled(),
     browserToolsBroker,
+    uiCommands: {
+      serverId,
+      broadcast: (command) => wsServer?.broadcastToTrustedClients(wrapSessionMessage(command)) ?? 0,
+    },
     paseoToolPolicy:
       runtime.paseoToolPolicy ??
       (runtime.callerAgentId ? agentManager.getPaseoToolPolicy(runtime.callerAgentId) : undefined),

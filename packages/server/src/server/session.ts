@@ -106,6 +106,8 @@ import {
 
 import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
 import type { AgentQueueService } from "./agent-queue/service.js";
+import type { ClientDiagnosticsStore } from "./client-diagnostics/store.js";
+import { resolveUiTabOpenCommand } from "./ui-commands.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
 import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import type {
@@ -446,6 +448,10 @@ const nodeSessionFileSystem: SessionFileSystem = {
 type AgentMcpTransportFactory = () => Promise<unknown>;
 
 /** Collapses an optional injected subsystem to its settled nullable form. */
+function daemonServerId(value?: string): string {
+  return value ?? "";
+}
+
 function nullable<T>(value?: T | null): T | null {
   return value ?? null;
 }
@@ -475,6 +481,7 @@ export interface SessionOptions {
   clientCapabilities?: Record<string, unknown> | null;
   onMessage: (msg: SessionOutboundMessage) => void;
   onMessageToSource?: (source: object, msg: SessionOutboundMessage) => void;
+  broadcastToClients?: (msg: SessionOutboundMessage) => number;
   onBinaryMessage?: (frame: Uint8Array) => void;
   onBinaryMessageToSource?: (source: object, frame: Uint8Array) => Promise<void>;
   getTransportBufferedAmount?: (source?: object) => number | null;
@@ -490,6 +497,7 @@ export interface SessionOptions {
   agentStorage: AgentStorage;
   /** Absent when the daemon runs without the durable queue (pre-fork peer). */
   agentQueueService?: AgentQueueService | null;
+  clientDiagnostics?: ClientDiagnosticsStore | null;
   messageReceipts: Pick<MessageReceipts, "send" | "listForAttachment">;
   creationService: Pick<CreationService, "create" | "subscribe">;
   projectRegistry: ProjectRegistry;
@@ -758,6 +766,9 @@ export class Session {
   private readonly clientId: string;
   private readonly authorization: SessionAuthorization;
   private readonly agentQueueService: AgentQueueService | null;
+  private readonly clientDiagnostics: ClientDiagnosticsStore | null;
+  private readonly daemonServerId: string;
+  private readonly broadcastToClients: ((msg: SessionOutboundMessage) => number) | null;
   private unsubscribeAgentQueue: (() => void) | null = null;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
@@ -960,6 +971,9 @@ export class Session {
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.agentQueueService = nullable(options.agentQueueService);
+    this.clientDiagnostics = nullable(options.clientDiagnostics);
+    this.daemonServerId = daemonServerId(serverId);
+    this.broadcastToClients = nullable(options.broadcastToClients);
     this.unsubscribeAgentQueue = this.subscribeToAgentQueueMutations();
     this.projectRegistry = projectRegistry;
     this.workspaceRegistry = workspaceRegistry;
@@ -1291,6 +1305,7 @@ export class Session {
         stt,
         voice,
         voiceBridge,
+        reportDiagnostic: (input) => this.clientDiagnostics?.recordHost(input),
         dictation,
       },
       this.delivery,
@@ -2901,7 +2916,12 @@ export class Session {
   }
 
   private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
-    return this.dispatchAgentQueueMessage(msg) ?? this.dispatchAgentLifecycleOperation(msg);
+    return (
+      this.dispatchUiCommandMessage(msg) ??
+      this.dispatchClientDiagnosticsMessage(msg) ??
+      this.dispatchAgentQueueMessage(msg) ??
+      this.dispatchAgentLifecycleOperation(msg)
+    );
   }
 
   private dispatchAgentLifecycleOperation(msg: SessionInboundMessage): Promise<void> | undefined {
@@ -8677,12 +8697,102 @@ export class Session {
     });
   }
 
+  private dispatchUiCommandMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    if (msg.type !== "ui.tab.open.request") return undefined;
+    return this.handleUiTabOpenRequest(msg);
+  }
+
+  private async handleUiTabOpenRequest(
+    msg: Extract<SessionInboundMessage, { type: "ui.tab.open.request" }>,
+  ): Promise<void> {
+    const result = await resolveUiTabOpenCommand(msg, {
+      serverId: this.daemonServerId,
+      workspaceExists: async (workspaceId) =>
+        (await this.workspaceRegistry.get(workspaceId)) != null,
+      validateTarget: async (target, workspaceId, placement) => {
+        if (target.kind === "agent" || target.kind === "provider_subagent") {
+          const agentId = target.kind === "agent" ? target.agentId : target.parentAgentId;
+          const home =
+            this.agentManager.getAgent(agentId)?.workspaceId ??
+            (await this.agentStorage.get(agentId))?.workspaceId;
+          if (!home) return `Agent not found: ${agentId}`;
+          if (placement !== "side" && home !== workspaceId)
+            return `Agent ${agentId} belongs to workspace ${home}`;
+        }
+        if (target.kind === "terminal") {
+          const terminal = this.terminalManager?.getTerminal(target.terminalId);
+          if (!terminal) return `Terminal not found: ${target.terminalId}`;
+          if (terminal.workspaceId !== workspaceId)
+            return `Terminal ${target.terminalId} belongs to workspace ${terminal.workspaceId}`;
+        }
+        return null;
+      },
+    });
+    const deliveredTo = result.ok ? (this.broadcastToClients?.(result.command) ?? 0) : 0;
+    this.emit({
+      type: "ui.tab.open.response",
+      payload: {
+        requestId: msg.requestId,
+        serverId: result.serverId,
+        workspaceId: result.workspaceId,
+        deliveredTo,
+        error: result.ok ? null : result.error,
+      },
+    });
+  }
+
+  private dispatchClientDiagnosticsMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    if (msg.type === "client.diagnostics.report.request") {
+      return (async () => {
+        const result = await this.clientDiagnostics?.recordPersisted(
+          {
+            clientId: this.clientId,
+            deviceLabel: msg.deviceLabel ?? null,
+            platform: msg.platform ?? null,
+            appVersion: this.appVersion,
+          },
+          msg.events,
+        );
+        this.emit({
+          type: "client.diagnostics.report.response",
+          payload: {
+            requestId: msg.requestId,
+            acknowledgedIds: result?.acknowledgedIds ?? [],
+            deferredIds: result?.deferredIds ?? msg.events.map((event) => event.id),
+            error: result ? null : "This daemon does not record client diagnostics.",
+          },
+        });
+      })();
+    }
+    if (msg.type === "client.diagnostics.list.request") {
+      const store = this.clientDiagnostics;
+      this.emit({
+        type: "client.diagnostics.list.response",
+        payload: {
+          requestId: msg.requestId,
+          events: store?.list({ limit: msg.limit, since: msg.since, source: msg.source }) ?? [],
+          rateLimited: store?.rateLimitedCount ?? 0,
+          retention: store?.retention ?? { maxEvents: 1, maxAgeDays: 1 },
+          error: store ? null : "This daemon does not record client diagnostics.",
+        },
+      });
+      return Promise.resolve();
+    }
+    return undefined;
+  }
+
   private dispatchAgentQueueMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     if (msg.type === "voice.input.receipts.read.request") {
       return this.handleVoiceInputReceiptsRead(msg);
     }
     if (msg.type === "agent.queue.get_item_images.request") {
       return this.handleAgentQueueGetItemImagesRequest(msg);
+    }
+    if (msg.type === "agent.queue.inspect.request") {
+      return this.handleAgentQueueInspectRequest(msg);
+    }
+    if (msg.type === "client.outbox.report.request") {
+      return this.handleClientOutboxReportRequest(msg);
     }
     if ((AGENT_QUEUE_RESPONSE_TYPES as Record<string, string>)[msg.type]) {
       return this.handleAgentQueueRequest(msg as AgentQueueRequestMessage);
@@ -8797,6 +8907,79 @@ export class Session {
       return error.code;
     }
     return errorToFriendlyMessage(error);
+  }
+
+  private async handleAgentQueueInspectRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.queue.inspect.request" }>,
+  ): Promise<void> {
+    const failure = (error: string, agentId = msg.agentId) => {
+      this.emit({
+        type: "agent.queue.inspect.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId,
+          queue: null,
+          drained: [],
+          receipts: [],
+          deviceReports: [],
+          error,
+        },
+      });
+    };
+    if (!this.agentQueueService) {
+      failure("This daemon does not support delivery inspection.");
+      return;
+    }
+    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    if (!resolved.ok) {
+      failure(resolved.error);
+      return;
+    }
+    try {
+      const inspection = await this.agentQueueService.inspect(resolved.agentId);
+      this.emit({
+        type: "agent.queue.inspect.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId: resolved.agentId,
+          ...inspection,
+          error: null,
+        },
+      });
+    } catch (error) {
+      failure(this.agentQueueErrorText(error), resolved.agentId);
+    }
+  }
+
+  private async handleClientOutboxReportRequest(
+    msg: Extract<SessionInboundMessage, { type: "client.outbox.report.request" }>,
+  ): Promise<void> {
+    let error: string | null = null;
+    const service = this.agentQueueService;
+    if (!service) {
+      error = "This daemon does not support device outbox reports.";
+    } else {
+      const resolved = await this.resolveAgentIdentifier(msg.agentId);
+      if (!resolved.ok) {
+        error = resolved.error;
+      } else {
+        service.recordOutboxReport({
+          agentId: resolved.agentId,
+          clientId: this.clientId,
+          deviceLabel: msg.deviceLabel ?? null,
+          platform: msg.platform ?? null,
+          reportedAt: new Date().toISOString(),
+          pending: msg.pending,
+          failed: msg.failed,
+          uncertain: msg.uncertain,
+          oldestCreatedAt: msg.oldestCreatedAt ?? null,
+        });
+      }
+    }
+    this.emit({
+      type: "client.outbox.report.response",
+      payload: { requestId: msg.requestId, error },
+    });
   }
 
   private async handleAgentQueueRequest(msg: AgentQueueRequestMessage): Promise<void> {
@@ -9305,6 +9488,10 @@ export class Session {
     this.emit(msg);
   }
 
+  public clearClientOutboxReport(): void {
+    this.agentQueueService?.clearOutboxReport(this.clientId);
+  }
+
   /**
    * Clean up session resources
    */
@@ -9325,6 +9512,7 @@ export class Session {
     this.unsubscribeWorkspaceMutations = null;
     this.unsubscribeAgentQueue?.();
     this.unsubscribeAgentQueue = null;
+    this.clearClientOutboxReport();
     this.agentUpdates.dispose();
     await this.hubExecutionController?.cleanup();
     if (this.unsubscribeTerminalWorkspaceContributionEvents) {

@@ -1,4 +1,5 @@
 import { resolvePaseoHome } from "@getpaseo/server/daemon-control";
+import { readDefaultDaemonTarget } from "./client-target.js";
 
 export type DaemonTarget = { kind: "instance"; home: string } | { kind: "endpoint"; host: string };
 
@@ -33,7 +34,11 @@ export function selectDaemonTarget(
       message: "PASEO_HOME and PASEO_HOST are both set. Choose --home or --host explicitly.",
     };
   if (env.PASEO_HOST) return { kind: "endpoint", host: env.PASEO_HOST };
-  return { kind: "instance", home: resolvePaseoHome({ PASEO_HOME: env.PASEO_HOME }) };
+  if (env.PASEO_HOME) return { kind: "instance", home: resolvePaseoHome(env) };
+  const home = resolvePaseoHome(env);
+  const saved = readDefaultDaemonTarget(home);
+  if (saved) return { kind: "endpoint", host: saved };
+  return { kind: "instance", home };
 }
 
 export function describeDaemonTarget(target: DaemonTarget): string {

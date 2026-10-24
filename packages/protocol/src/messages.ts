@@ -99,6 +99,12 @@ import {
 } from "./browser-automation/rpc-schemas.js";
 import { BrowserAutomationHostCapabilitySchema } from "./browser-automation/capabilities.js";
 import {
+  ClientDiagnosticsListRequestSchema,
+  ClientDiagnosticsListResponseSchema,
+  ClientDiagnosticsReportRequestSchema,
+  ClientDiagnosticsReportResponseSchema,
+} from "./client-diagnostics.js";
+import {
   PaseoConfigRawSchema,
   PaseoLifecycleCommandRawSchema,
   PaseoMetadataGenerationEntrySchema,
@@ -2895,6 +2901,65 @@ export const AgentQueueListRequestSchema = z.object({
  * Fetches the image bytes of one queued item. A device that did not queue the
  * item has no local copy, so editing it there would otherwise drop the images.
  */
+export const AgentQueueInspectRequestSchema = z.object({
+  type: z.literal("agent.queue.inspect.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+});
+
+export const ClientOutboxReportRequestSchema = z.object({
+  type: z.literal("client.outbox.report.request"),
+  requestId: z.string(),
+  agentId: z.string().max(200),
+  deviceLabel: z.string().max(120).nullable().optional(),
+  platform: z.string().max(40).nullable().optional(),
+  pending: z.number().int().nonnegative().max(1_000_000),
+  failed: z.number().int().nonnegative().max(1_000_000),
+  uncertain: z.number().int().nonnegative().max(1_000_000),
+  oldestCreatedAt: z.string().max(64).nullable().optional(),
+});
+
+export const AgentQueueInspectResponseSchema = z.object({
+  type: z.literal("agent.queue.inspect.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    queue: AgentQueueSnapshotSchema.nullable(),
+    drained: z.array(
+      z.object({
+        id: z.string(),
+        drainedAt: z.string().nullable(),
+        preview: z.string().nullable(),
+      }),
+    ),
+    receipts: z.array(
+      z.object({
+        messageId: z.string(),
+        state: z.string(),
+        createdAt: z.string().nullable(),
+      }),
+    ),
+    deviceReports: z.array(
+      z.object({
+        clientId: z.string(),
+        deviceLabel: z.string().nullable(),
+        platform: z.string().nullable(),
+        reportedAt: z.string(),
+        pending: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        uncertain: z.number().int().nonnegative(),
+        oldestCreatedAt: z.string().nullable(),
+      }),
+    ),
+    error: z.string().nullable(),
+  }),
+});
+
+export const ClientOutboxReportResponseSchema = z.object({
+  type: z.literal("client.outbox.report.response"),
+  payload: z.object({ requestId: z.string(), error: z.string().nullable() }),
+});
+
 export const AgentQueueGetItemImagesRequestSchema = z.object({
   type: z.literal("agent.queue.get_item_images.request"),
   requestId: z.string(),
@@ -3649,6 +3714,79 @@ export const HubExecutionControlRequestSchema = z.object({
 export type HubExecutionControlRequest = z.infer<typeof HubExecutionControlRequestSchema>;
 
 // These connection event streams have no directory bootstrap or timeline membership.
+// ============================================================================
+// UI Commands
+//
+// A UI command asks a connected app client to change what it is showing. The
+// daemon holds no UI state, so these are pass-through: an external caller (the
+// CLI, a script, another agent) sends a request, the daemon validates the
+// target exists, and the resulting `ui.command` push is broadcast to every
+// trusted client. A headless daemon with no app attached simply drops it.
+//
+// The wire target mirrors the app's WorkspaceTabTarget union
+// (packages/app/src/workspace-tabs/model.ts). Keep the two in sync when a new
+// tab kind is added; the app normalizes and rejects anything it cannot open.
+// ============================================================================
+
+export const UiWorkspaceTabTargetSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("draft"),
+    // Omit to open a fresh draft; the app generates the id.
+    draftId: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("agent"), agentId: z.string() }),
+  z.object({
+    kind: z.literal("provider_subagent"),
+    parentAgentId: z.string(),
+    subagentId: z.string(),
+  }),
+  z.object({ kind: z.literal("terminal"), terminalId: z.string() }),
+  z.object({
+    kind: z.literal("browser"),
+    // An existing browser on the client, or omitted with `url` to show a page: the daemon
+    // derives a stable id from the URL (ui-browser-target.ts), so repeats reuse one tab.
+    browserId: z.string().optional(),
+    // COMPAT(uiBrowserUrl): added in fork 0.10.0-beta.12. Clients that predate it ignore the
+    // URL and show the browser they have (or an empty one) for the derived id.
+    url: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("file"),
+    path: z.string(),
+    lineStart: z.number().int().positive().optional(),
+    lineEnd: z.number().int().positive().optional(),
+  }),
+  z.object({ kind: z.literal("working_diff"), focusPath: z.string().optional() }),
+  z.object({ kind: z.literal("setup"), workspaceId: z.string() }),
+  z.object({ kind: z.literal("commit_diff"), sha: z.string() }),
+]);
+
+export type UiWorkspaceTabTarget = z.infer<typeof UiWorkspaceTabTargetSchema>;
+
+// Where an opened tab lands. "side" opens it in the workspace's side pane, beside what the
+// user is looking at, and never navigates or moves focus on any attached client; "main" (the
+// default) is the existing open-or-focus behaviour. Compact layouts have no side pane and keep
+// the tab in the background instead.
+// COMPAT(uiTabPlacement): added in fork 0.10.0-beta.12; older clients treat it as "main".
+export const UiTabPlacementSchema = z.enum(["main", "side"]);
+export type UiTabPlacement = z.infer<typeof UiTabPlacementSchema>;
+
+export const UiTabOpenRequestMessageSchema = z.object({
+  type: z.literal("ui.tab.open.request"),
+  requestId: z.string(),
+  // Optional: the daemon fills in its own serverId when the caller omits it,
+  // and the client falls back to the connection it arrived on.
+  serverId: z.string().optional(),
+  workspaceId: z.string(),
+  target: UiWorkspaceTabTargetSchema,
+  // Default true. False opens the tab without stealing focus.
+  focus: z.boolean().optional(),
+  placement: UiTabPlacementSchema.optional(),
+});
+
+export type UiTabOpenRequestMessage = z.infer<typeof UiTabOpenRequestMessageSchema>;
+
+// These connection event streams have no directory bootstrap or timeline membership.
 export const SessionEventSubscriptionSchema = z.enum([
   "project.update",
   "providers_snapshot_update",
@@ -3819,7 +3957,12 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentQueueRetryRequestSchema,
   AgentQueueSendNowRequestSchema,
   AgentQueueListRequestSchema,
+  AgentQueueInspectRequestSchema,
+  UiTabOpenRequestMessageSchema,
+  ClientOutboxReportRequestSchema,
   AgentQueueGetItemImagesRequestSchema,
+  ClientDiagnosticsReportRequestSchema,
+  ClientDiagnosticsListRequestSchema,
   SetAgentTimelineSubscriptionRequestMessageSchema,
   AgentForkContextRequestMessageSchema,
   SetAgentModeRequestMessageSchema,
@@ -4134,6 +4277,14 @@ export const ServerInfoStatusPayloadSchema = z
         providersSnapshot: z.boolean().optional(),
         usageSources: z.boolean().optional(),
         usageReportsStreaming: z.boolean().optional(),
+        // COMPAT(clientDiagnostics): added in fork v0.12.0-fork.2; keep while stock peers are supported.
+        clientDiagnostics: z.boolean().optional(),
+        // COMPAT(deliveryInspect): added in fork v0.12.0-fork.2; keep while stock peers are supported.
+        deliveryInspect: z.boolean().optional(),
+        // COMPAT(uiCommands): fork UI command bridge, remove after 2027-04-24.
+        uiCommands: z.boolean().optional(),
+        // COMPAT(uiTabPlacement): fork side placement, remove after 2027-04-24.
+        uiTabPlacement: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: z.boolean().optional(),
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -7561,6 +7712,43 @@ export const AgentSkillsImportLegacySelectionResponseSchema = z.object({
   }),
 });
 
+export const UiTabOpenResponseMessageSchema = z.object({
+  type: z.literal("ui.tab.open.response"),
+  payload: z.object({
+    requestId: z.string(),
+    serverId: z.string(),
+    workspaceId: z.string(),
+    // How many trusted clients the command was broadcast to. Zero means the
+    // daemon accepted it but no app was attached to act on it.
+    deliveredTo: z.number().int().nonnegative(),
+    error: z.string().nullable(),
+  }),
+});
+
+export type UiTabOpenResponseMessage = z.infer<typeof UiTabOpenResponseMessageSchema>;
+
+export const UiCommandMessageSchema = z.object({
+  type: z.literal("ui.command"),
+  payload: z.discriminatedUnion("command", [
+    z.object({
+      command: z.literal("tab.open"),
+      serverId: z.string().optional(),
+      workspaceId: z.string(),
+      target: UiWorkspaceTabTargetSchema,
+      focus: z.boolean().optional(),
+      placement: UiTabPlacementSchema.optional(),
+    }),
+    z.object({
+      command: z.literal("tab.close"),
+      serverId: z.string().optional(),
+      workspaceId: z.string(),
+      target: UiWorkspaceTabTargetSchema,
+    }),
+  ]),
+});
+
+export type UiCommandMessage = z.infer<typeof UiCommandMessageSchema>;
+
 export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentCompanionUpdateEntryResponseMessageSchema,
   StreamListResponseSchema,
@@ -7569,6 +7757,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   BrowserHostRegisterResponseSchema,
   SubscriptionReleaseResponseSchema,
   SessionEventsSetSubscriptionResponseSchema,
+  UiTabOpenResponseMessageSchema,
+  UiCommandMessageSchema,
   HubExecutionAgentCreateResponseSchema,
   HubExecutionAgentValidateResponseSchema,
   HubExecutionControlResponseSchema,
@@ -7663,7 +7853,11 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentQueueRetryResponseSchema,
   AgentQueueSendNowResponseSchema,
   AgentQueueListResponseSchema,
+  AgentQueueInspectResponseSchema,
+  ClientOutboxReportResponseSchema,
   AgentQueueGetItemImagesResponseSchema,
+  ClientDiagnosticsReportResponseSchema,
+  ClientDiagnosticsListResponseSchema,
   AgentQueueUpdateMessageSchema,
   SetAgentTimelineSubscriptionResponseMessageSchema,
   AgentAttentionRequiredMessageSchema,
@@ -8326,6 +8520,7 @@ export const WSHelloMessageSchema = z.object({
       [CLIENT_CAPS.terminalReflowableSnapshot]: z.boolean().optional(),
       [CLIENT_CAPS.providerSubagents]: z.boolean().optional(),
       [CLIENT_CAPS.sideConversations]: z.boolean().optional(),
+      [CLIENT_CAPS.uiCommands]: z.boolean().optional(),
       [CLIENT_CAPS.projectUpdates]: z.boolean().optional(),
       [CLIENT_CAPS.compactProviderSnapshots]: z.boolean().optional(),
       [CLIENT_CAPS.providerSnapshotReferences]: z.boolean().optional(),

@@ -4,6 +4,7 @@ import type { CreationSnapshot } from "@getpaseo/protocol/messages";
 import type { AgentQueueService } from "./agent-queue/service.js";
 import { CreationService } from "./creation/index.js";
 import { MessageReceipts } from "./message-receipts/index.js";
+import { ClientDiagnosticsStore } from "./client-diagnostics/store.js";
 import { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage, Server as HTTPServer } from "http";
 import { join } from "path";
@@ -479,6 +480,7 @@ interface SocketSessionOptions {
   connectionLogger: pino.Logger;
   onMessage: (message: SessionOutboundMessage) => void;
   onMessageToSource?: (source: object, message: SessionOutboundMessage) => void;
+  broadcastToClients?: (message: SessionOutboundMessage) => number;
   onBinaryMessage?: (frame: Uint8Array) => void;
   onBinaryMessageToSource?: (source: object, frame: Uint8Array) => Promise<void>;
   getTransportBufferedAmount?: (source?: object) => number | null;
@@ -531,6 +533,22 @@ function requireWebSocketServices(params: {
     throw new Error("VoiceAssistantWebSocketServer requires a checkout diff manager.");
   }
   return { scheduleService, checkoutDiffManager };
+}
+
+/** A UI command is private to the originating principal and requires opt-in. */
+export function isTrustedUiCommandRecipient(input: {
+  lifecycle: string;
+  principalId: string;
+  expectedPrincipalId: string;
+  uiCommands: unknown;
+  isOriginSocket: boolean;
+}): boolean {
+  return (
+    input.lifecycle === "reconnectable" &&
+    input.principalId === input.expectedPrincipalId &&
+    input.uiCommands === true &&
+    !input.isOriginSocket
+  );
 }
 
 /**
@@ -625,6 +643,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
   private readonly agentQueueService: AgentQueueService | null;
+  private readonly clientDiagnostics: ClientDiagnosticsStore;
 
   private async validateCompletedCreation(snapshot: CreationSnapshot): Promise<void> {
     if (snapshot.workspace && snapshot.kind === "workspace") {
@@ -715,6 +734,10 @@ export class VoiceAssistantWebSocketServer {
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.messageReceipts = new MessageReceipts(join(paseoHome, "agent-requests"));
+    this.clientDiagnostics = new ClientDiagnosticsStore(
+      join(paseoHome, "diagnostics"),
+      this.logger.child({ module: "client-diagnostics" }),
+    );
     // The queue's drains and the legacy send path share one receipt owner, so a
     // spoken item's acceptance is readable through the same records.
     this.agentQueueService?.setMessageReceipts(this.messageReceipts);
@@ -1007,6 +1030,30 @@ export class VoiceAssistantWebSocketServer {
     this.sendMessageToSockets(this.sessions.keys(), message);
   }
 
+  /** Deliver a UI command only to clients that declared the new push schema. */
+  public broadcastToTrustedClients(message: WSOutboundMessage): number {
+    return this.broadcastToOtherTrustedClients(null, message);
+  }
+
+  private broadcastToOtherTrustedClients(
+    origin: SessionConnection | null,
+    message: WSOutboundMessage,
+  ): number {
+    const principalId = origin?.principalId ?? OWNER_SESSION_ADMISSION.principalId;
+    const sockets = [...this.sessions]
+      .filter(([ws, connection]) =>
+        isTrustedUiCommandRecipient({
+          lifecycle: connection.lifecycle,
+          principalId: connection.principalId,
+          expectedPrincipalId: principalId,
+          uiCommands: connection.clientCapabilities?.[CLIENT_CAPS.uiCommands],
+          isOriginSocket: origin?.sockets.has(ws) ?? false,
+        }),
+      )
+      .map(([ws]) => ws);
+    return this.sendMessageToSockets(sockets, message, false, true);
+  }
+
   public listSessions(): Session[] {
     return Array.from(
       new Set(
@@ -1186,6 +1233,7 @@ export class VoiceAssistantWebSocketServer {
     this.socketIdentities.clear();
     this.externalSessionsByKey.clear();
     this.wss.close();
+    await this.clientDiagnostics.flush();
   }
 
   private sendToClient(ws: WebSocketLike, message: WSOutboundMessage): boolean {
@@ -1197,10 +1245,14 @@ export class VoiceAssistantWebSocketServer {
     sockets: Iterable<WebSocketLike>,
     message: WSOutboundMessage,
     reportRejection = false,
+    trustedUiCommand = false,
   ): number {
+    if (trustedUiCommand && (message.type !== "session" || message.message.type !== "ui.command"))
+      throw new Error("Trusted UI delivery requires ui.command");
     const writableSockets = [...sockets].filter((ws) => {
       if (
         message.type === "session" &&
+        !trustedUiCommand &&
         this.sessions.get(ws)?.session.delivery.permits(ws, message.message) !== true
       ) {
         this.incrementRuntimeCounter("applicationJsonRejected");
@@ -1231,12 +1283,16 @@ export class VoiceAssistantWebSocketServer {
     }
 
     const payloadBytes = outboundFrameByteLength(payload);
+    let sentCount = 0;
     for (const ws of writableSockets) {
-      this.sendFrameToClient(ws, payload, payloadBytes, () => {
-        this.runtimeMetrics.recordOutboundMessage(message, ws.bufferedAmount);
-      });
+      if (
+        this.sendFrameToClient(ws, payload, payloadBytes, () => {
+          this.runtimeMetrics.recordOutboundMessage(message, ws.bufferedAmount);
+        })
+      )
+        sentCount++;
     }
-    return writableSockets.length;
+    return sentCount;
   }
 
   private sendBinaryToClient(ws: WebSocketLike, frame: Uint8Array, reportRejection = true): void {
@@ -1278,7 +1334,7 @@ export class VoiceAssistantWebSocketServer {
     frame: string | Uint8Array,
     frameBytes: number,
     recordSent: () => void,
-  ): void {
+  ): boolean {
     try {
       const sent = sendBoundedPhysicalFrame({
         socket: ws,
@@ -1287,8 +1343,10 @@ export class VoiceAssistantWebSocketServer {
         onHighWater: () => this.closeAtOutboundHighWater(ws),
       });
       if (sent) recordSent();
+      return sent;
     } catch (err) {
       this.logger.warn({ err }, "ws_send_failed");
+      return false;
     }
   }
 
@@ -1485,6 +1543,8 @@ export class VoiceAssistantWebSocketServer {
       },
       hubExecutionAgents: admission.hubExecutionAgents,
       hubRelationships: this.hubRelationships ?? undefined,
+      broadcastToClients: (message) =>
+        this.broadcastToOtherTrustedClients(connection, wrapSessionMessage(message)),
     });
 
     const base: SessionConnectionBase = {
@@ -1516,6 +1576,7 @@ export class VoiceAssistantWebSocketServer {
       permissions: options.permissions,
       onMessage: options.onMessage,
       onMessageToSource: options.onMessageToSource,
+      broadcastToClients: options.broadcastToClients,
       onBinaryMessage: options.onBinaryMessage,
       onBinaryMessageToSource: options.onBinaryMessageToSource,
       getTransportBufferedAmount: options.getTransportBufferedAmount,
@@ -1536,6 +1597,7 @@ export class VoiceAssistantWebSocketServer {
       agentManager: this.agentManager,
       agentStorage: this.agentStorage,
       agentQueueService: this.agentQueueService ?? undefined,
+      clientDiagnostics: this.clientDiagnostics,
       messageReceipts: this.messageReceipts,
       creationService: this.creationService,
       projectRegistry: this.projectRegistry,
@@ -1962,6 +2024,14 @@ export class VoiceAssistantWebSocketServer {
         openaiRealtimeVoice: this.agentQueueService !== null && realtimeAvailable(),
         // COMPAT(voiceVerbalMute): added in fork v0.12, remove after 2027-04-24.
         voiceVerbalMute: true,
+        // COMPAT(clientDiagnostics): added in fork v0.12.0-fork.2; keep while stock peers are supported.
+        clientDiagnostics: true,
+        // COMPAT(deliveryInspect): added in fork v0.12.0-fork.2; keep while stock peers are supported.
+        deliveryInspect: this.agentQueueService !== null,
+        // COMPAT(uiCommands): fork UI command bridge, remove after 2027-04-24.
+        uiCommands: true,
+        // COMPAT(uiTabPlacement): fork side placement, remove after 2027-04-24.
+        uiTabPlacement: true,
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: true,
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
@@ -2238,6 +2308,7 @@ export class VoiceAssistantWebSocketServer {
     this.socketIdentities.delete(ws);
 
     if (connection.sockets.size === 0) {
+      connection.session.clearClientOutboxReport();
       if (connection.lifecycle === "ephemeral-plugin") {
         this.pluginSocketIds.delete(ws);
         await this.cleanupConnection(connection, "Plugin session disconnected");

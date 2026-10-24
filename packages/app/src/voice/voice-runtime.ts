@@ -1,3 +1,4 @@
+import type { ClientDiagnosticInput } from "@/diagnostics/client-errors/model";
 import { Buffer } from "buffer";
 import type { RealtimeVoiceState } from "@getpaseo/protocol/messages";
 import type { AgentStreamEventPayload, SessionOutboundMessage } from "@getpaseo/protocol/messages";
@@ -143,6 +144,7 @@ export interface VoiceRuntimeDeps {
   getServerInfo(serverId: string): DaemonServerInfo | null;
   activateKeepAwake(tag: string): Promise<void>;
   deactivateKeepAwake(tag: string): Promise<void>;
+  recordDiagnostic?(input: ClientDiagnosticInput): void;
 }
 
 interface RuntimeSessionState {
@@ -640,6 +642,15 @@ export function createVoiceRuntime(deps: VoiceRuntimeDeps): VoiceRuntime {
 
   /** Shows the failure, and speaks it when it starts a new episode. */
   function reportFailure(kind: VoiceFailureKind): Promise<void> {
+    deps.recordDiagnostic?.({
+      source: "voice",
+      severity: "error",
+      code: kind,
+      message: "Voice failure",
+      phase: state.snapshot.phase,
+      agentId: state.snapshot.activeAgentId,
+      serverId: state.snapshot.activeServerId,
+    });
     const announce = failures.report(kind);
     patchSnapshot({ failure: failures.current() });
     if (!announce) {
