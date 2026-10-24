@@ -221,7 +221,7 @@ export function RealtimeVoiceOverlay({
           }
           style={muteButtonStyle}
         >
-          {isMuted ? (
+          {isMuted && !listeningForUnmute ? (
             <VoiceMicOff uniProps={whiteIcon} strokeWidth={2.5} />
           ) : (
             <VoiceMic uniProps={muteIcon} strokeWidth={2.5} />
