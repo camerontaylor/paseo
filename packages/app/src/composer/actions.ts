@@ -2,6 +2,12 @@ import type { SelectedFile } from "@/attachments/selected-file";
 import type { ForgeSearchItem } from "@getpaseo/protocol/messages";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import type {
+  AgentQueueSnapshot,
+  QueuedAgentDeliveryIntent,
+  QueuedAgentMessageDeliveryState,
+  QueuedComposerAttachment,
+} from "@getpaseo/protocol/messages";
+import type {
   AttachmentMetadata,
   ComposerAttachment,
   UserComposerAttachment,
@@ -14,6 +20,7 @@ import {
   splitComposerAttachmentsForSubmit,
   type ComposerAttachmentSubmitFormat,
 } from "@/composer/attachments/submit";
+import { toQueuedComposerAttachments } from "@/composer/queue-sync";
 import { createUserMessage, generateMessageId, type UserMessageItem } from "@/types/stream";
 import type { MessageSubmissionRejectionOutcome } from "@/composer/submission/model";
 import type { PickedImageAttachmentInput } from "@/hooks/image-attachment-picker";
@@ -23,6 +30,18 @@ export interface QueuedComposerMessage {
   id: string;
   text: string;
   attachments: ComposerAttachment[];
+  /**
+   * Durable queue state, present only on rows mirrored from a daemon snapshot.
+   * Local-only rows (old hosts) never set it, which is how the queue track
+   * tells the two apart.
+   */
+  deliveryState?: QueuedAgentMessageDeliveryState;
+  lastError?: string | null;
+  /**
+   * Outbox mirror state: `pending` while the enqueue is un-acked, `failed`
+   * once it exhausted its retries without ever reaching the daemon.
+   */
+  syncState?: "pending" | "failed";
 }
 
 export interface AttachmentPersister {
@@ -434,4 +453,349 @@ export function isAttachmentSelectedForForgeItem(
       attachment.item.kind === item.kind &&
       attachment.item.number === item.number,
   );
+}
+
+// ============================================================================
+// Daemon-owned queue — see docs/queue-mirroring.md.
+// Only reachable behind server_info.features.durableAgentQueueV1; without the
+// flag the composer keeps its local queue, which never leaves this device.
+// ============================================================================
+
+export interface ComposerQueueClient {
+  enqueueAgentMessage: (input: {
+    agentId: string;
+    itemId: string;
+    text: string;
+    intent: QueuedAgentDeliveryIntent;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
+    composerAttachments?: QueuedComposerAttachment[];
+  }) => Promise<AgentQueueSnapshot>;
+  updateQueuedAgentMessage: (input: {
+    agentId: string;
+    itemId: string;
+    text: string;
+    expectedRevision: number;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
+    composerAttachments?: QueuedComposerAttachment[];
+  }) => Promise<AgentQueueSnapshot>;
+  reorderQueuedAgentMessages: (
+    agentId: string,
+    itemIds: string[],
+    expectedRevision: number,
+  ) => Promise<AgentQueueSnapshot>;
+  deleteQueuedAgentMessage: (
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ) => Promise<AgentQueueSnapshot>;
+  retryQueuedAgentMessage: (
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ) => Promise<AgentQueueSnapshot>;
+  getQueuedAgentMessageImages: (
+    agentId: string,
+    itemId: string,
+  ) => Promise<Array<{ id: string; mimeType: string; fileName?: string | null; data: string }>>;
+}
+
+/**
+ * Durable copy of an enqueue until the daemon acknowledges it. Backed by the
+ * queue outbox store; actions only see this narrow writer so they stay pure.
+ */
+export interface QueueOutboxWriter {
+  add: (entry: {
+    agentId: string;
+    itemId: string;
+    text: string;
+    intent: QueuedAgentDeliveryIntent;
+    images: Array<{ data: string; mimeType: string }>;
+    attachments: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
+    composerAttachments: QueuedComposerAttachment[];
+  }) => void;
+  remove: (itemId: string) => void;
+}
+
+export interface QueueComposerMessageOnServerInput {
+  client: ComposerQueueClient;
+  agentId: string;
+  text: string;
+  attachments: ComposerAttachment[];
+  attachmentSubmitFormat?: ComposerAttachmentSubmitFormat;
+  encodeImages: (
+    images: AttachmentMetadata[],
+  ) => Promise<Array<{ data: string; mimeType: string }> | undefined>;
+  queue: QueueWriter;
+  applySnapshot: (snapshot: AgentQueueSnapshot) => void;
+  outbox?: QueueOutboxWriter;
+}
+
+/**
+ * Queues a message on the daemon. The local row appears immediately and is
+ * replaced by the daemon's snapshot.
+ *
+ * With an outbox, the wire payload is written durably before the request goes
+ * out: a send the daemon never acknowledged — relay stall, app suspended
+ * mid-request — is retried on the next reconnect instead of being lost, so the
+ * optimistic row stays. Without one, failure rolls the row back and surfaces
+ * the error, as before.
+ *
+ * Admission only ever appends to the queue writer. No submission writer is
+ * involved, so nothing puts a row in the timeline before the daemon has
+ * delivered the prompt; the accepted delivery creates the one canonical user
+ * row through the normal submission identity system.
+ */
+export async function queueComposerMessageOnServer(
+  input: QueueComposerMessageOnServerInput,
+): Promise<QueueComposerMessageResult & { error?: string }> {
+  const optimistic = queueComposerMessage({
+    agentId: input.agentId,
+    text: input.text,
+    attachments: input.attachments,
+    queue: input.queue,
+  });
+  if (!optimistic.queued) {
+    return optimistic;
+  }
+
+  const rollBack = (error: unknown): QueueComposerMessageResult & { error?: string } => {
+    removeQueuedComposerMessageLocally({
+      agentId: input.agentId,
+      messageId: optimistic.queued!.id,
+      queue: input.queue,
+    });
+    return {
+      queued: null,
+      error: error instanceof Error ? error.message : i18n.t("composer.errors.failedToSend"),
+    };
+  };
+
+  const wirePayload = splitComposerAttachmentsForSubmit(input.attachments, {
+    format: input.attachmentSubmitFormat,
+  });
+  let images: Array<{ data: string; mimeType: string }> | undefined;
+  try {
+    images = await input.encodeImages(wirePayload.images);
+  } catch (error) {
+    // Encoding is local; its failure is real and retrying would not help.
+    return rollBack(error);
+  }
+
+  const enqueueInput = {
+    agentId: input.agentId,
+    itemId: optimistic.queued.id,
+    text: optimistic.queued.text,
+    intent: "queue" as const,
+    images: images ?? [],
+    attachments: wirePayload.attachments,
+    composerAttachments: toQueuedComposerAttachments(input.attachments),
+  };
+  input.outbox?.add(enqueueInput);
+  try {
+    const snapshot = await input.client.enqueueAgentMessage(enqueueInput);
+    input.outbox?.remove(enqueueInput.itemId);
+    input.applySnapshot(snapshot);
+    return optimistic;
+  } catch (error) {
+    if (input.outbox) {
+      // The durable entry retries on reconnect; keep the row so the message
+      // still reads as queued on this device.
+      return optimistic;
+    }
+    return rollBack(error);
+  }
+}
+
+export function removeQueuedComposerMessageLocally(input: {
+  agentId: string;
+  messageId: string;
+  queue: QueueWriter;
+}): QueuedComposerMessage | null {
+  const item = input.queue.read(input.agentId).find((q) => q.id === input.messageId);
+  if (!item) return null;
+  input.queue.write((prev) => {
+    const next = new Map(prev);
+    next.set(
+      input.agentId,
+      (prev.get(input.agentId) ?? []).filter((q) => q.id !== input.messageId),
+    );
+    return next;
+  });
+  return item;
+}
+
+export interface TakeQueuedComposerMessageInput {
+  client: ComposerQueueClient;
+  agentId: string;
+  messageId: string;
+  expectedRevision: number;
+  queue: QueueWriter;
+  persistImage: (input: {
+    dataUrl: string;
+    mimeType: string;
+    fileName: string | null;
+  }) => Promise<AttachmentMetadata>;
+  applySnapshot: (snapshot: AgentQueueSnapshot) => void;
+}
+
+export type TakeQueuedComposerMessageResult =
+  | { status: "missing" }
+  | { status: "taken"; text: string; attachments: UserComposerAttachment[] }
+  | { status: "conflict" }
+  | { status: "failed"; errorMessage: string };
+
+/**
+ * Removes a queued message from the daemon and hands its content back for the
+ * composer. Images are fetched and re-persisted locally because only the device
+ * that queued them has the bytes.
+ */
+export async function takeQueuedComposerMessage(
+  input: TakeQueuedComposerMessageInput,
+): Promise<TakeQueuedComposerMessageResult> {
+  const item = input.queue.read(input.agentId).find((q) => q.id === input.messageId);
+  if (!item) return { status: "missing" };
+
+  try {
+    const images = await input.client.getQueuedAgentMessageImages(input.agentId, input.messageId);
+    const snapshot = await input.client.deleteQueuedAgentMessage(
+      input.agentId,
+      input.messageId,
+      input.expectedRevision,
+    );
+    input.applySnapshot(snapshot);
+    const restoredImages = await Promise.all(
+      images.map(async (image) => ({
+        kind: "image" as const,
+        metadata: await input.persistImage({
+          dataUrl: `data:${image.mimeType};base64,${image.data}`,
+          mimeType: image.mimeType,
+          fileName: image.fileName ?? null,
+        }),
+      })),
+    );
+    return {
+      status: "taken",
+      text: item.text,
+      attachments: [...userAttachmentsOnly(item.attachments), ...restoredImages],
+    };
+  } catch (error) {
+    if (isQueueRevisionConflictError(error)) {
+      return { status: "conflict" };
+    }
+    return {
+      status: "failed",
+      errorMessage: error instanceof Error ? error.message : i18n.t("composer.errors.failedToSend"),
+    };
+  }
+}
+
+/** A mutation the daemon rejected because another device changed the queue first. */
+export type QueuedMutationResult =
+  | { status: "applied" }
+  | { status: "conflict" }
+  | { status: "failed"; errorMessage: string };
+
+/**
+ * The daemon answers mutation failures with a machine-readable code on the
+ * response `error` field (see `agentQueueErrorText` in the session dispatch);
+ * the client throws it as the error message.
+ */
+export function isQueueRevisionConflictError(error: unknown): boolean {
+  return error instanceof Error && error.message === "queue_revision_conflict";
+}
+
+function queuedMutationResult(error: unknown): QueuedMutationResult {
+  if (isQueueRevisionConflictError(error)) {
+    return { status: "conflict" };
+  }
+  return {
+    status: "failed",
+    errorMessage: error instanceof Error ? error.message : i18n.t("composer.errors.failedToSend"),
+  };
+}
+
+export interface DeleteQueuedComposerMessageInput {
+  client: ComposerQueueClient;
+  agentId: string;
+  messageId: string;
+  expectedRevision: number;
+  applySnapshot: (snapshot: AgentQueueSnapshot) => void;
+}
+
+/**
+ * Discards one durable item after an explicit user decision. The snapshot from
+ * the daemon is authoritative; the local map is never edited directly here.
+ */
+export async function deleteQueuedComposerMessage(
+  input: DeleteQueuedComposerMessageInput,
+): Promise<QueuedMutationResult> {
+  try {
+    input.applySnapshot(
+      await input.client.deleteQueuedAgentMessage(
+        input.agentId,
+        input.messageId,
+        input.expectedRevision,
+      ),
+    );
+    return { status: "applied" };
+  } catch (error) {
+    return queuedMutationResult(error);
+  }
+}
+
+export interface ReorderQueuedComposerMessagesInput {
+  client: ComposerQueueClient;
+  agentId: string;
+  /** Full id list in the desired order, as the reorder wire contract expects. */
+  itemIds: string[];
+  expectedRevision: number;
+  applySnapshot: (snapshot: AgentQueueSnapshot) => void;
+}
+
+export async function reorderQueuedComposerMessages(
+  input: ReorderQueuedComposerMessagesInput,
+): Promise<QueuedMutationResult> {
+  try {
+    input.applySnapshot(
+      await input.client.reorderQueuedAgentMessages(
+        input.agentId,
+        input.itemIds,
+        input.expectedRevision,
+      ),
+    );
+    return { status: "applied" };
+  } catch (error) {
+    return queuedMutationResult(error);
+  }
+}
+
+export interface RetryQueuedComposerMessageInput {
+  client: ComposerQueueClient;
+  agentId: string;
+  messageId: string;
+  expectedRevision: number;
+  applySnapshot: (snapshot: AgentQueueSnapshot) => void;
+}
+
+/**
+ * The only path that resends an item whose provider acceptance is unknown or
+ * whose attempts ran out. Never called automatically; the user pressed retry.
+ */
+export async function retryQueuedComposerMessage(
+  input: RetryQueuedComposerMessageInput,
+): Promise<QueuedMutationResult> {
+  try {
+    input.applySnapshot(
+      await input.client.retryQueuedAgentMessage(
+        input.agentId,
+        input.messageId,
+        input.expectedRevision,
+      ),
+    );
+    return { status: "applied" };
+  } catch (error) {
+    return queuedMutationResult(error);
+  }
 }

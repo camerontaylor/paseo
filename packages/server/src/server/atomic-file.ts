@@ -5,6 +5,7 @@ import path from "node:path";
 export async function writeFileAtomic(
   filePath: string,
   data: string | NodeJS.ArrayBufferView,
+  options?: { mode?: number },
 ): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = path.join(
@@ -12,7 +13,9 @@ export async function writeFileAtomic(
     `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
   );
   try {
-    await fs.writeFile(tempPath, data, "utf8");
+    // The mode applies at temp-file creation, so the rename publishes a file
+    // that already carries it; the rename itself never widens permissions.
+    await fs.writeFile(tempPath, data, { encoding: "utf8", mode: options?.mode });
     await fs.rename(tempPath, filePath);
   } catch (error) {
     await fs.rm(tempPath, { force: true });
@@ -20,6 +23,10 @@ export async function writeFileAtomic(
   }
 }
 
-export async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
-  await writeFileAtomic(filePath, JSON.stringify(value, null, 2));
+export async function writeJsonFileAtomic(
+  filePath: string,
+  value: unknown,
+  options?: { mode?: number },
+): Promise<void> {
+  await writeFileAtomic(filePath, JSON.stringify(value, null, 2), options);
 }

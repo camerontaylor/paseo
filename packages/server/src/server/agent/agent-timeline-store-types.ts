@@ -17,6 +17,8 @@ export interface AgentTimelineCursor {
 export type AgentTimelineFetchDirection = "tail" | "before" | "after";
 
 export interface AgentTimelineFetchOptions {
+  /** Optional serialized page budget for client hydration; internal reads remain unbounded. */
+  byteBudget?: number;
   direction?: AgentTimelineFetchDirection;
   cursor?: AgentTimelineCursor;
   /**

@@ -144,6 +144,8 @@ interface MobileWorkspaceTabSwitcherProps {
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
   onCloseTabsBelow: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
+  onViewArtifacts: (agentId: string) => void;
+  onFindInChat: (agentId: string) => void;
 }
 
 function MobileWorkspaceTabOption({
@@ -165,6 +167,8 @@ function MobileWorkspaceTabOption({
   onCloseTabsAbove,
   onCloseTabsBelow,
   onCloseOtherTabs,
+  onViewArtifacts,
+  onFindInChat,
 }: {
   tab: WorkspaceTabDescriptor;
   tabIndex: number;
@@ -184,6 +188,8 @@ function MobileWorkspaceTabOption({
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
   onCloseTabsBelow: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
+  onViewArtifacts: (agentId: string) => void;
+  onFindInChat: (agentId: string) => void;
 }) {
   const { t } = useTranslation();
   const startSideConversation = useStartSideConversation({
@@ -206,6 +212,8 @@ function MobileWorkspaceTabOption({
       reloadAgentTooltip: t("workspace.tabs.menu.reloadAgentTooltip"),
       newSideConversation: t("sideConversations.actions.new"),
       close: t("workspace.tabs.menu.close"),
+      viewArtifacts: t("workspace.tabs.menu.viewArtifacts", { defaultValue: "View artifacts" }),
+      findInChat: t("workspace.tabs.menu.findInChat"),
     }),
     [t],
   );
@@ -227,6 +235,8 @@ function MobileWorkspaceTabOption({
     onCloseTabsBefore: onCloseTabsAbove,
     onCloseTabsAfter: onCloseTabsBelow,
     onCloseOtherTabs,
+    onViewArtifacts,
+    onFindInChat,
     labels: tabMenuLabels,
   });
 
@@ -299,6 +309,8 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
   onCloseTabsAbove,
   onCloseTabsBelow,
   onCloseOtherTabs,
+  onViewArtifacts,
+  onFindInChat,
 }: MobileWorkspaceTabSwitcherProps) {
   const { t } = useTranslation();
   const tabFallbackLabels = useMemo(
@@ -421,6 +433,8 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
           onCloseTabsAbove={onCloseTabsAbove}
           onCloseTabsBelow={onCloseTabsBelow}
           onCloseOtherTabs={onCloseOtherTabs}
+          onViewArtifacts={onViewArtifacts}
+          onFindInChat={onFindInChat}
         />
       );
     },
@@ -440,6 +454,8 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
       onCloseTabsAbove,
       onCloseTabsBelow,
       onCloseOtherTabs,
+      onViewArtifacts,
+      onFindInChat,
     ],
   );
 

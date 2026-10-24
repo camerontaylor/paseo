@@ -16,7 +16,11 @@ import { join } from "node:path";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
-import { setupFinishNotification, waitForAgentRunStartWithTimeout } from "./agent-prompt.js";
+import {
+  sendPromptToAgent,
+  setupFinishNotification,
+  waitForAgentRunStartWithTimeout,
+} from "./agent-prompt.js";
 import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
 import type {
   AgentClient,
@@ -64,6 +68,8 @@ interface FinishNotificationScenario {
   resolveChildPermissionFromState(requestId?: string): void;
   resolveChildPermissionWhileIdle(requestId?: string): void;
   finishChild(): void;
+  failChild(): void;
+  closeChild(): void;
   finishChildAndReadParentPrompt(): Promise<string>;
   closeChildAndReadParentPrompt(): Promise<string>;
   parentPrompts(): string[];
@@ -227,6 +233,18 @@ function createFinishNotificationScenario(
         agentId: "child-agent",
         event: { type: "turn_completed", provider: "codex" },
       });
+    },
+    failChild() {
+      childAgent.lifecycle = "running";
+      subscriber?.({ type: "agent_state", agent: childAgent });
+
+      childAgent.lifecycle = "error";
+      subscriber?.({ type: "agent_state", agent: childAgent });
+      subscriber?.({ type: "agent_state", agent: childAgent });
+    },
+    closeChild() {
+      childAgent.lifecycle = "closed";
+      subscriber?.({ type: "agent_state", agent: childAgent });
     },
     async finishChildAndReadParentPrompt() {
       const parentPrompt = new Promise<string>((resolve) => {
@@ -429,6 +447,79 @@ test("finish notifications survive repeated permission cycles", async () => {
   expect(
     scenario.parentPrompts().map((prompt) => prompt.match(/(needs permission|finished)\./)?.[1]),
   ).toEqual(["needs permission", "needs permission", "finished"]);
+});
+
+test("a finish notifies the caller once", async () => {
+  const scenario = createFinishNotificationScenario();
+
+  scenario.startWatchingChild();
+  scenario.finishChild();
+  await vi.waitFor(() => expect(scenario.parentPrompts()).toHaveLength(1));
+  expect(scenario.parentPrompts()[0]).toContain("finished.");
+
+  scenario.finishChild();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(scenario.parentPrompts()).toHaveLength(1);
+});
+
+test("a child that recovers from an error still notifies its finish", async () => {
+  const scenario = createFinishNotificationScenario();
+
+  scenario.startWatchingChild();
+  scenario.failChild();
+  await vi.waitFor(() => expect(scenario.parentPrompts()).toHaveLength(1));
+  expect(scenario.parentPrompts()[0]).toContain("errored.");
+
+  scenario.finishChild();
+  await vi.waitFor(() => expect(scenario.parentPrompts()).toHaveLength(2));
+  expect(scenario.parentPrompts()[1]).toContain("finished.");
+
+  scenario.finishChild();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(scenario.parentPrompts()).toHaveLength(2);
+});
+
+test("finish notifications report each recovered error cycle before the final finish", async () => {
+  const finalText = "Completed the recovery task.";
+  const scenario = createFinishNotificationScenario({ childLastAssistantMessage: finalText });
+  scenario.startWatchingChild();
+
+  for (const count of [1, 2]) {
+    scenario.failChild();
+    await vi.waitFor(() => expect(scenario.parentPrompts()).toHaveLength(count));
+    expect(parseAgentMessage(scenario.parentPrompts()[count - 1]!)).toEqual({
+      id: expect.any(String),
+      source: {
+        kind: "agent-notification",
+        agentId: "child-agent",
+        title: "Child Agent",
+        event: "errored",
+      },
+      text: `Agent child-agent (Child Agent) errored.\n\n<agent-response>\n${finalText}\n</agent-response>`,
+    });
+  }
+
+  scenario.finishChild();
+  await vi.waitFor(() => expect(scenario.parentPrompts()).toHaveLength(3));
+  expect(scenario.parentPrompts().map((prompt) => parseAgentMessage(prompt))).toEqual(
+    ["errored", "errored", "finished"].map((event) => ({
+      id: expect.any(String),
+      source: { kind: "agent-notification", agentId: "child-agent", title: "Child Agent", event },
+      text: `Agent child-agent (Child Agent) ${event}.\n\n<agent-response>\n${finalText}\n</agent-response>`,
+    })),
+  );
+});
+
+test("closing a child after it errored does not notify again", async () => {
+  const scenario = createFinishNotificationScenario();
+
+  scenario.startWatchingChild();
+  scenario.failChild();
+  await vi.waitFor(() => expect(scenario.parentPrompts()).toHaveLength(1));
+
+  scenario.closeChild();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(scenario.parentPrompts()).toHaveLength(1);
 });
 
 test("detaching a child ends its parent-owned finish notification", async () => {
@@ -860,4 +951,97 @@ test("a human pasting an agent envelope stays a human message through provider r
     messageId: "provider-echo",
     clientMessageId: "human-submission",
   });
+});
+
+test("queue acceptance waits on its own reserved provider run", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "queued-run-acceptance-"));
+  const client = new SlowStartAgentClient(null);
+  const manager = new AgentManager({ clients: { codex: client }, logger: createTestLogger() });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    // The queue's delivery: dispatch without replacement, then wait for the
+    // reserved run to actually start before the receipt completes.
+    const dispatch = sendPromptToAgent({
+      agentManager: manager,
+      agentStorage: { get: async () => undefined } as unknown as AgentStorage,
+      agentId: agent.id,
+      prompt: "one",
+      replaceRunning: false,
+      logger: createTestLogger(),
+    }).then(async (result) => {
+      expect(result.disposition).toBe("turn_started");
+      await waitForAgentRunStartWithTimeout(manager, agent.id);
+      return true;
+    });
+    await vi.waitFor(() => expect(manager.hasInFlightRun(agent.id)).toBe(true));
+    await expect(
+      sendPromptToAgent({
+        agentManager: manager,
+        agentStorage: { get: async () => undefined } as unknown as AgentStorage,
+        agentId: agent.id,
+        prompt: "competing",
+        replaceRunning: false,
+        logger: createTestLogger(),
+      }),
+    ).rejects.toMatchObject({ code: "AGENT_RUN_BUSY" });
+    client.sessions[0].release();
+    await expect(dispatch).resolves.toBe(true);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    for (const session of client.sessions) session.release();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("queue reservation preserves a pending permission without a foreground run", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "queued-permission-reservation-"));
+  const client = new SlowStartAgentClient(null);
+  const manager = new AgentManager({ clients: { codex: client }, logger: createTestLogger() });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    client.sessions[0].pushEvent({
+      type: "permission_requested",
+      provider: "codex",
+      request: {
+        id: "approval-key",
+        provider: "codex",
+        kind: "tool",
+        name: "shell",
+        input: { command: "controlled" },
+      },
+    });
+    await vi.waitFor(() => expect(manager.getPendingPermissions(agent.id)).toHaveLength(1));
+    expect(manager.hasInFlightRun(agent.id)).toBe(false);
+    expect(() =>
+      manager.streamAgent(agent.id, "yes", { requireNoPendingPermissions: true }),
+    ).toThrow(/active run/);
+    expect(manager.getPendingPermissions(agent.id).map((request) => request.id)).toEqual([
+      "approval-key",
+    ]);
+    await manager.respondToPermission(agent.id, "approval-key", { behavior: "deny" });
+    expect(manager.getPendingPermissions(agent.id)).toEqual([]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("queued dispatch cannot claim a turn when an agent became archived", async () => {
+  const streamAgent = vi.fn();
+  await expect(
+    sendPromptToAgent({
+      agentId: "archived",
+      prompt: "queued speech",
+      replaceRunning: false,
+      unarchive: false,
+      agentManager: { streamAgent } as unknown as AgentManager,
+      agentStorage: { get: async () => ({ archivedAt: "2026-10-08" }) } as unknown as AgentStorage,
+      logger: createTestLogger(),
+    }),
+  ).rejects.toMatchObject({ code: "AGENT_PROMPT_NOT_SUBMITTED" });
+  expect(streamAgent).not.toHaveBeenCalled();
 });

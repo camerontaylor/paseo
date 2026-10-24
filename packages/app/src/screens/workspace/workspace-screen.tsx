@@ -43,7 +43,10 @@ import {
   CompactWorkspaceHeader,
   MobileWorkspaceTabSwitcher,
 } from "@/screens/workspace/compact-workspace-header";
-import { WorkspaceHeaderProjectRow } from "@/screens/workspace/workspace-header-project-row";
+import {
+  WorkspaceHeaderProjectRow,
+  type WorkspaceHeaderBranchesModel,
+} from "@/screens/workspace/workspace-header-project-row";
 import { ScreenTitle } from "@/components/headers/screen-title";
 import {
   FloatingPanelPortalHost,
@@ -129,6 +132,7 @@ import { createWorkspaceBrowser, useBrowserStore } from "@/desktop/browser/store
 import { getDesktopHost } from "@/desktop/host";
 import { buildProviderCommand } from "@/utils/provider-command-templates";
 import { generateDraftId } from "@/stores/draft-keys";
+import { useAgentViewStore } from "@/stores/agent-view-store";
 import { resolveWorkspaceRouteId } from "@/utils/workspace-identity";
 import { useOpenAgentTabLabels } from "@/subagents/use-open-agent-tab-labels";
 import { WorkspaceTabPresentationResolver } from "@/screens/workspace/workspace-tab-presentation";
@@ -462,7 +466,10 @@ interface WorkspaceHeaderTitleBarProps {
   subtitle: string;
   isSubtitleDistinct: boolean;
   currentBranchName: string | null;
+  baseRefName: string | null;
+  workspaceDirectory: string | null;
   normalizedServerId: string;
+  normalizedWorkspaceId: string;
   showWorkspaceSetup: boolean;
   importAgentDisabled: boolean;
   copyPathDisabled: boolean;
@@ -478,7 +485,10 @@ function WorkspaceHeaderTitleBar({
   subtitle,
   isSubtitleDistinct,
   currentBranchName,
+  baseRefName,
+  workspaceDirectory,
   normalizedServerId,
+  normalizedWorkspaceId,
   showWorkspaceSetup,
   importAgentDisabled,
   copyPathDisabled,
@@ -487,6 +497,19 @@ function WorkspaceHeaderTitleBar({
   onCopyBranchName,
   onOpenSetupTab,
 }: WorkspaceHeaderTitleBarProps) {
+  const branches = useMemo<WorkspaceHeaderBranchesModel | null>(
+    () =>
+      currentBranchName
+        ? {
+            workspaceId: normalizedWorkspaceId,
+            workspaceDirectory,
+            currentBranchName,
+            baseRefName,
+            onCopyBranchName,
+          }
+        : null,
+    [baseRefName, currentBranchName, normalizedWorkspaceId, onCopyBranchName, workspaceDirectory],
+  );
   return (
     <View style={styles.headerTitleContainer}>
       {isLoading ? (
@@ -500,6 +523,7 @@ function WorkspaceHeaderTitleBar({
             subtitle={subtitle}
             isSubtitleDistinct={isSubtitleDistinct}
             serverId={normalizedServerId}
+            branches={branches}
           />
         </View>
       )}
@@ -613,6 +637,8 @@ interface WorkspaceHeaderFields {
   isWorkspaceHeaderSubtitleDistinct: boolean;
   isGitCheckout: boolean;
   currentBranchName: string | null;
+  /** Display name of the branch the checkout is compared with, when the daemon resolved one. */
+  baseRefName: string | null;
 }
 
 function buildWorkspaceHeaderCheckoutState(input: {
@@ -631,6 +657,7 @@ function buildWorkspaceHeaderCheckoutState(input: {
     checkout: {
       isGit: input.data.isGit,
       currentBranch: input.data.currentBranch,
+      baseRef: input.data.baseRef,
     },
   };
 }
@@ -648,6 +675,7 @@ function deriveWorkspaceHeaderFields(input: {
       isWorkspaceHeaderSubtitleDistinct: false,
       isGitCheckout: false,
       currentBranchName: null,
+      baseRefName: null,
     };
   }
   return {
@@ -657,6 +685,7 @@ function deriveWorkspaceHeaderFields(input: {
     isWorkspaceHeaderSubtitleDistinct: renderState.isSubtitleDistinct,
     isGitCheckout: renderState.isGitCheckout,
     currentBranchName: renderState.currentBranchName,
+    baseRefName: renderState.baseRefName,
   };
 }
 
@@ -1059,6 +1088,13 @@ function WorkspaceScreenContent({
   const supportsProvidersSnapshot = useSessionStore(
     (state) => state.sessions[normalizedServerId]?.serverInfo?.features?.providersSnapshot === true,
   );
+  // COMPAT(packageJsonScripts): added in fork v0.10.1, remove gate after 2027-04-01. Package
+  // scripts are discovered in the menu, so the button must render for a workspace that has none
+  // configured yet; the button itself hides only when neither source can produce a row.
+  const supportsPackageJsonScripts = useSessionStore(
+    (state) =>
+      state.sessions[normalizedServerId]?.serverInfo?.features?.packageJsonScripts === true,
+  );
   const workspaceDirectory = workspaceDescriptor?.workspaceDirectory || null;
   const isMissingWorkspaceDirectory = Boolean(workspaceDescriptor) && !workspaceDirectory;
   const [isImportSheetVisible, setIsImportSheetVisible] = useState(false);
@@ -1240,6 +1276,7 @@ function WorkspaceScreenContent({
     isWorkspaceHeaderSubtitleDistinct,
     isGitCheckout,
     currentBranchName,
+    baseRefName,
   } = deriveWorkspaceHeaderFields({
     workspace: workspaceDescriptor,
     checkoutState: workspaceHeaderCheckoutState,
@@ -2167,6 +2204,42 @@ function WorkspaceScreenContent({
       }
     },
     [toast, t],
+  );
+
+  const setFindOpen = useAgentViewStore((state) => state.setFindOpen);
+  const handleFindInChat = useCallback(
+    (agentId: string) => {
+      setFindOpen(normalizedServerId, agentId, true);
+      if (persistenceKey) {
+        const tabTarget = { kind: "agent", agentId } as WorkspaceTabTarget;
+        const tabId = openWorkspaceTabFocused(persistenceKey, tabTarget);
+        if (tabId) {
+          navigateToTabId(tabId);
+        }
+      }
+    },
+    [normalizedServerId, persistenceKey, openWorkspaceTabFocused, navigateToTabId, setFindOpen],
+  );
+
+  const setAgentSelectedView = useAgentViewStore((state) => state.setSelectedView);
+  const handleViewArtifacts = useCallback(
+    (agentId: string) => {
+      setAgentSelectedView(normalizedServerId, agentId, "artifacts");
+      if (persistenceKey) {
+        const tabTarget = { kind: "agent", agentId } as WorkspaceTabTarget;
+        const tabId = openWorkspaceTabFocused(persistenceKey, tabTarget);
+        if (tabId) {
+          navigateToTabId(tabId);
+        }
+      }
+    },
+    [
+      normalizedServerId,
+      persistenceKey,
+      openWorkspaceTabFocused,
+      navigateToTabId,
+      setAgentSelectedView,
+    ],
   );
 
   const handleCopyFilePath = useCallback(
@@ -3239,7 +3312,8 @@ function WorkspaceScreenContent({
     () => (
       <View style={styles.headerRight}>
         <PluginHeaderButtons serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
-        {workspaceDescriptor && workspaceDescriptor.scripts.length > 0 ? (
+        {workspaceDescriptor &&
+        (workspaceDescriptor.scripts.length > 0 || supportsPackageJsonScripts) ? (
           <WorkspaceScriptsButton
             serverId={normalizedServerId}
             workspaceId={normalizedWorkspaceId}
@@ -3277,6 +3351,7 @@ function WorkspaceScreenContent({
     ),
     [
       workspaceDescriptor,
+      supportsPackageJsonScripts,
       normalizedServerId,
       normalizedWorkspaceId,
       workspaceDirectory,
@@ -3360,7 +3435,10 @@ function WorkspaceScreenContent({
                 subtitle={workspaceHeaderSubtitle}
                 isSubtitleDistinct={isWorkspaceHeaderSubtitleDistinct}
                 currentBranchName={currentBranchName}
+                baseRefName={baseRefName}
+                workspaceDirectory={workspaceDirectory}
                 normalizedServerId={normalizedServerId}
+                normalizedWorkspaceId={normalizedWorkspaceId}
                 showWorkspaceSetup={showWorkspaceSetup}
                 importAgentDisabled={!canOpenImportSheet}
                 copyPathDisabled={!workspaceDirectory}
@@ -3375,6 +3453,7 @@ function WorkspaceScreenContent({
         />
       ) : null,
     [
+      baseRefName,
       canOpenImportSheet,
       currentBranchName,
       handleCopyBranchName,
@@ -3383,6 +3462,7 @@ function WorkspaceScreenContent({
       headerRight,
       isWorkspaceHeaderLoading,
       normalizedServerId,
+      normalizedWorkspaceId,
       openImportSheet,
       showScreenHeader,
       showWorkspaceSetup,
@@ -3444,6 +3524,8 @@ function WorkspaceScreenContent({
             onCloseTabsAbove={handleCloseTabsToLeft}
             onCloseTabsBelow={handleCloseTabsToRight}
             onCloseOtherTabs={handleCloseOtherTabs}
+            onViewArtifacts={handleViewArtifacts}
+            onFindInChat={handleFindInChat}
           />
           <WorkspaceHeaderMenuMobile
             normalizedServerId={normalizedServerId}
@@ -3479,6 +3561,8 @@ function WorkspaceScreenContent({
       handleCopyBranchName,
       handleCopyFilePath,
       handleCopyResumeCommand,
+      handleFindInChat,
+      handleViewArtifacts,
       handleCopyTerminalId,
       handleCopyWorkspacePath,
       handleCreateBrowserTab,

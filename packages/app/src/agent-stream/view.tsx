@@ -1,4 +1,6 @@
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import React, {
   forwardRef,
@@ -41,6 +43,7 @@ import {
   type InlinePathTarget,
 } from "@/components/message";
 import { PlanCard } from "@/components/plan-card";
+import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
 import type { StreamItem } from "@/types/stream";
 import type { PendingMessageSubmission } from "@/composer/submission/model";
 import type { TurnPresentation } from "@/timeline/turn-liveness";
@@ -52,6 +55,7 @@ import type {
 } from "@getpaseo/protocol/agent-types";
 import type { AgentScreenAgent } from "@/hooks/use-agent-screen-state-machine";
 import { useSessionStore } from "@/stores/session-store";
+import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { useRevealedText } from "@/hooks/use-revealed-text";
 import { useFileExplorerActions } from "@/hooks/use-file-explorer-actions";
 import { useLoadOlderAgentHistory } from "@/hooks/use-load-older-agent-history";
@@ -69,6 +73,8 @@ import { resolveStreamRenderStrategy } from "./strategy-resolver";
 import { type StreamSegmentRenderers, type StreamViewportHandle } from "./strategy";
 import { ChatOutlineRail } from "@/agent-stream/chat-outline/rail";
 import { useChatOutline } from "@/agent-stream/chat-outline/use-chat-outline";
+import { PinnedPrompt } from "@/agent-stream/pinned-prompt/pinned-prompt";
+import { usePinnedPrompt } from "@/agent-stream/pinned-prompt/use-pinned-prompt";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { planTimelineTailFetch } from "@/timeline/timeline-sync-plan";
 import {
@@ -104,6 +110,30 @@ import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useStreamHistoryWindow } from "./use-stream-history-window";
 import { PluginTimelineItemView, useInstalledTimelineTransform } from "@/plugins/timeline";
 
+type InlinePathError = "pathUnavailable" | "outsideWorkspaceDirectory";
+interface InlinePathErrorAlertProps {
+  error: InlinePathError | null;
+  onDismiss: () => void;
+}
+
+function InlinePathErrorAlert({ error, onDismiss }: InlinePathErrorAlertProps) {
+  const { t } = useTranslation();
+  if (!error) {
+    return null;
+  }
+  return (
+    <Alert
+      variant="info"
+      description={t(`workspace.fileExplorer.errors.${error}`)}
+      testID="inline-path-error"
+    >
+      <Button variant="ghost" size="sm" onPress={onDismiss}>
+        {t("common.actions.dismiss")}
+      </Button>
+    </Alert>
+  );
+}
+
 function renderLiveAuxiliaryNode(input: {
   pendingPermissions: ReactNode;
   turnFooter: ReactNode;
@@ -134,6 +164,7 @@ function BottomOverlayInset({ height }: { height: number }) {
 
 function renderPendingPermissionsNode(input: {
   pendingPermissions: PendingPermission[];
+  serverId: string;
   client: DaemonClient | null;
 }): ReactNode {
   if (input.pendingPermissions.length === 0) {
@@ -142,7 +173,12 @@ function renderPendingPermissionsNode(input: {
   return (
     <View style={stylesheet.permissionsContainer}>
       {input.pendingPermissions.map((permission) => (
-        <PermissionRequestCard key={permission.key} permission={permission} client={input.client} />
+        <PermissionRequestCard
+          key={permission.key}
+          permission={permission}
+          serverId={input.serverId}
+          client={input.client}
+        />
       ))}
     </View>
   );
@@ -154,6 +190,7 @@ function renderStreamItemWithTurnFooter(input: {
   strategy: TurnContentStrategy;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
+  onPin?: (text: string) => void;
 }): ReactNode {
   if (!input.content) {
     return null;
@@ -168,6 +205,7 @@ function renderStreamItemWithTurnFooter(input: {
       startIndex={footerHost.startIndex}
       supportsTimelineCursor={input.supportsTimelineCursor}
       onForkAssistantTurn={input.onForkAssistantTurn}
+      onPin={input.onPin}
     />
   ) : null;
   const content = (
@@ -351,6 +389,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [isMobile],
     );
     const [isNearBottom, setIsNearBottom] = useState(true);
+    const [inlinePathError, setInlinePathError] = useState<InlinePathError | null>(null);
+    const dismissInlinePathError = useStableEvent(() => setInlinePathError(null));
     const [expandedInlineToolCallIds, setExpandedInlineToolCallIds] = useState<Set<string>>(
       new Set(),
     );
@@ -383,11 +423,16 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       (state) => state.sessions[resolvedServerId]?.agentTimelineHasNewer.get(agentId) === true,
     );
 
-    const workspaceRoot = context.cwd?.trim() || "";
+    const workspaceRoot = context.cwd.trim();
+    const destinationRoot = useWorkspaceDirectory(resolvedServerId, context.workspaceId ?? null);
+    const planSource = useMemo(
+      () => (resolvedServerId ? { serverId: resolvedServerId, agentId } : undefined),
+      [resolvedServerId, agentId],
+    );
     const { revealDirectory } = useFileExplorerActions({
       serverId: resolvedServerId,
       workspaceId: context.workspaceId,
-      workspaceRoot,
+      workspaceRoot: destinationRoot,
     });
     const agentHistoryPagination = useLoadOlderAgentHistory({
       serverId: resolvedServerId,
@@ -419,6 +464,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     useEffect(() => {
       setIsNearBottom(true);
+      setInlinePathError(null);
       setExpandedInlineToolCallIds(new Set());
       setExpandedToolCallGroupIds(new Set());
     }, [agentId]);
@@ -447,7 +493,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         }),
         checkout: {
           serverId: resolvedServerId,
-          cwd: context.cwd,
+          cwd: destinationRoot ?? "",
           isGit: context.projectPlacement?.checkout?.isGit ?? true,
         },
         view: "files",
@@ -456,12 +502,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const inlinePathOpener = useMemo(
       () =>
         createInlinePathOpener({
-          workspaceRoot,
+          workspaceRoot: destinationRoot ?? "",
+          sourceCwd: workspaceRoot,
+          onError: setInlinePathError,
           client,
           openFile: openInlineFile,
           openDirectory: openInlineDirectory,
         }),
-      [workspaceRoot, client, openInlineFile, openInlineDirectory],
+      [workspaceRoot, destinationRoot, client, openInlineFile, openInlineDirectory],
     );
     useEffect(() => {
       if (!isActive) inlinePathOpener.cancel();
@@ -609,6 +657,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       mountedHistoryMessageIds,
       revealLoadedMessage: revealLoadedHistory,
     });
+    const pinnedPrompt = usePinnedPrompt({
+      history: baseRenderModel.history,
+      liveHead: baseRenderModel.segments.liveHead,
+    });
+    const jumpToPinnedPrompt = useStableEvent((itemId: string) => {
+      viewportRef.current?.scrollToMessage?.(itemId);
+    });
 
     useImperativeHandle(
       ref,
@@ -668,6 +723,31 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       });
     }, []);
 
+    const handlePin = useCallback(
+      (text: string) => {
+        if (!agentId || !client) return;
+        client
+          .updateCompanionEntry({ agentId, action: "add_pin", text })
+          .catch(() => toast?.error(t("agentPanel.stream.mutationFailed")));
+      },
+      [agentId, client, t, toast],
+    );
+
+    const handleQAndA = useCallback(
+      (text: string, messageId?: string) => {
+        if (!agentId || !client) return;
+        client
+          .updateCompanionEntry({
+            agentId,
+            action: "add_q_and_a",
+            text,
+            sourceId: messageId ? `msg:${messageId}` : undefined,
+          })
+          .catch(() => toast?.error(t("agentPanel.stream.mutationFailed")));
+      },
+      [agentId, client, t, toast],
+    );
+
     const renderUserMessageItem = useCallback(
       (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "user_message" }>) => {
         return (
@@ -679,6 +759,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             images={item.images}
             attachments={item.attachments}
             timestamp={item.timestamp.getTime()}
+            onPin={handlePin}
+            onQAndA={handleQAndA}
             capabilities={context.capabilities}
             client={client}
             isFirstInGroup={layoutItem.isFirstInUserGroup}
@@ -690,7 +772,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [context.capabilities, agentId, client, pendingClientMessageIds, resolvedServerId],
+      [
+        context.capabilities,
+        agentId,
+        client,
+        handlePin,
+        handleQAndA,
+        pendingClientMessageIds,
+        resolvedServerId,
+      ],
     );
 
     const renderAssistantMessageItem = useCallback(
@@ -765,6 +855,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           return (
             <ToolCallSlot
               itemId={item.id}
+              source={planSource}
               onInlineDetailsExpandedChangeByItemId={setInlineDetailsExpanded}
               toolName={data.name}
               error={data.error}
@@ -785,6 +876,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         return (
           <ToolCallSlot
             itemId={item.id}
+            source={planSource}
             onInlineDetailsExpandedChangeByItemId={setInlineDetailsExpanded}
             toolName={data.toolName}
             args={data.arguments}
@@ -796,7 +888,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [context.cwd, resolvedServerId, setInlineDetailsExpanded, handleToolCallOpenFile],
+      [context.cwd, resolvedServerId, setInlineDetailsExpanded, handleToolCallOpenFile, planSource],
     );
 
     // Read through a stable event so live group updates do not change the renderer identity
@@ -901,10 +993,12 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           strategy: streamRenderStrategy,
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
+          onPin: handlePin,
         });
       },
       [
         handleForkAssistantTurn,
+        handlePin,
         readOnly,
         renderStreamItemContent,
         streamRenderStrategy,
@@ -921,9 +1015,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () =>
         renderPendingPermissionsNode({
           pendingPermissions: pendingPermissionItems,
+          serverId: resolvedServerId,
           client,
         }),
-      [client, pendingPermissionItems],
+      [client, pendingPermissionItems, resolvedServerId],
     );
     const turnFooterNode = useMemo(
       () =>
@@ -936,11 +1031,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             supportsTimelineCursor={supportsAgentForkContextCursor}
             onForkAssistantTurn={readOnly ? undefined : handleForkAssistantTurn}
             onForkInFlightTurn={readOnly ? undefined : handleForkInFlightTurn}
+            onPin={handlePin}
           />
         ) : null,
       [
         handleForkAssistantTurn,
         handleForkInFlightTurn,
+        handlePin,
         readOnly,
         isTurnActive,
         baseRenderModel.turnTiming.runningStartedAt,
@@ -1002,6 +1099,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           ? undefined
           : (layoutHistoryItemById.get(rowId) ?? layoutLiveHeadItemById.get(rowId));
       chatOutline.reportReadingPosition(row?.item.timelineCursor?.seq ?? null);
+      pinnedPrompt.reportReadingPosition(rowId);
     });
 
     const renderHistoryRow = useCallback(
@@ -1090,6 +1188,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       >
         <ToolCallSheetProvider>
           <AssistantSelectionCopySurface style={stylesheet.container}>
+            <InlinePathErrorAlert error={inlinePathError} onDismiss={dismissInlinePathError} />
             <MessageOuterSpacingProvider disableOuterSpacing>
               {streamRenderStrategy.render({
                 agentId,
@@ -1119,6 +1218,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               prompts={chatOutline.prompts}
               activePrompt={chatOutline.activePrompt}
               onJumpToPrompt={chatOutline.jumpToPrompt}
+            />
+            <PinnedPrompt
+              pinnedId={pinnedPrompt.pinnedId}
+              promptById={pinnedPrompt.promptById}
+              onJumpToPrompt={jumpToPinnedPrompt}
             />
             {(!isNearBottom || isTimelineDetached) && (
               <View style={scrollToBottomContainerStyle} pointerEvents="box-none">
@@ -1276,6 +1380,7 @@ interface ToolCallSlotProps extends Omit<
   "onInlineDetailsExpandedChange"
 > {
   itemId: string;
+  source?: AgentDeepLinkTarget;
   onInlineDetailsExpandedChangeByItemId: (itemId: string, expanded: boolean) => void;
 }
 
@@ -1314,6 +1419,7 @@ function ThoughtSlot({
 
 function ToolCallSlot({
   itemId,
+  source,
   onInlineDetailsExpandedChangeByItemId,
   ...rest
 }: ToolCallSlotProps) {
@@ -1321,7 +1427,9 @@ function ToolCallSlot({
     (expanded: boolean) => onInlineDetailsExpandedChangeByItemId(itemId, expanded),
     [onInlineDetailsExpandedChangeByItemId, itemId],
   );
-  return <ToolCall {...rest} onInlineDetailsExpandedChange={handleExpandedChange} />;
+  return (
+    <ToolCall {...rest} source={source} onInlineDetailsExpandedChange={handleExpandedChange} />
+  );
 }
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
@@ -1390,15 +1498,21 @@ function PermissionActionButton({
 
 function PermissionRequestCard({
   permission,
+  serverId,
   client,
 }: {
   permission: PendingPermission;
+  serverId: string;
   client: DaemonClient | null;
 }) {
   const { t } = useTranslation();
   const isMobile = useIsCompactFormFactor();
 
   const { request } = permission;
+  const permissionPlanSource = useMemo(
+    () => (serverId ? { serverId, agentId: permission.agentId } : undefined),
+    [serverId, permission.agentId],
+  );
   const isPlanRequest = request.kind === "plan";
   const title = isPlanRequest
     ? t("agentStream.permission.plan")
@@ -1579,6 +1693,7 @@ function PermissionRequestCard({
         title={title}
         description={description}
         text={planMarkdown}
+        source={permissionPlanSource}
         outcome="pending"
         footer={footer}
         testID="permission-plan-card"
@@ -1597,6 +1712,7 @@ function PermissionRequestCard({
         <PlanCard
           title={t("agentStream.permission.proposedPlan")}
           text={planMarkdown}
+          source={permissionPlanSource}
           testID="permission-plan-card"
           disableOuterSpacing
         />

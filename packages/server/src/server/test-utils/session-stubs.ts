@@ -176,6 +176,9 @@ export interface ProviderSnapshotManagerSpies {
   applyMutableProviderConfig: ReturnType<
     typeof vi.fn<ProviderSnapshotManager["applyMutableProviderConfig"]>
   >;
+  prepareMutableProviderConfig: ReturnType<
+    typeof vi.fn<ProviderSnapshotManager["prepareMutableProviderConfig"]>
+  >;
   destroy: ReturnType<typeof vi.fn<ProviderSnapshotManager["destroy"]>>;
 }
 
@@ -236,6 +239,12 @@ export function createProviderSnapshotManagerStub(): {
       clients: {},
     }),
   );
+  const prepareMutableProviderConfig = vi.fn<
+    ProviderSnapshotManager["prepareMutableProviderConfig"]
+  >(() => ({
+    agentManagerState: { providerDefinitions: {}, clients: {} },
+    commit: vi.fn(),
+  }));
   const on = vi.fn();
   const off = vi.fn();
   const destroy = vi.fn<ProviderSnapshotManager["destroy"]>();
@@ -258,6 +267,7 @@ export function createProviderSnapshotManagerStub(): {
     resolveDefaultModel,
     getProviderDiagnostic,
     applyMutableProviderConfig,
+    prepareMutableProviderConfig,
     on,
     off,
     destroy,
@@ -284,6 +294,7 @@ export function createProviderSnapshotManagerStub(): {
     resolveDefaultModel,
     getProviderDiagnostic,
     applyMutableProviderConfig,
+    prepareMutableProviderConfig,
     destroy,
   };
 }
@@ -291,6 +302,7 @@ export function createProviderSnapshotManagerStub(): {
 export function createMessageReceiptsStub(): SessionOptions["messageReceipts"] {
   return {
     send: (input) => input.send(),
+    listForAttachment: async () => [],
   };
 }
 

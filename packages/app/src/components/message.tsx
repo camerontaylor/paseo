@@ -39,8 +39,10 @@ import {
   CircleDot,
   Copy,
   FileSymlink,
+  HelpCircle,
   Info,
   MicVocal,
+  Pin,
   Plus,
   Scissors,
   TriangleAlertIcon,
@@ -83,6 +85,7 @@ import { capAssistantMessageForRender, getUtf8ByteLength } from "./assistant-mes
 import { getTurnDurationLabel } from "./assistant-turn-footer-label";
 import { getCompactionMarkerLabel } from "./message-compaction-label";
 import { PlanCard } from "./plan-card";
+import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
 import { ToolCallDetailsContent } from "./tool-call-details";
 import { useToolCallSheet } from "./tool-call-sheet";
 export type { InlinePathTarget } from "@/assistant-file-links";
@@ -96,6 +99,8 @@ interface UserMessageProps {
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
   timestamp: number;
+  onPin?: (text: string) => void;
+  onQAndA?: (text: string, messageId?: string) => void;
   capabilities?: AgentCapabilityFlags;
   client?: DaemonClient | null;
   isFirstInGroup?: boolean;
@@ -394,6 +399,8 @@ export const UserMessage = memo(function UserMessage({
   images = [],
   attachments = [],
   timestamp,
+  onPin,
+  onQAndA,
   capabilities,
   client,
   isFirstInGroup = true,
@@ -424,6 +431,11 @@ export const UserMessage = memo(function UserMessage({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const getMessageContent = useCallback(() => message, [message]);
+  const handlePin = useCallback(() => onPin?.(message), [onPin, message]);
+  const handleQAndA = useCallback(
+    () => onQAndA?.(message, messageId),
+    [onQAndA, message, messageId],
+  );
   const handleRewind = useCallback(
     (input: { mode: RewindMode; rewoundText: string }) => {
       return rewindMutation.rewindAgent(input);
@@ -527,6 +539,15 @@ export const UserMessage = memo(function UserMessage({
                 onRewind={handleRewind}
               />
             ) : null}
+            {onPin ? (
+              <TurnPinButton onPin={handlePin} containerStyle={userMessageStylesheet.copyButton} />
+            ) : null}
+            {onQAndA ? (
+              <TurnQAndAButton
+                onQAndA={handleQAndA}
+                containerStyle={userMessageStylesheet.copyButton}
+              />
+            ) : null}
             <TurnCopyButton
               getContent={getMessageContent}
               containerStyle={userMessageStylesheet.copyButton}
@@ -545,6 +566,7 @@ interface AssistantTurnFooterProps {
   completedAt?: Date;
   durationMs?: number | null;
   onFork?: (target: AssistantForkTarget) => Promise<void> | void;
+  onPin?: (text: string) => void;
 }
 
 const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
@@ -589,6 +611,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   completedAt,
   durationMs,
   onFork,
+  onPin,
 }: AssistantTurnFooterProps) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
@@ -637,10 +660,21 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
     },
     [onFork],
   );
+  const handlePin = useCallback(() => {
+    if (onPin) {
+      onPin(getContent());
+    }
+  }, [onPin, getContent]);
   const canFork = Boolean(onFork);
 
   return (
     <View style={assistantTurnFooterStylesheet.container}>
+      {onPin ? (
+        <TurnPinButton
+          onPin={handlePin}
+          containerStyle={assistantTurnFooterStylesheet.copyButton}
+        />
+      ) : null}
       <TurnCopyButton
         getContent={getContent}
         containerStyle={assistantTurnFooterStylesheet.copyButton}
@@ -790,6 +824,68 @@ const turnCopyButtonStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
   },
 }));
+
+interface TurnPinButtonProps {
+  onPin: () => void;
+  containerStyle?: StyleProp<ViewStyle>;
+}
+
+export const TurnPinButton = memo(function TurnPinButton({
+  onPin,
+  containerStyle,
+}: TurnPinButtonProps) {
+  const pressableStyle = useMemo(
+    () => [turnCopyButtonStylesheet.container, containerStyle],
+    [containerStyle],
+  );
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      style={pressableStyle}
+      onPress={onPin}
+      accessibilityLabel="Pin to stream"
+    >
+      {({ hovered }) => {
+        const iconColor = hovered
+          ? turnCopyButtonStylesheet.iconHoveredColor.color
+          : turnCopyButtonStylesheet.iconColor.color;
+        return <Pin size={ICON_SIZE.sm} color={iconColor} />;
+      }}
+    </Pressable>
+  );
+});
+
+interface TurnQAndAButtonProps {
+  onQAndA: () => void;
+  containerStyle?: StyleProp<ViewStyle>;
+}
+
+export const TurnQAndAButton = memo(function TurnQAndAButton({
+  onQAndA,
+  containerStyle,
+}: TurnQAndAButtonProps) {
+  const pressableStyle = useMemo(
+    () => [turnCopyButtonStylesheet.container, containerStyle],
+    [containerStyle],
+  );
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      style={pressableStyle}
+      onPress={onQAndA}
+      accessibilityLabel="Track Q&A"
+    >
+      {({ hovered }) => {
+        const iconColor = hovered
+          ? turnCopyButtonStylesheet.iconHoveredColor.color
+          : turnCopyButtonStylesheet.iconColor.color;
+        return <HelpCircle size={ICON_SIZE.sm} color={iconColor} />;
+      }}
+    </Pressable>
+  );
+});
 
 interface TurnCopyButtonProps {
   getContent: () => string;
@@ -2226,6 +2322,7 @@ interface ToolCallProps {
   defaultExpanded?: boolean;
   forceInline?: boolean;
   maxDetailHeight?: number;
+  source?: AgentDeepLinkTarget;
 }
 
 export const ToolCall = memo(function ToolCall({
@@ -2247,6 +2344,7 @@ export const ToolCall = memo(function ToolCall({
   defaultExpanded,
   forceInline = false,
   maxDetailHeight = 400,
+  source,
 }: ToolCallProps) {
   const { openToolCall } = useToolCallSheet();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded ?? false);
@@ -2371,6 +2469,7 @@ export const ToolCall = memo(function ToolCall({
       <PlanCard
         text={effectiveDetail.text}
         outcome={presentation.planOutcome}
+        source={source}
         testID="timeline-plan-card"
         disableOuterSpacing={disableOuterSpacing}
       />
@@ -2413,5 +2512,6 @@ function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
   if (previous.defaultExpanded !== next.defaultExpanded) return false;
   if (previous.forceInline !== next.forceInline) return false;
   if (previous.maxDetailHeight !== next.maxDetailHeight) return false;
+  if (previous.source !== next.source) return false;
   return true;
 }

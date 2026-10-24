@@ -1,3 +1,6 @@
+import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
+import { PlanCopyActions } from "@/components/plan-copy-actions";
+import { PlanHandoffButton } from "@/components/plan-handoff-button";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { isWeb } from "@/constants/platform";
 import type { Theme } from "@/styles/theme";
@@ -15,6 +18,7 @@ interface PlanCardProps {
   text: string;
   outcome?: PlanOutcome;
   footer?: ReactNode;
+  source?: AgentDeepLinkTarget;
   disableOuterSpacing?: boolean;
   testID?: string;
 }
@@ -33,6 +37,7 @@ function PlanCardContent({
   text,
   outcome,
   footer,
+  source,
   disableOuterSpacing = false,
   testID,
 }: PlanCardProps) {
@@ -62,19 +67,22 @@ function PlanCardContent({
 
   return (
     <View testID={testID} style={containerStyle}>
-      <Pressable
-        {...webExpandedState}
-        accessibilityRole="button"
-        accessibilityLabel={resolvedTitle}
-        accessibilityState={accessibilityState}
-        onPress={toggleExpanded}
-        style={styles.header}
-      >
-        <View style={chevronStyle}>
-          <ThemedChevron size={16} uniProps={chevronColor} />
-        </View>
-        <Text style={styles.title}>{resolvedTitle}</Text>
-      </Pressable>
+      <View style={styles.header}>
+        <Pressable
+          {...webExpandedState}
+          accessibilityRole="button"
+          accessibilityLabel={resolvedTitle}
+          accessibilityState={accessibilityState}
+          onPress={toggleExpanded}
+          style={styles.headerToggle}
+        >
+          <View style={chevronStyle}>
+            <ThemedChevron size={16} uniProps={chevronColor} />
+          </View>
+          <Text style={styles.title}>{resolvedTitle}</Text>
+        </Pressable>
+        <PlanCopyActions text={text} source={source} />
+      </View>
       {expanded ? (
         <View style={styles.body}>
           {description ? <Text style={styles.description}>{description}</Text> : null}
@@ -82,6 +90,7 @@ function PlanCardContent({
         </View>
       ) : null}
       {footer ? <View style={styles.footer}>{footer}</View> : null}
+      {source ? <PlanHandoffButton source={source} text={text} /> : null}
     </View>
   );
 }
@@ -104,6 +113,13 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[2],
     minHeight: 24,
+  },
+  headerToggle: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
   },
   chevron: {},
   chevronExpanded: { transform: [{ rotate: "90deg" }] },
