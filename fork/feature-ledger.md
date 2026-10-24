@@ -7,6 +7,13 @@ them into `mine`; that does not make their code part of `custom`. When we absorb
 a carry into `custom`, move its ownership here and remove its manifest line on
 the next rebuild.
 
+The TMAD 2026-10-24 intake is carried in the Desvio manifest, not here: its
+source deltas live on `fork/tmad-2026-10-24-carry`, appended after the basket
+line, and are tracked in the [intake feature
+matrix](plans/tmad-desvio-feature-matrix-2026-10-24.json) and the
+[usage guide](usage-guide.md). If that carry is later absorbed into `custom`,
+move what it owns into the table below and drop the manifest line.
+
 Use `git diff <pinned-tag>..custom -- <path>` for the current footprint and
 `git log <pinned-tag>..custom -- <path>` for its history. Paths below are entry
 points and sync hotspots, not a copy of every changed file. Update the relevant
