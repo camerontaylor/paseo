@@ -36,7 +36,11 @@ function SidebarEmptyStateCard({
  * trigger, and an empty state that replaces the list rather than its body takes the header with
  * it — which is how filtering the last row away used to close the menu you were filtering from.
  */
-export function SidebarFilterEmptyState() {
+export function SidebarFilterEmptyState({
+  primaryAction,
+}: {
+  primaryAction?: { label: string; onPress: () => void; testID: string };
+} = {}) {
   const { t } = useTranslation();
   const clearLabelFilter = useSidebarViewStore((state) => state.clearLabelFilter);
   const clearProjectFilters = useSidebarViewStore((state) => state.clearProjectFilters);
@@ -54,15 +58,28 @@ export function SidebarFilterEmptyState() {
       title={t("sidebar.filterEmpty.title")}
       description={t("sidebar.filterEmpty.description")}
     >
-      <Button
-        variant="secondary"
-        size="xs"
-        style={styles.action}
-        textStyle={styles.actionText}
-        onPress={clearFilters}
-      >
-        {t("sidebar.filterEmpty.clear")}
-      </Button>
+      {primaryAction ? (
+        <Button
+          variant="secondary"
+          size="xs"
+          style={styles.action}
+          textStyle={styles.actionText}
+          onPress={primaryAction.onPress}
+          testID={primaryAction.testID}
+        >
+          {primaryAction.label}
+        </Button>
+      ) : (
+        <Button
+          variant="secondary"
+          size="xs"
+          style={styles.action}
+          textStyle={styles.actionText}
+          onPress={clearFilters}
+        >
+          {t("sidebar.filterEmpty.clear")}
+        </Button>
+      )}
     </SidebarEmptyStateCard>
   );
 }

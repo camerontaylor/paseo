@@ -7,6 +7,7 @@ import { createValidatedPersistStorage } from "@/storage/validated-persist-stora
 
 export type SidebarGroupMode = "project" | "status";
 export type SidebarSortMode = "manual" | "recent" | "user" | "assistant" | "title";
+export type SidebarFilterScope = "names" | "messages";
 
 const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
 const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
@@ -64,6 +65,8 @@ interface SidebarViewStoreState {
    */
   projectFilters: string[];
   labelFilter: SidebarLabelFilter;
+  filterScope: SidebarFilterScope;
+  setFilterScope: (scope: SidebarFilterScope) => void;
   toggleBackground: () => void;
   setGroupMode: (mode: SidebarGroupMode) => void;
   setSortMode: (mode: SidebarSortMode) => void;
@@ -84,6 +87,7 @@ interface SidebarViewPersistedState {
   hostFilters: string[];
   projectFilters: string[];
   labelFilter: SidebarLabelFilter;
+  filterScope: SidebarFilterScope;
 }
 
 const PersistedSidebarGroupModeSchema = z.enum(["project", "status", "label"]);
@@ -99,6 +103,7 @@ const SidebarViewPersistedStateSchema = z.strictObject({
   projectFilters: z.array(z.string()).optional(),
   groupModeByServerId: z.record(z.string(), PersistedSidebarGroupModeSchema).optional(),
   labelFilter: SidebarLabelFilterSchema.optional(),
+  filterScope: z.enum(["names", "messages"]).optional(),
 });
 
 type SidebarViewStorageState = z.infer<typeof SidebarViewPersistedStateSchema>;
@@ -137,6 +142,7 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
       hostFilters: [],
       projectFilters: [],
       labelFilter: emptyLabelFilter(),
+      filterScope: "names",
     };
   }
   const state = result.data;
@@ -150,6 +156,7 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
       hostFilters: [],
       projectFilters: [],
       labelFilter: emptyLabelFilter(),
+      filterScope: "names",
     };
   }
 
@@ -162,6 +169,7 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
     labelFilter: state.labelFilter
       ? normalizeSidebarLabelFilter(state.labelFilter)
       : emptyLabelFilter(),
+    filterScope: state.filterScope ?? "names",
   };
 }
 
@@ -199,6 +207,8 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
       hostFilters: [],
       projectFilters: [],
       labelFilter: emptyLabelFilter(),
+      filterScope: "names",
+      setFilterScope: (scope) => set({ filterScope: scope }),
       toggleBackground: () => set((state) => ({ showBackground: !state.showBackground })),
       setGroupMode: (mode) => set({ groupMode: mode }),
       setSortMode: (mode) => set({ sortMode: mode }),
@@ -253,6 +263,7 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
         hostFilters: state.hostFilters,
         projectFilters: state.projectFilters,
         labelFilter: state.labelFilter,
+        filterScope: state.filterScope,
       }),
       migrate: migrateSidebarViewState,
     },

@@ -46,6 +46,7 @@ describe("sidebar view store", () => {
       hostFilters: [],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -100,6 +101,7 @@ describe("sidebar view store", () => {
       hostFilters: [],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -116,6 +118,7 @@ describe("sidebar view store", () => {
       hostFilters: ["host-a"],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -133,7 +136,15 @@ describe("sidebar view store", () => {
       hostFilters: ["host-a", "host-b"],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
+  });
+
+  it("persists the message search scope while keeping explicit names selection", () => {
+    expect(migrateSidebarViewState({ filterScope: "messages" }).filterScope).toBe("messages");
+    expect(migrateSidebarViewState({}).filterScope).toBe("names");
+    useSidebarViewStore.getState().setFilterScope("messages");
+    expect(useSidebarViewStore.getState().filterScope).toBe("messages");
   });
 
   it("clears only the label facet", () => {
@@ -151,6 +162,7 @@ describe("sidebar view store", () => {
       sortMode: "recent",
       hostFilters: ["host-a"],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -250,6 +262,7 @@ describe("sidebar view store", () => {
       hostFilters: ["host-a"],
       projectFilters: ["project-a", "project-b"],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 
@@ -261,6 +274,7 @@ describe("sidebar view store", () => {
       hostFilters: [],
       projectFilters: [],
       labelFilter: { labels: [] },
+      filterScope: "names",
     });
   });
 

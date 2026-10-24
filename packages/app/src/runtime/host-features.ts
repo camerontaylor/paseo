@@ -81,3 +81,7 @@ export function useHostFeatureAvailability(
     return info ? hostSupportsFeature(info, feature) : null;
   });
 }
+
+export function everyHostLacksFeature(availability: ReadonlyMap<string, boolean | null>): boolean {
+  return availability.size > 0 && [...availability.values()].every((value) => value === false);
+}

@@ -40,6 +40,7 @@ import {
 } from "@/workspace-labels";
 
 interface SidebarModel extends SidebarWorkspacesListResult {
+  serverIds: string[];
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
@@ -75,6 +76,10 @@ export function SidebarModelProvider({
   const { t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState("");
   const list = useSidebarWorkspacesList({ enabled: active });
+  const serverIds = useMemo(
+    () => [...new Set(list.workspacePlacements.map((item) => item.serverId))],
+    [list.workspacePlacements],
+  );
   const showBackground = useSidebarViewStore((state) => state.showBackground);
   const groupMode = useSidebarViewStore((state) => state.groupMode);
   const selectedSortMode = useSidebarViewStore((state) => state.sortMode);
@@ -234,6 +239,7 @@ export function SidebarModelProvider({
   const value = useMemo(
     () => ({
       ...list,
+      serverIds,
       projects: orderedProjects,
       allProjects: list.projects,
       resolvedProjectFilters,
@@ -256,6 +262,7 @@ export function SidebarModelProvider({
       collapsedProjectKeys,
       groupMode,
       list,
+      serverIds,
       orderedProjects,
       pinOrdered.pinnedViewKeys,
       projection,
