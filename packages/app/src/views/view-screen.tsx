@@ -35,6 +35,7 @@ import { collectBroadcastTargets } from "@/views/broadcast-plan";
 import { ViewBroadcastModal } from "@/views/view-broadcast-modal";
 import { useViewKeyboard } from "@/views/use-view-keyboard";
 import { ViewPaneSurface } from "@/views/view-pane-surface";
+import { viewAgentActionScope } from "@/views/view-agent-action-scope";
 
 const EMPTY_TAB_IDS = new Set<string>();
 
@@ -64,13 +65,6 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
 
   const uiTabs = useMemo(() => (view ? collectViewTabs(view) : []), [view]);
   useViewTimelineSync({ ownerKey: layoutKey, layout: view?.layout ?? null, tabs: uiTabs });
-  const scopeForAgent = useCallback(
-    (agentId: string): WorkspaceTabScope | null =>
-      uiTabs.find((tab) => tab.target.kind === "agent" && tab.target.agentId === agentId)?.scope ??
-      null,
-    [uiTabs],
-  );
-
   // Unread dots: a tab is unread once its agent moved on while it was not on screen.
   const sessions = useSessionStore((state) => state.sessions);
   const activityByTabId = useMemo(() => {
@@ -112,14 +106,6 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
       reconcileTabActivity(previous, descriptors, new Map(), viewedTabIds, activityByTabId),
     );
   }, [activityByTabId, descriptors, viewedTabIds]);
-  const activityByAgentId = useMemo(() => {
-    const activity = new Map<string, number>();
-    for (const tab of uiTabs) {
-      if (tab.target.kind !== "agent") continue;
-      activity.set(tab.target.agentId, activityByTabId.get(tab.tabId) ?? 0);
-    }
-    return activity;
-  }, [activityByTabId, uiTabs]);
   const unreadTabIds = useMemo(
     () => new Set([...tabActivity].filter(([, state]) => state.unread).map(([tabId]) => tabId)),
     [tabActivity],
@@ -138,8 +124,8 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
   );
 
   const handleCopyResumeCommand = useCallback(
-    async (agentId: string) => {
-      const scope = scopeForAgent(agentId);
+    async (agentId: string, tab?: WorkspaceTabDescriptor) => {
+      const scope = viewAgentActionScope(tab, agentId);
       const agent = scope
         ? (useSessionStore.getState().sessions[scope.serverId]?.agents?.get(agentId) ?? null)
         : null;
@@ -160,12 +146,12 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
       }
       await copy(command, t("workspace.tabs.toasts.resumeCommandCopiedLabel"));
     },
-    [copy, scopeForAgent, t, toast],
+    [copy, t, toast],
   );
 
   const handleReloadAgent = useCallback(
-    async (agentId: string) => {
-      const scope = scopeForAgent(agentId);
+    async (agentId: string, tab?: WorkspaceTabDescriptor) => {
+      const scope = viewAgentActionScope(tab, agentId);
       const runtime = getHostRuntimeStore();
       const client = scope ? runtime.getClient(scope.serverId) : null;
       if (!scope || !client || !isHostRuntimeConnected(runtime.getSnapshot(scope.serverId))) {
@@ -190,7 +176,7 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
         );
       }
     },
-    [scopeForAgent, t, toast],
+    [t, toast],
   );
 
   /** Anything that is not a session opens in its home workspace, where it has context. */
@@ -442,7 +428,6 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
               normalizedWorkspaceId=""
               isWorkspaceFocused
               uiTabs={uiTabs}
-              activityByAgentId={activityByAgentId}
               unreadTabIds={unreadTabIds}
               hoveredCloseTabKey={hoveredCloseTabKey}
               setHoveredCloseTabKey={setHoveredCloseTabKey}

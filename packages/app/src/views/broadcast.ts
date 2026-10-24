@@ -16,6 +16,8 @@ export interface BroadcastResult {
   queued: number;
   skipped: number;
   failed: number;
+  /** Recipients with no admitted message. Only these are safe to retry. */
+  retryTargets: BroadcastTarget[];
 }
 
 export function planBroadcastForCurrentState(targets: BroadcastTarget[]): BroadcastPlanEntry[] {
@@ -35,7 +37,7 @@ export async function runBroadcast(
   text: string,
   plan: BroadcastPlanEntry[],
 ): Promise<BroadcastResult> {
-  const result: BroadcastResult = { sent: 0, queued: 0, skipped: 0, failed: 0 };
+  const result: BroadcastResult = { sent: 0, queued: 0, skipped: 0, failed: 0, retryTargets: [] };
   const trimmed = text.trim();
   if (!trimmed) return result;
   const runtime = getHostRuntimeStore();
@@ -46,18 +48,21 @@ export async function runBroadcast(
       const client = runtime.getClient(entry.serverId);
       if (entry.delivery === "skip" || !client) {
         result.skipped += 1;
+        result.retryTargets.push({ serverId: entry.serverId, agentId: entry.agentId });
         return;
       }
+      let directOutbox: DirectSendOutbox | undefined;
+      let clientMessageId: string | null = null;
       try {
         if (entry.delivery === "send") {
-          const directOutbox = await prepareDirectSendOutbox(entry.serverId, client);
-          const captured = { clientMessageId: null as string | null };
-          const observedOutbox: DirectSendOutbox | undefined = directOutbox
+          const preparedOutbox = await prepareDirectSendOutbox(entry.serverId, client);
+          directOutbox = preparedOutbox;
+          const observedOutbox: DirectSendOutbox | undefined = preparedOutbox
             ? {
-                ...directOutbox,
+                ...preparedOutbox,
                 add: async (pending) => {
-                  captured.clientMessageId = pending.clientMessageId;
-                  await directOutbox.add(pending);
+                  clientMessageId = pending.clientMessageId;
+                  await preparedOutbox.add(pending);
                 },
               }
             : undefined;
@@ -72,7 +77,7 @@ export async function runBroadcast(
           });
           // An uncertain delivery remains in the durable outbox for retry. Report it as
           // queued, never as sent, until the host confirms admission.
-          if (captured.clientMessageId && directOutbox?.get(captured.clientMessageId)) {
+          if (clientMessageId && directOutbox?.get(clientMessageId)) {
             result.queued += 1;
           } else {
             result.sent += 1;
@@ -92,7 +97,14 @@ export async function runBroadcast(
         queuedServers.add(entry.serverId);
         result.queued += 1;
       } catch {
-        result.failed += 1;
+        // A flush can fail after the durable add. Its retained intent will retry with the
+        // same id; sending it again from this modal would create a second prompt.
+        if (clientMessageId && directOutbox?.get(clientMessageId)) {
+          result.queued += 1;
+        } else {
+          result.failed += 1;
+          result.retryTargets.push({ serverId: entry.serverId, agentId: entry.agentId });
+        }
       }
     }),
   );

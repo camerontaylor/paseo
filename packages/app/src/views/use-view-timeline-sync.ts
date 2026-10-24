@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useStoreWithEqualityFn } from "zustand/traditional";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
 import type { WorkspaceLayout } from "@/stores/workspace-layout-actions";
 import type { WorkspaceTab } from "@/workspace-tabs/model";
 import { selectViewVisibleAgentIds } from "@/views/view-visible-agents";
+import type { ViewedTimelineOwner } from "@/timeline/viewed-timeline-sync";
 
 function serializeVisible(visible: Map<string, string[]>): string {
   return [...visible]
@@ -36,13 +38,20 @@ export function useViewTimelineSync(input: {
     stableRef.current = { key, visible: computed };
   }
   const visible = stableRef.current.visible;
-  // Re-run reporting when a host's sync owner appears, without re-rendering on every
-  // session update.
-  const readySyncKey = useSessionStore((state) =>
-    [...visible.keys()]
-      .filter((serverId) => state.sessions[serverId]?.viewedTimelineSync)
-      .sort()
-      .join(","),
+  // The owner object can be replaced on reconnect while the host id stays the same.
+  // Compare identities so reporting follows the new owner without subscribing to every
+  // unrelated session update.
+  const syncOwners = useStoreWithEqualityFn(
+    useSessionStore,
+    (state) =>
+      [...visible.keys()].map(
+        (serverId) => [serverId, state.sessions[serverId]?.viewedTimelineSync ?? null] as const,
+      ),
+    (left, right) =>
+      left.length === right.length &&
+      left.every(
+        ([serverId, owner], index) => serverId === right[index]?.[0] && owner === right[index]?.[1],
+      ),
   );
 
   useEffect(() => {
@@ -55,28 +64,19 @@ export function useViewTimelineSync(input: {
     }
   }, [visible]);
 
-  const reportedServersRef = useRef(new Set<string>());
   useLayoutEffect(() => {
-    const reported = reportedServersRef.current;
-    const sessions = useSessionStore.getState().sessions;
-    for (const serverId of new Set([...reported, ...visible.keys()])) {
-      const sync = sessions[serverId]?.viewedTimelineSync;
+    const reported: ViewedTimelineOwner[] = [];
+    for (const [serverId, sync] of syncOwners) {
       if (!sync) continue;
       const agentIds = visible.get(serverId) ?? [];
+      if (agentIds.length === 0) continue;
       sync.replaceVisibleAgentIds(ownerKey, agentIds);
-      if (agentIds.length === 0) reported.delete(serverId);
-      else reported.add(serverId);
+      reported.push(sync);
     }
-  }, [ownerKey, readySyncKey, visible]);
-
-  useEffect(
-    () => () => {
-      const latestSessions = useSessionStore.getState().sessions;
-      for (const serverId of reportedServersRef.current) {
-        latestSessions[serverId]?.viewedTimelineSync?.replaceVisibleAgentIds(ownerKey, []);
-      }
-      reportedServersRef.current.clear();
-    },
-    [ownerKey],
-  );
+    // Clean the exact object that received the registration. Session context can swap
+    // owners before this hook renders again, leaving the previous owner otherwise live.
+    return () => {
+      for (const sync of reported) sync.replaceVisibleAgentIds(ownerKey, []);
+    };
+  }, [ownerKey, syncOwners, visible]);
 }

@@ -22,9 +22,12 @@ export function ViewBroadcastModal({
   const toast = useToast();
   const [text, setText] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [retryTargets, setRetryTargets] = useState<BroadcastTarget[] | null>(null);
+  const [resetKey, setResetKey] = useState(0);
+  const activeTargets = retryTargets ?? targets;
   const plan = useMemo(
-    () => (visible ? planBroadcastForCurrentState(targets) : []),
-    [targets, visible],
+    () => (visible ? planBroadcastForCurrentState(activeTargets) : []),
+    [activeTargets, visible],
   );
   const counts = useMemo(
     () => ({
@@ -39,6 +42,8 @@ export function ViewBroadcastModal({
   const close = useCallback(() => {
     if (isSending) return;
     setText("");
+    setRetryTargets(null);
+    setResetKey((key) => key + 1);
     onClose();
   }, [isSending, onClose]);
 
@@ -47,10 +52,10 @@ export function ViewBroadcastModal({
     setIsSending(true);
     try {
       // Re-plan at send time: agents may have started or finished a turn meanwhile.
-      const result = await runBroadcast(text, planBroadcastForCurrentState(targets));
+      const result = await runBroadcast(text, planBroadcastForCurrentState(activeTargets));
       let variant: "error" | "default" | "success" = "success";
       if (result.failed > 0) variant = "error";
-      else if (result.queued > 0) variant = "default";
+      else if (result.queued > 0 || result.sent === 0) variant = "default";
       toast.show(
         t("views.broadcast.result", {
           sent: result.sent,
@@ -59,12 +64,19 @@ export function ViewBroadcastModal({
         }),
         { variant },
       );
-      setText("");
-      onClose();
+      if (result.retryTargets.length > 0) {
+        // Keep the original draft, but never repeat an accepted or durably pending send.
+        setRetryTargets(result.retryTargets);
+      } else {
+        setText("");
+        setRetryTargets(null);
+        setResetKey((key) => key + 1);
+        onClose();
+      }
     } finally {
       setIsSending(false);
     }
-  }, [isSending, onClose, t, targets, text, toast]);
+  }, [activeTargets, isSending, onClose, t, text, toast]);
   const sendVoid = useCallback(() => {
     void send();
   }, [send]);
@@ -86,6 +98,7 @@ export function ViewBroadcastModal({
         </Text>
         <AdaptiveTextInput
           initialValue=""
+          resetKey={resetKey}
           onChangeText={setText}
           placeholder={t("views.broadcast.placeholder")}
           multiline
@@ -103,10 +116,10 @@ export function ViewBroadcastModal({
             size="sm"
             onPress={sendVoid}
             loading={isSending}
-            disabled={!text.trim() || counts.send + counts.queue === 0}
+            disabled={!text.trim() || (counts.send + counts.queue === 0 && !retryTargets)}
             testID="view-broadcast-send"
           >
-            {t("views.broadcast.send")}
+            {t(retryTargets ? "common.actions.retry" : "views.broadcast.send")}
           </Button>
         </View>
       </View>
