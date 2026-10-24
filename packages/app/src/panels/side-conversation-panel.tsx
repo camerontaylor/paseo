@@ -6,6 +6,7 @@ import { MessageCircle } from "lucide-react-native";
 import invariant from "tiny-invariant";
 import type { TFunction } from "i18next";
 import type { SideAnswerPayload } from "@getpaseo/protocol/messages";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { Button } from "@/components/ui/button";
 import {
   queueComposerMessageOnServer,
@@ -30,6 +31,7 @@ import {
   resolveSideConversationPlaceholder,
   SIDE_CONVERSATION_PLACEHOLDER_KEYS,
   type SideConversationLoadState,
+  type SideConversationPlaceholder,
 } from "@/panels/side-conversation-panel-state";
 
 const ThemedTextInput = withUnistyles(EditingTextInput, (theme) => ({
@@ -164,7 +166,7 @@ function ThreadTimeline({
     item: { type: "user_message" | "assistant_message"; text: string };
     key: string;
   }[];
-  placeholder: SideConversationLoadState | null;
+  placeholder: SideConversationPlaceholder | null;
   isPending: boolean;
   notice: string | null;
   submitError: string | null;
@@ -265,7 +267,7 @@ function useRefreshSideConversation(input: {
 }
 
 function useSubmitSideConversation(input: {
-  client: NonNullable<Parameters<typeof queueComposerMessageOnServer>[0]["client"]> | null;
+  client: DaemonClient | null;
   supported: boolean;
   question: string;
   isPending: boolean;
@@ -326,7 +328,7 @@ function useSubmitSideConversation(input: {
 }
 
 async function runSendBack(input: {
-  client: NonNullable<Parameters<typeof queueComposerMessageOnServer>[0]["client"]> | null;
+  client: DaemonClient | null;
   serverId: string;
   parentAgentId: string;
   threadId: string;
