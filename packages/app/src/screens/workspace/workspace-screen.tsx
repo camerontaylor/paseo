@@ -1,3 +1,4 @@
+import { useWorkspaceLinks } from "./use-workspace-links";
 import {
   AssistantFileLinkResolverProvider,
   createInlinePathOpener,
@@ -207,6 +208,7 @@ import type { TerminalProfile } from "@getpaseo/protocol/messages";
 import {
   WorkspaceHeaderMenuDesktop,
   WorkspaceHeaderMenuMobile,
+  type WorkspaceHeaderTabActions,
 } from "@/screens/workspace/workspace-header-menu";
 import { PluginHeaderButtons } from "@/plugins";
 import {
@@ -460,7 +462,7 @@ function useCloseTabs(): UseCloseTabsResult {
   return { closingTabIds, closeTab };
 }
 
-interface WorkspaceHeaderTitleBarProps {
+interface WorkspaceHeaderTitleBarProps extends WorkspaceHeaderTabActions {
   isLoading: boolean;
   title: string;
   subtitle: string;
@@ -480,6 +482,11 @@ interface WorkspaceHeaderTitleBarProps {
 }
 
 function WorkspaceHeaderTitleBar({
+  canCopyTabLink,
+  onCopyTabLink,
+  onCopyWorkspaceLink,
+  renameTabKind,
+  onRenameCurrentTab,
   isLoading,
   title,
   subtitle,
@@ -529,6 +536,11 @@ function WorkspaceHeaderTitleBar({
       )}
       <View style={styles.compactHeaderMenuCluster}>
         <WorkspaceHeaderMenuDesktop
+          canCopyTabLink={canCopyTabLink}
+          onCopyTabLink={onCopyTabLink}
+          onCopyWorkspaceLink={onCopyWorkspaceLink}
+          renameTabKind={renameTabKind}
+          onRenameCurrentTab={onRenameCurrentTab}
           currentBranchName={currentBranchName}
           showWorkspaceSetup={showWorkspaceSetup}
           importAgentDisabled={importAgentDisabled}
@@ -1029,6 +1041,18 @@ function useLastMainPane(input: {
     lastMainPaneRef.current.paneId = focusedPaneId;
   }
   return lastMainPaneRef;
+}
+
+function useWorkspaceHeaderRename(
+  tab: WorkspaceTabDescriptor | null,
+  onRenameTab: (tab: WorkspaceTabDescriptor) => void,
+) {
+  const renameTabKind =
+    tab?.target.kind === "agent" || tab?.target.kind === "terminal" ? tab.target.kind : null;
+  const onRenameCurrentTab = useCallback(() => {
+    if (tab) onRenameTab(tab);
+  }, [tab, onRenameTab]);
+  return { renameTabKind, onRenameCurrentTab };
 }
 
 function WorkspaceScreenContent({
@@ -3017,6 +3041,15 @@ function WorkspaceScreenContent({
   });
 
   const activeTabDescriptor = useMemo(() => activeTab?.descriptor ?? null, [activeTab]);
+  const { canCopyTabLink, onCopyTabLink, onCopyWorkspaceLink } = useWorkspaceLinks(
+    normalizedServerId,
+    normalizedWorkspaceId,
+    activeTabDescriptor,
+  );
+  const { renameTabKind, onRenameCurrentTab: handleRenameCurrentTab } = useWorkspaceHeaderRename(
+    activeTabDescriptor,
+    handleRenameTab,
+  );
   const activeFileFields = getWorkspaceFileLocationFields(activeTabDescriptor);
   const activeFilePath = activeFileFields.path;
   const activeFileLineStart = activeFileFields.lineStart;
@@ -3430,6 +3463,11 @@ function WorkspaceScreenContent({
             <>
               <SidebarMenuToggle />
               <WorkspaceHeaderTitleBar
+                canCopyTabLink={canCopyTabLink}
+                onCopyTabLink={onCopyTabLink}
+                onCopyWorkspaceLink={onCopyWorkspaceLink}
+                renameTabKind={renameTabKind}
+                onRenameCurrentTab={handleRenameCurrentTab}
                 isLoading={isWorkspaceHeaderLoading}
                 title={workspaceHeaderTitle}
                 subtitle={workspaceHeaderSubtitle}
@@ -3454,6 +3492,11 @@ function WorkspaceScreenContent({
       ) : null,
     [
       baseRefName,
+      renameTabKind,
+      handleRenameCurrentTab,
+      canCopyTabLink,
+      onCopyTabLink,
+      onCopyWorkspaceLink,
       canOpenImportSheet,
       currentBranchName,
       handleCopyBranchName,
@@ -3528,6 +3571,11 @@ function WorkspaceScreenContent({
             onFindInChat={handleFindInChat}
           />
           <WorkspaceHeaderMenuMobile
+            canCopyTabLink={canCopyTabLink}
+            onCopyTabLink={onCopyTabLink}
+            onCopyWorkspaceLink={onCopyWorkspaceLink}
+            renameTabKind={renameTabKind}
+            onRenameCurrentTab={handleRenameCurrentTab}
             normalizedServerId={normalizedServerId}
             scripts={compactHeaderScripts}
             currentBranchName={currentBranchName}
@@ -3546,6 +3594,11 @@ function WorkspaceScreenContent({
         </CompactWorkspaceHeader>
       ) : null,
     [
+      renameTabKind,
+      handleRenameCurrentTab,
+      canCopyTabLink,
+      onCopyTabLink,
+      onCopyWorkspaceLink,
       activeTabKey,
       canOpenImportSheet,
       compactHeaderScripts,

@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { Keyboard, Pressable, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { SquarePen, SquareTerminal } from "lucide-react-native";
+import { Search, SquarePen, SquareTerminal } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
@@ -355,6 +355,11 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
     Keyboard.dismiss();
     setIsOpen(true);
   }, []);
+  const activeTab = tabs.find((tab) => tab.key === activeTabKey);
+  const currentAgentId = activeTab?.target.kind === "agent" ? activeTab.target.agentId : null;
+  const handleFindCurrentChat = useCallback(() => {
+    if (currentAgentId) onFindInChat(currentAgentId);
+  }, [currentAgentId, onFindInChat]);
 
   const handleNewAgent = useCallback(() => {
     setIsOpen(false);
@@ -474,6 +479,19 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
           <Text style={styles.tabCountText}>{tabs.length}</Text>
         </View>
       </Pressable>
+
+      {currentAgentId ? (
+        <Button
+          testID="workspace-current-chat-find"
+          variant="ghost"
+          size="md"
+          leftIcon={Search}
+          accessibilityLabel={t("workspace.tabs.menu.findInChat")}
+          onPress={handleFindCurrentChat}
+        >
+          {t("paneFind.title")}
+        </Button>
+      ) : null}
 
       <Combobox
         options={tabSwitcherOptions}

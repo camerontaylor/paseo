@@ -159,6 +159,7 @@ export const ko: TranslationResources = {
       exitFullscreen: "전체 화면 종료",
       focusHint: "{{shortcut}}로 포커스",
       addAttachment: "첨부 추가",
+      dismissKeyboard: "키보드 닫기",
       interruptAgent: "에이전트 중단",
       queueMessage: "메시지 대기열에 추가",
       sendAndInterrupt: "보내고 중단",
@@ -526,6 +527,8 @@ export const ko: TranslationResources = {
     },
   },
   importSession: {
+    copyWorkspaceLink: "워크스페이스 링크 복사",
+    copyTabLink: "탭 링크 복사",
     chooseHostTitle: en.importSession.chooseHostTitle,
     title: "세션 가져오기",
     searchPlaceholder: "세션 검색...",
@@ -882,6 +885,8 @@ export const ko: TranslationResources = {
         workspacePathUnavailable: "워크스페이스 경로를 아직 사용할 수 없습니다",
         branchNameUnavailable: "브랜치 이름을 사용할 수 없습니다",
         terminalQueued: "워크스페이스 준비 중, 준비되면 터미널을 엽니다...",
+        workspaceLinkCopiedLabel: "워크스페이스 링크",
+        tabLinkCopiedLabel: "탭 링크",
         workspacePathCopiedLabel: "워크스페이스 경로",
         branchNameCopiedLabel: "브랜치 이름",
       },
@@ -1311,6 +1316,7 @@ export const ko: TranslationResources = {
     },
   },
   sidebar: {
+    openTabs: "열린 탭 {{count}}개",
     statusGroupAccessibility: "{{label}} 그룹",
     statusBucket: {
       needsInput: "입력 필요",
@@ -2382,6 +2388,7 @@ export const ko: TranslationResources = {
         label: "도구 호출 표시",
         description: "타임라인에 도구 호출이 표시되는 방식",
         options: {
+          quiet: "간소화",
           overview: "요약",
           detailed: "전체 세부정보",
         },

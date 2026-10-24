@@ -155,6 +155,7 @@ export const en = {
       exitFullscreen: "Exit fullscreen",
       focusHint: "{{shortcut}} to focus",
       addAttachment: "Add attachment",
+      dismissKeyboard: "Dismiss keyboard",
       interruptAgent: "Interrupt agent",
       queueMessage: "Queue message",
       sendAndInterrupt: "Send and interrupt",
@@ -524,6 +525,8 @@ export const en = {
     },
   },
   importSession: {
+    copyWorkspaceLink: "Copy workspace link",
+    copyTabLink: "Copy tab link",
     title: "Import session",
     chooseHostTitle: "Import from host",
     searchPlaceholder: "Search sessions...",
@@ -879,6 +882,8 @@ export const en = {
         workspacePathUnavailable: "Workspace path is not available yet",
         branchNameUnavailable: "Branch name not available",
         terminalQueued: "Preparing workspace, opening terminal when ready...",
+        workspaceLinkCopiedLabel: "Workspace link",
+        tabLinkCopiedLabel: "Tab link",
         workspacePathCopiedLabel: "Workspace path",
         branchNameCopiedLabel: "Branch name",
       },
@@ -1314,6 +1319,7 @@ export const en = {
     },
   },
   sidebar: {
+    openTabs: "{{count}} open tabs",
     statusGroupAccessibility: "{{label}} group",
     statusBucket: {
       needsInput: "Needs input",
@@ -2496,6 +2502,7 @@ export const en = {
         label: "Tool call display",
         description: "How tool calls appear in the timeline",
         options: {
+          quiet: "Quiet",
           overview: "Summary",
           detailed: "Full detail",
         },

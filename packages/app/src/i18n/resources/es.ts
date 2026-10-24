@@ -161,6 +161,7 @@ export const es: TranslationResources = {
       exitFullscreen: "Salir de pantalla completa",
       focusHint: "{{shortcut}}para enfocar",
       addAttachment: "Agregar archivo adjunto",
+      dismissKeyboard: "Ocultar el teclado",
       interruptAgent: "agente de interrupción",
       queueMessage: "mensaje de cola",
       sendAndInterrupt: "Enviar e interrumpir",
@@ -532,6 +533,8 @@ export const es: TranslationResources = {
     },
   },
   importSession: {
+    copyWorkspaceLink: "Copiar enlace del espacio de trabajo",
+    copyTabLink: "Copiar enlace de la pestaña",
     chooseHostTitle: en.importSession.chooseHostTitle,
     title: "Importar sesión",
     searchPlaceholder: "Buscar sesiones...",
@@ -893,6 +896,8 @@ export const es: TranslationResources = {
         branchNameUnavailable: "Nombre de la sucursal no disponible",
         terminalQueued:
           "Preparando el espacio de trabajo, abriendo la terminal cuando esté listo...",
+        workspaceLinkCopiedLabel: "Enlace del espacio de trabajo",
+        tabLinkCopiedLabel: "Enlace de la pestaña",
         workspacePathCopiedLabel: "RutaWorkspace",
         branchNameCopiedLabel: "Nombre de la sucursal",
       },
@@ -1343,6 +1348,7 @@ export const es: TranslationResources = {
     },
   },
   sidebar: {
+    openTabs: "{{count}} pestañas abiertas",
     statusGroupAccessibility: "Grupo {{label}}",
     statusBucket: {
       needsInput: "Necesita datos",
@@ -2426,6 +2432,7 @@ export const es: TranslationResources = {
         label: "Visualización de llamadas a herramientas",
         description: "Cómo aparecen las llamadas a herramientas en la cronología",
         options: {
+          quiet: "Discreto",
           overview: "Resumen",
           detailed: "Detalle completo",
         },

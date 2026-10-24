@@ -160,6 +160,7 @@ export const ru: TranslationResources = {
       exitFullscreen: "Выйти из полноэкранного режима",
       focusHint: "{{shortcut}}, для фокуса",
       addAttachment: "Добавить вложение",
+      dismissKeyboard: "Скрыть клавиатуру",
       interruptAgent: "Прервать агента",
       queueMessage: "Сообщение в очередь",
       sendAndInterrupt: "Отправить и прервать",
@@ -527,6 +528,8 @@ export const ru: TranslationResources = {
     },
   },
   importSession: {
+    copyWorkspaceLink: "Копировать ссылку на рабочую область",
+    copyTabLink: "Копировать ссылку на вкладку",
     chooseHostTitle: en.importSession.chooseHostTitle,
     title: "Импортировать сессию",
     searchPlaceholder: "Поиск сессий...",
@@ -888,6 +891,8 @@ export const ru: TranslationResources = {
         branchNameUnavailable: "Имя ветки недоступно",
         terminalQueued:
           "Рабочее пространство подготавливается. Терминал откроется, когда оно будет готово...",
+        workspaceLinkCopiedLabel: "Ссылка на рабочую область",
+        tabLinkCopiedLabel: "Ссылка на вкладку",
         workspacePathCopiedLabel: "Путь к рабочему пространству",
         branchNameCopiedLabel: "Имя ветки",
       },
@@ -1319,6 +1324,7 @@ export const ru: TranslationResources = {
     },
   },
   sidebar: {
+    openTabs: "Открытых вкладок: {{count}}",
     statusGroupAccessibility: "Группа «{{label}}»",
     statusBucket: {
       needsInput: "Ожидает ввода",
@@ -2405,6 +2411,7 @@ export const ru: TranslationResources = {
         label: "Отображение вызовов инструментов",
         description: "Как вызовы инструментов отображаются на временной шкале",
         options: {
+          quiet: "Тихий режим",
           overview: "Сводка",
           detailed: "Все подробности",
         },

@@ -159,6 +159,7 @@ export const zhCN: TranslationResources = {
       exitFullscreen: "退出全屏",
       focusHint: "{{shortcut}} 聚焦",
       addAttachment: "添加附件",
+      dismissKeyboard: "收起键盘",
       interruptAgent: "中断 Agent",
       queueMessage: "消息排队",
       sendAndInterrupt: "发送并中断",
@@ -522,6 +523,8 @@ export const zhCN: TranslationResources = {
     },
   },
   importSession: {
+    copyWorkspaceLink: "复制工作区链接",
+    copyTabLink: "复制标签页链接",
     chooseHostTitle: en.importSession.chooseHostTitle,
     title: "导入会话",
     searchPlaceholder: "搜索会话...",
@@ -874,6 +877,8 @@ export const zhCN: TranslationResources = {
         workspacePathUnavailable: "Workspace 路径尚不可用",
         branchNameUnavailable: "分支名称不可用",
         terminalQueued: "正在准备 workspace，Terminal 准备好后会打开...",
+        workspaceLinkCopiedLabel: "工作区链接",
+        tabLinkCopiedLabel: "标签页链接",
         workspacePathCopiedLabel: "Workspace 路径",
         branchNameCopiedLabel: "分支名称",
       },
@@ -1292,6 +1297,7 @@ export const zhCN: TranslationResources = {
     },
   },
   sidebar: {
+    openTabs: "{{count}} 个打开的标签页",
     statusGroupAccessibility: "{{label}} 分组",
     statusBucket: {
       needsInput: "需要输入",
@@ -2341,6 +2347,7 @@ export const zhCN: TranslationResources = {
         label: "工具调用显示",
         description: "工具调用在时间线中的显示方式",
         options: {
+          quiet: "精简",
           overview: "摘要",
           detailed: "完整详情",
         },

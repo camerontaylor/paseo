@@ -161,6 +161,7 @@ export const ja: TranslationResources = {
       exitFullscreen: "全画面表示を終了",
       focusHint: "{{shortcut}}でフォーカス",
       addAttachment: "添付ファイルを追加",
+      dismissKeyboard: "キーボードを閉じる",
       interruptAgent: "エージェントを中断",
       queueMessage: "メッセージをキューに追加",
       sendAndInterrupt: "送信して中断",
@@ -529,6 +530,8 @@ export const ja: TranslationResources = {
     },
   },
   importSession: {
+    copyWorkspaceLink: "ワークスペースのリンクをコピー",
+    copyTabLink: "タブのリンクをコピー",
     chooseHostTitle: en.importSession.chooseHostTitle,
     title: "セッションをインポート",
     searchPlaceholder: "セッションを検索...",
@@ -885,6 +888,8 @@ export const ja: TranslationResources = {
         workspacePathUnavailable: "ワークスペースパスはまだ利用できません",
         branchNameUnavailable: "ブランチ名が利用できません",
         terminalQueued: "ワークスペースを準備中、準備ができたらターミナルを開きます...",
+        workspaceLinkCopiedLabel: "ワークスペースのリンク",
+        tabLinkCopiedLabel: "タブのリンク",
         workspacePathCopiedLabel: "ワークスペースパス",
         branchNameCopiedLabel: "ブランチ名",
       },
@@ -1316,6 +1321,7 @@ export const ja: TranslationResources = {
     },
   },
   sidebar: {
+    openTabs: "{{count}} 個の開いているタブ",
     statusGroupAccessibility: "{{label}} グループ",
     statusBucket: {
       needsInput: "入力待ち",
@@ -2390,6 +2396,7 @@ export const ja: TranslationResources = {
         label: "ツール呼び出しの表示",
         description: "タイムラインでのツール呼び出しの表示方法",
         options: {
+          quiet: "控えめ",
           overview: "要約",
           detailed: "すべての詳細",
         },

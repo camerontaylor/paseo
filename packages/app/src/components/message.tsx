@@ -69,6 +69,7 @@ import {
   ViewStyle,
   type GestureResponderEvent,
   type LayoutChangeEvent,
+  type TextLayoutEvent,
   type TextStyle,
 } from "react-native";
 import Animated, {
@@ -82,7 +83,7 @@ import Animated, {
 import Svg, { Defs, Rect, Stop, LinearGradient as SvgLinearGradient } from "react-native-svg";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { capAssistantMessageForRender, getUtf8ByteLength } from "./assistant-message-render-limit";
-import { getTurnDurationLabel } from "./assistant-turn-footer-label";
+import { getAssistantTurnFooterLabel } from "./assistant-turn-footer-label";
 import { getCompactionMarkerLabel } from "./message-compaction-label";
 import { PlanCard } from "./plan-card";
 import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
@@ -366,6 +367,17 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
   trailingRowVisible: {
     opacity: 1,
   },
+  showMoreButton: {
+    minHeight: 44,
+    marginTop: theme.spacing[2],
+    alignSelf: "flex-start",
+    justifyContent: "center",
+  },
+  showMoreText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontWeight: "500",
+  },
   timestampText: {
     color: theme.colors.foregroundMuted,
     fontSize: STREAM_METADATA_FONT_SIZE,
@@ -390,6 +402,60 @@ function UserMessageImagePill({ image, onOpen, accessibilityLabel }: UserMessage
 }
 
 const MESSAGE_TEXT_DATASET = { messageText: "true" };
+
+export function ClampedUserMessageText({
+  message,
+  style,
+}: {
+  message: string;
+  style: StyleProp<TextStyle>;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const [clampState, setClampState] = useState<"measuring" | "clamped" | "unclamped">("measuring");
+  useEffect(() => {
+    setExpanded(false);
+    setClampState("measuring");
+  }, [message]);
+  const handleTextLayout = useCallback((event: TextLayoutEvent) => {
+    setClampState(event.nativeEvent.lines.length > 10 ? "clamped" : "unclamped");
+  }, []);
+  const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
+  let lines: number | undefined;
+  if (clampState === "measuring") lines = 11;
+  else if (clampState === "clamped" && !expanded) lines = 10;
+  return (
+    <View>
+      <Text
+        selectable
+        style={style}
+        dataSet={MESSAGE_TEXT_DATASET}
+        numberOfLines={lines}
+        onTextLayout={clampState === "measuring" ? handleTextLayout : undefined}
+      >
+        {message}
+      </Text>
+      {clampState === "clamped" ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            expanded
+              ? t("message.actions.showLess", "Show less")
+              : t("message.actions.showMore", "Show more")
+          }
+          onPress={toggleExpanded}
+          style={userMessageStylesheet.showMoreButton}
+        >
+          <Text style={userMessageStylesheet.showMoreText}>
+            {expanded
+              ? t("message.actions.showLess", "Show less")
+              : t("message.actions.showMore", "Show more")}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
 
 export const UserMessage = memo(function UserMessage({
   serverId,
@@ -517,9 +583,7 @@ export const UserMessage = memo(function UserMessage({
             </View>
           ) : null}
           {hasText ? (
-            <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
-              {message}
-            </Text>
+            <ClampedUserMessageText message={message} style={userMessageStylesheet.text} />
           ) : null}
         </View>
         {hasText ? (
@@ -582,29 +646,15 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
     marginTop: 0,
     marginLeft: -theme.spacing[1],
   },
-  labelWrapper: {
-    position: "relative",
-  },
-  labelSizer: {
-    color: theme.colors.foregroundMuted,
-    fontSize: STREAM_METADATA_FONT_SIZE,
-    opacity: 0,
-  },
   labelOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
     color: theme.colors.foregroundMuted,
     fontSize: STREAM_METADATA_FONT_SIZE,
   },
 }));
 
-const TIMESTAMP_REVEAL_MS = 3000;
-
 /**
  * Footer rendered next to the copy button at the end of an assistant turn.
- * Shows the turn duration and swaps to the end timestamp when both are known.
- * A turn without a visible start shows its end timestamp directly.
+ * Shows completion time and duration together when both are known.
  */
 export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   getContent,
@@ -614,46 +664,10 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   onPin,
 }: AssistantTurnFooterProps) {
   const { t } = useTranslation();
-  const [hovered, setHovered] = useState(false);
-  const [pressedReveal, setPressedReveal] = useState(false);
-  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (revealTimerRef.current) {
-        clearTimeout(revealTimerRef.current);
-        revealTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  const durationLabel = useMemo(
-    () =>
-      durationMs !== undefined && durationMs !== null ? getTurnDurationLabel(durationMs, t) : "",
-    [durationMs, t],
+  const primaryLabel = useMemo(
+    () => getAssistantTurnFooterLabel(completedAt, durationMs, t),
+    [completedAt, durationMs, t],
   );
-  const timestampLabel = useMemo(
-    () => (completedAt ? formatMessageTimestamp(completedAt) : ""),
-    [completedAt],
-  );
-
-  const primaryLabel = durationLabel || timestampLabel;
-  const canSwap = Boolean(durationLabel && timestampLabel);
-  const showTimestamp = canSwap && (isWeb ? hovered : pressedReveal);
-
-  const handleHoverIn = useCallback(() => setHovered(true), []);
-  const handleHoverOut = useCallback(() => setHovered(false), []);
-  const handlePress = useCallback(() => {
-    if (isWeb || !canSwap) return;
-    if (revealTimerRef.current) {
-      clearTimeout(revealTimerRef.current);
-    }
-    setPressedReveal((prev) => !prev);
-    revealTimerRef.current = setTimeout(() => {
-      setPressedReveal(false);
-      revealTimerRef.current = null;
-    }, TIMESTAMP_REVEAL_MS);
-  }, [canSwap]);
   const handleFork = useCallback(
     (target: AssistantForkTarget) => {
       return onFork?.(target);
@@ -681,24 +695,9 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
       />
       {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
       {primaryLabel ? (
-        <Pressable
-          onPress={handlePress}
-          onHoverIn={handleHoverIn}
-          onHoverOut={handleHoverOut}
-          accessibilityRole={canSwap ? "button" : undefined}
-          accessibilityLabel={canSwap ? `${durationLabel}, ended ${timestampLabel}` : primaryLabel}
-        >
-          <View style={assistantTurnFooterStylesheet.labelWrapper}>
-            {/* Sizer reserves space for whichever label is longer so the
-                container width is stable across hover transitions. */}
-            <Text style={assistantTurnFooterStylesheet.labelSizer} aria-hidden>
-              {primaryLabel.length >= timestampLabel.length ? primaryLabel : timestampLabel}
-            </Text>
-            <Text style={assistantTurnFooterStylesheet.labelOverlay}>
-              {showTimestamp ? timestampLabel : primaryLabel}
-            </Text>
-          </View>
-        </Pressable>
+        <Text style={assistantTurnFooterStylesheet.labelOverlay} accessibilityLabel={primaryLabel}>
+          {primaryLabel}
+        </Text>
       ) : null}
     </View>
   );

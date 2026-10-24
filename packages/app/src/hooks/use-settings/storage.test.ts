@@ -44,6 +44,45 @@ function makeDeps(
 }
 
 describe("loadAppSettingsFromStorage", () => {
+  it("defaults missing send behavior to queue without rewriting explicit preferences", async () => {
+    const fresh = makeDeps();
+    expect((await loadAppSettingsFromStorage(fresh)).sendBehavior).toBe("queue");
+    for (const sendBehavior of ["interrupt", "steer", "queue"] as const) {
+      const deps = makeDeps({
+        storage: createInMemoryKeyValueStorage({
+          [APP_SETTINGS_KEY]: JSON.stringify({ sendBehavior }),
+        }),
+      });
+      expect((await loadAppSettingsFromStorage(deps)).sendBehavior).toBe(sendBehavior);
+    }
+  });
+
+  it("preserves explicit Full detail and diff trailing choices", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({
+          toolCallDetailLevel: "detailed",
+          sidebarWorkspaceTrailing: "diff",
+        }),
+      }),
+    });
+    const settings = await loadAppSettingsFromStorage(deps);
+    expect(settings.toolCallDetailLevel).toBe("detailed");
+    expect(settings.sidebarWorkspaceTrailing).toBe("diff");
+  });
+
+  it.each([
+    [true, "overview"],
+    [false, "detailed"],
+  ] as const)("preserves legacy compactToolCalls %s", async (compactToolCalls, expected) => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({ compactToolCalls }),
+      }),
+    });
+    expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe(expected);
+  });
+
   it("preserves a persisted steer send behavior", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
@@ -74,7 +113,7 @@ describe("loadAppSettingsFromStorage", () => {
     expect(result.sidebarRowItems.host).toBe(false);
     expect(JSON.parse(deps.storage.entries.get(APP_SETTINGS_KEY) ?? "null")).toEqual(stored);
   });
-  it("migrates a stored interrupt to steer and persists it", async () => {
+  it("preserves a stored interrupt as an explicit send choice", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
         [APP_SETTINGS_KEY]: JSON.stringify({ sendBehavior: "interrupt" }),
@@ -83,9 +122,9 @@ describe("loadAppSettingsFromStorage", () => {
 
     const result = await loadAppSettingsFromStorage(deps);
 
-    expect(result.sendBehavior).toBe("steer");
+    expect(result.sendBehavior).toBe("interrupt");
     expect(JSON.parse(deps.storage.entries.get(APP_SETTINGS_KEY) ?? "{}").sendBehavior).toBe(
-      "steer",
+      "interrupt",
     );
     expect(JSON.parse(deps.storage.entries.get(APP_SETTINGS_KEY) ?? "{}")).not.toHaveProperty(
       "needsWrite",
@@ -115,7 +154,7 @@ describe("loadAppSettingsFromStorage", () => {
     expect((await loadAppSettingsFromStorage(deps)).sidebarRowItems.services).toBe(true);
   });
 
-  it("keeps an interrupt the user picked after the migration ran", async () => {
+  it("keeps an interrupt the user picked after saving", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
         [APP_SETTINGS_KEY]: JSON.stringify({ sendBehavior: "interrupt" }),
@@ -780,7 +819,7 @@ describe("appearance settings", () => {
     expect(result.contentFontSize).toBe(DEFAULT_UI_BASE_FONT_SIZE);
     expect(result.codeFontSize).toBe(DEFAULT_CODE_FONT_SIZE);
     expect(result.syntaxTheme).toBe("one");
-    expect(result.toolCallDetailLevel).toBe("detailed");
+    expect(result.toolCallDetailLevel).toBe("overview");
   });
 
   it("migrates the enabled compact tool call preference to overview", async () => {
@@ -800,7 +839,7 @@ describe("appearance settings", () => {
       }),
     });
 
-    expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe("detailed");
+    expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe("overview");
   });
 
   it("migrates a switched-off checks row item to the hidden checks display", async () => {

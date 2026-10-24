@@ -159,6 +159,7 @@ export const ar: TranslationResources = {
       exitFullscreen: "الخروج من ملء الشاشة",
       focusHint: "{{shortcut}}للتركيز",
       addAttachment: "إضافة مرفق",
+      dismissKeyboard: "إخفاء لوحة المفاتيح",
       interruptAgent: "عامل المقاطعة",
       queueMessage: "رسالة قائمة الانتظار",
       sendAndInterrupt: "إرسال ومقاطعة",
@@ -523,6 +524,8 @@ export const ar: TranslationResources = {
     },
   },
   importSession: {
+    copyWorkspaceLink: "نسخ رابط مساحة العمل",
+    copyTabLink: "نسخ رابط علامة التبويب",
     chooseHostTitle: en.importSession.chooseHostTitle,
     title: "جلسة الاستيراد",
     searchPlaceholder: "البحث في الجلسات...",
@@ -880,6 +883,8 @@ export const ar: TranslationResources = {
         workspacePathUnavailable: "مسار Workspace غير متاح بعد",
         branchNameUnavailable: "اسم الفرع غير متوفر",
         terminalQueued: "تحضير مساحة العمل، وفتح الوحدة الطرفية عندما تكون جاهزة...",
+        workspaceLinkCopiedLabel: "رابط مساحة العمل",
+        tabLinkCopiedLabel: "رابط علامة التبويب",
         workspacePathCopiedLabel: "مسار Workspace",
         branchNameCopiedLabel: "اسم الفرع",
       },
@@ -1302,6 +1307,7 @@ export const ar: TranslationResources = {
     },
   },
   sidebar: {
+    openTabs: "{{count}} علامات تبويب مفتوحة",
     statusGroupAccessibility: "مجموعة {{label}}",
     statusBucket: {
       needsInput: "تحتاج إدخالاً",
@@ -2368,6 +2374,7 @@ export const ar: TranslationResources = {
         label: "عرض استدعاءات الأدوات",
         description: "كيفية ظهور استدعاءات الأدوات في المخطط الزمني",
         options: {
+          quiet: "هادئ",
           overview: "ملخص",
           detailed: "التفاصيل الكاملة",
         },

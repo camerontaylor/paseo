@@ -1,3 +1,4 @@
+import { SessionPinButton } from "@/session-pins/pin-button";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -1184,6 +1185,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     (state) => state.selectedViews[`${serverId}:${agentId}`] || "chat",
   );
   const setSelectedView = useAgentViewStore((state) => state.setSelectedView);
+  const findOpen = useAgentViewStore((state) => state.findOpen[`${serverId}:${agentId}`] ?? false);
   const isChatVisible = selectedView !== "artifacts";
   const handleSetSelectedView = useCallback(
     (view: "chat" | "artifacts") => {
@@ -1352,9 +1354,10 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
         size={isCompact ? "md" : "xs"}
         textWrap={isCompact}
         testID="agent-view-switcher"
-        style={styles.viewSwitcher}
+        style={[styles.viewSwitcher, isCompact && isChatVisible && findOpen && styles.hiddenPane]}
         segmentStyle={isCompact ? styles.compactSegment : undefined}
       />
+      <SessionPinButton serverId={serverId} agentId={agentId} />
       {streamContent}
       {!isChatVisible ? (
         <CompanionFeed

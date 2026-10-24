@@ -1,3 +1,4 @@
+import { PinnedSessions } from "@/session-pins/sidebar";
 import { router } from "expo-router";
 import {
   CircleGauge,
@@ -604,7 +605,12 @@ function MobileSidebar({
             onImportSession={handleImportSession}
             parentGestureRef={closeGestureRef}
             dragGestureHostActive={active}
-            listHeaderComponent={workspacesSectionHeaderElement}
+            listHeaderComponent={
+              <>
+                <PinnedSessions onNavigate={closeSidebar} />
+                {workspacesSectionHeaderElement}
+              </>
+            }
           />
         )}
 
@@ -806,7 +812,12 @@ function DesktopSidebar({
             onRefresh={handleRefresh}
             onAddProject={handleOpenProject}
             onImportSession={handleImportSession}
-            listHeaderComponent={workspacesSectionHeaderElement}
+            listHeaderComponent={
+              <>
+                <PinnedSessions />
+                {workspacesSectionHeaderElement}
+              </>
+            }
           />
         )}
 

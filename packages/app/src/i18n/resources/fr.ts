@@ -161,6 +161,7 @@ export const fr: TranslationResources = {
       exitFullscreen: "Quitter le plein écran",
       focusHint: "{{shortcut}} pour saisir",
       addAttachment: "Ajouter une pièce jointe",
+      dismissKeyboard: "Masquer le clavier",
       interruptAgent: "Interrompre l’agent",
       queueMessage: "Mettre le message en file d’attente",
       sendAndInterrupt: "Envoyer et interrompre",
@@ -532,6 +533,8 @@ export const fr: TranslationResources = {
     },
   },
   importSession: {
+    copyWorkspaceLink: "Copier le lien de l’espace de travail",
+    copyTabLink: "Copier le lien de l’onglet",
     chooseHostTitle: en.importSession.chooseHostTitle,
     title: "Importer une session",
     searchPlaceholder: "Rechercher des sessions…",
@@ -893,6 +896,8 @@ export const fr: TranslationResources = {
         branchNameUnavailable: "Nom de la branche indisponible",
         terminalQueued:
           "Préparation de l’espace de travail, le terminal s’ouvrira dès qu’il sera prêt…",
+        workspaceLinkCopiedLabel: "Lien de l’espace de travail",
+        tabLinkCopiedLabel: "Lien de l’onglet",
         workspacePathCopiedLabel: "Chemin de l’espace de travail",
         branchNameCopiedLabel: "Nom de la branche",
       },
@@ -1335,6 +1340,7 @@ export const fr: TranslationResources = {
     },
   },
   sidebar: {
+    openTabs: "{{count}} onglets ouverts",
     statusGroupAccessibility: "Groupe {{label}}",
     statusBucket: {
       needsInput: "Attend une réponse",
@@ -2424,6 +2430,7 @@ export const fr: TranslationResources = {
         label: "Affichage des appels d’outils",
         description: "Comment les appels d’outils apparaissent dans la chronologie",
         options: {
+          quiet: "Discret",
           overview: "Résumé",
           detailed: "Détails complets",
         },

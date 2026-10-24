@@ -160,6 +160,7 @@ export const ptBR: TranslationResources = {
       exitFullscreen: "Sair da tela cheia",
       focusHint: "{{shortcut}} para focar",
       addAttachment: "Adicionar anexo",
+      dismissKeyboard: "Ocultar teclado",
       interruptAgent: "Interromper agente",
       queueMessage: "Enfileirar mensagem",
       sendAndInterrupt: "Enviar e interromper",
@@ -530,6 +531,8 @@ export const ptBR: TranslationResources = {
     },
   },
   importSession: {
+    copyWorkspaceLink: "Copiar link do espaço de trabalho",
+    copyTabLink: "Copiar link da aba",
     chooseHostTitle: en.importSession.chooseHostTitle,
     title: "Importar sessão",
     searchPlaceholder: "Buscar sessões...",
@@ -888,6 +891,8 @@ export const ptBR: TranslationResources = {
         workspacePathUnavailable: "O caminho do workspace ainda não está disponível",
         branchNameUnavailable: "Nome da branch indisponível",
         terminalQueued: "Preparando workspace, abrindo terminal quando estiver pronto...",
+        workspaceLinkCopiedLabel: "Link do espaço de trabalho",
+        tabLinkCopiedLabel: "Link da aba",
         workspacePathCopiedLabel: "Caminho do workspace",
         branchNameCopiedLabel: "Nome da branch",
       },
@@ -1332,6 +1337,7 @@ export const ptBR: TranslationResources = {
     },
   },
   sidebar: {
+    openTabs: "{{count}} abas abertas",
     statusGroupAccessibility: "Grupo {{label}}",
     statusBucket: {
       needsInput: "Precisa de resposta",
@@ -2407,6 +2413,7 @@ export const ptBR: TranslationResources = {
         label: "Exibição de chamadas de ferramentas",
         description: "Como as chamadas de ferramentas aparecem na linha do tempo",
         options: {
+          quiet: "Discreto",
           overview: "Resumo",
           detailed: "Detalhes completos",
         },

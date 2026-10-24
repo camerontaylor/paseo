@@ -33,6 +33,7 @@ import { resolveSidebarWorkspacePrimaryLabel } from "@/components/sidebar/sideba
 import { DensityIcon } from "@/components/ui/density-icon";
 import { TrailingActionScrim } from "@/components/ui/trailing-action-scrim";
 import { useWorkspaceLabelDefinitions } from "@/workspace-labels";
+import { WorkspaceTabCount } from "./workspace-tab-count";
 
 const needsInputColorMapping = (theme: Theme) => ({
   color: theme.colors.surface0,
@@ -163,7 +164,10 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             <Text style={workspaceBranchTextStyle} numberOfLines={1}>
               {workspaceLabel}
             </Text>
-            <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
+            <View style={sidebarWorkspaceRowStyles.rowRight}>
+              <WorkspaceTabCount workspaceKey={workspace.workspaceKey} />
+              {children}
+            </View>
           </View>
           <WorkspaceMetaRow
             currentBranch={workspace.currentBranch}

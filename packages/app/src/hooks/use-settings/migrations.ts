@@ -5,14 +5,6 @@ import type { AppSettings, KeyValueStorage, PersistedAppSettings } from "./stora
 
 const AppliedMigrationsSchema = z.strictObject({ applied: z.array(z.string()) });
 
-/**
- * `sendBehavior` defaulted to "interrupt" for the months before steering existed, and defaults
- * are materialized into storage on first load, so a stored "interrupt" cannot be told apart from
- * a deliberate one. This flips every stored "interrupt" to "steer" exactly once; picking
- * "interrupt" afterwards sticks.
- */
-const STEER_DEFAULT_MIGRATION = "steer-default";
-
 /** Existing mobile installs materialized the old 15px content default in storage. */
 const MOBILE_CONTENT_16_MIGRATION = "mobile-content-16";
 
@@ -37,13 +29,6 @@ export async function migrateAppSettings(
   let addedMigration = false;
 
   let migrated = settings;
-  if (!applied.has(STEER_DEFAULT_MIGRATION)) {
-    migrated =
-      migrated.sendBehavior === "interrupt" ? { ...migrated, sendBehavior: "steer" } : migrated;
-    applied.add(STEER_DEFAULT_MIGRATION);
-    addedMigration = true;
-  }
-
   if (options.native && !applied.has(MOBILE_CONTENT_16_MIGRATION)) {
     migrated = migrated.contentFontSize === 15 ? { ...migrated, contentFontSize: 16 } : migrated;
     applied.add(MOBILE_CONTENT_16_MIGRATION);

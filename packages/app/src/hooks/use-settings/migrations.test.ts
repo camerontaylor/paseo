@@ -38,52 +38,13 @@ function createFailingWriteStorage(failingKey: string): Storage {
 }
 
 describe("migrateAppSettings", () => {
-  it("flips a stored interrupt to steer and marks itself applied", async () => {
-    const storage = createInMemoryKeyValueStorage();
-
-    const result = await migrateAppSettings(settingsWith("interrupt"), storage);
-
-    expect(result.sendBehavior).toBe("steer");
-    expect(storedSendBehavior(storage)).toBe("steer");
-    expect(appliedIds(storage)).toEqual(["steer-default"]);
-  });
-
-  it("leaves interrupt alone once the migration has run", async () => {
-    const storage = createInMemoryKeyValueStorage();
-    await migrateAppSettings(settingsWith("interrupt"), storage);
-
-    const result = await migrateAppSettings(settingsWith("interrupt"), storage);
-
-    expect(result.sendBehavior).toBe("interrupt");
-  });
-
-  it("leaves queue alone", async () => {
-    const storage = createInMemoryKeyValueStorage();
-
-    const result = await migrateAppSettings(settingsWith("queue"), storage);
-
-    expect(result.sendBehavior).toBe("queue");
-    expect(storage.entries.has(APP_SETTINGS_KEY)).toBe(false);
-    expect(appliedIds(storage)).toEqual(["steer-default"]);
-  });
-
-  it("marks itself applied on a fresh install without rewriting settings", async () => {
-    const storage = createInMemoryKeyValueStorage();
-
-    await migrateAppSettings(settingsWith("steer"), storage);
-
-    expect(storage.entries.has(APP_SETTINGS_KEY)).toBe(false);
-    expect(appliedIds(storage)).toEqual(["steer-default"]);
-  });
-
-  it("keeps unknown migration ids written by a newer client", async () => {
-    const storage = createInMemoryKeyValueStorage({
-      [SETTINGS_MIGRATIONS_KEY]: JSON.stringify({ applied: ["some-later-migration"] }),
-    });
-
-    await migrateAppSettings(settingsWith("interrupt"), storage);
-
-    expect(appliedIds(storage)).toEqual(["some-later-migration", "steer-default"]);
+  it("preserves explicit send modes even when the old steer marker is absent", async () => {
+    for (const sendBehavior of ["interrupt", "steer", "queue"] as const) {
+      const storage = createInMemoryKeyValueStorage();
+      const result = await migrateAppSettings(settingsWith(sendBehavior), storage);
+      expect(result.sendBehavior).toBe(sendBehavior);
+      expect(storedSendBehavior(storage)).toBeUndefined();
+    }
   });
 
   it("migrates every mobile 15px content preference to 16px", async () => {
@@ -94,7 +55,7 @@ describe("migrateAppSettings", () => {
 
     expect(result.contentFontSize).toBe(16);
     expect(storedContentFontSize(storage)).toBe(16);
-    expect(appliedIds(storage)).toEqual(["steer-default", "mobile-content-16"]);
+    expect(appliedIds(storage)).toEqual(["mobile-content-16"]);
   });
 
   it("leaves a 15px web content preference unchanged", async () => {
@@ -105,7 +66,7 @@ describe("migrateAppSettings", () => {
 
     expect(result.contentFontSize).toBe(15);
     expect(storedContentFontSize(storage)).toBeUndefined();
-    expect(appliedIds(storage)).toEqual(["steer-default"]);
+    expect(appliedIds(storage)).toEqual([]);
   });
 
   it("lets a mobile user choose 15px after the default migration ran", async () => {
@@ -126,24 +87,45 @@ describe("migrateAppSettings", () => {
 
     expect(result.contentFontSize).toBe(15);
   });
+  it("preserves migration IDs written by a newer client", async () => {
+    const storage = createInMemoryKeyValueStorage({
+      [SETTINGS_MIGRATIONS_KEY]: JSON.stringify({ applied: ["future-migration"] }),
+    });
+    await migrateAppSettings(
+      { ...settingsWith("steer"), contentFontSize: 15 },
+      storage,
+      undefined,
+      { native: true },
+    );
+    expect(appliedIds(storage)).toEqual(["future-migration", "mobile-content-16"]);
+  });
 
-  it("stays unmarked when the settings write fails, so a later launch retries", async () => {
+  it("does not mark a failed settings write", async () => {
     const storage = createFailingWriteStorage(APP_SETTINGS_KEY);
-
-    await expect(migrateAppSettings(settingsWith("interrupt"), storage)).rejects.toThrow();
-
+    await expect(
+      migrateAppSettings({ ...settingsWith("steer"), contentFontSize: 15 }, storage, undefined, {
+        native: true,
+      }),
+    ).rejects.toThrow();
     expect(appliedIds(storage)).toEqual([]);
   });
 
-  it("re-runs harmlessly when the marker write fails after settings landed", async () => {
-    const failing = createFailingWriteStorage(SETTINGS_MIGRATIONS_KEY);
-    await expect(migrateAppSettings(settingsWith("interrupt"), failing)).rejects.toThrow();
-    expect(storedSendBehavior(failing)).toBe("steer");
-
-    const recovered = createInMemoryKeyValueStorage(Object.fromEntries(failing.entries));
-    const result = await migrateAppSettings(settingsWith("steer"), recovered);
-
-    expect(result.sendBehavior).toBe("steer");
-    expect(appliedIds(recovered)).toEqual(["steer-default"]);
+  it("retries safely when the marker write fails after settings landed", async () => {
+    const storage = createFailingWriteStorage(SETTINGS_MIGRATIONS_KEY);
+    await expect(
+      migrateAppSettings({ ...settingsWith("steer"), contentFontSize: 15 }, storage, undefined, {
+        native: true,
+      }),
+    ).rejects.toThrow();
+    expect(storedContentFontSize(storage)).toBe(16);
+    const recovered = createInMemoryKeyValueStorage(Object.fromEntries(storage.entries));
+    const result = await migrateAppSettings(
+      { ...settingsWith("steer"), contentFontSize: 15 },
+      recovered,
+      undefined,
+      { native: true },
+    );
+    expect(result.contentFontSize).toBe(16);
+    expect(appliedIds(recovered)).toEqual(["mobile-content-16"]);
   });
 });
