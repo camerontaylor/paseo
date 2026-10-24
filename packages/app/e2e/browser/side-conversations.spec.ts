@@ -1,5 +1,6 @@
 import { expect, test } from "../support/fixtures";
 import { openAgentRoute } from "../support/helpers/mock-agent";
+import { awaitAssistantMessage } from "../support/helpers/agent-stream";
 import {
   askSideQuestion,
   expectNoSideConversationInTabMenu,
@@ -54,6 +55,67 @@ test.describe("Side conversations", () => {
 
       // Reopening the row must not mint a second thread.
       await expect(sideConversationTabs(page)).toHaveCount(1);
+    } finally {
+      await agent.cleanup();
+    }
+  });
+
+  test("reopens a reply thread from its retained source and queues its answer once", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1400, height: 900 });
+    const agent = await seedSideConversationParent({
+      repoPrefix: "side-conversation-reply-thread-",
+      title: "Threaded reply parent",
+      answersSideQuestions: true,
+    });
+    try {
+      const sourcePrompt = "Create a source reply for threaded follow-up.";
+      await agent.client.sendAgentMessage(agent.agentId, sourcePrompt);
+      await agent.client.waitForFinish(agent.agentId, 30_000);
+      await openAgentRoute(page, { workspaceId: agent.workspaceId, agentId: agent.agentId });
+      await awaitAssistantMessage(page);
+
+      const sourceUrl = page.url();
+      const mainComposer = page.locator("textarea[data-composer-input]:visible").first();
+      await expect(mainComposer).toBeEditable({ timeout: 30_000 });
+      await mainComposer.fill("Keep this main draft intact");
+      await page.getByTestId("reply-in-thread").last().click();
+      await expect(sideConversationPanel(page)).toBeVisible({ timeout: 30_000 });
+      await expect(mainComposer).toHaveValue("Keep this main draft intact");
+      expect(page.url()).toBe(sourceUrl);
+
+      const question = "Explain the source reply.";
+      await askSideQuestion(page, question);
+      await expectSideConversationText(page, mockSideAnswer(0, question));
+      const sendBack = sideConversationPanel(page).getByTestId("thread-send-back");
+      await sendBack.click();
+      await expect(sendBack).toHaveText("Answer added to main queue", { timeout: 30_000 });
+
+      const threadTab = sideConversationTabs(page).first();
+      const tabTestId = await threadTab.getAttribute("data-testid");
+      expect(tabTestId).toMatch(/^workspace-tab-/);
+      const menuTabId = tabTestId!.slice("workspace-tab-".length);
+      await threadTab.click({ button: "right" });
+      await page.getByTestId("workspace-tab-context-" + menuTabId + "-close").click();
+      await expect(sideConversationTabs(page)).toHaveCount(0);
+      await expect(mainComposer).toHaveValue("Keep this main draft intact");
+
+      await page.getByTestId("reply-in-thread").last().click();
+      await expect(sideConversationPanel(page)).toBeVisible({ timeout: 30_000 });
+      await expect(sideConversationTabs(page)).toHaveCount(1);
+      await expectSideConversationText(page, question);
+      await expectSideConversationText(page, mockSideAnswer(0, question));
+      await expect(sideConversationPanel(page).getByTestId("thread-send-back")).toHaveText(
+        "Answer added to main queue",
+      );
+      await expect(mainComposer).toHaveValue("Keep this main draft intact");
+
+      await sideConversationPanel(page).getByTestId("thread-open-source").click();
+      await expect(page.getByTestId("assistant-message").first()).toBeVisible();
+      await expect(page).toHaveURL(sourceUrl);
+      await expect(page.getByTestId("reply-in-thread").last()).toBeVisible();
     } finally {
       await agent.cleanup();
     }

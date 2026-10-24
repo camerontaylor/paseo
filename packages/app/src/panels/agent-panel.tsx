@@ -122,6 +122,11 @@ import {
   type ChatAgentStateShape,
 } from "@/panels/select-chat-agent-state";
 import { buildDraftAgentSetup, type ClientSlashCommand } from "@/client-slash-commands";
+import { useStartSideConversation } from "@/side-conversations/start";
+import {
+  threadOriginAgentKey,
+  useThreadOriginNavigationStore,
+} from "@/threads/origin-navigation-store";
 
 function readViewedTimelineError(input: {
   agentId: string | undefined;
@@ -714,6 +719,22 @@ function ChatAgentContent({
   const { api: toastApi, toast: toastState, dismiss: dismissToast } = useToastHost();
   const { isArchivingAgent } = useArchiveAgent();
   const streamViewRef = useRef<AgentStreamViewHandle>(null);
+  const startSideConversation = useStartSideConversation({ serverId, workspaceId });
+  const threadOriginRequest = useThreadOriginNavigationStore((state) =>
+    agentId ? state.requestsByAgent[threadOriginAgentKey(serverId, agentId)] : undefined,
+  );
+  const resolveThreadOriginNavigation = useThreadOriginNavigationStore((state) => state.resolve);
+  const selectedAgentView = useAgentViewStore(
+    (state) => state.selectedViews[`${serverId}:${agentId ?? ""}`] || "chat",
+  );
+  const setSelectedAgentView = useAgentViewStore((state) => state.setSelectedView);
+  const handleReplyInThread = useCallback(
+    (anchor: string) => {
+      if (!agentId || !startSideConversation) return;
+      startSideConversation(agentId, { anchor });
+    },
+    [agentId, startSideConversation],
+  );
   const clearOnAgentBlurRef = useRef<() => void>(() => {});
   const wasPaneFocusedRef = useRef(isPaneFocused);
   const initAttemptTokenRef = useRef(0);
@@ -751,6 +772,31 @@ function ChatAgentContent({
       : ("cold" as const),
   );
   const hasAppliedAuthoritativeHistory = replicaTimelineStatus === "synced";
+  useEffect(() => {
+    if (!agentId || !threadOriginRequest || !hasAppliedAuthoritativeHistory) return;
+    if (selectedAgentView !== "chat") {
+      setSelectedAgentView(serverId, agentId, "chat");
+      return;
+    }
+    const status = streamViewRef.current?.scrollToAnchor(threadOriginRequest.anchor)
+      ? "opened"
+      : "unavailable";
+    resolveThreadOriginNavigation({
+      serverId,
+      parentAgentId: agentId,
+      threadId: threadOriginRequest.threadId,
+      requestId: threadOriginRequest.requestId,
+      status,
+    });
+  }, [
+    agentId,
+    hasAppliedAuthoritativeHistory,
+    resolveThreadOriginNavigation,
+    selectedAgentView,
+    serverId,
+    setSelectedAgentView,
+    threadOriginRequest,
+  ]);
   const agentHistorySyncGeneration = useSessionStore((state) =>
     agentId ? (state.sessions[serverId]?.agentHistorySyncGeneration?.get(agentId) ?? -1) : -1,
   );
@@ -1061,6 +1107,7 @@ function ChatAgentContent({
       isRetryingHistorySync={isRetryingHistorySync}
       cwd={agentCwd}
       retryTimelineSync={retryTimelineSync}
+      onReplyInThread={startSideConversation ? handleReplyInThread : undefined}
       onAttentionInputFocus={attentionController.clearOnInputFocus}
       onAttentionPromptSend={attentionController.clearOnPromptSend}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
@@ -1092,6 +1139,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   showHistorySyncError,
   isRetryingHistorySync,
   retryTimelineSync,
+  onReplyInThread,
   cwd,
   onAttentionInputFocus,
   onAttentionPromptSend,
@@ -1118,6 +1166,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   showHistorySyncError: boolean;
   isRetryingHistorySync: boolean;
   retryTimelineSync: () => void;
+  onReplyInThread?: (anchor: string) => void;
   cwd: string;
   onAttentionInputFocus: () => void;
   onAttentionPromptSend: () => void;
@@ -1259,6 +1308,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
             hasVisibleAgentTracks={hasVisibleAgentTracks}
             toast={toastApi}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
+            onReplyInThread={onReplyInThread}
           />
         </RenderProfile>
         {hasActiveComposer ? (
@@ -1464,6 +1514,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   hasVisibleAgentTracks,
   toast,
   onOpenWorkspaceFile,
+  onReplyInThread,
 }: {
   streamViewRef: React.RefObject<AgentStreamViewHandle | null>;
   serverId: string;
@@ -1476,6 +1527,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   hasVisibleAgentTracks: boolean;
   toast: ReturnType<typeof useToastHost>["api"];
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
+  onReplyInThread?: (anchor: string) => void;
 }) {
   const isCompactFormFactor = useIsCompactFormFactor();
   const hasWorkspaceDiffStat = useWorkspaceHasDiffStat(serverId, workspaceId);
@@ -1548,6 +1600,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
       pendingMessageSubmissions={pendingMessageSubmissions}
       turnPresentation={turnPresentation}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
+      onReplyInThread={onReplyInThread}
     />
   );
 });

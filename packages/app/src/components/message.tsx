@@ -46,6 +46,7 @@ import {
   HelpCircle,
   Info,
   MicVocal,
+  MessagesSquare,
   Plus,
   Scissors,
   TriangleAlertIcon,
@@ -140,6 +141,7 @@ function useDisableOuterSpacing(disableOuterSpacing: boolean | undefined) {
 const WEB_TOOLCALL_SHIMMER_KEYFRAME_ID = "paseo-toolcall-shimmer-keyframes";
 const WEB_TOOLCALL_SHIMMER_ANIMATION_NAME = "paseo-toolcall-shimmer";
 const ThemedMicVocal = withUnistyles(MicVocal);
+const ThemedMessagesSquare = withUnistyles(MessagesSquare);
 const ThemedFileSymlinkIcon = withUnistyles(FileSymlink);
 const ThemedTriangleAlertIcon = withUnistyles(TriangleAlertIcon);
 const ThemedChevronRightIcon = withUnistyles(ChevronRight);
@@ -696,6 +698,8 @@ export const UserMessage = memo(function UserMessage({
 
 interface AssistantTurnFooterProps {
   getContent: () => string;
+  threadAnchor?: string;
+  onReplyInThread?: (anchor: string) => void;
   completedAt?: Date;
   durationMs?: number | null;
   onFork?: (target: AssistantForkTarget) => Promise<void> | void;
@@ -731,6 +735,8 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   durationMs,
   onFork,
   onPin,
+  threadAnchor,
+  onReplyInThread,
 }: AssistantTurnFooterProps) {
   const { t } = useTranslation();
   const primaryLabel = useMemo(
@@ -744,9 +750,23 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
     [onFork],
   );
   const canFork = Boolean(onFork);
+  const handleReplyInThread = useCallback(() => {
+    if (threadAnchor) onReplyInThread?.(threadAnchor);
+  }, [onReplyInThread, threadAnchor]);
 
   return (
     <View style={assistantTurnFooterStylesheet.container}>
+      {onReplyInThread && threadAnchor ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("message.actions.replyInThread")}
+          testID="reply-in-thread"
+          onPress={handleReplyInThread}
+          style={assistantTurnFooterStylesheet.copyButton}
+        >
+          <ThemedMessagesSquare size={16} uniProps={foregroundMutedColorMapping} />
+        </Pressable>
+      ) : null}
       {onPin ? (
         <MessagePinControl
           getContent={getContent}

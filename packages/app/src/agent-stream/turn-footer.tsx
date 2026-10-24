@@ -10,6 +10,7 @@ import {
   type StreamStrategy,
 } from "./strategy";
 import { resolveAssistantTurnForkBoundary, type AssistantTurnForkBoundary } from "./turn-boundary";
+import { threadAnchorKey } from "@/threads/model";
 import {
   AssistantTurnFooter,
   LiveElapsed,
@@ -41,6 +42,7 @@ export type AssistantTurnForkHandler = (input: {
  * required) so the compiler keeps enforcing that completed turns always pin one.
  */
 export type InFlightTurnForkHandler = (target: AssistantForkTarget) => Promise<void> | void;
+export type AssistantReplyInThreadHandler = (anchor: string) => void;
 
 export const TurnFooter = memo(function TurnFooter({
   isRunning,
@@ -51,6 +53,7 @@ export const TurnFooter = memo(function TurnFooter({
   onForkAssistantTurn,
   onForkInFlightTurn,
   onPin,
+  onReplyInThread,
 }: {
   isRunning: boolean;
   inFlightTurnStartedAt: Date | null;
@@ -60,6 +63,7 @@ export const TurnFooter = memo(function TurnFooter({
   onForkAssistantTurn?: AssistantTurnForkHandler;
   onForkInFlightTurn?: InFlightTurnForkHandler;
   onPin?: MessagePinHandler;
+  onReplyInThread?: AssistantReplyInThreadHandler;
 }) {
   if (isRunning) {
     return (
@@ -83,6 +87,7 @@ export const TurnFooter = memo(function TurnFooter({
       supportsTimelineCursor={supportsTimelineCursor}
       onForkAssistantTurn={onForkAssistantTurn}
       onPin={onPin}
+      onReplyInThread={onReplyInThread}
     />
   );
 });
@@ -95,6 +100,7 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   supportsTimelineCursor,
   onForkAssistantTurn,
   onPin,
+  onReplyInThread,
 }: {
   strategy: TurnContentStrategy;
   items: StreamItem[];
@@ -103,6 +109,7 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
   onPin?: MessagePinHandler;
+  onReplyInThread?: AssistantReplyInThreadHandler;
 }) {
   return (
     <TurnFooterRow>
@@ -114,6 +121,7 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
         supportsTimelineCursor={supportsTimelineCursor}
         onForkAssistantTurn={onForkAssistantTurn}
         onPin={onPin}
+        onReplyInThread={onReplyInThread}
       />
     </TurnFooterRow>
   );
@@ -171,6 +179,7 @@ function CompletedTurnFooter({
   supportsTimelineCursor,
   onForkAssistantTurn,
   onPin,
+  onReplyInThread,
 }: {
   strategy: TurnContentStrategy;
   items: StreamItem[];
@@ -179,6 +188,7 @@ function CompletedTurnFooter({
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
   onPin?: MessagePinHandler;
+  onReplyInThread?: AssistantReplyInThreadHandler;
 }) {
   const getContent = useCallback(
     () =>
@@ -207,6 +217,8 @@ function CompletedTurnFooter({
     <View style={stylesheet.turnFooterSlot}>
       <AssistantTurnFooter
         getContent={getContent}
+        threadAnchor={boundary ? (threadAnchorKey(boundary) ?? undefined) : undefined}
+        onReplyInThread={boundary ? onReplyInThread : undefined}
         completedAt={timing?.completedAt}
         durationMs={timing?.durationMs}
         onFork={boundary && onForkAssistantTurn ? handleFork : undefined}

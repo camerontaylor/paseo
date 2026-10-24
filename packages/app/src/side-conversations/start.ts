@@ -1,8 +1,13 @@
 import { useCallback } from "react";
 import { useSettings } from "@/hooks/use-settings";
+import { collectAllTabs, useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { useSessionStore } from "@/stores/session-store";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
-import { openPreferredWorkspaceTarget } from "@/workspace-tabs/open-beside";
+import {
+  openPreferredWorkspaceTarget,
+  openWorkspaceTargetAtLocation,
+} from "@/workspace-tabs/open-beside";
+import { sideConversationParentPrefix, useSideConversationStore } from "./store";
 
 /**
  * Thread ids are minted by the client. The daemon has no create call — a thread comes into
@@ -16,42 +21,83 @@ export function createSideConversationThreadId(): string {
 export interface StartSideConversationOptions {
   /** The agent tab the question is about, so the thread opens beside it. */
   parentTabId?: string;
+  /** Stable assistant-message id or epoch:sequence cursor for the presentation origin. */
+  anchor?: string;
 }
 
 /**
- * Opens a fresh side conversation on `parentAgentId`. Null when the host has no side
- * conversations, so callers hide the control instead of offering one that cannot work.
+ * Opens or revisits a side conversation on the parent agent. With an anchor, an existing
+ * conversation for that reply is reopened. Null when the host lacks the feature or the
+ * workspace cannot place the tab.
  */
 export function useStartSideConversation(input: {
   serverId: string;
   workspaceId: string;
-}): ((parentAgentId: string, options?: StartSideConversationOptions) => void) | null {
+}): ((parentAgentId: string, options?: StartSideConversationOptions) => string | null) | null {
   // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
   const supported = useSessionStore(
     (state) => state.sessions[input.serverId]?.serverInfo?.features?.sideConversations === true,
   );
-  // Side conversations open from the subagents track and present as one, so they follow that
-  // source's side-pane preference rather than introducing a preference of their own.
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
+  const originsHydrated = useSideConversationStore((state) => state.originsHydrated);
   const workspaceKey = buildWorkspaceTabPersistenceKey({
     serverId: input.serverId,
     workspaceId: input.workspaceId,
   });
   const start = useCallback(
     (parentAgentId: string, options?: StartSideConversationOptions) => {
-      openPreferredWorkspaceTarget({
-        workspaceKey,
-        target: {
-          kind: "side_conversation",
+      const store = useSideConversationStore.getState();
+      const parentPrefix = sideConversationParentPrefix(input.serverId, parentAgentId);
+      const existingOriginKey = options?.anchor
+        ? Object.entries(store.origins).find(
+            ([key, origin]) =>
+              key.startsWith(parentPrefix) &&
+              origin.parentAgentId === parentAgentId &&
+              origin.anchor === options.anchor,
+          )?.[0]
+        : undefined;
+      const threadId = existingOriginKey
+        ? existingOriginKey.slice(parentPrefix.length)
+        : createSideConversationThreadId();
+      const layout = workspaceKey
+        ? useWorkspaceLayoutStore.getState().layoutByWorkspace[workspaceKey]
+        : undefined;
+      const parentTabId =
+        options?.parentTabId ??
+        (layout
+          ? collectAllTabs(layout.root).find(
+              (tab) => tab.target.kind === "agent" && tab.target.agentId === parentAgentId,
+            )?.tabId
+          : undefined);
+      const target = {
+        kind: "side_conversation" as const,
+        parentAgentId,
+        threadId,
+      };
+      const tabId = options?.anchor
+        ? openWorkspaceTargetAtLocation({
+            workspaceKey,
+            target,
+            location: "side",
+            parentTabId,
+          })
+        : openPreferredWorkspaceTarget({
+            workspaceKey,
+            target,
+            source: "subagents",
+            preferences: openInSidePane,
+            parentTabId: options?.parentTabId,
+          });
+      if (!tabId) return null;
+      if (options?.anchor && !existingOriginKey) {
+        useSideConversationStore.getState().setOrigin(input.serverId, parentAgentId, threadId, {
           parentAgentId,
-          threadId: createSideConversationThreadId(),
-        },
-        source: "subagents",
-        preferences: openInSidePane,
-        parentTabId: options?.parentTabId,
-      });
+          anchor: options.anchor,
+        });
+      }
+      return threadId;
     },
-    [openInSidePane, workspaceKey],
+    [input.serverId, openInSidePane, workspaceKey],
   );
-  return supported ? start : null;
+  return supported && originsHydrated ? start : null;
 }

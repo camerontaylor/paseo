@@ -98,6 +98,7 @@ import {
   type BottomAnchorRouteRequest,
 } from "./bottom-anchor-controller";
 import { createAssistantImageOccurrenceKey } from "@/assistant-image/acquisition-cache";
+import { findThreadAnchorMessageId } from "@/threads/model";
 import { AssistantSelectionCopySurface } from "@/assistant-selection-copy/surface";
 import { AssistantFileLinkResolverProvider, createInlinePathOpener } from "@/assistant-file-links";
 import {
@@ -197,6 +198,7 @@ function renderStreamItemWithTurnFooter(input: {
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
   onPin?: MessagePinHandler;
+  onReplyInThread?: (anchor: string) => void;
 }): ReactNode {
   if (!input.content) {
     return null;
@@ -212,6 +214,7 @@ function renderStreamItemWithTurnFooter(input: {
       supportsTimelineCursor={input.supportsTimelineCursor}
       onForkAssistantTurn={input.onForkAssistantTurn}
       onPin={input.onPin}
+      onReplyInThread={input.onReplyInThread}
     />
   ) : null;
   const content = (
@@ -297,6 +300,7 @@ function renderStreamRow(input: {
 export interface AgentStreamViewHandle {
   jumpToSource(seq: number, epoch: string): void;
   scrollToBottom(reason?: BottomAnchorLocalRequest["reason"]): void;
+  scrollToAnchor(anchor: string): boolean;
   prepareForViewportChange(): void;
 }
 
@@ -318,6 +322,7 @@ export interface AgentStreamViewProps {
   toast?: ToastApi | null;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   readOnly?: boolean;
+  onReplyInThread?: (anchor: string) => void;
   historyPagination?: {
     hasOlder: boolean;
     isLoadingOlder: boolean;
@@ -372,6 +377,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       readOnly = false,
+      onReplyInThread,
       historyPagination,
     },
     ref,
@@ -696,11 +702,27 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         scrollToBottom(reason = "jump-to-bottom") {
           viewportRef.current?.scrollToBottom(reason);
         },
+        scrollToAnchor(anchor: string) {
+          const messageId = findThreadAnchorMessageId(
+            [...effectiveStreamItems, ...(effectiveStreamHead ?? [])],
+            anchor,
+          );
+          const scrollToMessage = viewportRef.current?.scrollToMessage;
+          if (!messageId || !scrollToMessage) return false;
+          scrollToMessage(messageId);
+          return true;
+        },
         prepareForViewportChange() {
           viewportRef.current?.prepareForViewportChange();
         },
       }),
-      [chatOutline, timelineEpoch, handleTimelineHistoryLoadError],
+      [
+        chatOutline,
+        effectiveStreamHead,
+        effectiveStreamItems,
+        handleTimelineHistoryLoadError,
+        timelineEpoch,
+      ],
     );
 
     const scrollToBottom = useCallback(() => {
@@ -1037,11 +1059,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
           onPin: handlePin,
+          onReplyInThread: onReplyInThread,
         });
       },
       [
         handleForkAssistantTurn,
         handlePin,
+        onReplyInThread,
         readOnly,
         renderStreamItemContent,
         streamRenderStrategy,
@@ -1075,12 +1099,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             onForkAssistantTurn={readOnly ? undefined : handleForkAssistantTurn}
             onForkInFlightTurn={readOnly ? undefined : handleForkInFlightTurn}
             onPin={handlePin}
+            onReplyInThread={onReplyInThread}
           />
         ) : null,
       [
         handleForkAssistantTurn,
         handleForkInFlightTurn,
         handlePin,
+        onReplyInThread,
         readOnly,
         isTurnActive,
         baseRenderModel.turnTiming.runningStartedAt,
