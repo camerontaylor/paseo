@@ -1568,7 +1568,9 @@ export const ru: TranslationResources = {
       routeBestMatchAction: "Route this prompt to the best matching chat",
       routeAmbiguous: "No clear best match. Choose the destination; nothing sent yet.",
       routeNewConversation: "Start a new conversation with this draft",
-      moveDraft: "Wrong chat? Move draft",
+      moveDraft: "Wrong chat? Copy prompt",
+      copyWarning:
+        "The original chat may already run this prompt. Sending the copy creates another queue item.",
     },
     filterSidebar: {
       matches: {

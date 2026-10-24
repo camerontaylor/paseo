@@ -583,6 +583,9 @@ export interface QueueOutboxWriter {
     composerAttachments: QueuedComposerAttachment[];
     expectedWorkspaceId?: string;
     expectedProjectId?: string;
+    routingOrigin?: true;
+    routingDraftVersion?: number;
+    routingDraftUpdatedAt?: number;
   }) => void | Promise<void>;
   remove: (itemId: string) => void | Promise<void>;
   flush?: () => Promise<void>;
@@ -592,6 +595,9 @@ export interface QueueComposerMessageOnServerInput {
   itemId?: string;
   expectedWorkspaceId?: string;
   expectedProjectId?: string;
+  routingOrigin?: true;
+  routingDraftVersion?: number;
+  routingDraftUpdatedAt?: number;
   client: ComposerQueueClient;
   agentId: string;
   text: string;
@@ -665,6 +671,13 @@ export async function queueComposerMessageOnServer(
               : {}),
             ...(input.expectedProjectId !== undefined
               ? { expectedProjectId: input.expectedProjectId }
+              : {}),
+            ...(input.routingOrigin ? { routingOrigin: true as const } : {}),
+            ...(input.routingDraftVersion !== undefined
+              ? { routingDraftVersion: input.routingDraftVersion }
+              : {}),
+            ...(input.routingDraftUpdatedAt !== undefined
+              ? { routingDraftUpdatedAt: input.routingDraftUpdatedAt }
               : {}),
           });
         } catch (error) {

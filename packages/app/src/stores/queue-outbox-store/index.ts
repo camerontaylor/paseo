@@ -34,8 +34,22 @@ export {
   type QueueOutboxFlushClient,
 } from "./model";
 
+const RoutingReceiptSchema = z.object({
+  itemId: z.string(),
+  serverId: z.string(),
+  agentId: z.string(),
+  workspaceId: z.string(),
+  projectId: z.string(),
+  text: z.string(),
+  draftVersion: z.number().int().nonnegative(),
+  draftUpdatedAt: z.number(),
+  acceptedAt: z.number(),
+});
+export type RoutingReceipt = z.infer<typeof RoutingReceiptSchema>;
+
 const PersistedQueueOutboxSchema = z.object({
   entries: z.record(z.string(), PendingQueueEnqueueSchema),
+  routingReceipt: RoutingReceiptSchema.nullable().optional(),
   directEntries: z.record(z.string(), PendingDirectSendSchema).optional(),
   durableHosts: z.record(z.string(), z.literal(true)).optional(),
 });
@@ -44,6 +58,7 @@ interface QueueOutboxState {
   entries: Record<string, PendingQueueEnqueue>;
   directEntries: Record<string, PendingDirectSend>;
   durableHosts: Record<string, true>;
+  routingReceipt: RoutingReceipt | null;
   /**
    * The last queue-storage write failure, surfaced so the queue track can show
    * a rendered, actionable error instead of leaving a silent persistence gap.
@@ -89,6 +104,7 @@ interface QueueOutboxActions {
   clearStorageError: () => void;
   entriesForServer: (serverId: string) => PendingQueueEnqueue[];
   entriesForAgent: (serverId: string, agentId: string) => PendingQueueEnqueue[];
+  acknowledgeRoutingEntry: (entry: PendingQueueEnqueue) => Promise<void>;
 }
 
 type QueueOutboxStore = QueueOutboxState & QueueOutboxActions;
@@ -225,6 +241,7 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
       entries: {},
       directEntries: {},
       durableHosts: {},
+      routingReceipt: null,
       storageError: null,
       addDirect: (entry) =>
         serializeQueueOperation("queue-outbox-mutation", async () => {
@@ -627,15 +644,48 @@ export const useQueueOutboxStore = create<QueueOutboxStore>()(
             (entry) => entry.serverId === serverId && entry.agentId === agentId,
           ),
         ),
+      acknowledgeRoutingEntry: (entry) =>
+        serializeQueueOperation("queue-outbox-mutation", async () => {
+          await awaitOutboxHydration();
+          if (
+            !entry.routingOrigin ||
+            !entry.expectedWorkspaceId ||
+            !entry.expectedProjectId ||
+            entry.routingDraftVersion === undefined
+          )
+            return;
+          const previous = get().routingReceipt;
+          const receipt: RoutingReceipt = {
+            itemId: entry.itemId,
+            serverId: entry.serverId,
+            agentId: entry.agentId,
+            workspaceId: entry.expectedWorkspaceId,
+            projectId: entry.expectedProjectId,
+            text: entry.text,
+            draftVersion: entry.routingDraftVersion,
+            draftUpdatedAt: entry.routingDraftUpdatedAt ?? 0,
+            acceptedAt: Date.now(),
+          };
+          set({ routingReceipt: receipt });
+          try {
+            await pendingWrite;
+          } catch (error) {
+            set({ routingReceipt: previous });
+            get().reportStorageError(entry.itemId);
+            throw error;
+          }
+          get().clearStorageError();
+        }),
     }),
     {
       name: "paseo-queue-outbox",
       version: 1,
       storage: durableStorage,
-      partialize: ({ entries, directEntries, durableHosts }) => ({
+      partialize: ({ entries, directEntries, durableHosts, routingReceipt }) => ({
         entries,
         directEntries,
         durableHosts,
+        routingReceipt,
       }),
       onRehydrateStorage: () => (_state, error) => {
         if (error) failHydrationWaiters();
@@ -710,6 +760,7 @@ export async function flushQueueOutboxForServer(input: {
   const store = useQueueOutboxStore.getState();
   await flushQueueOutbox({
     ...input,
+    onAccepted: (entry) => useQueueOutboxStore.getState().acknowledgeRoutingEntry(entry),
     outbox: {
       list: (serverId) => useQueueOutboxStore.getState().entriesForServer(serverId),
       get: (itemId) => useQueueOutboxStore.getState().entries[itemId],

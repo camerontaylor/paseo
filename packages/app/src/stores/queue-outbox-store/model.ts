@@ -28,6 +28,9 @@ export const PendingQueueEnqueueSchema = z.object({
   composerAttachments: z.array(QueuedComposerAttachmentSchema),
   expectedWorkspaceId: z.string().optional(),
   expectedProjectId: z.string().optional(),
+  routingOrigin: z.literal(true).optional(),
+  routingDraftVersion: z.number().int().nonnegative().optional(),
+  routingDraftUpdatedAt: z.number().optional(),
   createdAt: z.number(),
   attempts: z.number().int().nonnegative(),
   /**
@@ -110,6 +113,7 @@ export interface FlushQueueOutboxInput {
    */
   onEntryExhausted?: (entry: PendingQueueEnqueue) => void;
   onRejected?: (entry: PendingQueueEnqueue, message: string) => void;
+  onAccepted?: (entry: PendingQueueEnqueue, snapshot: AgentQueueSnapshot) => void | Promise<void>;
 }
 
 /**
@@ -167,6 +171,9 @@ async function settleDispatch(
   // A cancellation that raced the acknowledgement must survive: the removal
   // happens with preserve-removal-intent, and a tombstone that appeared
   // mid-flight is dispatched before the entry settles.
+  if (reserved.routingOrigin && !resolveCurrent(reserved.itemId)?.removalRequested) {
+    await input.onAccepted?.(reserved, snapshot);
+  }
   await input.outbox.remove(reserved.itemId, true);
   const latest = resolveCurrent(reserved.itemId);
   if (!latest?.removalRequested) {

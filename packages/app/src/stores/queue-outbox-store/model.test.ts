@@ -107,6 +107,27 @@ describe("flushQueueOutbox", () => {
     expect(applied).toHaveLength(2);
   });
 
+  test("records a routed receipt before removing its durable delivery intent", async () => {
+    const harness = createOutbox([pendingEntry({ routingOrigin: true })]);
+    const events: string[] = [];
+    const originalRemove = harness.outbox.remove;
+    harness.outbox.remove = async (itemId, preserveRemovalIntent) => {
+      events.push("remove");
+      await originalRemove(itemId, preserveRemovalIntent);
+    };
+    await flushQueueOutbox({
+      serverId: "server-1",
+      outbox: harness.outbox,
+      client: { enqueueAgentMessage: async () => snapshotWith("item-1") },
+      applySnapshot: () => {},
+      onAccepted: async () => {
+        events.push("receipt");
+      },
+    });
+    expect(events).toEqual(["receipt", "remove"]);
+    expect(harness.entries.size).toBe(0);
+  });
+
   test("a reconnect preserves the routed destination fence and parks a moved recipient", async () => {
     const harness = createOutbox([
       pendingEntry({

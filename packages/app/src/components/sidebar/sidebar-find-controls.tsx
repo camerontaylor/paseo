@@ -13,6 +13,7 @@ import { SidebarFilterScopeMenu } from "./sidebar-filter-scope-menu";
 import { useSidebarFilterRequestFocus } from "./sidebar-filter-request";
 import { useStartChatFromFilterQuery } from "./use-start-chat-from-filter-query";
 import { useRoutingBridge } from "./find-or-start";
+import { SessionRoutingComposer } from "./session-routing/composer";
 
 /** The same Find field is shown on compact and desktop sidebars. Typing never sends a prompt. */
 const ThemedSearch = withUnistyles(Search);
@@ -60,36 +61,39 @@ export function SidebarFindControls() {
   }, [setSearchQuery]);
 
   return (
-    <View style={styles.container}>
-      <View style={styles.field}>
-        <ThemedSearch size={15} uniProps={mutedColor} />
-        <EditingTextInput
-          ref={inputRef}
-          initialValue={searchQuery}
-          onChangeText={setSearchQuery}
-          onKeyPress={onKeyPress}
-          onSubmitEditing={openOrStart}
-          returnKeyType="go"
-          placeholder={t("sidebar.filterSidebar.placeholder")}
-          accessibilityLabel={t("sidebar.filterSidebar.placeholder")}
-          autoCorrect={false}
-          autoCapitalize="none"
-          testID="sidebar-title-project-filter"
-          style={styles.input}
-        />
-        {searchQuery ? (
-          <PressHighlight
-            onPress={clear}
-            accessibilityRole="button"
-            accessibilityLabel={t("sidebar.filterSidebar.clear")}
-            testID="sidebar-title-project-filter-clear"
-          >
-            <ThemedX size={14} uniProps={mutedColor} />
-          </PressHighlight>
-        ) : null}
+    <>
+      <View style={styles.container}>
+        <View style={styles.field}>
+          <ThemedSearch size={15} uniProps={mutedColor} />
+          <EditingTextInput
+            ref={inputRef}
+            initialValue={searchQuery}
+            onChangeText={setSearchQuery}
+            onKeyPress={onKeyPress}
+            onSubmitEditing={openOrStart}
+            returnKeyType="go"
+            placeholder={t("sidebar.filterSidebar.placeholder")}
+            accessibilityLabel={t("sidebar.filterSidebar.placeholder")}
+            autoCorrect={false}
+            autoCapitalize="none"
+            testID="sidebar-title-project-filter"
+            style={styles.input}
+          />
+          {searchQuery ? (
+            <PressHighlight
+              onPress={clear}
+              accessibilityRole="button"
+              accessibilityLabel={t("sidebar.filterSidebar.clear")}
+              testID="sidebar-title-project-filter-clear"
+            >
+              <ThemedX size={14} uniProps={mutedColor} />
+            </PressHighlight>
+          ) : null}
+        </View>
+        <SidebarFilterScopeMenu />
       </View>
-      <SidebarFilterScopeMenu />
-    </View>
+      <SessionRoutingComposer />
+    </>
   );
 }
 
