@@ -8815,7 +8815,13 @@ export class Session {
       return;
     }
 
-    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    const routed =
+      msg.type === "agent.queue.enqueue.request" &&
+      (msg.expectedWorkspaceId !== undefined || msg.expectedProjectId !== undefined);
+    // A routed intent carries an exact agent id. Prefix resolution could retarget it.
+    const resolved = routed
+      ? { ok: true as const, agentId: msg.agentId }
+      : await this.resolveAgentIdentifier(msg.agentId);
     if (!resolved.ok) {
       this.emit({
         type: responseType,
@@ -8859,16 +8865,25 @@ export class Session {
     msg: AgentQueueRequestMessage,
   ): Promise<AgentQueueSnapshot> {
     switch (msg.type) {
-      case "agent.queue.enqueue.request":
-        return service.enqueue({
-          agentId,
-          itemId: msg.itemId,
-          text: msg.text,
-          intent: msg.intent,
-          images: msg.images,
-          attachments: msg.attachments,
-          composerAttachments: msg.composerAttachments,
-        });
+      case "agent.queue.enqueue.request": {
+        const enqueue = () =>
+          service.enqueue({
+            agentId,
+            itemId: msg.itemId,
+            text: msg.text,
+            intent: msg.intent,
+            images: msg.images,
+            attachments: msg.attachments,
+            composerAttachments: msg.composerAttachments,
+            validateDestination:
+              msg.expectedWorkspaceId !== undefined || msg.expectedProjectId !== undefined
+                ? () => this.validateRoutingDestination(agentId, msg)
+                : undefined,
+          });
+        return msg.expectedWorkspaceId !== undefined || msg.expectedProjectId !== undefined
+          ? this.agentManager.runLifecycleMutation(agentId, enqueue)
+          : enqueue();
+      }
       case "agent.queue.update.request":
         return service.update(agentId, msg.itemId, msg.expectedRevision, {
           text: msg.text,
@@ -8886,6 +8901,30 @@ export class Session {
         return service.sendNow(agentId, msg.itemId, msg.expectedRevision);
       case "agent.queue.list.request":
         return service.list(agentId);
+    }
+  }
+
+  private async validateRoutingDestination(
+    agentId: string,
+    msg: Extract<AgentQueueRequestMessage, { type: "agent.queue.enqueue.request" }>,
+  ): Promise<void> {
+    const record = await this.agentStorage.get(agentId);
+    const live = this.agentManager.getAgent(agentId);
+    if (!record && !live) throw new Error("session_route_destination_missing");
+    const workspaceId = live?.workspaceId ?? record?.workspaceId;
+    const workspace = workspaceId ? await this.workspaceRegistry.get(workspaceId) : null;
+    const project = workspace ? await this.projectRegistry.get(workspace.projectId) : null;
+    if (
+      !workspace ||
+      workspace.archivedAt ||
+      !project ||
+      project.archivedAt ||
+      !msg.expectedWorkspaceId ||
+      workspace.workspaceId !== msg.expectedWorkspaceId ||
+      (msg.expectedProjectId && workspace.projectId !== msg.expectedProjectId) ||
+      record?.archivedAt
+    ) {
+      throw new Error("session_route_destination_changed");
     }
   }
 

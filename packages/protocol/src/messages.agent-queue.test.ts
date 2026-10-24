@@ -66,6 +66,35 @@ describe("durable agent queue wire contract", () => {
     ).toThrow();
   });
 
+  it("keeps route destination fields optional and advertises an independent guard capability", () => {
+    const bare = AgentQueueEnqueueRequestSchema.parse({
+      type: "agent.queue.enqueue.request",
+      requestId: "req-1",
+      agentId: "agent-1",
+      itemId: "item-1",
+      text: "hello",
+      intent: "queue",
+    });
+    expect(bare.expectedWorkspaceId).toBeUndefined();
+    const routed = AgentQueueEnqueueRequestSchema.parse({
+      ...bare,
+      expectedWorkspaceId: "workspace-a",
+      expectedProjectId: "project-a",
+    });
+    expect(routed).toMatchObject({
+      expectedWorkspaceId: "workspace-a",
+      expectedProjectId: "project-a",
+    });
+    expect(
+      ServerInfoStatusPayloadSchema.parse({
+        status: "server_info",
+        protocolVersion: 1,
+        serverId: "server-1",
+        features: { routedQueueAdmission: true },
+      }).features?.routedQueueAdmission,
+    ).toBe(true);
+  });
+
   it("registers every queue RPC on the session unions", () => {
     for (const type of [
       "agent.queue.enqueue.request",

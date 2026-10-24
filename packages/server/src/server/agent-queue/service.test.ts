@@ -151,6 +151,23 @@ describe("AgentQueueService", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  test("a destination change aborts queue admission before any host row is saved", async () => {
+    harness.agents.lifecycle = "running";
+    await expect(
+      harness.service.enqueue({
+        agentId: AGENT_ID,
+        itemId: "routed-1",
+        text: "wrong workspace",
+        intent: "queue",
+        validateDestination: async () => {
+          throw new Error("session_route_destination_changed");
+        },
+      }),
+    ).rejects.toThrow("session_route_destination_changed");
+    expect((await harness.service.list(AGENT_ID)).items).toEqual([]);
+    expect(harness.sent).toEqual([]);
+  });
+
   test("broadcasts the queue to subscribers when an item is enqueued while the agent is busy", async () => {
     harness.agents.lifecycle = "running";
 

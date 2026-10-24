@@ -26,6 +26,8 @@ export const PendingQueueEnqueueSchema = z.object({
   images: z.array(z.object({ data: z.string(), mimeType: z.string() })),
   attachments: z.array(AgentAttachmentWireSchema),
   composerAttachments: z.array(QueuedComposerAttachmentSchema),
+  expectedWorkspaceId: z.string().optional(),
+  expectedProjectId: z.string().optional(),
   createdAt: z.number(),
   attempts: z.number().int().nonnegative(),
   /**
@@ -90,6 +92,8 @@ export interface QueueOutboxFlushClient {
     images?: Array<{ data: string; mimeType: string }>;
     attachments?: PendingQueueEnqueue["attachments"];
     composerAttachments?: PendingQueueEnqueue["composerAttachments"];
+    expectedWorkspaceId?: string;
+    expectedProjectId?: string;
   }) => Promise<AgentQueueSnapshot>;
   /** Resolves the host removal for a tombstoned entry. Absent = removals fail. */
   removeQueuedAgentMessage?: (agentId: string, itemId: string) => Promise<AgentQueueSnapshot>;
@@ -105,6 +109,7 @@ export interface FlushQueueOutboxInput {
    * visible as failed; this only tells the UI the state changed.
    */
   onEntryExhausted?: (entry: PendingQueueEnqueue) => void;
+  onRejected?: (entry: PendingQueueEnqueue, message: string) => void;
 }
 
 /**
@@ -255,6 +260,8 @@ async function dispatchOne(
         images: reserved.images,
         attachments: reserved.attachments,
         composerAttachments: reserved.composerAttachments,
+        expectedWorkspaceId: reserved.expectedWorkspaceId,
+        expectedProjectId: reserved.expectedProjectId,
       });
     }
     await settleDispatch(input, reserved, snapshot);
@@ -265,6 +272,17 @@ async function dispatchOne(
       // already ran; the lane re-dispatches with a fresh reservation — the
       // cap still bounds the total attempts.
       return "conflict";
+    }
+    if (
+      !reserved.removalRequested &&
+      error instanceof Error &&
+      error.name === "AgentQueueDestinationChangedError"
+    ) {
+      // Destination fences are definitive. Keep the entry editable, but never
+      // retry it automatically after a workspace move or archive.
+      await input.outbox.markFailed(reserved.itemId);
+      input.onRejected?.(reserved, error.message);
+      return "failure";
     }
     if (reserved.removalRequested) {
       // The removal outcome, distinct from the reservation counter.

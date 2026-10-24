@@ -107,6 +107,43 @@ describe("flushQueueOutbox", () => {
     expect(applied).toHaveLength(2);
   });
 
+  test("a reconnect preserves the routed destination fence and parks a moved recipient", async () => {
+    const harness = createOutbox([
+      pendingEntry({
+        expectedWorkspaceId: "original-workspace",
+        expectedProjectId: "original-project",
+      }),
+    ]);
+    const sent: Array<{ workspace?: string; project?: string }> = [];
+    const rejected: string[] = [];
+    const client = {
+      enqueueAgentMessage: async (input: {
+        expectedWorkspaceId?: string;
+        expectedProjectId?: string;
+      }): Promise<AgentQueueSnapshot> => {
+        sent.push({
+          workspace: input.expectedWorkspaceId,
+          project: input.expectedProjectId,
+        });
+        const error = new Error("Choose its destination again.");
+        error.name = "AgentQueueDestinationChangedError";
+        throw error;
+      },
+    };
+    for (let reconnect = 0; reconnect < 2; reconnect += 1) {
+      await flushQueueOutbox({
+        serverId: "server-1",
+        outbox: harness.outbox,
+        client,
+        applySnapshot: () => {},
+        onRejected: (entry) => rejected.push(entry.itemId),
+      });
+    }
+    expect(sent).toEqual([{ workspace: "original-workspace", project: "original-project" }]);
+    expect(harness.entries.get("item-1")?.failedAt).toBeDefined();
+    expect(rejected).toEqual(["item-1"]);
+  });
+
   test("only flushes entries for the requested server", async () => {
     const harness = createOutbox([
       pendingEntry({ itemId: "item-1", serverId: "server-1" }),

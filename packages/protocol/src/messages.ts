@@ -2833,6 +2833,8 @@ export const AgentQueueEnqueueRequestSchema = z.object({
   images: z.array(ImageAttachmentSchema).optional(),
   attachments: z.array(AgentAttachmentWireSchema).optional(),
   composerAttachments: z.array(QueuedComposerAttachmentSchema).optional(),
+  expectedWorkspaceId: z.string().optional(),
+  expectedProjectId: z.string().optional(),
 });
 
 /**
@@ -4213,6 +4215,9 @@ export const ServerInfoStatusPayloadSchema = z
         // released daemon understands. Remove the gate after 2027-10-01 once
         // the supported daemon floor is past every 0.11.x host.
         durableAgentQueueV1: z.boolean().optional(),
+        // COMPAT(routedQueueAdmission): added in TMAD intake 2026-10-24;
+        // old daemons may ignore optional destination fields.
+        routedQueueAdmission: z.boolean().optional(),
         // COMPAT(durableVoiceInputV1): fork addition (TM-04). Gates voice
         // attachment admission into the durable agent queue; an old daemon
         // never answers voice.input.receipts.read requests.

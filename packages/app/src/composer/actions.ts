@@ -531,6 +531,8 @@ export interface ComposerQueueClient {
     images?: Array<{ data: string; mimeType: string }>;
     attachments?: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
     composerAttachments?: QueuedComposerAttachment[];
+    expectedWorkspaceId?: string;
+    expectedProjectId?: string;
   }) => Promise<AgentQueueSnapshot>;
   updateQueuedAgentMessage: (input: {
     agentId: string;
@@ -579,6 +581,8 @@ export interface QueueOutboxWriter {
     images: Array<{ data: string; mimeType: string }>;
     attachments: ReturnType<typeof splitComposerAttachmentsForSubmit>["attachments"];
     composerAttachments: QueuedComposerAttachment[];
+    expectedWorkspaceId?: string;
+    expectedProjectId?: string;
   }) => void | Promise<void>;
   remove: (itemId: string) => void | Promise<void>;
   flush?: () => Promise<void>;
@@ -586,6 +590,8 @@ export interface QueueOutboxWriter {
 
 export interface QueueComposerMessageOnServerInput {
   itemId?: string;
+  expectedWorkspaceId?: string;
+  expectedProjectId?: string;
   client: ComposerQueueClient;
   agentId: string;
   text: string;
@@ -654,6 +660,12 @@ export async function queueComposerMessageOnServer(
             images: images ?? [],
             attachments: wirePayload.attachments,
             composerAttachments: toQueuedComposerAttachments(input.attachments),
+            ...(input.expectedWorkspaceId !== undefined
+              ? { expectedWorkspaceId: input.expectedWorkspaceId }
+              : {}),
+            ...(input.expectedProjectId !== undefined
+              ? { expectedProjectId: input.expectedProjectId }
+              : {}),
           });
         } catch (error) {
           return {
@@ -713,6 +725,12 @@ export async function queueComposerMessageOnServer(
     images: images ?? [],
     attachments: wirePayload.attachments,
     composerAttachments: toQueuedComposerAttachments(input.attachments),
+    ...(input.expectedWorkspaceId !== undefined
+      ? { expectedWorkspaceId: input.expectedWorkspaceId }
+      : {}),
+    ...(input.expectedProjectId !== undefined
+      ? { expectedProjectId: input.expectedProjectId }
+      : {}),
   };
   try {
     await input.outbox?.add(enqueueInput);

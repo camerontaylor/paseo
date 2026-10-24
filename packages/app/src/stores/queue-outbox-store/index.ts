@@ -693,6 +693,7 @@ export async function flushQueueOutboxForServer(input: {
   client: QueueOutboxFlushClient;
   applySnapshot: (snapshot: AgentQueueSnapshot) => void;
   onEntryExhausted?: (entry: PendingQueueEnqueue) => void;
+  onRejected?: (entry: PendingQueueEnqueue, message: string) => void;
 }): Promise<void> {
   try {
     await awaitOutboxHydration();

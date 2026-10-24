@@ -132,6 +132,8 @@ export interface EnqueueAgentMessageInput {
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: AgentAttachment[];
   composerAttachments?: QueuedComposerAttachment[];
+  /** Called inside the serialized admission mutation, immediately before append. */
+  validateDestination?: () => Promise<void>;
 }
 
 export interface UpdateQueuedMessageInput {
@@ -533,6 +535,7 @@ export class AgentQueueService {
       if (current.items.length >= MAX_ITEMS_PER_QUEUE) {
         throw new QueueFullError(MAX_ITEMS_PER_QUEUE);
       }
+      await input.validateDestination?.();
       return { ...current, items: [...current.items, item] };
     });
     this.publish(result);

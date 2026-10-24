@@ -1032,6 +1032,13 @@ export class AgentMessageRejectedError extends Error {
   }
 }
 
+export class AgentQueueDestinationChangedError extends Error {
+  constructor() {
+    super("The selected chat moved, was archived, or was deleted. Choose its destination again.");
+    this.name = "AgentQueueDestinationChangedError";
+  }
+}
+
 export class DaemonConnectionError extends Error {
   constructor(
     message: string,
@@ -3812,6 +3819,8 @@ export class DaemonClient {
     images?: Array<{ data: string; mimeType: string }>;
     attachments?: AgentAttachmentWire[];
     composerAttachments?: QueuedComposerAttachment[];
+    expectedWorkspaceId?: string;
+    expectedProjectId?: string;
   }): Promise<AgentQueueSnapshot> {
     return this.requireAgentQueuePayload(
       await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.enqueue.response">({
@@ -3825,6 +3834,12 @@ export class DaemonClient {
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           ...(input.composerAttachments?.length
             ? { composerAttachments: input.composerAttachments }
+            : {}),
+          ...(input.expectedWorkspaceId !== undefined
+            ? { expectedWorkspaceId: input.expectedWorkspaceId }
+            : {}),
+          ...(input.expectedProjectId !== undefined
+            ? { expectedProjectId: input.expectedProjectId }
             : {}),
         },
       }),
@@ -3938,6 +3953,12 @@ export class DaemonClient {
     error: string | null;
   }): AgentQueueSnapshot {
     if (!payload.queue) {
+      if (
+        payload.error === "session_route_destination_changed" ||
+        payload.error === "session_route_destination_missing"
+      ) {
+        throw new AgentQueueDestinationChangedError();
+      }
       throw new Error(payload.error ?? "Agent queue request rejected");
     }
     return payload.queue;
