@@ -105,6 +105,7 @@ interface SplitContainerProps {
   isWorkspaceFocused: boolean;
   uiTabs: WorkspaceTab[];
   activityByAgentId: Map<string, number>;
+  activityByTabId?: Map<string, number>;
   unreadTabIds: Set<string>;
   hoveredCloseTabKey: string | null;
   setHoveredCloseTabKey: Dispatch<SetStateAction<string | null>>;
@@ -320,6 +321,7 @@ export function SplitContainer({
   isWorkspaceFocused,
   uiTabs,
   activityByAgentId,
+  activityByTabId,
   unreadTabIds,
   hoveredCloseTabKey,
   setHoveredCloseTabKey,
@@ -659,6 +661,7 @@ export function SplitContainer({
                   workspaceKey={workspaceKey}
                   uiTabs={uiTabs}
                   activityByAgentId={activityByAgentId}
+                  activityByTabId={activityByTabId}
                   unreadTabIds={unreadTabIds}
                   focusedPaneId={layout.focusedPaneId}
                   normalizedServerId={normalizedServerId}
@@ -935,6 +938,7 @@ function SplitNodeView({
   workspaceKey,
   uiTabs,
   activityByAgentId,
+  activityByTabId,
   unreadTabIds,
   focusedPaneId,
   normalizedServerId,
@@ -1025,6 +1029,7 @@ function SplitNodeView({
             pane={node.pane}
             uiTabs={uiTabs}
             activityByAgentId={activityByAgentId}
+            activityByTabId={activityByTabId}
             unreadTabIds={unreadTabIds}
             isFocused={node.pane.id === focusedPaneId}
             normalizedServerId={normalizedServerId}
@@ -1079,6 +1084,7 @@ function SplitNodeView({
               workspaceKey={workspaceKey}
               uiTabs={uiTabs}
               activityByAgentId={activityByAgentId}
+              activityByTabId={activityByTabId}
               unreadTabIds={unreadTabIds}
               focusedPaneId={focusedPaneId}
               normalizedServerId={normalizedServerId}
@@ -1141,6 +1147,7 @@ const SplitPaneView = memo(function SplitPaneView({
   pane,
   uiTabs,
   activityByAgentId,
+  activityByTabId,
   unreadTabIds,
   isFocused,
   normalizedServerId,
@@ -1194,6 +1201,7 @@ const SplitPaneView = memo(function SplitPaneView({
       sortTabsByActivity(
         paneTabs.map((tab) => ({ tab })),
         activityByAgentId,
+        activityByTabId,
       ).map(({ tab }) => ({
         tab,
         isActive: tab.key === activeTabDescriptor?.key,
@@ -1204,6 +1212,7 @@ const SplitPaneView = memo(function SplitPaneView({
     [
       activeTabDescriptor?.key,
       activityByAgentId,
+      activityByTabId,
       closingTabIds,
       hoveredCloseTabKey,
       paneTabs,

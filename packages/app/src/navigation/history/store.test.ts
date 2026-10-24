@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createNavigationHistoryStore } from "./store";
 import type { HistoryEntry } from "./model";
 
-const ws = (workspaceId: string, tabId: string | null = null): HistoryEntry => ({
+const ws = (
+  workspaceId: string,
+  tabId: string | null = null,
+): Extract<HistoryEntry, { kind: "workspace" }> => ({
   kind: "workspace",
   serverId: "srv",
   workspaceId,

@@ -44,7 +44,7 @@ export function useRecentSessionRows(limit?: number): RecentSessionRow[] {
         agentInfo: (serverId, agentId) => {
           const agent = sessions[serverId]?.agents.get(agentId);
           if (!agent) return null;
-          const liveWorkspace = selectWorkspace({ sessions }, serverId, agent.workspaceId);
+          const liveWorkspace = selectWorkspace({ sessions }, serverId, agent.workspaceId ?? null);
           if (!liveWorkspace || liveWorkspace.archivingAt) return null;
           return {
             title: agent.title,

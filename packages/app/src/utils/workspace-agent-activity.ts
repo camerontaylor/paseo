@@ -9,6 +9,7 @@ export interface WorkspaceAgentActivity {
   lastActivityAt: Date;
   lastMessageAt?: Date;
   lastUserMessageAt?: Date;
+  lastAssistantMessageAt?: Date;
 }
 
 function workspaceAgentStatus(agent: Agent): Agent["status"] {
@@ -25,6 +26,7 @@ export function buildWorkspaceAgentActivityIndex(
   const lastActivityAtByWorkspaceId = new Map<string, Date>();
   const lastMessageAtByWorkspaceId = new Map<string, Date>();
   const lastUserMessageAtByWorkspaceId = new Map<string, Date>();
+  const lastAssistantMessageAtByWorkspaceId = new Map<string, Date>();
 
   for (const agent of agents.values()) {
     const parentAgent = agent.parentAgentId ? agents.get(agent.parentAgentId) : undefined;
@@ -33,7 +35,12 @@ export function buildWorkspaceAgentActivityIndex(
     }
 
     recordLatest(lastActivityAtByWorkspaceId, agent.workspaceId, agent.lastActivityAt);
-    recordMessageClocks(agent, lastMessageAtByWorkspaceId, lastUserMessageAtByWorkspaceId);
+    recordMessageClocks(
+      agent,
+      lastMessageAtByWorkspaceId,
+      lastUserMessageAtByWorkspaceId,
+      lastAssistantMessageAtByWorkspaceId,
+    );
 
     const enteredAt = agent.attentionTimestamp ?? agent.updatedAt;
     const latestActivityAt = latestActivityAtByWorkspaceId.get(agent.workspaceId);
@@ -61,6 +68,7 @@ export function buildWorkspaceAgentActivityIndex(
       lastActivityAtByWorkspaceId.get(workspaceId) ?? activity.lastActivityAt;
     activity.lastMessageAt = lastMessageAtByWorkspaceId.get(workspaceId);
     activity.lastUserMessageAt = lastUserMessageAtByWorkspaceId.get(workspaceId);
+    activity.lastAssistantMessageAt = lastAssistantMessageAtByWorkspaceId.get(workspaceId);
     const previousActivity = previous?.get(workspaceId);
     activityByWorkspaceId.set(workspaceId, preservePreviousActivity(activity, previousActivity));
   }
@@ -75,11 +83,13 @@ function recordMessageClocks(
   agent: Agent,
   lastMessageAtByWorkspaceId: Map<string, Date>,
   lastUserMessageAtByWorkspaceId: Map<string, Date>,
+  lastAssistantMessageAtByWorkspaceId: Map<string, Date>,
 ): void {
   if (!agent.workspaceId) return;
   const user = messageDate(agent.messageActivity?.lastUserMessageAt) ?? agent.createdAt;
   const assistant = messageDate(agent.messageActivity?.lastAssistantMessageAt);
   recordLatest(lastUserMessageAtByWorkspaceId, agent.workspaceId, user);
+  if (assistant) recordLatest(lastAssistantMessageAtByWorkspaceId, agent.workspaceId, assistant);
   recordLatest(
     lastMessageAtByWorkspaceId,
     agent.workspaceId,
@@ -126,6 +136,7 @@ function sameClocks(left: WorkspaceAgentActivity, right: WorkspaceAgentActivity)
   return (
     left.lastActivityAt.getTime() === right.lastActivityAt.getTime() &&
     left.lastMessageAt?.getTime() === right.lastMessageAt?.getTime() &&
-    left.lastUserMessageAt?.getTime() === right.lastUserMessageAt?.getTime()
+    left.lastUserMessageAt?.getTime() === right.lastUserMessageAt?.getTime() &&
+    left.lastAssistantMessageAt?.getTime() === right.lastAssistantMessageAt?.getTime()
   );
 }

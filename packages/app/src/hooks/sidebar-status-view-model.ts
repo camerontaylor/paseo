@@ -63,7 +63,7 @@ function compareStatusRows(
   sortMode: SidebarSortMode,
 ): number {
   const sortDelta = compareStatusSort(a, b, sortMode);
-  if (sortMode === "recent" || sortMode === "user") return sortDelta;
+  if (sortMode === "recent" || sortMode === "user" || sortMode === "assistant") return sortDelta;
   if (sortDelta !== 0) return sortDelta;
   const aTime = a.statusEnteredAt?.getTime() ?? null;
   const bTime = b.statusEnteredAt?.getTime() ?? null;
@@ -92,8 +92,14 @@ function compareStatusSort(
   b: SidebarWorkspaceEntry,
   sortMode: SidebarSortMode,
 ): number {
-  if (sortMode === "recent" || sortMode === "user") {
-    const field = sortMode === "recent" ? "lastMessageAt" : "lastUserMessageAt";
+  if (sortMode === "recent" || sortMode === "user" || sortMode === "assistant") {
+    const field = (
+      {
+        recent: "lastMessageAt",
+        user: "lastUserMessageAt",
+        assistant: "lastAssistantMessageAt",
+      } as const
+    )[sortMode];
     return (b[field]?.getTime() ?? 0) - (a[field]?.getTime() ?? 0);
   }
   if (sortMode === "title") {

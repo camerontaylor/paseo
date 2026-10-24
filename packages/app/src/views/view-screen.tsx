@@ -38,6 +38,7 @@ import { ViewPaneSurface } from "@/views/view-pane-surface";
 import { viewAgentActionScope } from "@/views/view-agent-action-scope";
 
 const EMPTY_TAB_IDS = new Set<string>();
+const EMPTY_AGENT_ACTIVITY = new Map<string, number>();
 
 type SplitPosition = "left" | "right" | "top" | "bottom";
 
@@ -428,6 +429,8 @@ function ViewScreenContent({ viewId }: { viewId: string }) {
               normalizedWorkspaceId=""
               isWorkspaceFocused
               uiTabs={uiTabs}
+              activityByAgentId={EMPTY_AGENT_ACTIVITY}
+              activityByTabId={activityByTabId}
               unreadTabIds={unreadTabIds}
               hoveredCloseTabKey={hoveredCloseTabKey}
               setHoveredCloseTabKey={setHoveredCloseTabKey}

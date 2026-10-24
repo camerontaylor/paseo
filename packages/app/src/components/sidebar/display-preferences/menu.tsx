@@ -98,6 +98,7 @@ const SORT_ICONS: Record<SidebarSortMode, OptionIcon> = {
   manual: withUnistyles(SortDesc),
   recent: withUnistyles(Clock),
   user: withUnistyles(Circle),
+  assistant: withUnistyles(CircleCheck),
   title: withUnistyles(Type),
 };
 
@@ -105,6 +106,7 @@ const SORT_LABEL_KEYS: Record<SidebarSortMode, string> = {
   manual: "sidebar.display.sort.manual",
   recent: "sidebar.display.sort.recent",
   user: "sidebar.display.sort.user",
+  assistant: "sidebar.display.sort.assistant",
   title: "sidebar.display.sort.title",
 };
 
@@ -137,7 +139,7 @@ const TRAILING_ICONS: Record<SidebarTrailingChoice, OptionIcon> = {
   timestamp: withUnistyles(Clock),
 };
 
-const SORT_CHOICES: readonly SidebarSortMode[] = ["recent", "user", "manual", "title"];
+const SORT_CHOICES: readonly SidebarSortMode[] = ["recent", "user", "assistant", "manual", "title"];
 const SORT_CHOICES_LEGACY: readonly SidebarSortMode[] = ["manual", "title"];
 
 const GROUPING_MODES: readonly SidebarGroupMode[] = ["project", "status"];

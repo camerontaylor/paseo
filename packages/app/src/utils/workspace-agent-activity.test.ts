@@ -340,6 +340,9 @@ describe("workspace agent activity index", () => {
     expect(index.get("workspace-a")?.lastUserMessageAt).toEqual(
       new Date("2026-06-01T11:00:00.000Z"),
     );
+    expect(index.get("workspace-a")?.lastAssistantMessageAt).toEqual(
+      new Date("2026-06-01T10:00:00.000Z"),
+    );
     expect(index.get("workspace-a")?.lastActivityAt).toEqual(new Date("2026-06-01T12:00:00.000Z"));
   });
 
