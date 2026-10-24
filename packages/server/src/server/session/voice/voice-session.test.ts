@@ -166,6 +166,72 @@ describe("VoiceSession streaming transcription", () => {
     await voiceSession.cleanup();
   });
 
+  test("verbal mute keeps recognition active and discards ordinary speech until the exact unmute command", async () => {
+    const { voiceSession, detector, sttSession, host } = createVoiceSession();
+    await voiceSession.handleSetVoiceMode(true, VOICE_AGENT_ID, "start", {
+      attachmentId: "attachment",
+      voiceCommandsEnabled: true,
+    });
+    async function say(segmentId: string, transcript: string) {
+      detector.emit("speech_started");
+      await settle();
+      detector.emit("speech_stopped");
+      await settle();
+      sttSession.emitCommitted({ segmentId, previousSegmentId: null });
+      sttSession.emitTranscript({ segmentId, transcript, isFinal: true });
+      await settle();
+    }
+
+    await say("mute", "mute microphone");
+    expect(host.emitted).toContainEqual(
+      expect.objectContaining({
+        type: "voice_input_state",
+        payload: expect.objectContaining({ isMuted: true }),
+      }),
+    );
+    await say("ordinary", "please do some work");
+    await say("combined", "unmute microphone and run tests");
+    expect(host.spokenInput).toEqual([]);
+    await say("unmute", "unmute microphone");
+    expect(host.emitted).toContainEqual(
+      expect.objectContaining({
+        type: "voice_input_state",
+        payload: expect.objectContaining({ isMuted: false }),
+      }),
+    );
+    await say("request", "run tests");
+    expect(host.spokenInput).toEqual([
+      expect.objectContaining({ text: "run tests", agentId: VOICE_AGENT_ID }),
+    ]);
+    await voiceSession.cleanup();
+  });
+
+  test("verbal mute rejects stale attachment control", async () => {
+    const { voiceSession, host } = createVoiceSession();
+    await voiceSession.handleSetVoiceMode(true, VOICE_AGENT_ID, "start", {
+      attachmentId: "attachment",
+      voiceCommandsEnabled: true,
+    });
+    await voiceSession.handleSetInputMuted({
+      type: "voice.input.set_muted.request",
+      requestId: "stale",
+      attachmentId: "wrong",
+      generation: "wrong",
+      muted: true,
+    });
+    expect(host.emitted).toContainEqual(
+      expect.objectContaining({
+        type: "voice.input.set_muted.response",
+        payload: expect.objectContaining({
+          requestId: "stale",
+          muted: false,
+          error: expect.any(String),
+        }),
+      }),
+    );
+    await voiceSession.cleanup();
+  });
+
   test("stopping aborts synthesis before it can emit into a later attachment", async () => {
     let release!: () => void;
     let started!: () => void;

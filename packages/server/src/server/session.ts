@@ -1285,6 +1285,7 @@ export class Session {
         },
         logger: this.sessionLogger,
         sessionId: this.sessionId,
+        realtimeHome: this.paseoHome,
         sttLanguage,
         tts,
         stt,
@@ -2749,6 +2750,8 @@ export class Session {
       case "abort_request":
       case "audio_played":
       case "set_voice_mode":
+      case "voice.realtime.control.request":
+      case "voice.input.set_muted.request":
       case "dictation_stream_start":
       case "dictation_stream_chunk":
       case "dictation_stream_finish":

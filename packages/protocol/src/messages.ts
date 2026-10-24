@@ -1168,13 +1168,71 @@ export const WorkspaceRecoveryRestoreRequestSchema = z.object({
   requestId: z.string(),
 });
 
+export const VoiceInputSetMutedRequestSchema = z.object({
+  type: z.literal("voice.input.set_muted.request"),
+  requestId: z.string(),
+  muted: z.boolean(),
+  attachmentId: z.string(),
+  generation: z.string(),
+});
+export const VoiceInputSetMutedResponseSchema = z.object({
+  type: z.literal("voice.input.set_muted.response"),
+  payload: z.object({
+    requestId: z.string(),
+    muted: z.boolean(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const RealtimeVoiceStateSchema = z.object({
+  provider: z.literal("openai-realtime"),
+  destination: z.enum(["assistant", "agent"]),
+  connection: z.enum(["connecting", "connected", "unavailable", "off"]),
+  mode: z.enum(["conversation", "listen"]),
+  epoch: z.string(),
+  draft: z.string(),
+  muted: z.boolean(),
+  error: z.string().nullable(),
+  omittedContextEntries: z.number(),
+});
+export type RealtimeVoiceState = z.infer<typeof RealtimeVoiceStateSchema>;
+
+export const RealtimeVoiceControlRequestSchema = z.object({
+  type: z.literal("voice.realtime.control.request"),
+  requestId: z.string(),
+  attachmentId: z.string(),
+  generation: z.string(),
+  action: z.enum([
+    "listen",
+    "end_listening",
+    "clear",
+    "retry",
+    "focus_agent",
+    "back_to_assistant",
+    "mute",
+    "unmute",
+  ]),
+  expectedEpoch: z.string(),
+});
+export const RealtimeVoiceControlResponseSchema = z.object({
+  type: z.literal("voice.realtime.control.response"),
+  payload: z.object({
+    requestId: z.string(),
+    state: RealtimeVoiceStateSchema.nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
 export const SetVoiceModeMessageSchema = z.object({
+  voiceProvider: z.enum(["paseo", "openai-realtime"]).optional(),
   type: z.literal("set_voice_mode"),
   /** Voice attachment identity; the host binds its generation to it. */
   attachmentId: z.string().optional(),
   /** Supplied when an existing attachment reclaims itself after a reconnect. */
   generation: z.string().optional(),
   enabled: z.boolean(),
+  voiceCommandsEnabled: z.boolean().optional(),
+  isMuted: z.boolean().optional(),
   agentId: z.string().optional(),
   requestId: z.string().optional(),
 });
@@ -2315,6 +2373,9 @@ export const WorkspaceRecoveryRestoreResponseSchema = z.object({
 export const SetVoiceModeResponseMessageSchema = z.object({
   type: z.literal("set_voice_mode_response"),
   payload: z.object({
+    realtime: RealtimeVoiceStateSchema.optional(),
+    voiceCommandsEnabled: z.boolean().optional(),
+    isMuted: z.boolean().optional(),
     requestId: z.string(),
     enabled: z.boolean(),
     agentId: z.string().nullable(),
@@ -3674,6 +3735,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceRecoveryInspectRequestSchema,
   WorkspaceRecoveryRestoreRequestSchema,
   SetVoiceModeMessageSchema,
+  RealtimeVoiceControlRequestSchema,
+  VoiceInputSetMutedRequestSchema,
   VoiceInputReceiptsReadRequestSchema,
   SendAgentMessageRequestSchema,
   WaitForFinishRequestSchema,
@@ -3927,6 +3990,8 @@ export const TranscriptionResultMessageSchema = z.object({
 export const VoiceInputStateMessageSchema = z.object({
   type: z.literal("voice_input_state"),
   payload: z.object({
+    realtime: RealtimeVoiceStateSchema.optional(),
+    isMuted: z.boolean().optional(),
     isSpeaking: z.boolean(),
     /** Input problem text, e.g. a transcript that could not be queued. */
     error: z.string().optional(),
@@ -4144,6 +4209,10 @@ export const ServerInfoStatusPayloadSchema = z
         // attachment admission into the durable agent queue; an old daemon
         // never answers voice.input.receipts.read requests.
         durableVoiceInputV1: z.boolean().optional(),
+        // COMPAT(voiceVerbalMute): added in fork v0.12, remove after 2027-04-24.
+        voiceVerbalMute: z.boolean().optional(),
+        // COMPAT(openaiRealtimeVoice): added in fork v0.12, remove after 2027-04-24.
+        openaiRealtimeVoice: z.boolean().optional(),
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: z.boolean().optional(),
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
@@ -7593,6 +7662,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceMarkUnreadResponseSchema,
   SendAgentMessageResponseMessageSchema,
   SetVoiceModeResponseMessageSchema,
+  RealtimeVoiceControlResponseSchema,
+  VoiceInputSetMutedResponseSchema,
   VoiceInputReceiptsReadResponseSchema,
   DaemonGetStatusResponseSchema,
   DaemonGetPairingOfferResponseSchema,

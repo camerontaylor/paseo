@@ -66,6 +66,12 @@ describe("voice microphone controls", () => {
     });
   }
 
+  it("shows the microphone interruption instead of claiming to listen", async () => {
+    await render({ isMuted: false, isCaptureInterrupted: true });
+    expect(container.textContent).toContain("Microphone interrupted");
+    expect(container.textContent).not.toContain("Microphone on");
+  });
+
   it("says it is not listening and why when input stops reaching the agent", async () => {
     await render({ isMuted: false, failure: "host-disconnected" });
     expect(container.textContent).toContain("Not listening");

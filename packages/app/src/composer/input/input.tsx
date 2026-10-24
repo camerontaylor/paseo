@@ -566,10 +566,22 @@ function MessageInputOverlay({
   voice:
     | {
         isMuted: boolean;
+        voiceCommandsEnabled?: boolean;
+        realtime?: import("@getpaseo/protocol/messages").RealtimeVoiceState;
+        isCaptureInterrupted: boolean;
         isVoiceSwitching: boolean;
         failure: import("@/voice/voice-failure").VoiceFailureKind | null;
         lastInputStatus: import("@/voice/voice-runtime").VoiceInputStatus | null;
         toggleMute: () => void;
+        controlRealtime: (
+          action:
+            | "listen"
+            | "end_listening"
+            | "clear"
+            | "retry"
+            | "focus_agent"
+            | "back_to_assistant",
+        ) => Promise<void>;
       }
     | null
     | undefined;
@@ -610,6 +622,10 @@ function MessageInputOverlay({
     return (
       <RealtimeVoiceOverlay
         isMuted={voice.isMuted}
+        voiceCommandsEnabled={voice.voiceCommandsEnabled}
+        realtime={voice.realtime}
+        onRealtimeControl={voice.controlRealtime}
+        isCaptureInterrupted={voice.isCaptureInterrupted}
         isSwitching={voice.isVoiceSwitching}
         failure={voice.failure}
         lastInputStatus={voice.lastInputStatus}

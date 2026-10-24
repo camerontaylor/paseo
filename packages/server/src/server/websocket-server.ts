@@ -1,3 +1,4 @@
+import { realtimeAvailable } from "./session/voice/openai-realtime.js";
 import { stat } from "node:fs/promises";
 import type { CreationSnapshot } from "@getpaseo/protocol/messages";
 import type { AgentQueueService } from "./agent-queue/service.js";
@@ -1956,6 +1957,10 @@ export class VoiceAssistantWebSocketServer {
         // the gate while stock peers are supported. This contract adapts source
         // voiceConcurrentInput to TM-02 admission and receipt reconciliation.
         durableVoiceInputV1: this.agentQueueService !== null,
+        // COMPAT(openaiRealtimeVoice): added in fork v0.12, remove after 2027-04-24.
+        openaiRealtimeVoice: this.agentQueueService !== null && realtimeAvailable(),
+        // COMPAT(voiceVerbalMute): added in fork v0.12, remove after 2027-04-24.
+        voiceVerbalMute: true,
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: true,
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97

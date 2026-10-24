@@ -97,4 +97,30 @@ describe("voice attachment and failure wire contract", () => {
       }).features?.durableVoiceInputV1,
     ).toBeUndefined();
   });
+  it("accepts optional realtime and verbal mute capabilities and attachment controls", () => {
+    const status = ServerInfoStatusPayloadSchema.parse({
+      status: "server_info",
+      serverId: "daemon-1",
+      features: { openaiRealtimeVoice: true, voiceVerbalMute: true },
+    });
+    expect(status.features).toMatchObject({ openaiRealtimeVoice: true, voiceVerbalMute: true });
+
+    const control = {
+      type: "voice.realtime.control.request",
+      requestId: "control",
+      action: "mute",
+      attachmentId: "attachment",
+      generation: "generation",
+      expectedEpoch: "epoch",
+    };
+    expect(SessionInboundMessageSchema.parse(control)).toEqual(control);
+    const mute = {
+      type: "voice.input.set_muted.request",
+      requestId: "mute",
+      muted: true,
+      attachmentId: "attachment",
+      generation: "generation",
+    };
+    expect(SessionInboundMessageSchema.parse(mute)).toEqual(mute);
+  });
 });

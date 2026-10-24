@@ -21,7 +21,8 @@ import {
 } from "@/voice/voice-runtime";
 
 interface VoiceContextValue extends VoiceRuntimeSnapshot {
-  startVoice: (serverId: string, agentId: string) => Promise<void>;
+  startVoice: VoiceRuntime["startVoice"];
+  controlRealtime: VoiceRuntime["controlRealtime"];
   stopVoice: () => Promise<void>;
   isVoiceModeForAgent: (serverId: string, agentId: string) => boolean;
   toggleMute: () => void;
@@ -32,6 +33,7 @@ const EMPTY_SNAPSHOT: VoiceRuntimeSnapshot = {
   isVoiceMode: false,
   isVoiceSwitching: false,
   isMuted: false,
+  isCaptureInterrupted: false,
   failure: null,
   lastInputStatus: null,
   activeServerId: null,
@@ -81,6 +83,7 @@ export function useVoiceOptional(): VoiceContextValue | null {
       stopVoice: runtime.stopVoice,
       isVoiceModeForAgent: runtime.isVoiceModeForAgent,
       toggleMute: runtime.toggleMute,
+      controlRealtime: runtime.controlRealtime,
     };
   }, [snapshot, runtime]);
 }
@@ -136,6 +139,9 @@ export function VoiceProvider({ children }: VoiceProviderProps) {
       },
       onVolumeLevel: (level) => {
         runtime?.handleCaptureVolume(level);
+      },
+      onCaptureAvailabilityChange: (available) => {
+        runtime?.handleCaptureAvailabilityChange(available);
       },
       onInterruption: () => {
         if (!runtime?.getSnapshot().isVoiceMode) return;

@@ -4236,6 +4236,9 @@ export class DaemonClient {
     enabled: boolean,
     agentId?: string,
     input?: {
+      voiceProvider?: "paseo" | "openai-realtime";
+      voiceCommandsEnabled?: boolean;
+      isMuted?: boolean;
       /** Voice attachment identity; the host binds its transport generation to it. */
       attachmentId?: string;
       /** Supplied when an existing attachment reclaims itself after a reconnect. */
@@ -4249,6 +4252,11 @@ export class DaemonClient {
       ...(agentId ? { agentId } : {}),
       ...(input?.attachmentId ? { attachmentId: input.attachmentId } : {}),
       ...(input?.generation ? { generation: input.generation } : {}),
+      ...(input?.voiceProvider ? { voiceProvider: input.voiceProvider } : {}),
+      ...(input?.voiceCommandsEnabled !== undefined
+        ? { voiceCommandsEnabled: input.voiceCommandsEnabled }
+        : {}),
+      ...(input?.isMuted !== undefined ? { isMuted: input.isMuted } : {}),
       requestId,
     });
     const response = await this.sendRequest({
@@ -4272,6 +4280,42 @@ export class DaemonClient {
       throw new Error((response.error ?? "Failed to set voice mode") + codeSuffix);
     }
     return response;
+  }
+
+  async setVoiceInputMuted(
+    muted: boolean,
+    transport: { attachmentId: string; generation: string },
+  ): Promise<boolean> {
+    const requestId = this.createRequestId();
+    const response = await this.sendRequest({
+      requestId,
+      message: { type: "voice.input.set_muted.request", requestId, muted, ...transport },
+      select: (msg) =>
+        msg.type === "voice.input.set_muted.response" && msg.payload.requestId === requestId
+          ? msg.payload
+          : null,
+    });
+    if (response.error) throw new Error(response.error);
+    return response.muted;
+  }
+
+  async controlRealtimeVoice(
+    input: Omit<
+      Extract<SessionInboundMessage, { type: "voice.realtime.control.request" }>,
+      "type" | "requestId"
+    >,
+  ) {
+    const requestId = this.createRequestId();
+    const response = await this.sendRequest({
+      requestId,
+      message: { type: "voice.realtime.control.request", requestId, ...input },
+      select: (msg) =>
+        msg.type === "voice.realtime.control.response" && msg.payload.requestId === requestId
+          ? msg.payload
+          : null,
+    });
+    if (response.error) throw new Error(response.error);
+    return response.state;
   }
 
   /** Reads this attachment's delivery receipts so the panel can show truthful state. */

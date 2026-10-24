@@ -82,6 +82,7 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
 import type { WorkspaceDraftTabSetup, WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { isEmptyWorkspaceSubmission, runCreateEmptyWorkspace } from "./new-workspace-empty";
+import { createNewWorkspaceAgentForVoice } from "./new-workspace-voice";
 import {
   getWorkspaceNamingAttachments,
   remapDraftCwdToWorkspace,
@@ -241,6 +242,10 @@ function normalizeBranchDetails(
  * and the screen — if still mounted under another route — has to drop its pending state itself.
  */
 type SubmitOutcome = "navigated" | "background";
+interface CreateChatAgentResult {
+  outcome: SubmitOutcome;
+  agentId: string;
+}
 
 interface SubmitDraftInput {
   clearConsumedDraft: () => void;
@@ -343,6 +348,7 @@ async function createMultiplicityWorkspace(input: {
 
 interface CreateChatAgentInput {
   payload: MessagePayload;
+  forVoice?: boolean;
   composerState: ReturnType<typeof useAgentInputDraft>["composerState"];
   forkDraftSetup?: PendingWorkspaceDraftSetup | null;
   ensureWorkspace: (input: {
@@ -416,8 +422,8 @@ function buildComposerInitialValues(input: {
   return undefined;
 }
 
-const pendingWorkspaceSubmissions = new Map<string, Promise<SubmitOutcome>>();
-function runCreateChatAgent(input: CreateChatAgentInput): Promise<SubmitOutcome> {
+const pendingWorkspaceSubmissions = new Map<string, Promise<CreateChatAgentResult>>();
+function runCreateChatAgent(input: CreateChatAgentInput): Promise<CreateChatAgentResult> {
   const key = JSON.stringify([input.serverId, input.draftId]);
   const pending = pendingWorkspaceSubmissions.get(key);
   if (pending) return pending;
@@ -427,7 +433,9 @@ function runCreateChatAgent(input: CreateChatAgentInput): Promise<SubmitOutcome>
   return submission;
 }
 
-async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<SubmitOutcome> {
+async function createWorkspaceChatAgent(
+  input: CreateChatAgentInput,
+): Promise<CreateChatAgentResult> {
   const { payload, composerState, ensureWorkspace, serverId, clearDraft } = input;
   const clearConsumedDraft = captureWorkspaceDraftCleanup(input);
   const { text, attachments, cwd } = payload;
@@ -451,6 +459,7 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
   const images = await encodeImages(wirePayload.images);
   let navigated = false;
   let outcome: SubmitOutcome = "background";
+  let createdWorkspaceId: string | null = null;
   const initialAgent: NonNullable<CreateWorkspaceRequestOptions["agent"]> = {
     config: {
       provider,
@@ -460,13 +469,14 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
       thinkingOptionId: composerState.effectiveThinkingOptionId || undefined,
       featureValues: composerState.featureValues,
     },
-    initialPrompt: text,
-    clientMessageId: `${input.draftId}:initial-message`,
+    ...(input.forVoice
+      ? {}
+      : { initialPrompt: text, clientMessageId: `${input.draftId}:initial-message` }),
     images: images?.length ? images : undefined,
     attachments: wirePayload.attachments?.length ? wirePayload.attachments : undefined,
   };
   const execute = async (requestedAgent = initialAgent): Promise<AgentSnapshotPayload> => {
-    const { agent } = await ensureWorkspace({
+    const { agent, workspace } = await ensureWorkspace({
       cwd,
       prompt: text,
       attachments: workspaceNamingAttachments,
@@ -476,16 +486,17 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
         if (!snapshot.workspace || navigated) return;
         navigated = true;
         if (!input.isStillOnCreateScreen()) return;
-        const workspace = normalizeWorkspaceDescriptor(snapshot.workspace);
+        const createdWorkspace = normalizeWorkspaceDescriptor(snapshot.workspace);
         getHostRuntimeStore().acceptWorkspaceSnapshots(serverId, [
-          { ...workspace, status: "running" },
+          { ...createdWorkspace, status: "running" },
         ]);
         const initialSetup = buildWorkspaceDraftSetupForCreatedWorkspace({
           forkDraftSetup: input.forkDraftSetup,
-          workspaceDirectory: workspace.workspaceDirectory,
+          workspaceDirectory: createdWorkspace.workspaceDirectory,
           provider,
           composerState,
         });
+        if (input.forVoice) return;
         outcome = submitWorkspaceDraft({
           clearConsumedDraft,
           draftKey: input.draftKey,
@@ -496,8 +507,8 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
           clearDraft,
           draftId: input.draftId,
           initialSetup,
-          workspaceId: workspace.id,
-          workspaceDirectory: workspace.workspaceDirectory,
+          workspaceId: createdWorkspace.id,
+          workspaceDirectory: createdWorkspace.workspaceDirectory,
           text,
           attachments,
           provider,
@@ -508,6 +519,7 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
       },
     });
     if (!agent) throw new Error("Workspace creation returned no agent");
+    createdWorkspaceId = workspace.id;
     return agent;
   };
   const agentCreation = {
@@ -516,15 +528,27 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
       execute({
         ...initialAgent,
         config: { ...request.config!, cwd },
-        initialPrompt: request.initialPrompt ?? "",
-        clientMessageId: initialAgent.clientMessageId,
+        ...(input.forVoice
+          ? {}
+          : {
+              initialPrompt: request.initialPrompt ?? "",
+              clientMessageId: initialAgent.clientMessageId,
+            }),
         images: request.images,
         attachments: request.attachments,
       }),
   };
-  await agentCreation.result;
+  const agent = await agentCreation.result;
+  if (input.forVoice && createdWorkspaceId && input.isStillOnCreateScreen()) {
+    navigateToWorkspace({
+      serverId,
+      workspaceId: createdWorkspaceId,
+      target: { kind: "agent", agentId: agent.id },
+    });
+    outcome = "navigated";
+  }
   if (outcome === "background") clearConsumedDraft();
-  return outcome;
+  return { outcome, agentId: agent.id };
 }
 
 function buildComposerConfig(input: {
@@ -1303,39 +1327,16 @@ export function NewWorkspaceScreen({
     ],
   );
 
-  const handleSubmitNewWorkspace = useCallback(
-    async (payload: MessagePayload) => {
+  const submitChatAgent = useCallback(
+    async (payload: MessagePayload, forVoice = false): Promise<CreateChatAgentResult | null> => {
       try {
         setErrorMessage(null);
         await composerState?.persistFormPreferences();
         await updateFormPreferences({ launchTarget });
-        if (isEmptyWorkspaceSubmission(payload)) {
-          setPendingAction("empty");
-          let outcome: SubmitOutcome = "background";
-          await runCreateEmptyWorkspace({
-            payload,
-            ensureWorkspace: async (request) => (await ensureWorkspace(request)).workspace,
-            serverId: selectedServerId,
-            navigate: (targetServerId, workspaceId) => {
-              if (!isStillOnCreateScreen()) {
-                return;
-              }
-              outcome = "navigated";
-              leaveFullscreen();
-              navigateToWorkspace({ serverId: targetServerId, workspaceId });
-            },
-          });
-          // Nothing navigated, so this screen may still be mounted under another route. Release
-          // the pending lock it would otherwise keep forever.
-          if (outcome === "background") {
-            setPendingAction(null);
-          }
-          return;
-        }
-
         setPendingAction("chat");
-        const outcome = await runCreateChatAgent({
+        const result = await runCreateChatAgent({
           payload,
+          forVoice,
           composerState,
           forkDraftSetup,
           ensureWorkspace,
@@ -1352,14 +1353,14 @@ export function NewWorkspaceScreen({
             selectModel: t("newWorkspace.errors.selectModel"),
           },
         });
-        if (outcome === "background") {
-          setPendingAction(null);
-        }
+        if (result.outcome === "background") setPendingAction(null);
+        return result;
       } catch (error) {
         const message = toErrorMessage(error);
         setPendingAction(null);
         setErrorMessage(message);
         toast.error(message);
+        return null;
       }
     },
     [
@@ -1372,7 +1373,6 @@ export function NewWorkspaceScreen({
       forkDraftSetup,
       isStillOnCreateScreen,
       launchTarget,
-      leaveFullscreen,
       selectedServerId,
       supportsForgeSearch,
       t,
@@ -1380,6 +1380,59 @@ export function NewWorkspaceScreen({
       updateFormPreferences,
       withConnectedClient,
     ],
+  );
+
+  const handleSubmitNewWorkspace = useCallback(
+    async (payload: MessagePayload) => {
+      if (!isEmptyWorkspaceSubmission(payload)) {
+        await submitChatAgent(payload);
+        return;
+      }
+      try {
+        setErrorMessage(null);
+        await composerState?.persistFormPreferences();
+        await updateFormPreferences({ launchTarget });
+        setPendingAction("empty");
+        let outcome: SubmitOutcome = "background";
+        await runCreateEmptyWorkspace({
+          payload,
+          ensureWorkspace: async (request) => (await ensureWorkspace(request)).workspace,
+          serverId: selectedServerId,
+          navigate: (targetServerId, workspaceId) => {
+            if (!isStillOnCreateScreen()) return;
+            outcome = "navigated";
+            leaveFullscreen();
+            navigateToWorkspace({ serverId: targetServerId, workspaceId });
+          },
+        });
+        if (outcome === "background") setPendingAction(null);
+      } catch (error) {
+        const message = toErrorMessage(error);
+        setPendingAction(null);
+        setErrorMessage(message);
+        toast.error(message);
+      }
+    },
+    [
+      composerState,
+      ensureWorkspace,
+      isStillOnCreateScreen,
+      launchTarget,
+      leaveFullscreen,
+      selectedServerId,
+      submitChatAgent,
+      toast,
+      updateFormPreferences,
+    ],
+  );
+
+  const createAgentForVoice = useCallback(
+    () =>
+      createNewWorkspaceAgentForVoice({
+        cwd: selectedSourceDirectory,
+        createChatAgent: async (payload) => submitChatAgent(payload, true),
+      }),
+    [selectedSourceDirectory, submitChatAgent],
   );
 
   const handleSubmitTerminalLaunch = useCallback(async () => {
@@ -1576,6 +1629,7 @@ export function NewWorkspaceScreen({
       serverId={selectedServerId}
       isPaneFocused={true}
       onSubmitMessage={handleSubmitNewWorkspace}
+      createAgentForVoice={createAgentForVoice}
       allowEmptySubmit={true}
       submitButtonAccessibilityLabel={t("newWorkspace.create")}
       submitButtonTestID="workspace-create-submit"

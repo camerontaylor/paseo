@@ -1,4 +1,12 @@
 import { v4 as uuidv4 } from "uuid";
+import {
+  OpenAiRealtime,
+  realtimeAvailable,
+  realtimeKey,
+  type RealtimeFailureReport,
+} from "./openai-realtime.js";
+import { RealtimeContextStore } from "./realtime-context.js";
+import { parseVoiceInputCommand } from "./voice-input-command.js";
 import { z } from "zod";
 import type pino from "pino";
 import { getErrorMessage } from "@getpaseo/protocol/error-utils";
@@ -124,7 +132,19 @@ export interface VoiceSessionHost {
   sendSpokenInput(agentId: string, text: string, messageId: string): Promise<void>;
 }
 
+export interface HostDiagnosticInput {
+  message: string;
+  severity?: "error" | "warning";
+  code?: string;
+  operation?: string;
+  phase?: string;
+  agentId?: string;
+  clientId?: string | null;
+}
+
 export interface VoiceSessionOptions {
+  realtimeHome?: string;
+  reportDiagnostic?: (input: HostDiagnosticInput) => void;
   host: VoiceSessionHost;
   logger: pino.Logger;
   sessionId: string;
@@ -168,6 +188,17 @@ export interface VoiceSessionOptions {
  * audio buffering or processing phases.
  */
 export class VoiceSession {
+  private realtime: OpenAiRealtime | null = null;
+  private readonly realtimeHome?: string;
+  private readonly reportDiagnostic?: (input: HostDiagnosticInput) => void;
+  private voiceProvider: "paseo" | "openai-realtime" = "paseo";
+  private voiceCommandsEnabled = false;
+  private inputMuted = false;
+  private inputRevision = 0;
+  private readonly realtimeAudioDurations = new Map<
+    string,
+    { responseId: string; duration: number }
+  >();
   private readonly host: VoiceSessionHost;
   private readonly sessionLogger: pino.Logger;
   private readonly sessionId: string;
@@ -232,6 +263,8 @@ export class VoiceSession {
     const { host, logger, sessionId, sttLanguage, tts, stt, voice, voiceBridge, dictation } =
       options;
     this.host = host;
+    this.realtimeHome = options.realtimeHome;
+    this.reportDiagnostic = options.reportDiagnostic;
     this.onIdle = options.onIdle;
     this.sessionLogger = logger;
     this.sessionId = sessionId;
@@ -346,6 +379,10 @@ export class VoiceSession {
   }
 
   private async speakFallback(text: string): Promise<void> {
+    if (this.realtime) {
+      this.realtime.reply(text);
+      return;
+    }
     try {
       await this.ttsManager.generateAndWaitForPlayback(
         text,
@@ -473,7 +510,13 @@ export class VoiceSession {
     enabled: boolean,
     agentId?: string,
     requestId?: string,
-    input: { attachmentId?: string; generation?: string } = {},
+    input: {
+      attachmentId?: string;
+      generation?: string;
+      voiceProvider?: "paseo" | "openai-realtime";
+      voiceCommandsEnabled?: boolean;
+      isMuted?: boolean;
+    } = {},
   ): Promise<void> {
     const startedAt = Date.now();
     try {
@@ -491,7 +534,14 @@ export class VoiceSession {
         throw new Error("Voice attachment is no longer owned by this request.");
       }
       if (enabled) {
-        const unavailable = this.resolveVoiceFeatureUnavailableContext("voice_mode");
+        const requestedProvider = input.voiceProvider ?? "paseo";
+        if (requestedProvider === "openai-realtime" && !realtimeAvailable()) {
+          throw new Error("Configure the host OpenAI credential before selecting GPT Realtime.");
+        }
+        const unavailable =
+          requestedProvider === "paseo"
+            ? this.resolveVoiceFeatureUnavailableContext("voice_mode")
+            : null;
         if (unavailable) {
           throw new VoiceFeatureUnavailableError(unavailable);
         }
@@ -501,7 +551,8 @@ export class VoiceSession {
         if (
           this.isVoiceMode &&
           this.voiceModeAgentId &&
-          (this.voiceModeAgentId !== normalizedAgentId ||
+          (this.voiceProvider !== requestedProvider ||
+            this.voiceModeAgentId !== normalizedAgentId ||
             (input.attachmentId && input.attachmentId !== this.voiceModeAttachmentId))
         ) {
           this.sessionLogger.info(
@@ -516,6 +567,7 @@ export class VoiceSession {
           this.isVoiceMode = false;
         }
 
+        this.voiceProvider = requestedProvider;
         if (!this.isVoiceMode || this.voiceModeAgentId !== normalizedAgentId) {
           this.requiresTransportToken = !!input.attachmentId;
           this.voiceModeAttachmentId = input.attachmentId ?? uuidv4();
@@ -540,7 +592,11 @@ export class VoiceSession {
           { agentId: this.voiceModeAgentId, elapsedMs: Date.now() - startedAt },
           "set_voice_mode starting voice turn controller",
         );
-        await this.startVoiceTurnController();
+        if (this.voiceProvider === "openai-realtime") {
+          await this.startRealtime();
+        } else {
+          await this.startVoiceTurnController();
+        }
         this.sessionLogger.info(
           { agentId: this.voiceModeAgentId, elapsedMs: Date.now() - startedAt },
           "set_voice_mode voice turn controller started",
@@ -550,6 +606,10 @@ export class VoiceSession {
           return;
         }
         this.isVoiceMode = !this.closed;
+        this.voiceCommandsEnabled =
+          this.voiceProvider === "paseo" && input.voiceCommandsEnabled === true;
+        this.inputMuted = this.voiceCommandsEnabled && input.isMuted === true;
+        this.inputRevision += 1;
         this.sessionLogger.info(
           {
             agentId: this.voiceModeAgentId,
@@ -563,6 +623,9 @@ export class VoiceSession {
             payload: {
               requestId,
               enabled: true,
+              ...(this.realtime ? { realtime: this.realtime.status() } : {}),
+              voiceCommandsEnabled: this.voiceCommandsEnabled,
+              isMuted: this.realtime?.status().muted ?? this.inputMuted,
               agentId: this.voiceModeAgentId,
               ...(this.voiceModeAttachmentId ? { attachmentId: this.voiceModeAttachmentId } : {}),
               ...(this.voiceModeGeneration ? { generation: this.voiceModeGeneration } : {}),
@@ -626,6 +689,177 @@ export class VoiceSession {
     }
   }
 
+  async handleSetInputMuted(
+    input: Extract<SessionInboundMessage, { type: "voice.input.set_muted.request" }>,
+  ): Promise<void> {
+    const active =
+      this.isVoiceMode &&
+      this.voiceCommandsEnabled &&
+      this.acceptsInput(input.attachmentId, input.generation);
+    if (!active) {
+      this.emit({
+        type: "voice.input.set_muted.response",
+        payload: {
+          requestId: input.requestId,
+          muted: this.inputMuted,
+          error: "Verbal mute requires an active Paseo voice attachment.",
+        },
+      });
+      return;
+    }
+    this.setInputMuted(input.muted);
+    this.emit({
+      type: "voice.input.set_muted.response",
+      payload: { requestId: input.requestId, muted: this.inputMuted, error: null },
+    });
+  }
+
+  private setInputMuted(muted: boolean): void {
+    this.inputRevision += 1;
+    this.inputMuted = muted;
+    this.pendingAudioSegments = [];
+    this.audioBuffer = null;
+    this.clearBufferTimeout();
+    this.emit({
+      type: "voice_input_state",
+      payload: { isSpeaking: false, isMuted: muted },
+    });
+  }
+
+  private async startRealtime(): Promise<void> {
+    if (this.realtime) return;
+    if (!this.realtimeHome || !this.voiceModeAgentId)
+      throw new Error("GPT Realtime host storage unavailable");
+    const agentId = this.voiceModeAgentId;
+    this.realtime = new OpenAiRealtime({
+      store: new RealtimeContextStore(this.realtimeHome, agentId),
+      key: realtimeKey,
+      report: (failure: RealtimeFailureReport) => {
+        const fields = [
+          failure.param && `param=${failure.param}`,
+          failure.eventId && `eventId=${failure.eventId}`,
+          failure.lastClientEvent && `lastClientEvent=${failure.lastClientEvent}`,
+          failure.closeCode !== undefined && `closeCode=${failure.closeCode}`,
+          failure.closeReason && "closeReason=redacted",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        this.reportDiagnostic?.({
+          message: `GPT Realtime ${failure.kind}: ${fields}`.trim(),
+          severity: "error",
+          code: failure.code ?? failure.kind,
+          operation: "voice.realtime",
+          phase: failure.phase,
+          agentId,
+        });
+      },
+      host: {
+        status: (realtime) =>
+          this.emit({
+            type: "voice_input_state",
+            payload: { isSpeaking: false, isMuted: realtime.muted, realtime },
+          }),
+        speech: (isSpeaking) =>
+          this.emit({
+            type: "voice_input_state",
+            payload: { isSpeaking },
+          }),
+        stopPlayback: () =>
+          this.emit({
+            type: "voice_input_state",
+            payload: { isSpeaking: true },
+          }),
+        audio: (responseId, audio, index, last) => {
+          const id = `${responseId}-${index}`;
+          this.realtimeAudioDurations.set(id, {
+            responseId,
+            duration: Buffer.byteLength(audio, "base64") / 48,
+          });
+          this.emit({
+            type: "audio_output",
+            payload: {
+              id,
+              audio,
+              format: "audio/pcm;rate=24000;bits=16",
+              isVoiceMode: true,
+              groupId: responseId,
+              chunkIndex: index,
+              isLastChunk: last,
+            },
+          });
+        },
+        submit: async (text, messageId) => {
+          if (!this.currentAttachment()) throw new Error("Voice attachment ended before admission");
+          await this.host.sendSpokenInput(agentId, text, messageId);
+          this.emit({
+            type: "transcription_result",
+            payload: { text, requestId: messageId, messageId, queued: true },
+          });
+        },
+        endVoice: () => {
+          void this.disableVoiceModeForActiveAgent();
+        },
+      },
+    });
+    try {
+      await this.realtime.start();
+    } catch (error) {
+      this.realtime.stop();
+      this.realtime = null;
+      throw error;
+    }
+  }
+
+  async handleRealtimeControl(
+    input: Extract<SessionInboundMessage, { type: "voice.realtime.control.request" }>,
+  ): Promise<void> {
+    try {
+      if (!this.acceptsInput(input.attachmentId, input.generation) || !this.realtime)
+        throw new Error("GPT Realtime attachment is unavailable");
+      if (input.expectedEpoch !== this.realtime.status().epoch && input.action !== "clear")
+        throw new Error("Voice context changed");
+      switch (input.action) {
+        case "listen":
+          this.realtime.listen();
+          break;
+        case "focus_agent":
+          this.realtime.focus("agent");
+          break;
+        case "back_to_assistant":
+          this.realtime.focus("assistant");
+          break;
+        case "end_listening":
+          await this.realtime.endListening();
+          break;
+        case "clear":
+          await this.realtime.clear(input.expectedEpoch, input.requestId);
+          break;
+        case "retry":
+          await this.realtime.start(true);
+          break;
+        case "mute":
+          this.realtime.mute(true);
+          break;
+        case "unmute":
+          this.realtime.mute(false);
+          break;
+      }
+      this.emit({
+        type: "voice.realtime.control.response",
+        payload: { requestId: input.requestId, state: this.realtime.status(), error: null },
+      });
+    } catch {
+      this.emit({
+        type: "voice.realtime.control.response",
+        payload: {
+          requestId: input.requestId,
+          state: this.realtime?.status() ?? null,
+          error: "Voice control failed. Context retained; retry after reconnecting.",
+        },
+      });
+    }
+  }
+
   private parseVoiceTargetAgentId(rawId: string, source: string): string {
     const parsed = AgentIdSchema.safeParse(rawId.trim());
     if (!parsed.success) {
@@ -652,6 +886,12 @@ export class VoiceSession {
   }
 
   private async disableVoiceModeForActiveAgent(): Promise<void> {
+    this.realtime?.stop();
+    this.realtime = null;
+    this.realtimeAudioDurations.clear();
+    this.voiceCommandsEnabled = false;
+    this.inputMuted = false;
+    this.inputRevision += 1;
     this.isVoiceMode = false;
     this.abortController.abort();
     this.visibleReply = "";
@@ -718,7 +958,7 @@ export class VoiceSession {
               isSpeaking: true,
             },
           });
-          await this.handleVoiceSpeechStart();
+          if (!this.voiceCommandsEnabled) await this.handleVoiceSpeechStart();
         },
         onPartialTranscript: async ({ segmentId, transcript }) => {
           this.sessionLogger.debug(
@@ -728,6 +968,7 @@ export class VoiceSession {
         },
         onSpeechStopped: async () => {
           if (!isCurrentController()) return;
+          if (this.voiceCommandsEnabled) return;
           this.handleVoiceSpeechStopped();
           this.setPhase("transcribing");
           this.emit({
@@ -753,6 +994,15 @@ export class VoiceSession {
           if (!isCurrentController()) return;
           const requestId = `${controllerGeneration}:${utteranceId}`;
           const transcriptText = isLowConfidence ? "" : transcript.trim();
+          if (this.voiceCommandsEnabled) {
+            const command = parseVoiceInputCommand(transcriptText);
+            if (command === "mute" || command === "unmute") {
+              this.setInputMuted(command === "mute");
+              return;
+            }
+            if (this.inputMuted) return;
+          }
+          const revision = this.inputRevision;
           const recognitionIssue = this.resolveRecognitionIssue({
             transcript: transcriptText,
             speechMs,
@@ -760,7 +1010,7 @@ export class VoiceSession {
           });
           if (isLowConfidence) {
             this.sessionLogger.debug(
-              { text: transcript, avgLogprob },
+              { transcriptLength: transcript.length, avgLogprob },
               "Filtered low-confidence transcription (likely non-speech)",
             );
           }
@@ -769,10 +1019,14 @@ export class VoiceSession {
               requestId,
               isVoiceMode: this.isVoiceMode,
               transcriptLength: transcriptText.length,
-              transcript: transcriptText,
             },
             "Transcription result",
           );
+          if (this.voiceCommandsEnabled && transcriptText) {
+            await this.handleVoiceSpeechStart();
+            if (revision !== this.inputRevision || !this.isVoiceMode) return;
+            this.handleVoiceSpeechStopped();
+          }
           await this.handleTranscriptionResultPayload({
             text: transcriptText,
             requestId,
@@ -918,6 +1172,8 @@ export class VoiceSession {
     });
   }
 
+  // Realtime bypasses the legacy buffering path; both remain here to preserve attachment routing.
+  // oxlint-disable-next-line complexity
   async handleAudioChunk(
     msg: Extract<SessionInboundMessage, { type: "voice_audio_chunk" }>,
   ): Promise<void> {
@@ -927,6 +1183,10 @@ export class VoiceSession {
       );
     }
 
+    if (this.realtime) {
+      this.realtime.append(msg.audio, msg.format);
+      return;
+    }
     const chunkFormat = msg.format || "audio/wav";
 
     if (this.isVoiceMode) {
@@ -1129,6 +1389,7 @@ export class VoiceSession {
   private async handleTranscriptionResultPayload(
     result: VoiceTranscriptionResultPayload,
   ): Promise<void> {
+    if (this.isVoiceMode && this.inputMuted) return;
     const transcriptText = result.text.trim();
 
     const emitTranscript = (messageId?: string) =>
@@ -1254,11 +1515,14 @@ export class VoiceSession {
       )
         return { ok: false, reason: "unavailable" };
       this.spokeThisTurn = true;
+      if (this.realtime) {
+        this.realtime.reply(text);
+        return;
+      }
       this.sessionLogger.info(
         {
           agentId,
           textLength: text.length,
-          preview: text.slice(0, 160),
         },
         "Voice speak tool call received by session handler",
       );
@@ -1322,6 +1586,10 @@ export class VoiceSession {
    * explicit interrupt command from the user is the only path that cancels it.
    */
   async handleAbort(): Promise<void> {
+    if (this.realtime) {
+      this.realtime.interrupt();
+      return;
+    }
     this.sessionLogger.info(
       { phase: this.processingPhase },
       `Abort request, phase: ${this.processingPhase}`,
@@ -1348,6 +1616,12 @@ export class VoiceSession {
    * Handle audio playback confirmation from client
    */
   handleAudioPlayed(id: string, error?: string): void {
+    const chunk = this.realtimeAudioDurations.get(id);
+    if (chunk) {
+      this.realtimeAudioDurations.delete(id);
+      if (!error) this.realtime?.acknowledgeAudio(chunk.responseId, chunk.duration);
+      return;
+    }
     this.ttsManager.confirmAudioPlayed(id, error);
   }
 
@@ -1541,6 +1815,7 @@ export class VoiceSession {
   cancel(): void {
     if (this.closed) return;
     this.closed = true;
+    this.realtime?.stop();
     this.abortController.abort();
     this.clearBufferTimeout();
     this.pendingAudioSegments = [];
