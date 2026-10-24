@@ -36,7 +36,7 @@
       "acceptance": "Rename focused agent/terminal from topbar on desktop and compact layouts; reject blanks, retain failed input, persist reload.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -52,7 +52,7 @@
       "acceptance": "Pin individual sessions with stable host/session identity and order; reload, archive and restore preserve correct behavior.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -68,7 +68,7 @@
       "acceptance": "Completed reply displays local completion time and duration; missing timestamps remain unknown.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -84,7 +84,7 @@
       "acceptance": "Scoped search finds existing sessions and acknowledged queued text; explicit selection delivers saved prompt to the chosen destination.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "13 outbox tests + isolated moved/archived/missing-destination daemon regression (6a8ceaa32); passive Find + guarded routing slices green.",
         "artifact": null,
         "installed": null,
@@ -100,7 +100,7 @@
       "acceptance": "Explicit action routes only above source confidence and margin thresholds; ambiguity/no-match preserves draft and offers selection/new session; receipt exposes destination and recovery.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "13 outbox tests + isolated moved/archived/missing-destination daemon regression (6a8ceaa32); passive Find + guarded routing slices green.",
         "artifact": null,
         "installed": null,
@@ -116,7 +116,7 @@
       "acceptance": "Visible software-keyboard dismissal on phones preserves draft; absent with hardware keyboard and on web.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -132,7 +132,7 @@
       "acceptance": "Shortcut/sidebar/command center creates once without leaving current tab; Start and open navigates; retry preserves draft and chosen destination.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "13 outbox tests + isolated moved/archived/missing-destination daemon regression (6a8ceaa32); passive Find + guarded routing slices green.",
         "artifact": null,
         "installed": null,
@@ -148,7 +148,7 @@
       "acceptance": "Stateful child list opens beside parent; only selected child receives reply; provider-owned children remain read-only; phone overlay and Open in tab work.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Views broadcast/scoped-actions suites at 76013e49d (UIcommands/pushrouter/Views broadcast green); D4 follow-up scoped regressions green (910e7e051).",
         "artifact": null,
         "installed": null,
@@ -164,7 +164,7 @@
       "acceptance": "Per-session Subagents/Checklist selection and size survive reload; validated checklist URL or local Stream fallback; label clearing closes panel without draft loss.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Views broadcast/scoped-actions suites at 76013e49d (UIcommands/pushrouter/Views broadcast green); D4 follow-up scoped regressions green (910e7e051).",
         "artifact": null,
         "installed": null,
@@ -180,7 +180,7 @@
       "acceptance": "MCP open_tab and CLI --side target the existing side-pane host; phone presentation and focus are correct.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Views broadcast/scoped-actions suites at 76013e49d (UIcommands/pushrouter/Views broadcast green); D4 follow-up scoped regressions green (910e7e051).",
         "artifact": null,
         "installed": null,
@@ -196,7 +196,7 @@
       "acceptance": "Normal sessions can open alongside another; deterministic identity resolution never picks an arbitrary partial-ID collision.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Views broadcast/scoped-actions suites at 76013e49d (UIcommands/pushrouter/Views broadcast green); D4 follow-up scoped regressions green (910e7e051).",
         "artifact": null,
         "installed": null,
@@ -212,7 +212,7 @@
       "acceptance": "Session IDs resolve deterministically in search and routing; ambiguous prefixes require choice and respect host scope.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "13 outbox tests + isolated moved/archived/missing-destination daemon regression (6a8ceaa32); passive Find + guarded routing slices green.",
         "artifact": null,
         "installed": null,
@@ -228,7 +228,7 @@
       "acceptance": "Explicit creation modes preserve provider/project controls, draft and queue-only dispatch; passive matching never sends.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "13 outbox tests + isolated moved/archived/missing-destination daemon regression (6a8ceaa32); passive Find + guarded routing slices green.",
         "artifact": null,
         "installed": null,
@@ -244,7 +244,7 @@
       "acceptance": "Conversation ordering follows persisted selected mode across updates; existing explicit preferences survive migration.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -260,7 +260,7 @@
       "acceptance": "Pinned default project drives creation defaults without overriding explicit destination, host or workspace choices.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "13 outbox tests + isolated moved/archived/missing-destination daemon regression (6a8ceaa32); passive Find + guarded routing slices green.",
         "artifact": null,
         "installed": null,
@@ -276,7 +276,7 @@
       "acceptance": "Deep sidebar filtering shows matching sessions/projects and a prefilled creation route; clearing query restores normal navigation.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "13 outbox tests + isolated moved/archived/missing-destination daemon regression (6a8ceaa32); passive Find + guarded routing slices green.",
         "artifact": null,
         "installed": null,
@@ -292,7 +292,7 @@
       "acceptance": "Unified Find can select an existing conversation or start with preserved query/draft; both compact and desktop entry points work.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "13 outbox tests + isolated moved/archived/missing-destination daemon regression (6a8ceaa32); passive Find + guarded routing slices green.",
         "artifact": null,
         "installed": null,
@@ -308,7 +308,7 @@
       "acceptance": "Typed, voice and routed sends use durable admission with persisted identity; receipt-safe retry, park/uncertain states and archive fence survive reload/reconnect.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused queue/outbox suites at 76013e49d: queue actions, direct-send reconciliation, service bounds, receipts, outbox/reconnect/delivery (23/23 outbox reports); routed-destination guard 68 tests (c3756000a).",
         "artifact": null,
         "installed": null,
@@ -324,7 +324,7 @@
       "acceptance": "Distinct local-pending, host-accepted, timeline-observed and failed states; Unsent supports safe Retry/Edit/Discard without duplicate admission.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused queue/outbox suites at 76013e49d: queue actions, direct-send reconciliation, service bounds, receipts, outbox/reconnect/delivery (23/23 outbox reports); routed-destination guard 68 tests (c3756000a).",
         "artifact": null,
         "installed": null,
@@ -340,7 +340,7 @@
       "acceptance": "queue ls <agent> [--json] reports durable queue and bounded receipt/drain history; device-only backlog is explicitly unknown unless reported.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Server diagnostics 44 tests, offline alias utility 12 tests, app toast test (6ccf07f67, integrated 1423b6602).",
         "artifact": null,
         "installed": null,
@@ -356,7 +356,7 @@
       "acceptance": "Bounded host/device error history survives reconnect; scoped acknowledgments and two-stage redaction prevent prompt/audio/credential capture; CLI filters work.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Server diagnostics 44 tests, offline alias utility 12 tests, app toast test (6ccf07f67, integrated 1423b6602).",
         "artifact": null,
         "installed": null,
@@ -372,7 +372,7 @@
       "acceptance": "Voice from empty workspace creates one session then starts preferred configured transport after creation acknowledgment; navigation/unmount does not lose activation.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused voice/runtime/transport suites (3ffc21ef6a, 299ef94ea); live GPT Realtime readiness handshake passed (session ACK, no audio; /tmp/paseo-d7-realtime-readiness.log).",
         "artifact": null,
         "installed": null,
@@ -388,7 +388,7 @@
       "acceptance": "Collected artifacts appear in session Stream and global views with source links, correct filters and reload persistence.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Stream model + pin-write suites 32/32 at 76013e49d; server durability suite 5/5 (d8be771a4). Browser: global-stream.spec.ts pins/links/paging/durable all pass at 0b02dfada. Real-browser + isolated-daemon flows pass at 0b02dfada (composed run 2026-10-25, triton: pins x2, links x2, Load more, durable checklist, side conversations x5).",
         "artifact": null,
         "installed": null,
@@ -404,7 +404,7 @@
       "acceptance": "Stable-ID asks retain revisions, subtasks and evidence across restart; completion requires evidence and no remaining work; pagination does not evict stored history.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Stream model + pin-write suites 32/32 at 76013e49d; server durability suite 5/5 (d8be771a4). Browser: global-stream.spec.ts pins/links/paging/durable all pass at 0b02dfada. Real-browser + isolated-daemon flows pass at 0b02dfada (composed run 2026-10-25, triton: pins x2, links x2, Load more, durable checklist, side conversations x5).",
         "artifact": null,
         "installed": null,
@@ -420,7 +420,7 @@
       "acceptance": "Questions retain explicit tracked status; unrelated user messages cannot silently resolve all asks; source-chat navigation works.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Stream model + pin-write suites 32/32 at 76013e49d; server durability suite 5/5 (d8be771a4). Browser: global-stream.spec.ts pins/links/paging/durable all pass at 0b02dfada.",
         "artifact": null,
         "installed": null,
@@ -436,7 +436,7 @@
       "acceptance": "Saved cross-project views restore scope/filter/order and host identity; global Stream handles pagination, disconnected hosts and permissions.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Views broadcast/scoped-actions suites at 76013e49d (UIcommands/pushrouter/Views broadcast green); D4 follow-up scoped regressions green (910e7e051). Real-browser + isolated-daemon flows pass at 0b02dfada (composed run 2026-10-25, triton: pins x2, links x2, Load more, durable checklist, side conversations x5).",
         "artifact": null,
         "installed": null,
@@ -452,7 +452,7 @@
       "acceptance": "Explicit mark unread, unread/activity signals and workspace last-active timestamps survive reload; visits do not become message activity; trailing preference migration preserves user choice.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -468,7 +468,7 @@
       "acceptance": "Back/forward focus history extends existing navigation store; no duplicate entries or cross-host/session mistakes after close/archive.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -484,7 +484,7 @@
       "acceptance": "Existing recency owner supplies workspace history with stable deduplication and valid restored targets.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -500,7 +500,7 @@
       "acceptance": "Recent session navigation extends existing menu/history; archived or unavailable destinations are handled explicitly.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -516,9 +516,9 @@
       "acceptance": "Retain our bundle IDs, display identity, package namespace, home, updater and release channel in packaged clients; never ship source Ideaflow identity.",
       "status": "TODO",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Android dev APK aapt badging shows package sh.paseo.debug (never sh.paseo); npm namespace @camerontaylor/paseo-* verified on the registry union.",
-        "artifact": "sh.paseo.debug APK sha256 a68cc3be1a67f7e85dabe339e05198aca20167dd6a24e3253ba01b30eafafbd6 (dev variant; JS from Metro at the candidate tip).",
+        "artifact": "sh.paseo.debug APK sha256 a68cc3be1a67f7e85dabe339e05198aca20167dd6a24e3253ba01b30eafafbd6 (dev variant; JS from Metro at the candidate tip). macOS: Paseo Desvio Candidate.app, appId sh.paseo.desktop.desvio-candidate, 0.12.0-fork.2, ad-hoc signed, built not installed.",
         "installed": null,
         "observed": null
       }
@@ -532,7 +532,7 @@
       "acceptance": "Restore message/selection pin action, Activity/All default, useful empty checklist; save acknowledgement, stable retry ID, preserved failed text and editor for >4000 characters.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Stream model + pin-write suites 32/32 at 76013e49d; server durability suite 5/5 (d8be771a4). Browser: global-stream.spec.ts pins/links/paging/durable all pass at 0b02dfada. Real-browser + isolated-daemon flows pass at 0b02dfada (composed run 2026-10-25, triton: pins x2, links x2, Load more, durable checklist, side conversations x5).",
         "artifact": null,
         "installed": null,
@@ -548,7 +548,7 @@
       "acceptance": "Account for source-covered activity kinds, stable source links and pagination without duplicate/lost entries.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Stream model + pin-write suites 32/32 at 76013e49d; server durability suite 5/5 (d8be771a4). Browser: global-stream.spec.ts pins/links/paging/durable all pass at 0b02dfada. Real-browser + isolated-daemon flows pass at 0b02dfada (composed run 2026-10-25, triton: pins x2, links x2, Load more, durable checklist, side conversations x5).",
         "artifact": null,
         "installed": null,
@@ -564,7 +564,7 @@
       "acceptance": "Explicit agent pin curation through local permission model with stable identity, validated text and acknowledged persistence.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Stream model + pin-write suites 32/32 at 76013e49d; server durability suite 5/5 (d8be771a4). Browser: global-stream.spec.ts pins/links/paging/durable all pass at 0b02dfada.",
         "artifact": null,
         "installed": null,
@@ -580,7 +580,7 @@
       "acceptance": "Visible 44px Find target at 320/390 widths; floating controls do not cover search; verify physical touch/keyboard.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -596,7 +596,7 @@
       "acceptance": "Counts reflect multiple tabs without counting hidden provider children or changing unread semantics.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -612,7 +612,7 @@
       "acceptance": "Copy and resolve host/workspace/tab links with explicit unavailable-target behavior; preserve routing ownership.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -628,7 +628,7 @@
       "acceptance": "Per-assistant reply action opens existing side-conversation surface with anchor; main draft/route/scroll unchanged; Send to main is queue-only.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "20 focused model/store tests + exact-tree app typecheck (78b0262b0, 9abe7adcd); browser side-conversations 5/5 at 0b02dfada. Real-browser + isolated-daemon flows pass at 0b02dfada (composed run 2026-10-25, triton: pins x2, links x2, Load more, durable checklist, side conversations x5).",
         "artifact": null,
         "installed": null,
@@ -644,7 +644,7 @@
       "acceptance": "Ship hash-bound offline dry-run repair utility and refusal tests for stale/colliding receipts; never run it against live production state.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Server diagnostics 44 tests, offline alias utility 12 tests, app toast test (6ccf07f67, integrated 1423b6602).",
         "artifact": null,
         "installed": null,
@@ -660,7 +660,7 @@
       "acceptance": "Complete existing Quiet/Summary stage and unread/activity integration; preserve explicit user choices.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -676,7 +676,7 @@
       "acceptance": "Preserve queued speech attachments, playback recovery and audible/visible errors without duplicate sends or lost recordings.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused voice/runtime/transport suites (3ffc21ef6a, 299ef94ea); live GPT Realtime readiness handshake passed (session ACK, no audio; /tmp/paseo-d7-realtime-readiness.log).",
         "artifact": null,
         "installed": null,
@@ -692,7 +692,7 @@
       "acceptance": "Explicitly enabled verbal control has truthful listening state and safe false-positive behavior, verified on physical devices.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused voice/runtime/transport suites (3ffc21ef6a, 299ef94ea); live GPT Realtime readiness handshake passed (session ACK, no audio; /tmp/paseo-d7-realtime-readiness.log).",
         "artifact": null,
         "installed": null,
@@ -708,7 +708,7 @@
       "acceptance": "Implement native background/permission/audio lifecycle; prove lock/unlock/interruption recovery on physical iOS; never present unsupported state as listening.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused voice/runtime/transport suites (3ffc21ef6a, 299ef94ea); live GPT Realtime readiness handshake passed (session ACK, no audio; /tmp/paseo-d7-realtime-readiness.log).",
         "artifact": null,
         "installed": null,
@@ -724,7 +724,7 @@
       "acceptance": "Persist selected daemon target while preserving explicit CLI, environment and checkout-local dev-home precedence.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Server diagnostics 44 tests, offline alias utility 12 tests, app toast test (6ccf07f67, integrated 1423b6602).",
         "artifact": null,
         "installed": null,
@@ -740,7 +740,7 @@
       "acceptance": "CLI-created ordinary session appears once in intended workspace; hidden children, closed tabs and principal boundaries remain respected.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Server diagnostics 44 tests, offline alias utility 12 tests, app toast test (6ccf07f67, integrated 1423b6602).",
         "artifact": null,
         "installed": null,
@@ -756,7 +756,7 @@
       "acceptance": "Compare current upstream implementation; preserve expand/collapse, selection, search and scroll on long messages; adapt only missing behavior.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Navigation/history focused suites: settings/defaults, favorites, footer, keyboard, compact Find, tab counts, rename, deep links (71 tests, f4fe75579); unread/clocks/sorting slice green.",
         "artifact": null,
         "installed": null,
@@ -772,7 +772,7 @@
       "acceptance": "Enable queue default for new/unset preference while preserving explicit existing choices and distinct send modes.",
       "status": "IN PROGRESS",
       "evidence": {
-        "candidate": "0b02dfadae886170cba6dfa4f99e73b02b3f7fcd",
+        "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused queue/outbox suites at 76013e49d: queue actions, direct-send reconciliation, service bounds, receipts, outbox/reconnect/delivery (23/23 outbox reports); routed-destination guard 68 tests (c3756000a).",
         "artifact": null,
         "installed": null,

@@ -280,3 +280,26 @@ from Metro at runtime, so the APK is byte-stable across docs/JS-only tip moves;
 device QA runs Metro from the exact candidate tree. The Samsung device was not
 reachable from neptune during this window, so installed Android observations
 remain open. Physical iOS remains unverified (no iPhone).
+
+## macOS packaging and promotion prep — 2026-10-25
+
+- `c272ea69e` docs(fork): the promotion transaction document (final tip).
+- D10 dry-run re-run with `FORK_SCOPE=@camerontaylor` (the workflow's scope):
+  version resolves to **0.12.0-fork.2** from the registry union; 7/7 GATE
+  PASS, no publish/tag/push. The first dry-run without the env defaulted to
+  `@paseo-fork`, found no published packages, and staged `fork.1` — a local
+  dry-run must always set the scope.
+- Cross-host reproduction: neptune fetched the candidate via git bundle
+  (sha256-verified transfer), assembled with a disposable desvio config
+  (base `cafe4b01c` → `origin/custom` → `origin/upgrade/basket-0.12.0` →
+  `fork/tmad-2026-10-24-carry`), and its tree equals triton's byte-for-byte:
+  `e48e98c4c02387d586dd73f6bbdd522fbeab7bbf`.
+- macOS package built on neptune (x86_64, node 22.20.0 via the
+  `lts-jod` install — the repo's `.mise.toml` vars templates exceed
+  neptune's mise 2026.5.15, so shims are bypassed for packaging runs):
+  `Paseo Desvio Candidate.app`, appId `sh.paseo.desktop.desvio-candidate`,
+  version 0.12.0-fork.2, ad-hoc signed, not notarized, 552M. Built only —
+  not installed and not launched, because the bundle shares the stock app's
+  Application Support state.
+- Neptune Android-device check stayed empty all window; device QA remains
+  the open gate for the installed-platform rows.
