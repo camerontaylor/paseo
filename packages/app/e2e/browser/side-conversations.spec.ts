@@ -102,7 +102,7 @@ test.describe("Side conversations", () => {
       await expect(sideConversationTabs(page)).toHaveCount(0);
       await expect(mainComposer).toHaveValue("Keep this main draft intact");
 
-      await page.getByTestId("reply-in-thread").last().click();
+      await page.getByTestId("reply-in-thread").first().click();
       await expect(sideConversationPanel(page)).toBeVisible({ timeout: 30_000 });
       await expect(sideConversationTabs(page)).toHaveCount(1);
       await expectSideConversationText(page, question);
