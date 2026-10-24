@@ -1636,6 +1636,7 @@ export const es: TranslationResources = {
         label: "Sort by",
         recent: "Latest conversation",
         user: "Your latest message",
+        assistant: "AI’s last reply",
         manual: "Manual",
         title: "Title",
       },
