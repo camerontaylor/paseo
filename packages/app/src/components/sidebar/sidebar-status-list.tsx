@@ -125,6 +125,8 @@ interface StatusWorkspaceListProps {
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
   onPinnedWorkspaceReorder: (workspaces: SidebarWorkspaceEntry[]) => void;
   listHeaderComponent?: ReactNode;
+  listFooterComponent?: ReactNode;
+  hasActiveSearchFilter?: boolean;
   /** Swaps the group list for the label filter's empty state. Never the header above it. */
   sidebarFilterEmpty?: boolean;
   parentGestureRef?: MutableRefObject<GestureType | undefined>;
@@ -143,6 +145,8 @@ export function SidebarStatusWorkspaceList({
   onToggleWorkspacePin,
   onPinnedWorkspaceReorder,
   listHeaderComponent,
+  listFooterComponent,
+  hasActiveSearchFilter = false,
   sidebarFilterEmpty = false,
   parentGestureRef,
   dragGestureHostActive,
@@ -236,7 +240,7 @@ export function SidebarStatusWorkspaceList({
         </View>
       ) : null}
       {listHeaderComponent}
-      {sidebarFilterEmpty ? (
+      {sidebarFilterEmpty && !hasActiveSearchFilter ? (
         <SidebarFilterEmptyState />
       ) : (
         <StatusGroupList
@@ -251,6 +255,7 @@ export function SidebarStatusWorkspaceList({
           onToggleWorkspacePin={onToggleWorkspacePin}
         />
       )}
+      {listFooterComponent}
     </>
   );
 
