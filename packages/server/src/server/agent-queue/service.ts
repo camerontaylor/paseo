@@ -87,6 +87,38 @@ class QueueSteerRefusedError extends Error {
 
 export type AgentQueueMutationListener = (snapshot: AgentQueueSnapshot) => void;
 
+export interface DeviceOutboxReportInput {
+  agentId: string;
+  clientId: string;
+  deviceLabel: string | null;
+  platform: string | null;
+  reportedAt: string;
+  pending: number;
+  failed: number;
+  uncertain: number;
+  oldestCreatedAt: string | null;
+}
+
+export interface AgentDeliveryInspection {
+  queue: AgentQueueSnapshot;
+  drained: Array<{ id: string; drainedAt: string | null; preview: string | null }>;
+  receipts: Array<{ messageId: string; state: string; createdAt: string | null }>;
+  deviceReports: Array<{
+    clientId: string;
+    deviceLabel: string | null;
+    platform: string | null;
+    reportedAt: string;
+    pending: number;
+    failed: number;
+    uncertain: number;
+    oldestCreatedAt: string | null;
+  }>;
+}
+
+const MAX_DEVICE_OUTBOX_REPORTS = 64;
+const MAX_AGENTS_PER_DEVICE_REPORT = 128;
+const MAX_INSPECTED_RECEIPTS = 50;
+
 export interface EnqueueAgentMessageInput {
   agentId: string;
   itemId: string;
@@ -119,7 +151,8 @@ export interface SendQueuedPromptInput {
 export type AgentQueueReceiptController = Pick<
   MessageReceipts,
   "send" | "outcome" | "listForAttachment" | "recordRemoved"
->;
+> &
+  Partial<Pick<MessageReceipts, "listForAgent">>;
 
 export interface AgentQueueServiceOptions {
   store: AgentQueueStore;
@@ -173,6 +206,22 @@ export class AgentQueueService {
   private readonly lastPermissionCount = new Map<string, number>();
   private readonly drainTails = new Map<string, Promise<void>>();
   private unsubscribeAgentEvents: (() => void) | null = null;
+  private readonly outboxReports = new Map<
+    string,
+    {
+      clientId: string;
+      deviceLabel: string | null;
+      platform: string | null;
+      reportedAt: string;
+      agents: Map<
+        string,
+        Omit<
+          DeviceOutboxReportInput,
+          "agentId" | "clientId" | "deviceLabel" | "platform" | "reportedAt"
+        >
+      >;
+    }
+  >();
 
   constructor(options: AgentQueueServiceOptions) {
     this.store = options.store;
@@ -341,6 +390,72 @@ export class AgentQueueService {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /** Device-only unsent counts are memory-only; no prompt text is accepted. */
+  recordOutboxReport(report: DeviceOutboxReportInput): void {
+    const previous = this.outboxReports.get(report.clientId);
+    const agents = new Map(previous?.agents);
+    agents.delete(report.agentId);
+    agents.set(report.agentId, {
+      pending: report.pending,
+      failed: report.failed,
+      uncertain: report.uncertain,
+      oldestCreatedAt: report.oldestCreatedAt,
+    });
+    while (agents.size > MAX_AGENTS_PER_DEVICE_REPORT) {
+      const oldest = agents.keys().next().value;
+      if (oldest === undefined) break;
+      agents.delete(oldest);
+    }
+    this.outboxReports.delete(report.clientId);
+    this.outboxReports.set(report.clientId, {
+      clientId: report.clientId,
+      deviceLabel: report.deviceLabel,
+      platform: report.platform,
+      reportedAt: report.reportedAt,
+      agents,
+    });
+    while (this.outboxReports.size > MAX_DEVICE_OUTBOX_REPORTS) {
+      const oldest = this.outboxReports.keys().next().value;
+      if (oldest === undefined) break;
+      this.outboxReports.delete(oldest);
+    }
+  }
+
+  clearOutboxReport(clientId: string): void {
+    this.outboxReports.delete(clientId);
+  }
+
+  async inspect(agentId: string): Promise<AgentDeliveryInspection> {
+    const queue = await this.store.get(agentId);
+    const logged = new Map((queue.drainedLog ?? []).map((entry) => [entry.id, entry]));
+    const drained = (queue.drainedIds ?? [])
+      .map((id) => {
+        const entry = logged.get(id);
+        return { id, drainedAt: entry?.drainedAt ?? null, preview: entry?.preview ?? null };
+      })
+      .toReversed();
+    const receipts = this.receipts?.listForAgent
+      ? (await this.receipts.listForAgent(agentId)).slice(0, MAX_INSPECTED_RECEIPTS)
+      : [];
+    const deviceReports = [...this.outboxReports.values()]
+      .flatMap((report) => {
+        const counts = report.agents.get(agentId);
+        return counts
+          ? [
+              {
+                clientId: report.clientId,
+                deviceLabel: report.deviceLabel,
+                platform: report.platform,
+                reportedAt: report.reportedAt,
+                ...counts,
+              },
+            ]
+          : [];
+      })
+      .sort((a, b) => b.reportedAt.localeCompare(a.reportedAt));
+    return { queue: toAgentQueueSnapshot(queue), drained, receipts, deviceReports };
   }
 
   async list(agentId: string): Promise<AgentQueueSnapshot> {

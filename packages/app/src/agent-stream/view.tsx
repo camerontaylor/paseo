@@ -44,7 +44,10 @@ import {
 } from "@/components/message";
 import { PlanCard } from "@/components/plan-card";
 import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
-import type { StreamItem } from "@/types/stream";
+import { isUnreconciledLocalUserMessage, type StreamItem } from "@/types/stream";
+import { resolveChatMessageDeliveryState } from "@/composer/delivery-state";
+import { promptDirectSendAttention } from "@/composer/delivery-actions";
+import { useQueueOutboxStore } from "@/stores/queue-outbox-store";
 import type { PendingMessageSubmission } from "@/composer/submission/model";
 import type { TurnPresentation } from "@/timeline/turn-liveness";
 import type { PendingPermission } from "@/types/shared";
@@ -379,6 +382,16 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => new Set(pendingMessageSubmissions.map((submission) => submission.clientMessageId)),
       [pendingMessageSubmissions],
     );
+    const submissionsByClientMessageId = useMemo(
+      () =>
+        new Map(
+          pendingMessageSubmissions.map((submission) => [
+            submission.clientMessageId,
+            { rpcSettled: submission.rpcSettled === true },
+          ]),
+        ),
+      [pendingMessageSubmissions],
+    );
     const isMobile = useIsCompactFormFactor();
     const streamRenderStrategy = useMemo(
       () =>
@@ -403,6 +416,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const transformTimelineItem = useInstalledTimelineTransform(resolvedServerId);
 
     const client = useSessionStore((state) => state.sessions[resolvedServerId]?.client ?? null);
+    const directEntries = useQueueOutboxStore((state) => state.directEntries);
     const sessionStreamHead = useSessionStore((state) =>
       state.sessions[resolvedServerId]?.agentStreamHead?.get(agentId),
     );
@@ -748,6 +762,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [agentId, client, t, toast],
     );
 
+    const handleDeliveryAttention = useCallback(
+      (id: string) => {
+        const entry = useQueueOutboxStore.getState().directEntries[id];
+        if (entry) void promptDirectSendAttention({ entry, client });
+      },
+      [client],
+    );
+
     const renderUserMessageItem = useCallback(
       (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "user_message" }>) => {
         return (
@@ -769,6 +791,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               item.clientMessageId !== undefined &&
               pendingClientMessageIds.has(item.clientMessageId)
             }
+            deliveryState={resolveChatMessageDeliveryState({
+              isCanonical: !isUnreconciledLocalUserMessage(item),
+              submission: item.clientMessageId
+                ? submissionsByClientMessageId.get(item.clientMessageId)
+                : undefined,
+              outboxEntry: item.clientMessageId ? directEntries[item.clientMessageId] : undefined,
+            })}
+            clientMessageId={item.clientMessageId}
+            onDeliveryAttentionPress={handleDeliveryAttention}
           />
         );
       },
@@ -779,6 +810,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         handlePin,
         handleQAndA,
         pendingClientMessageIds,
+        submissionsByClientMessageId,
+        directEntries,
+        handleDeliveryAttention,
         resolvedServerId,
       ],
     );

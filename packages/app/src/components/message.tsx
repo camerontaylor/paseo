@@ -13,6 +13,8 @@ import { RewindMenu, type RewindMode } from "@/components/rewind/rewind-menu";
 import { useRewindAgentMutation } from "@/components/rewind/use-rewind-agent-mutation";
 import { TaskListRow } from "@/components/task-list-row";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { DeliveryMark } from "@/components/delivery-mark";
+import type { MessageDeliveryState } from "@/composer/delivery-state";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative, isWeb } from "@/constants/platform";
 import { useRevealedText, type MarkdownPhase } from "@/hooks/use-revealed-text";
@@ -107,6 +109,9 @@ interface UserMessageProps {
   isFirstInGroup?: boolean;
   isLastInGroup?: boolean;
   isPending?: boolean;
+  deliveryState?: MessageDeliveryState;
+  clientMessageId?: string;
+  onDeliveryAttentionPress?: (clientMessageId: string) => void;
   disableOuterSpacing?: boolean;
 }
 
@@ -457,6 +462,52 @@ export function ClampedUserMessageText({
   );
 }
 
+function isAwaitingUserDelivery(state: MessageDeliveryState | undefined): boolean {
+  return state !== undefined && state !== "delivered";
+}
+
+function showUserTrailingRow(input: {
+  awaiting: boolean;
+  pending: boolean;
+  hasText: boolean;
+  reveal: boolean;
+}): boolean {
+  return input.awaiting || (!input.pending && input.hasText && input.reveal);
+}
+
+function UserDeliveryMetadata({
+  state,
+  clientMessageId,
+  onAttentionPress,
+  timestamp,
+}: {
+  state: MessageDeliveryState | undefined;
+  clientMessageId: string | undefined;
+  onAttentionPress: ((id: string) => void) | undefined;
+  timestamp: string;
+}) {
+  const handleAttention = useCallback(() => {
+    if (clientMessageId) onAttentionPress?.(clientMessageId);
+  }, [clientMessageId, onAttentionPress]);
+  const awaiting = isAwaitingUserDelivery(state);
+  return (
+    <>
+      {awaiting ? null : (
+        <Text style={userMessageStylesheet.timestampText} testID="user-message-timestamp">
+          {timestamp}
+        </Text>
+      )}
+      {state ? (
+        <DeliveryMark
+          state={state}
+          testID="user-message-delivery-mark"
+          onPress={state === "attention" ? handleAttention : undefined}
+        />
+      ) : null}
+    </>
+  );
+}
+
 export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
@@ -472,6 +523,9 @@ export const UserMessage = memo(function UserMessage({
   isFirstInGroup = true,
   isLastInGroup = true,
   isPending = false,
+  deliveryState,
+  clientMessageId,
+  onDeliveryAttentionPress,
   disableOuterSpacing,
 }: UserMessageProps) {
   const isCompact = useIsCompactFormFactor();
@@ -487,7 +541,12 @@ export const UserMessage = memo(function UserMessage({
   const hasText = message.trim().length > 0;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;
-  const showTrailingRow = !isPending && hasText && (isCompact || isNative || isHovered);
+  const showTrailingRow = showUserTrailingRow({
+    awaiting: isAwaitingUserDelivery(deliveryState),
+    pending: isPending,
+    hasText,
+    reveal: isCompact || isNative || isHovered,
+  });
   const formattedTimestamp = useMemo(
     () => formatMessageTimestamp(new Date(timestamp)),
     [timestamp],
@@ -586,15 +645,18 @@ export const UserMessage = memo(function UserMessage({
             <ClampedUserMessageText message={message} style={userMessageStylesheet.text} />
           ) : null}
         </View>
-        {hasText ? (
+        {hasText || deliveryState ? (
           <View
             style={trailingRowStyle}
             pointerEvents={showTrailingRow ? "auto" : "none"}
             testID="user-message-trailing-row"
           >
-            <Text style={userMessageStylesheet.timestampText} testID="user-message-timestamp">
-              {formattedTimestamp}
-            </Text>
+            <UserDeliveryMetadata
+              state={deliveryState}
+              clientMessageId={clientMessageId}
+              onAttentionPress={onDeliveryAttentionPress}
+              timestamp={formattedTimestamp}
+            />
             {capabilities && messageId ? (
               <RewindMenu
                 capabilities={capabilities}

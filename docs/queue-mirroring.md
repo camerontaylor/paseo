@@ -10,6 +10,12 @@ The queue is daemon-only infrastructure (`packages/server/src/server/agent-queue
 - The daemon mirrors `agent.queue.update` broadcasts only to clients advertising `CLIENT_CAPS.durableAgentQueue`, so an old client never receives an event its outbound union cannot parse.
 - Legacy `send_agent_message_request` keeps its released receipt-backed path. It never enqueues, and admission is never inferred from a message the daemon did not classify.
 
+## Queued admission vs provider delivery
+
+A direct send response may report `queued: true` (optional, additive on `send_agent_message_response`). Queue admission alone is not provider submission: the composer retires only its optimistic bubble and submission activity — the daemon-owned queue stays the source of truth until delivery — and a canonical provider echo that raced the response is preserved (`observeMessageSubmissionCanonical`).
+
+A Codex turn start cancelled before `turn/start` was issued throws `AGENT_PROMPT_NOT_SUBMITTED`; the receipt service treats that code as "never dispatched", strips the attempt receipt, and the item returns to `pending` for the next idle boundary. A timeout or a failure after `turn/start` is never classified as safe to retry: the outcome is `uncertain` and demands an explicit retry or discard.
+
 ## Delivery lifecycle
 
 ```
@@ -51,12 +57,17 @@ One JSON file per agent under `$PASEO_HOME/queues/`, written atomically at mode 
 
 ## The composer side
 
-The queue track shows one row per queued prompt. Rows mirrored from the daemon carry the item's delivery state; rows the daemon has not acknowledged yet come from the outbox. Three contracts hold the two layers together:
+The queue track shows one row per queued prompt. Rows mirrored from the daemon carry the item's delivery state; rows the daemon has not acknowledged yet come from the outbox. Four contracts hold the two layers together:
 
-- **Snapshots replace, outbox survives.** A snapshot replaces an agent's rows wholesale behind a revision guard; entries in the outbox that the snapshot cannot know about are re-appended, so an un-acked enqueue never disappears because another device mutated the queue first.
-- **The outbox is the durable copy of the enqueue.** It is written before the request goes out and cleared on the daemon's acknowledgement. A send that never got an ack — relay stall, suspended app — is retried on the next reconnect whose server info advertises the flag, verbatim, including its intent.
-- **Exhausted retries stay visible.** After 8 failed flush attempts an entry is parked in a visible failed state with explicit retry and discard, not dropped. This deliberately diverges from the source, which deleted the entry and its row at the cap — that silently discards an undelivered prompt.
+- **Session state stores snapshots only.** The composer overlays the durable outbox at render time (`annotateQueueRows`), so acknowledging or discarding an outbox entry removes its row without another snapshot — a stale overlay can never outlive its entry.
+- **Acknowledgement precedes application.** When a snapshot contains an outbox entry's id, the entry is removed durably _before_ the snapshot is stored; if that removal fails, the snapshot is not applied at all and the next snapshot retries the acknowledgement. An equal-revision snapshot still re-applies, so a raced broadcast reconciles leftover rows.
+- **The outbox is the durable copy of the enqueue.** It is written (and the write awaited) before the composer clears anything, and cleared on the daemon's acknowledgement. A send that never got an ack — relay stall, suspended app — is retried on the next reconnect whose server info advertises the flag, verbatim, including its intent. Rows whose entry is still in the outbox render as waiting-to-sync and cannot be edited or sent.
+- **Exhausted retries stay visible.** After 8 failed flush attempts an entry is parked in a visible failed state with explicit retry and discard, not dropped. This deliberately diverges from the source, which retries forever behind an attention toast — an unbounded retry. A failed park write keeps the in-process fence, so storage failure cannot un-park an entry.
 
-Edit and send-now pull the item off the daemon queue (delete + image rehydration) before it re-enters the composer or the send path, so a taken message cannot also drain from the queue. Every mutation sends the revision the device last saw; a stale one is refused as a visible conflict and the queue refreshes — never a silent overwrite.
+A storage failure on any outbox write surfaces as a rendered error row in the queue track (retry re-probes storage and re-flushes; dismiss clears it). Queue mutations write through a serialized chain: `add` rolls the in-memory entry back when its write fails, removal restores the entry, and each write resolves on its own — a failed write never poisons the writes queued behind it. Before an automatic flush sends anything it probes the storage with a real write; a failed probe sends nothing.
+
+Editing a queued row happens in place: the edit is checkpointed to the draft store (with the edit-start revision) before the update RPC runs, so a kill between edit and host confirmation restores the editing state with the baseline. A revision conflict persists a conflict fence — implicit saves (blur, Done, collapse, unmount) stay blocked across restarts until the user explicitly overwrites or discards. "Move to composer" remains an explicit menu action that pulls the item off the daemon queue (delete + image rehydration) into the composer.
+
+Removal persists a `removalRequested` tombstone in the outbox before the remove RPC runs; the tombstone survives lost responses, reconnects, and raced acknowledgements (a snapshot containing the item never acknowledges a pending cancellation), and a failed removal retries on the next flush — the row shows pending/failed removal feedback and is never re-enqueued. Every mutation sends the revision the device last saw; a stale one is refused as a visible conflict and the queue refreshes — never a silent overwrite.
 
 Hosts without `durableAgentQueueV1` keep the pre-queue composer behavior: the queue track holds rows in memory for this session and this device only, and nothing presents them as durable. Outbox entries written against a capable host and never flushed (the host downgraded before the next connect) wait in storage; they are not shown as queued against a host that cannot honor them.

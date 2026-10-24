@@ -1020,6 +1020,13 @@ type CorrelatedResponsePayloads = {
 type CorrelatedResponsePayload<TType extends CorrelatedResponseType> =
   CorrelatedResponsePayloads[TType];
 
+export class AgentMessageRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentMessageRejectedError";
+  }
+}
+
 export class DaemonConnectionError extends Error {
   constructor(
     message: string,
@@ -3704,7 +3711,7 @@ export class DaemonClient {
     agentId: string,
     text: string,
     options?: SendMessageOptions,
-  ): Promise<void> {
+  ): Promise<{ queued: boolean }> {
     if (
       options?.sourceAgentId &&
       this.lastServerInfoMessage?.features?.agentMessageProvenance !== true
@@ -3739,8 +3746,9 @@ export class DaemonClient {
       },
     });
     if (!payload.accepted) {
-      throw new Error(payload.error ?? "sendAgentMessage rejected");
+      throw new AgentMessageRejectedError(payload.error ?? "sendAgentMessage rejected");
     }
+    return { queued: payload.queued === true };
   }
 
   async sendMessage(agentId: string, text: string, options?: SendMessageOptions): Promise<void> {

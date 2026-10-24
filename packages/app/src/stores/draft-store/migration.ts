@@ -84,6 +84,13 @@ const RawDraftInputSchema = z.strictObject({
     )
     .optional(),
   cwd: z.string().optional(),
+  queueEdit: z
+    .strictObject({
+      itemId: z.string(),
+      baselineRevision: z.number().int().nonnegative(),
+      conflicted: z.boolean().optional(),
+    })
+    .optional(),
 });
 const DraftLifecycleSchema = z.enum(["active", "abandoned", "sent"]);
 const NestedDraftRecordSchema = z.strictObject({
@@ -162,6 +169,7 @@ export async function migrateDraftInput(
   return {
     text: typeof rawInput.text === "string" ? rawInput.text : "",
     attachments: [...attachments, ...legacyImagesToAttachments(migratedImages)],
+    ...(rawInput.queueEdit ? { queueEdit: rawInput.queueEdit } : {}),
   };
 }
 

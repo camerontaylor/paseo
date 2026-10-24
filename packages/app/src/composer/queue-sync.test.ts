@@ -4,7 +4,10 @@ import type { AgentQueueSnapshot, ForgeSearchItem } from "@getpaseo/protocol/mes
 import type { AttachmentMetadata } from "@/attachments/types";
 import type { PendingQueueEnqueue } from "@/stores/queue-outbox-store/model";
 import {
+  annotateQueueRows,
   appendPendingQueueRows,
+  getPendingQueueMessageIds,
+  resolveQueueStorageErrorRow,
   shouldApplyAgentQueueSnapshot,
   toQueuedComposerAttachments,
   toQueuedComposerMessages,
@@ -201,4 +204,163 @@ describe("toQueuedComposerAttachments", () => {
       ]),
     ).toEqual([{ kind: "workspace_file", path: "src/main.ts", selection: { kind: "whole_file" } }]);
   });
+});
+
+describe("getPendingQueueMessageIds", () => {
+  function outboxEntry(itemId: string): PendingQueueEnqueue {
+    return {
+      serverId: "server-1",
+      agentId: "agent-1",
+      itemId,
+      text: "not acked yet",
+      intent: "queue",
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+      createdAt: 1,
+      attempts: 0,
+    };
+  }
+
+  it("excludes ids the snapshot already accepted", () => {
+    const ids = getPendingQueueMessageIds([outboxEntry("a"), outboxEntry("b")], new Set(["a"]));
+    expect([...ids]).toEqual(["b"]);
+  });
+
+  it("includes every un-acked entry and nothing when the outbox is empty", () => {
+    expect([...getPendingQueueMessageIds([outboxEntry("a")], undefined)]).toEqual(["a"]);
+    expect(getPendingQueueMessageIds([], new Set(["a"])).size).toBe(0);
+  });
+});
+
+describe("annotateQueueRows", () => {
+  function outboxEntry(
+    itemId: string,
+    overrides: Partial<PendingQueueEnqueue> = {},
+  ): PendingQueueEnqueue {
+    return {
+      serverId: "server-1",
+      agentId: "agent-1",
+      itemId,
+      text: `text for ${itemId}`,
+      intent: "queue",
+      images: [],
+      attachments: [],
+      composerAttachments: [],
+      createdAt: 1,
+      attempts: 0,
+      ...overrides,
+    };
+  }
+
+  const snapshotRows = [{ id: "item-1", text: "first", attachments: [] }];
+
+  it("overlays un-acked outbox rows on the stored snapshot rows", () => {
+    const rows = annotateQueueRows({
+      rows: snapshotRows,
+      entries: [outboxEntry("pending-1", { createdAt: 1 })],
+    });
+    expect(rows.map((row) => [row.id, row.syncState])).toEqual([
+      ["item-1", undefined],
+      ["pending-1", "pending"],
+    ]);
+  });
+
+  it("marks parked entries failed and visible, even when only the outbox knows them", () => {
+    const rows = annotateQueueRows({
+      rows: snapshotRows,
+      entries: [outboxEntry("parked-1", { failedAt: 5, attempts: 8 })],
+    });
+    const appended = rows.find((row) => row.id === "parked-1");
+    expect(appended?.syncState).toBe("failed");
+  });
+
+  it("drops a row whose entry was discarded, without needing a new snapshot", () => {
+    const withOverlay = annotateQueueRows({
+      rows: snapshotRows,
+      entries: [outboxEntry("pending-1")],
+    });
+    expect(withOverlay.map((row) => row.id)).toEqual(["item-1", "pending-1"]);
+
+    // The discard removes the outbox entry; the overlay recomputes from the
+    // durable store, so the row disappears with no snapshot arriving.
+    const afterDiscard = annotateQueueRows({ rows: snapshotRows, entries: [] });
+    expect(afterDiscard.map((row) => row.id)).toEqual(["item-1"]);
+  });
+});
+
+describe("resolveQueueStorageErrorRow", () => {
+  it("carries the message key and the affected entry's text", () => {
+    const row = resolveQueueStorageErrorRow({ itemId: "item-9" }, [
+      {
+        serverId: "server-1",
+        agentId: "agent-1",
+        itemId: "item-9",
+        text: "the payload",
+        intent: "queue",
+        images: [],
+        attachments: [],
+        composerAttachments: [],
+        createdAt: 1,
+        attempts: 0,
+      },
+    ]);
+    expect(row).toEqual({
+      id: "queue-storage-error",
+      messageKey: "composer.errors.queuedPersistFailed",
+      entryText: "the payload",
+    });
+  });
+
+  it("is null without an error and tolerates an unknown item id", () => {
+    expect(resolveQueueStorageErrorRow(null, [])).toBeNull();
+    const row = resolveQueueStorageErrorRow({ itemId: null }, []);
+    expect(row?.entryText).toBeNull();
+    expect(row?.messageKey).toBe("composer.errors.queuedPersistFailed");
+  });
+});
+
+it("pending ids include tombstoned entries even when a snapshot contains them", () => {
+  const tombstoned: PendingQueueEnqueue = {
+    serverId: "server-1",
+    agentId: "agent-1",
+    itemId: "item-1",
+    text: "text",
+    intent: "queue",
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+    createdAt: 1,
+    attempts: 0,
+    removalRequested: true,
+  };
+  const ids = getPendingQueueMessageIds([tombstoned], new Set(["item-1"]));
+  expect([...ids]).toEqual(["item-1"]);
+});
+
+it("an outbox-only tombstone row carries its removal intent so discard stays rejected", () => {
+  const tombstoned: PendingQueueEnqueue = {
+    serverId: "server-1",
+    agentId: "agent-1",
+    itemId: "item-t",
+    text: "cancel me",
+    intent: "queue",
+    images: [],
+    attachments: [],
+    composerAttachments: [],
+    createdAt: 1,
+    attempts: 3,
+    removalRequested: true,
+  };
+  const plain: PendingQueueEnqueue = {
+    ...tombstoned,
+    itemId: "item-p",
+    text: "plain pending",
+    removalRequested: undefined,
+  };
+  const rows = appendPendingQueueRows([], [tombstoned, plain]);
+  const tombstoneRow = rows.find((row) => row.id === "item-t");
+  const plainRow = rows.find((row) => row.id === "item-p");
+  expect(tombstoneRow?.removalRequested).toBe(true);
+  expect(plainRow?.removalRequested).toBeUndefined();
 });

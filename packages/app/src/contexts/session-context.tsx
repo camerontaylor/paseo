@@ -16,9 +16,17 @@ import { deriveAgentStreamTurnLiveness } from "@/timeline/session-stream-reducer
 import { planTimelineTailFetch } from "@/timeline/timeline-sync-plan";
 import { requestTimelineReplacement } from "@/timeline/timeline-replacement";
 import { type ViewedTimelineOwner } from "@/timeline/viewed-timeline-sync";
-import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
+import type { SessionOutboundMessage, ServerInfoStatusPayload } from "@getpaseo/protocol/messages";
 import { parseServerInfoStatusPayload } from "@getpaseo/protocol/messages";
-import { flushQueueOutboxForServer } from "@/stores/queue-outbox-store";
+import {
+  flushDirectOutboxForServer,
+  flushQueueOutboxForServer,
+  supportsDurableDirectSend,
+  useQueueOutboxStore,
+} from "@/stores/queue-outbox-store";
+import { createDirectSendAcceptanceHandler } from "@/composer/submission/direct-send-outbox";
+import { startOutboxReconnectFlush } from "./session-outbox-flush";
+import { createServerQueueFlushClient } from "@/composer/server-queue-flush-client";
 import {
   buildAgentAttentionNotificationPayload,
   type AgentAttentionReason,
@@ -542,6 +550,35 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     viewedTimelineSyncRef.current?.setConnected(isConnected);
   }, [isConnected]);
 
+  useEffect(() => {
+    const flush = (features: ServerInfoStatusPayload["features"]) => {
+      const supported = supportsDurableDirectSend(features);
+      void useQueueOutboxStore
+        .getState()
+        .rememberHostSupport(serverId, supported)
+        .catch((error) => {
+          console.error("[direct-outbox] support persistence failed:", error);
+        });
+      if (!supported) return;
+      void flushDirectOutboxForServer({
+        serverId,
+        client,
+        onAccepted: createDirectSendAcceptanceHandler(serverId),
+      }).catch((error) => console.error("[direct-outbox] reconnect flush failed:", error));
+      void flushQueueOutboxForServer({
+        serverId,
+        client: createServerQueueFlushClient({ client, serverId }),
+        applySnapshot: (snapshot) =>
+          useSessionStore.getState().applyAgentQueueSnapshot(serverId, snapshot),
+      }).catch((error) => console.error("[queue-outbox] reconnect flush failed:", error));
+    };
+    return startOutboxReconnectFlush({
+      client,
+      subscribeStatus: (handler) => client.on("status", (message) => handler(message.payload)),
+      flush,
+    });
+  }, [client, serverId]);
+
   // Daemon message handlers - directly update Zustand store
   useEffect(() => {
     const feeds = client.observeEvents(
@@ -626,20 +663,6 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       const serverInfo = parseServerInfoStatusPayload(message.payload);
       if (serverInfo) {
         updateSessionServerInfo(serverId, toDaemonServerInfo(serverInfo));
-        // COMPAT(durableAgentQueue): added in v0.11.0-beta.3+custom (TM-02/TM-03).
-        // Server info arrives on every (re)connect, which is exactly when an
-        // enqueue the daemon never acknowledged should be retried. Hosts without
-        // the flag keep the local queue path and their outbox entries wait; the
-        // local queue is in-memory and session-scoped, so nothing durable is
-        // implied about it either way.
-        if (serverInfo.features?.durableAgentQueueV1 === true) {
-          void flushQueueOutboxForServer({
-            serverId,
-            client,
-            applySnapshot: (snapshot) =>
-              useSessionStore.getState().applyAgentQueueSnapshot(serverId, snapshot),
-          });
-        }
         return;
       }
     });
