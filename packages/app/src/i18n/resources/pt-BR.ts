@@ -872,6 +872,8 @@ export const ptBR: TranslationResources = {
         renameTerminal: "Renomear terminal",
         viewArtifacts: "Ver artefatos",
         renameAgent: "Renomear agente",
+        markAsUnread: "Marcar como não lido",
+        lastActive: "Última atividade",
       },
       actions: {
         newTab: "Nova aba",
@@ -1424,6 +1426,13 @@ export const ptBR: TranslationResources = {
       done: "Concluído",
     },
     display: {
+      sort: {
+        label: "Sort by",
+        recent: "Latest conversation",
+        user: "Your latest message",
+        manual: "Manual",
+        title: "Title",
+      },
       showBackground: "Mostrar espaços em segundo plano",
       trigger: "Preferências de exibição",
       heading: "Exibição",

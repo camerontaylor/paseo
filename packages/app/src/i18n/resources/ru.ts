@@ -870,6 +870,8 @@ export const ru: TranslationResources = {
         renameTerminal: "Переименовать терминал",
         viewArtifacts: "Открыть артефакты",
         renameAgent: "Переименовать агента",
+        markAsUnread: "Отметить как непрочитанное",
+        lastActive: "Последняя активность",
       },
       actions: {
         newTab: "Новая вкладка",
@@ -1411,6 +1413,13 @@ export const ru: TranslationResources = {
       done: "Готово",
     },
     display: {
+      sort: {
+        label: "Sort by",
+        recent: "Latest conversation",
+        user: "Your latest message",
+        manual: "Manual",
+        title: "Title",
+      },
       showBackground: "Показать фоновые пространства",
       trigger: "Настройки отображения",
       heading: "Отображение",

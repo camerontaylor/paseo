@@ -867,6 +867,8 @@ export const ko: TranslationResources = {
         renameTerminal: "터미널 이름 변경",
         viewArtifacts: "아티팩트 보기",
         renameAgent: "에이전트 이름 변경",
+        markAsUnread: "읽지 않음으로 표시",
+        lastActive: "마지막 활동",
       },
       actions: {
         newTab: "새 탭",
@@ -1403,6 +1405,13 @@ export const ko: TranslationResources = {
       done: "완료",
     },
     display: {
+      sort: {
+        label: "Sort by",
+        recent: "Latest conversation",
+        user: "Your latest message",
+        manual: "Manual",
+        title: "Title",
+      },
       showBackground: "백그라운드 표시",
       trigger: "표시 설정",
       heading: "표시",

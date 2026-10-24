@@ -119,6 +119,7 @@ import { selectWorkspaceServiceSummary } from "@/components/sidebar/workspace-me
 import {
   SidebarWorkspaceTrailingContent,
   useSidebarWorkspaceTrailing,
+  workspaceLastActiveAt,
 } from "@/components/sidebar/workspace-trailing";
 import { DensityIcon } from "@/components/ui/density-icon";
 import { PressHighlight } from "@/components/ui/press-highlight";
@@ -707,6 +708,7 @@ function WorkspaceRowRightGroup({
                 isPinned={isPinned}
                 onTogglePin={onTogglePin}
                 openInFileManagerPath={workspacePath}
+                lastActiveAt={workspaceLastActiveAt(workspace)}
               />
             ) : null}
           </SidebarWorkspaceTrailingActionOverlay>

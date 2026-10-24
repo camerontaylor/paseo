@@ -7912,7 +7912,7 @@ export class Session {
   private async handleWorkspaceMarkUnreadRequest(
     request: Extract<SessionInboundMessage, { type: "workspace.mark_unread.request" }>,
   ): Promise<void> {
-    const { requestId, workspaceId } = request;
+    const { requestId, workspaceId, agentId } = request;
     let markedAgentId: string | null = null;
     try {
       const workspace = await this.workspaceRegistry.get(workspaceId);
@@ -7924,6 +7924,19 @@ export class Session {
         this.isProviderVisibleToClient(agent.provider),
       );
       const agentsById = new Map(agents.map((agent) => [agent.id, agent] as const));
+      if (agentId) {
+        const target = agentsById.get(agentId);
+        if (!target || target.archivedAt || target.workspaceId !== workspace.workspaceId) {
+          throw new Error(`Agent not found in workspace: ${agentId}`);
+        }
+        await this.agentManager.markAgentUnread(target.id);
+        markedAgentId = target.id;
+        this.emit({
+          type: "workspace.mark_unread.response",
+          payload: { requestId, workspaceId, markedAgentId, success: true, error: null },
+        });
+        return;
+      }
       const candidates = agents
         .filter((agent) => !agent.archivedAt && agent.workspaceId === workspace.workspaceId)
         .filter((agent) => resolveWorkspaceRootAgent(agent, agentsById)?.id === agent.id)

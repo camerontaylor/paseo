@@ -58,7 +58,8 @@ export type WorkspaceTabMenuEntry =
         | "message-circle-plus"
         | "file-code-2"
         | "x"
-        | "search";
+        | "search"
+        | "circle";
       hint?: string;
       tooltip?: string;
       disabled?: boolean;

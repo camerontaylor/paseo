@@ -1,6 +1,7 @@
 import type { TFunction } from "i18next";
 import { STATUS_BUCKET_ORDER } from "@/utils/sidebar-agent-state";
 import type { SidebarWorkspaceEntry } from "@/hooks/sidebar-workspaces-view-model";
+import type { SidebarSortMode } from "@/stores/sidebar-view-store";
 
 export type StatusBucket = SidebarWorkspaceEntry["statusBucket"];
 
@@ -28,6 +29,7 @@ export function buildStatusGroups(
   workspaces: SidebarWorkspaceEntry[],
   projectNamesByViewKey: Map<string, string>,
   t: TFunction,
+  sortMode: SidebarSortMode = "manual",
 ): StatusGroup[] {
   const bucketRows = new Map<StatusBucket, SidebarWorkspaceEntry[]>();
 
@@ -47,7 +49,7 @@ export function buildStatusGroups(
     const rows = bucketRows.get(bucket);
     if (!rows || rows.length === 0) continue;
 
-    rows.sort((a, b) => compareStatusRows(a, b, projectNamesByViewKey));
+    rows.sort((a, b) => compareStatusRows(a, b, projectNamesByViewKey, sortMode));
     groups.push({ bucket, label: getStatusBucketLabel(bucket, t), rows });
   }
 
@@ -58,7 +60,10 @@ function compareStatusRows(
   a: SidebarWorkspaceEntry,
   b: SidebarWorkspaceEntry,
   projectNamesByViewKey: Map<string, string>,
+  sortMode: SidebarSortMode,
 ): number {
+  const sortDelta = compareStatusSort(a, b, sortMode);
+  if (sortDelta !== 0) return sortDelta;
   const aTime = a.statusEnteredAt?.getTime() ?? null;
   const bTime = b.statusEnteredAt?.getTime() ?? null;
 
@@ -79,6 +84,24 @@ function compareStatusRows(
   if (nameCmp !== 0) return nameCmp;
 
   return a.workspaceKey.localeCompare(b.workspaceKey);
+}
+
+function compareStatusSort(
+  a: SidebarWorkspaceEntry,
+  b: SidebarWorkspaceEntry,
+  sortMode: SidebarSortMode,
+): number {
+  if (sortMode === "recent" || sortMode === "user") {
+    const field = sortMode === "recent" ? "lastMessageAt" : "lastUserMessageAt";
+    return (b[field]?.getTime() ?? 0) - (a[field]?.getTime() ?? 0);
+  }
+  if (sortMode === "title") {
+    return (
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) ||
+      a.workspaceKey.localeCompare(b.workspaceKey)
+    );
+  }
+  return 0;
 }
 
 export function buildStatusShortcutIndex(groups: StatusGroup[]): Map<string, number> {

@@ -857,6 +857,8 @@ export const zhCN: TranslationResources = {
         renameTerminal: "重命名 Terminal",
         viewArtifacts: "查看产出文件",
         renameAgent: "重命名 Agent",
+        markAsUnread: "标记为未读",
+        lastActive: "上次活动",
       },
       actions: {
         newTab: "新建标签页",
@@ -1380,6 +1382,13 @@ export const zhCN: TranslationResources = {
       done: "已完成",
     },
     display: {
+      sort: {
+        label: "Sort by",
+        recent: "Latest conversation",
+        user: "Your latest message",
+        manual: "Manual",
+        title: "Title",
+      },
       showBackground: "显示后台工作区",
       trigger: "显示偏好",
       heading: "显示",

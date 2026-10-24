@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Agent } from "@/stores/session-store";
-import { buildWorkspaceAgentActivityIndex } from "./workspace-agent-activity";
+import {
+  buildWorkspaceAgentActivityIndex,
+  type WorkspaceAgentActivity,
+} from "./workspace-agent-activity";
 
 function agent(input: {
   id: string;
@@ -14,6 +17,7 @@ function agent(input: {
   pendingPermissionCount?: number;
   archivedAt?: string | null;
   parentAgentId?: string | null;
+  messageActivity?: Agent["messageActivity"];
 }): Agent {
   return {
     serverId: "host-a",
@@ -34,6 +38,7 @@ function agent(input: {
     updatedAt: new Date(input.updatedAt),
     lastUserMessageAt: null,
     lastActivityAt: new Date(input.updatedAt),
+    messageActivity: input.messageActivity,
     capabilities: {
       supportsStreaming: true,
       supportsSessionPersistence: true,
@@ -63,6 +68,19 @@ function agent(input: {
     parentAgentId: input.parentAgentId ?? null,
     labels: {},
   };
+}
+
+function statusOnly(index: Map<string, WorkspaceAgentActivity>) {
+  return new Map(
+    [...index].map(([key, value]) => [
+      key,
+      {
+        agentId: value.agentId,
+        status: value.status,
+        enteredAt: value.enteredAt,
+      },
+    ]),
+  );
 }
 
 describe("workspace agent activity index", () => {
@@ -136,7 +154,7 @@ describe("workspace agent activity index", () => {
       ]),
     );
 
-    expect(index).toEqual(
+    expect(statusOnly(index)).toEqual(
       new Map([
         [
           "workspace-a",
@@ -194,7 +212,7 @@ describe("workspace agent activity index", () => {
       ]),
     );
 
-    expect(index.get("workspace-a")).toEqual({
+    expect(index.get("workspace-a")).toMatchObject({
       agentId: "root",
       status: "running",
       enteredAt: new Date("2026-06-01T10:00:00.000Z"),
@@ -225,7 +243,7 @@ describe("workspace agent activity index", () => {
       ]),
     );
 
-    expect(index).toEqual(
+    expect(statusOnly(index)).toEqual(
       new Map([
         [
           "workspace-a",
@@ -247,7 +265,7 @@ describe("workspace agent activity index", () => {
     );
   });
 
-  it("preserves the activity index while the same agent remains in the same status", () => {
+  it("preserves the status entry time while updating the last-activity clock", () => {
     const previous = buildWorkspaceAgentActivityIndex(
       new Map([
         [
@@ -277,8 +295,52 @@ describe("workspace agent activity index", () => {
       previous,
     );
 
-    expect(next).toBe(previous);
+    expect(next).not.toBe(previous);
+    expect(next.get("workspace-a")?.lastActivityAt).toEqual(new Date("2026-06-01T10:05:00.000Z"));
     expect(next.get("workspace-a")?.enteredAt).toEqual(new Date("2026-06-01T10:00:00.000Z"));
+  });
+
+  it("uses the newest root-agent message clock without treating a visit as a message", () => {
+    const first = agent({
+      id: "first",
+      workspaceId: "workspace-a",
+      updatedAt: "2026-06-01T12:00:00.000Z",
+      messageActivity: {
+        lastUserMessageAt: "2026-06-01T09:00:00.000Z",
+        lastAssistantMessageAt: "2026-06-01T10:00:00.000Z",
+      },
+    });
+    const second = agent({
+      id: "second",
+      workspaceId: "workspace-a",
+      updatedAt: "2026-06-01T11:00:00.000Z",
+      messageActivity: {
+        lastUserMessageAt: "2026-06-01T11:00:00.000Z",
+        lastAssistantMessageAt: null,
+      },
+    });
+    const child = agent({
+      id: "child",
+      workspaceId: "workspace-a",
+      updatedAt: "2026-06-01T13:00:00.000Z",
+      parentAgentId: "first",
+      messageActivity: {
+        lastUserMessageAt: "2026-06-01T13:00:00.000Z",
+        lastAssistantMessageAt: null,
+      },
+    });
+    const index = buildWorkspaceAgentActivityIndex(
+      new Map([
+        ["first", first],
+        ["second", second],
+        ["child", child],
+      ]),
+    );
+    expect(index.get("workspace-a")?.lastMessageAt).toEqual(new Date("2026-06-01T11:00:00.000Z"));
+    expect(index.get("workspace-a")?.lastUserMessageAt).toEqual(
+      new Date("2026-06-01T11:00:00.000Z"),
+    );
+    expect(index.get("workspace-a")?.lastActivityAt).toEqual(new Date("2026-06-01T12:00:00.000Z"));
   });
 
   it("records a new entry time when an agent changes status", () => {
@@ -313,7 +375,7 @@ describe("workspace agent activity index", () => {
     );
 
     expect(next).not.toBe(previous);
-    expect(next.get("workspace-a")).toEqual({
+    expect(next.get("workspace-a")).toMatchObject({
       agentId: "root",
       status: "needs_input",
       enteredAt: new Date("2026-06-01T10:05:00.000Z"),

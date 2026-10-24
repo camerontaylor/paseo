@@ -863,6 +863,8 @@ export const en = {
         renameTerminal: "Rename terminal",
         viewArtifacts: "View artifacts",
         renameAgent: "Rename agent",
+        markAsUnread: "Mark as unread",
+        lastActive: "Last active",
       },
       actions: {
         newTab: "New tab",
@@ -1408,6 +1410,13 @@ export const en = {
       showBackground: "Show background",
       trigger: "Display preferences",
       heading: "Display",
+      sort: {
+        label: "Sort by",
+        recent: "Latest conversation",
+        user: "Your latest message",
+        manual: "Manual",
+        title: "Title",
+      },
       grouping: {
         label: "Grouping",
         project: "Project",

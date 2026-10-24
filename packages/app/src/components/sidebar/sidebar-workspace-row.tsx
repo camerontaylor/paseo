@@ -38,6 +38,7 @@ import { selectWorkspaceServiceSummary } from "@/components/sidebar/workspace-me
 import {
   SidebarWorkspaceTrailingContent,
   useSidebarWorkspaceTrailing,
+  workspaceLastActiveAt,
   type SidebarWorkspaceTrailing,
 } from "@/components/sidebar/workspace-trailing";
 
@@ -450,6 +451,7 @@ function WorkspaceRowTrailingActions({
                 archiveStatus={archiveStatus}
                 archivePendingLabel={archivePendingLabel}
                 archiveShortcutKeys={archiveShortcutKeys}
+                lastActiveAt={workspaceLastActiveAt(workspace)}
               />
             ) : null}
           </SidebarWorkspaceTrailingActionOverlay>

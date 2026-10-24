@@ -42,6 +42,9 @@ export interface SidebarWorkspaceEntry extends SidebarStatusWorkspacePlacement {
   // Raw user-set title (null when the name is derived from branch/directory).
   // Prefills the rename input and signals whether a reset is available.
   title: string | null;
+  lastActivityAt?: Date | null;
+  lastMessageAt?: Date | null;
+  lastUserMessageAt?: Date | null;
   pinnedAt?: string | null;
   labels?: string[];
   // Checkout branch (null when not a git checkout or detached HEAD).
@@ -168,6 +171,10 @@ export function createSidebarWorkspaceEntry(input: {
     background: input.workspace.background,
     name: input.workspace.name,
     title: input.workspace.title ?? null,
+    lastActivityAt: input.workspaceAgentActivity?.get(input.workspace.id)?.lastActivityAt ?? null,
+    lastMessageAt: input.workspaceAgentActivity?.get(input.workspace.id)?.lastMessageAt ?? null,
+    lastUserMessageAt:
+      input.workspaceAgentActivity?.get(input.workspace.id)?.lastUserMessageAt ?? null,
     pinnedAt: input.workspace.pinnedAt,
     labels: input.workspace.labels ?? EMPTY_WORKSPACE_LABELS,
     currentBranch: normalizeCurrentBranch(input.workspace.gitRuntime?.currentBranch),

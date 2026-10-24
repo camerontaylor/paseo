@@ -17,6 +17,10 @@ import {
 import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
 import type { SidebarShortcutModel } from "@/utils/sidebar-shortcuts";
 import { buildSidebarProjection } from "./sidebar-projection";
+import { filterAndSortSidebarProjects } from "./sidebar-filter-sort";
+import { effectiveSidebarSortMode, messageSortAvailability } from "./message-sort-capability";
+import { useSessionStore } from "@/stores/session-store";
+import { useHosts } from "@/runtime/host-runtime";
 import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model";
 import { filterWorkspacesByLabels, type SidebarWorkspaceGroup } from "./sidebar-labels";
 import { filterWorkspacesByProjects, resolveActiveProjectFilters } from "./sidebar-project-filter";
@@ -59,6 +63,23 @@ export function SidebarModelProvider({
   const list = useSidebarWorkspacesList({ enabled: active });
   const showBackground = useSidebarViewStore((state) => state.showBackground);
   const groupMode = useSidebarViewStore((state) => state.groupMode);
+  const selectedSortMode = useSidebarViewStore((state) => state.sortMode);
+  const hostFilters = useSidebarViewStore((state) => state.hostFilters);
+  const hosts = useHosts();
+  const sortSupport = useSessionStore((state) =>
+    hosts
+      .filter((host) => hostFilters.length === 0 || hostFilters.includes(host.serverId))
+      .map(({ serverId }) =>
+        state.sessions[serverId]?.serverInfo?.features?.conversationMessageActivity === true
+          ? "1"
+          : "0",
+      )
+      .join(""),
+  );
+  const sortMode = effectiveSidebarSortMode(
+    selectedSortMode,
+    messageSortAvailability(sortSupport.split("").map((value) => value === "1")),
+  );
   const labelFilter = useSidebarViewStore((state) => state.labelFilter);
   const projectFilters = useSidebarViewStore((state) => state.projectFilters);
   const reconcileLabelFilter = useSidebarViewStore((state) => state.reconcileLabelFilter);
@@ -138,8 +159,15 @@ export function SidebarModelProvider({
           : [];
       });
     }
-    return projects;
+    return filterAndSortSidebarProjects({
+      projects,
+      entries: filteredWorkspaceEntriesByKey,
+      query: "",
+      mode: sortMode,
+    });
   }, [
+    sortMode,
+    filteredWorkspaceEntriesByKey,
     showBackground,
     hasActiveLabelFilter,
     hasActiveProjectFilter,
@@ -156,6 +184,7 @@ export function SidebarModelProvider({
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
       projectNamesByViewKey: list.projectNamesByViewKey,
       groupMode,
+      sortMode,
       pinnedCollapsed,
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
@@ -165,6 +194,7 @@ export function SidebarModelProvider({
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
       groupMode,
+      sortMode,
       list.projectNamesByViewKey,
       filteredProjects,
       pinnedCollapsed,

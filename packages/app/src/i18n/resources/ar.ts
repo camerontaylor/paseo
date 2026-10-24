@@ -862,6 +862,8 @@ export const ar: TranslationResources = {
         renameTerminal: "إعادة تسمية المحطة",
         viewArtifacts: "عرض الملفات المنتَجة",
         renameAgent: "إعادة تسمية الوكيل",
+        markAsUnread: "تعليم كغير مقروء",
+        lastActive: "آخر نشاط",
       },
       actions: {
         newTab: "علامة تبويب جديدة",
@@ -1393,6 +1395,13 @@ export const ar: TranslationResources = {
       done: "تم",
     },
     display: {
+      sort: {
+        label: "Sort by",
+        recent: "Latest conversation",
+        user: "Your latest message",
+        manual: "Manual",
+        title: "Title",
+      },
       showBackground: "إظهار مساحات العمل في الخلفية",
       trigger: "تفضيلات العرض",
       heading: "العرض",

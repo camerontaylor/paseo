@@ -871,6 +871,8 @@ export const ja: TranslationResources = {
         renameTerminal: "ターミナルの名前を変更",
         viewArtifacts: "アーティファクトを表示",
         renameAgent: "エージェントの名前を変更",
+        markAsUnread: "未読にする",
+        lastActive: "最終アクティブ",
       },
       actions: {
         newTab: "新しいタブ",
@@ -1408,6 +1410,13 @@ export const ja: TranslationResources = {
       done: "完了",
     },
     display: {
+      sort: {
+        label: "Sort by",
+        recent: "Latest conversation",
+        user: "Your latest message",
+        manual: "Manual",
+        title: "Title",
+      },
       showBackground: "バックグラウンドを表示",
       trigger: "表示設定",
       heading: "表示",

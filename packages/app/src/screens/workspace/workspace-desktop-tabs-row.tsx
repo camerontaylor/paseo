@@ -11,6 +11,7 @@ import React, {
 } from "react";
 import { Pressable, Text, View, type LayoutChangeEvent } from "react-native";
 import {
+  Circle,
   CopyX,
   ArrowLeftToLine,
   ArrowRightToLine,
@@ -79,6 +80,7 @@ import { formatCompactTimeAgoAsProse } from "@/utils/time";
 import { buildWorkspaceKeyboardHandlerId } from "@/keyboard/handler-id";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import { WorkspaceNewTabMenuContent } from "@/screens/workspace/workspace-new-tab-menu";
+import { useMarkTabUnreadMenuEntries } from "@/screens/workspace/use-mark-tab-unread-menu-entries";
 import { WorkspaceRecentAgentsMenuContent } from "@/screens/workspace/workspace-recent-agents-menu";
 import {
   paneContentToolbarTrailingPadding,
@@ -129,6 +131,7 @@ const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedArrowLeftToLine = withUnistyles(ArrowLeftToLine);
 const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
+const ThemedCircle = withUnistyles(Circle);
 const ThemedMessageCirclePlus = withUnistyles(MessageCirclePlus);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedHistory = withUnistyles(History);
@@ -460,6 +463,8 @@ function TabContextMenuItem({
         return <ThemedX size={16} uniProps={mutedColorMapping} />;
       case "search":
         return <ThemedSearch size={16} uniProps={mutedColorMapping} />;
+      case "circle":
+        return <ThemedCircle size={16} uniProps={mutedColorMapping} />;
       default:
         return undefined;
     }
@@ -1313,6 +1318,7 @@ function ResolvedWorkspaceDesktopTabsRow({
         <ResolvedDesktopTabChip
           key={`${item.tab.key}:${item.tab.kind}`}
           serverId={normalizedServerId}
+          workspaceId={normalizedWorkspaceId}
           item={item}
           isFocused={isFocused}
           isDragging={isActive}
@@ -1347,6 +1353,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       layout.closeButtonPolicy,
       layout.items,
       normalizedServerId,
+      normalizedWorkspaceId,
       onCloseOtherTabs,
       onCloseTab,
       onCloseTabsToLeft,
@@ -1470,6 +1477,7 @@ function ResolvedWorkspaceDesktopTabsRow({
 }
 function ResolvedDesktopTabChip({
   serverId,
+  workspaceId,
   item,
   isFocused,
   isDragging,
@@ -1497,6 +1505,7 @@ function ResolvedDesktopTabChip({
   showDropIndicatorAfter,
 }: {
   serverId: string;
+  workspaceId: string;
   item: ResolvedWorkspaceDesktopTabRowItem;
   isFocused: boolean;
   isDragging: boolean;
@@ -1525,7 +1534,7 @@ function ResolvedDesktopTabChip({
 }) {
   const { t } = useTranslation();
   const presentation = item.presentation;
-  const resolvedTab = useMemo(
+  const baseResolvedTab = useMemo(
     () =>
       buildWorkspaceDesktopTabActions({
         tab: item.tab,
@@ -1561,6 +1570,23 @@ function ResolvedDesktopTabChip({
       onStartSideConversation,
       tabCount,
     ],
+  );
+
+  const markUnreadEntries = useMarkTabUnreadMenuEntries({
+    tab: item.tab,
+    serverId,
+    workspaceId,
+    menuTestIDBase: baseResolvedTab.contextMenuTestId,
+  });
+  const resolvedTab = useMemo(
+    () =>
+      markUnreadEntries.length === 0
+        ? baseResolvedTab
+        : {
+            ...baseResolvedTab,
+            menuEntries: [...markUnreadEntries, ...baseResolvedTab.menuEntries],
+          },
+    [baseResolvedTab, markUnreadEntries],
   );
 
   const rawTooltipLabel =

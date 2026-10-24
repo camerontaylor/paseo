@@ -7,6 +7,7 @@ import {
 import {
   useSidebarViewStore,
   type SidebarGroupMode,
+  type SidebarSortMode,
   type SidebarLabelFilter,
 } from "@/stores/sidebar-view-store";
 import { DEFAULT_SIDEBAR_CHECKS_DISPLAY, type SidebarChecksDisplay } from "./checks-display";
@@ -20,6 +21,8 @@ export interface SidebarDisplayPreferences {
   toggleBackground: () => void;
   grouping: SidebarGroupMode;
   setGrouping: (mode: SidebarGroupMode) => void;
+  sortMode: SidebarSortMode;
+  setSortMode: (mode: SidebarSortMode) => void;
   titleSource: WorkspaceTitleSource;
   setTitleSource: (source: WorkspaceTitleSource) => void;
   rowItems: SidebarRowItems;
@@ -54,6 +57,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
   const toggleBackground = useSidebarViewStore((state) => state.toggleBackground);
   const grouping = useSidebarViewStore((state) => state.groupMode);
   const setGrouping = useSidebarViewStore((state) => state.setGroupMode);
+  const sortMode = useSidebarViewStore((state) => state.sortMode);
+  const setSortMode = useSidebarViewStore((state) => state.setSortMode);
   const hostFilters = useSidebarViewStore((state) => state.hostFilters);
   const toggleHostFilter = useSidebarViewStore((state) => state.toggleHostFilter);
   const clearHostFilters = useSidebarViewStore((state) => state.clearHostFilters);
@@ -112,6 +117,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       toggleBackground,
       grouping,
       setGrouping,
+      sortMode,
+      setSortMode,
       titleSource: workspaceTitleSource,
       setTitleSource,
       rowItems: sidebarRowItems,
@@ -135,6 +142,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       toggleBackground,
       grouping,
       setGrouping,
+      sortMode,
+      setSortMode,
       workspaceTitleSource,
       setTitleSource,
       sidebarRowItems,

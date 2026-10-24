@@ -875,6 +875,8 @@ export const es: TranslationResources = {
         renameTerminal: "Cambiar nombre de terminal",
         viewArtifacts: "Ver artefactos",
         renameAgent: "Cambiar nombre del agente",
+        markAsUnread: "Marcar como no leído",
+        lastActive: "Última actividad",
       },
       actions: {
         newTab: "Nueva pestaña",
@@ -1435,6 +1437,13 @@ export const es: TranslationResources = {
       done: "Terminado",
     },
     display: {
+      sort: {
+        label: "Sort by",
+        recent: "Latest conversation",
+        user: "Your latest message",
+        manual: "Manual",
+        title: "Title",
+      },
       showBackground: "Mostrar espacios en segundo plano",
       trigger: "Preferencias de visualización",
       heading: "Visualización",

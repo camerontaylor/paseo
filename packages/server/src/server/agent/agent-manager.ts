@@ -1,4 +1,11 @@
 import { indexStreamMessages } from "./stream-message-inventory.js";
+import { isSystemInjectedEnvelope } from "./agent-messages/index.js";
+import {
+  advanceMessageActivity,
+  deriveHistoricalMessageActivity,
+  emptyMessageActivity,
+  type MessageActivity,
+} from "./message-activity.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
@@ -464,6 +471,8 @@ interface ManagedAgentBase {
   persistence: AgentPersistenceHandle | null;
   historyPrimed: boolean;
   lastUserMessageAt: Date | null;
+  messageActivity?: MessageActivity;
+  assistantActivityTurnId?: string;
   activeTurnId: string | null;
   activeTurnStartedAt: Date | null;
   lastUsage?: AgentUsage;
@@ -1540,6 +1549,7 @@ export class AgentManager {
       createdAt?: Date;
       updatedAt?: Date;
       lastUserMessageAt?: Date | null;
+      messageActivity?: MessageActivity;
       labels?: Record<string, string>;
       workspaceId?: string;
       owner?: AgentOwner;
@@ -1574,6 +1584,7 @@ export class AgentManager {
       createdAt?: Date;
       updatedAt?: Date;
       lastUserMessageAt?: Date | null;
+      messageActivity?: MessageActivity;
       labels?: Record<string, string>;
       workspaceId?: string;
       owner?: AgentOwner;
@@ -1824,6 +1835,7 @@ export class AgentManager {
         createdAt: existing.createdAt,
         updatedAt: existing.updatedAt,
         lastUserMessageAt: existing.lastUserMessageAt,
+        messageActivity: existing.messageActivity,
         historyPrimed: rehydrateFromDisk ? false : preservedHistoryPrimed,
         lastUsage: preservedLastUsage,
         lastError: preservedLastError,
@@ -2223,6 +2235,7 @@ export class AgentManager {
         persistence: record.persistence ?? null,
         historyPrimed: true,
         lastUserMessageAt: record.lastUserMessageAt ? new Date(record.lastUserMessageAt) : null,
+        messageActivity: record.messageActivity ?? emptyMessageActivity(),
         lastUsage: undefined,
         lastError: record.lastError ?? undefined,
         attention,
@@ -3147,6 +3160,7 @@ export class AgentManager {
   }
 
   private openActiveTurn(agent: ActiveManagedAgent, turnId: string, startedAt: Date): void {
+    agent.assistantActivityTurnId = undefined;
     agent.activeTurnId = turnId;
     agent.activeTurnStartedAt = startedAt;
   }
@@ -3967,6 +3981,7 @@ export class AgentManager {
       createdAt?: Date;
       updatedAt?: Date;
       lastUserMessageAt?: Date | null;
+      messageActivity?: MessageActivity;
       labels?: Record<string, string>;
       timeline?: AgentTimelineItem[];
       timelineRows?: AgentTimelineRow[];
@@ -4158,6 +4173,7 @@ export class AgentManager {
           createdAt?: Date;
           updatedAt?: Date;
           lastUserMessageAt?: Date | null;
+          messageActivity?: MessageActivity;
           labels?: Record<string, string>;
           historyPrimed?: boolean;
           lastUsage?: AgentUsage;
@@ -4203,6 +4219,7 @@ export class AgentManager {
       ),
       historyPrimed: options?.historyPrimed ?? durableTimelineHasRows,
       lastUserMessageAt: options?.lastUserMessageAt ?? null,
+      messageActivity: resolveInitialMessageActivity(options),
       lastUsage: options?.lastUsage,
       lastError: options?.lastError,
       attention: resolveInitialAttention(options?.attention),
@@ -4616,6 +4633,7 @@ export class AgentManager {
         });
       }
     }
+    this.mergeHistoricalMessageActivity(agent, historyEvents);
     this.touchUpdatedAt(agent);
     this.emitState(agent);
   }
@@ -4688,6 +4706,7 @@ export class AgentManager {
       }
     }
     agent.historyPrimed = true;
+    this.mergeHistoricalMessageActivity(agent, historyEvents);
 
     if (typeof broadcast !== "function" || !broadcast()) {
       return;
@@ -4701,6 +4720,24 @@ export class AgentManager {
         epoch: this.timelineStore.getEpoch(agent.id),
         timestamp: row.timestamp,
       });
+    }
+  }
+
+  private mergeHistoricalMessageActivity(
+    agent: ActiveManagedAgent,
+    events: Iterable<Extract<AgentStreamEvent, { type: "timeline" }>>,
+  ): void {
+    const historical = deriveHistoricalMessageActivity(events);
+    const previous = agent.messageActivity ?? emptyMessageActivity();
+    let next = advanceMessageActivity(previous, "user", historical.lastUserMessageAt ?? undefined);
+    next = advanceMessageActivity(
+      next,
+      "assistant",
+      historical.lastAssistantMessageAt ?? undefined,
+    );
+    if (next !== previous) {
+      agent.messageActivity = next;
+      this.emitState(agent);
     }
   }
 
@@ -4990,6 +5027,18 @@ export class AgentManager {
     }
 
     event.item = item;
+    if (options?.fromHistory) {
+      this.recordTimeline(
+        agent.id,
+        event.item,
+        event.timestamp ? { timestamp: event.timestamp } : undefined,
+      );
+      this.mergeHistoricalMessageActivity(agent, [event]);
+      flags.shouldDispatchEvent = false;
+      flags.shouldNotifyWaiters = false;
+      return;
+    }
+
     if (
       event.item.type === "user_message" &&
       event.item.clientMessageId &&
@@ -5000,20 +5049,14 @@ export class AgentManager {
       return;
     }
 
-    if (options?.fromHistory) {
-      this.recordTimeline(
-        agent.id,
-        event.item,
-        event.timestamp ? { timestamp: event.timestamp } : undefined,
-      );
-      flags.shouldDispatchEvent = false;
-      flags.shouldNotifyWaiters = false;
-      return;
-    }
-
     this.recordAndDispatchTimelineItem(agent.id, event.item, event.provider, event.turnId);
     if (event.item.type === "user_message") {
       agent.lastUserMessageAt = new Date();
+      agent.messageActivity = advanceMessageActivity(
+        agent.messageActivity ?? emptyMessageActivity(),
+        "user",
+        event.timestamp ?? agent.lastUserMessageAt,
+      );
       this.emitState(agent);
     }
     flags.shouldDispatchEvent = false;
@@ -5040,6 +5083,19 @@ export class AgentManager {
       "agent.manager.turn.completed",
     );
     if (terminalDisposition === "stale") return;
+    if (
+      eventTurnId &&
+      terminalDisposition === "closed_current" &&
+      agent.assistantActivityTurnId === eventTurnId
+    ) {
+      agent.messageActivity = advanceMessageActivity(
+        agent.messageActivity ?? emptyMessageActivity(),
+        "assistant",
+        new Date(),
+      );
+      agent.assistantActivityTurnId = undefined;
+      this.emitState(agent);
+    }
     if (event.usage) {
       agent.lastUsage = { ...agent.lastUsage, ...event.usage };
     }
@@ -5316,6 +5372,12 @@ export class AgentManager {
       ...(turnId !== undefined ? { turnId } : {}),
     };
     const timelineAgent = this.agents.get(agentId);
+    if (timelineAgent && item.type === "assistant_message" && item.text.trim()) {
+      const messageTurnId = turnId ?? timelineAgent.activeTurnId;
+      if (messageTurnId && messageTurnId === timelineAgent.activeTurnId) {
+        timelineAgent.assistantActivityTurnId = messageTurnId;
+      }
+    }
     if (timelineAgent) this.collectCompanionEvent(timelineAgent, event);
     this.dispatchStream(agentId, event, {
       seq: row.seq,
@@ -5354,13 +5416,14 @@ export class AgentManager {
     if (!item) return;
     // Human attempts stay in history on rejection; delivery notifications require acceptance.
     if (outcome === "rejected" && item.type !== "user_message") return;
-    this.recordSubmittedPromptItem(agent, item, options);
+    this.recordSubmittedPromptItem(agent, item, options, outcome === "accepted");
   }
 
   private recordSubmittedPromptItem(
     agent: ActiveManagedAgent,
     item: AgentTimelineItem,
     options?: { providerMessageId?: string; turnId?: string },
+    accepted = true,
   ): void {
     if (
       item.type === "user_message" &&
@@ -5369,7 +5432,16 @@ export class AgentManager {
     )
       return;
     this.touchUpdatedAt(agent);
-    if (item.type === "user_message") agent.lastUserMessageAt = new Date();
+    if (item.type === "user_message") {
+      agent.lastUserMessageAt = new Date();
+      if (accepted && !isSystemInjectedEnvelope(item.text)) {
+        agent.messageActivity = advanceMessageActivity(
+          agent.messageActivity ?? emptyMessageActivity(),
+          "user",
+          agent.lastUserMessageAt,
+        );
+      }
+    }
     this.recordAndDispatchTimelineItem(agent.id, item, agent.provider, options?.turnId, options);
   }
 
@@ -6103,4 +6175,10 @@ export function commandMayHaveChangedExternalState(command: string): boolean {
     // ahead/behind counts can drift stale until the next refresh.
     /\bgit\s+fetch\b/.test(normalized)
   );
+}
+
+function resolveInitialMessageActivity(options?: {
+  messageActivity?: MessageActivity;
+}): MessageActivity {
+  return options?.messageActivity ?? emptyMessageActivity();
 }
