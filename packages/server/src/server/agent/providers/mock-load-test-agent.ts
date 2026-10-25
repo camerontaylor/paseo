@@ -26,6 +26,8 @@ import type {
   ImportProviderSessionContext,
   ImportProviderSessionInput,
   ProviderCatalog,
+  SideAnswer,
+  SideConversationExchange,
   SteerActiveTurnOptions,
   SteerResult,
   ToolCallDetail,
@@ -43,6 +45,7 @@ const MOCK_LOAD_TEST_COMMAND: AgentSlashCommand = {
   kind: "command",
 };
 export const MOCK_LOAD_TEST_HANDLED_COMMAND = `/${MOCK_LOAD_TEST_COMMAND.name} ${MOCK_LOAD_TEST_COMMAND.argumentHint}`;
+export const MOCK_SIDE_ANSWER_PREFIX = "mock-side-answer";
 const MOCK_LOAD_TEST_MODE_ID = "load-test";
 const MOCK_LOAD_TEST_DURATION_MS = 5 * 60 * 1000;
 const MOCK_LOAD_TEST_INTERVAL_MS = 40;
@@ -774,6 +777,16 @@ export class MockLoadTestAgentSession implements AgentSession {
   private readonly rewindError: string | null;
   private remainingPromptRejections: number;
   private remainingSteerFailures: number;
+  /**
+   * Assigned only when the agent opts in, because `AgentManager` treats the mere presence of this
+   * method as "this provider supports side questions". Leaving it off by default keeps the mock
+   * usable as the seam-less provider double — the shape Codex, Copilot, Pi and ACP really have.
+   */
+  askSideQuestion?: (
+    question: string,
+    history: readonly SideConversationExchange[],
+    options?: { signal?: AbortSignal },
+  ) => Promise<SideAnswer>;
 
   constructor(options: { config: AgentSessionConfig; sessionId: string; logger?: Logger }) {
     this.id = options.sessionId;
@@ -803,16 +816,23 @@ export class MockLoadTestAgentSession implements AgentSession {
       typeof options.config.featureValues?.mockRewindError === "string"
         ? options.config.featureValues.mockRewindError
         : null;
-    const requestedPromptRejections = options.config.featureValues?.mockPromptRejections;
-    this.remainingPromptRejections =
-      typeof requestedPromptRejections === "number" &&
-      Number.isSafeInteger(requestedPromptRejections) &&
-      requestedPromptRejections > 0
-        ? requestedPromptRejections
-        : 0;
+    this.remainingPromptRejections = getPositiveFeatureInteger(
+      options.config.featureValues?.mockPromptRejections,
+    );
     this.remainingSteerFailures = getPositiveFeatureInteger(
       options.config.featureValues?.mockSteerAmbiguousFailures,
     );
+    if (options.config.featureValues?.mockSideQuestions === true) {
+      // Answers name the exchanges the daemon handed back, so a caller can prove a follow-up was
+      // threaded rather than asked cold. Nothing is emitted on the stream: a side question that
+      // reached the main timeline would be the bug this seam exists to avoid.
+      this.askSideQuestion = async (question, history) => ({
+        status: "answered",
+        content: `${MOCK_SIDE_ANSWER_PREFIX} ${history.length}: ${question}`,
+        synthetic: false,
+        threading: "threaded",
+      });
+    }
   }
 
   usageSession() {

@@ -32,6 +32,7 @@ import {
   type FirstAgentContext,
   type SessionInboundMessage,
   type SessionOutboundMessage,
+  type SideConversationSnapshotPayload,
   type ScriptStatusUpdateMessage,
   type StartWorkspaceScriptRequest,
   type WorkspaceScriptListRequest,
@@ -114,6 +115,7 @@ import type {
   AgentTimelineFetchResult,
   ManagedAgent,
 } from "./agent/agent-manager.js";
+import type { SideConversationRecord } from "./agent/side-conversations/store.js";
 import { createAgentCommand } from "./agent/create-agent/create.js";
 import { resolveCreateAgentIntent, type CreateAgentIntent } from "./agent/create-agent/intent.js";
 import {
@@ -673,6 +675,23 @@ interface ClientActivity {
   lastActivityAt: Date;
   appVisible: boolean;
   appVisibilityChangedAt: Date;
+}
+
+function sideConversationSnapshot(record: SideConversationRecord): SideConversationSnapshotPayload {
+  return {
+    parentAgentId: record.parentAgentId,
+    threadId: record.threadId,
+    items: record.items,
+    pendingQuestion: record.pendingQuestion,
+    lastAnswer: record.lastAnswer,
+  };
+}
+
+function emptySideConversationSnapshot(
+  parentAgentId: string,
+  threadId: string,
+): SideConversationSnapshotPayload {
+  return { parentAgentId, threadId, items: [], pendingQuestion: null, lastAnswer: null };
 }
 
 export class Session {
@@ -1690,6 +1709,18 @@ export class Session {
   /**
    * Subscribe to AgentManager events and forward them to the client
    */
+  private hasSideConversationEventSubscription(): boolean {
+    for (const subscription of this.eventSubscriptions.values()) {
+      if (
+        subscription.events.has("agent.side_conversation.update") ||
+        subscription.events.has("agent.side_conversation.removed")
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private refreshObservationProducers(): void {
     const legacy = this.delivery.hasLegacySources();
     const workspaces =
@@ -1698,6 +1729,7 @@ export class Session {
       workspaces ||
       this.delivery.hasDemand("agents") ||
       this.delivery.hasDemand("timelines") ||
+      this.hasSideConversationEventSubscription() ||
       this.voiceSessions.hasDemand ||
       this.wantsEvent("agent_attention_required") ||
       this.wantsEvent("agent_permission_request") ||
@@ -1966,6 +1998,56 @@ export class Session {
     }
   }
 
+  private forwardSideConversationUpdate(
+    update: Extract<AgentManagerEvent, { type: "side_conversation" }>["event"],
+  ): void {
+    const message: SessionOutboundMessage =
+      update.type === "update"
+        ? {
+            type: "agent.side_conversation.update",
+            payload: sideConversationSnapshot(update.record),
+          }
+        : {
+            type: "agent.side_conversation.removed",
+            payload: { parentAgentId: update.parentAgentId, threadId: update.threadId },
+          };
+    if (!this.authorization.allowsOutbound(message)) return;
+    // Modern sources only accept proof-carrying messages, so the events travel through the
+    // session event subscription that asked for them. The owner must also be capable: the
+    // selector is fork-only, and a stock source never subscribes to it anyway.
+    const delivered = new Set<object>();
+    for (const subscription of this.eventSubscriptions.values()) {
+      if (!subscription.events.has(message.type)) continue;
+      if (
+        !this.clientSources
+          .get(subscription.owner.source)
+          ?.capabilities.has(CLIENT_CAPS.sideConversations)
+      )
+        continue;
+      subscription.owner.emit(message);
+      delivered.add(subscription.owner.source);
+    }
+    // COMPAT(sideConversations): legacy clients keep receiving the broadcast, gated by the
+    // capability they advertise. Modern clients need the subscription above.
+    if (this.clientSources.size === 0 || !this.onMessageToSource) {
+      if (this.supports(CLIENT_CAPS.sideConversations) && delivered.size === 0) {
+        // Not `emit`: that would re-enter emitSubscribedEvent's owner loop, which does not check
+        // the per-owner capability and would leak the event to an incapable subscription.
+        this.onMessage(message);
+      }
+      return;
+    }
+    for (const [source, { capabilities }] of this.clientSources) {
+      if (
+        delivered.has(source) ||
+        this.delivery.isModern(source) ||
+        !capabilities.has(CLIENT_CAPS.sideConversations)
+      )
+        continue;
+      this.onMessageToSource(source, message);
+    }
+  }
+
   private subscribeToAgentEvents(): void {
     if (this.unsubscribeAgentEvents) {
       this.unsubscribeAgentEvents();
@@ -2002,6 +2084,11 @@ export class Session {
           if (this.agentManager.getAgent(parentAgentId)?.internal) return;
           this.emitProviderSubagentWorkspaceUpdate(event.event);
           this.forwardProviderSubagentUpdate(event.event);
+          return;
+        }
+
+        if (event.type === "side_conversation") {
+          this.forwardSideConversationUpdate(event.event);
           return;
         }
 
@@ -2767,6 +2854,12 @@ export class Session {
         return this.handleProviderSubagentListRequest(msg);
       case "agent.provider_subagents.timeline.get.request":
         return this.handleProviderSubagentTimelineRequest(msg, source);
+      case "agent.side_conversation.ask.request":
+        return this.handleSideConversationAskRequest(msg);
+      case "agent.side_conversation.timeline.get.request":
+        return this.handleSideConversationTimelineGetRequest(msg);
+      case "agent.side_conversation.list.request":
+        return this.handleSideConversationListRequest(msg);
       case "session.events.set_subscription.request": {
         const owner = this.delivery.begin("events", undefined, async (id) => {
           this.eventSubscriptions.delete(id);
@@ -8137,6 +8230,116 @@ export class Session {
     }
   }
 
+  private async handleSideConversationAskRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.side_conversation.ask.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      // The manager broadcasts `agent.side_conversation.update` on begin and on complete, so this
+      // handler only owns the response.
+      const answer = await this.agentManager.askSideQuestion(
+        msg.parentAgentId,
+        msg.threadId,
+        msg.question,
+      );
+      this.emit({
+        type: "agent.side_conversation.ask.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threadId: msg.threadId,
+          answer,
+          error: null,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit({
+        type: "agent.side_conversation.ask.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threadId: msg.threadId,
+          answer: { status: "unavailable" },
+          error: message.startsWith("Agent is archived:") ? null : message,
+        },
+      });
+    }
+  }
+
+  private async handleSideConversationTimelineGetRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.side_conversation.timeline.get.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      const record = this.agentManager.getSideConversation(msg.parentAgentId, msg.threadId);
+      this.emit({
+        type: "agent.side_conversation.timeline.get.response",
+        payload: {
+          requestId: msg.requestId,
+          ...(record
+            ? sideConversationSnapshot(record)
+            : emptySideConversationSnapshot(msg.parentAgentId, msg.threadId)),
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.side_conversation.timeline.get.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threadId: msg.threadId,
+          items: [],
+          pendingQuestion: null,
+          lastAnswer: null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  private async handleSideConversationListRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.side_conversation.list.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      this.emit({
+        type: "agent.side_conversation.list.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threads: this.agentManager
+            .listSideConversations(msg.parentAgentId)
+            .map(sideConversationSnapshot),
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.side_conversation.list.response",
+        payload: {
+          requestId: msg.requestId,
+          parentAgentId: msg.parentAgentId,
+          threads: [],
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
   private async handleAgentForkContextRequest(
     msg: Extract<SessionInboundMessage, { type: "agent.fork_context.request" }>,
   ): Promise<void> {
@@ -8747,7 +8950,16 @@ function isValidGitHubRepoSegment(value: string): boolean {
   return /^[A-Za-z0-9._-]+$/u.test(value);
 }
 
+// Side conversation events are only delivered to a client that subscribed to them. Grouping them
+// here keeps the category switch under the lint branch limit.
+const SIDE_CONVERSATION_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "agent.side_conversation.update",
+  "agent.side_conversation.removed",
+]);
+
 function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubscription | null {
+  if (SIDE_CONVERSATION_EVENT_TYPES.has(message.type))
+    return message.type as SessionEventSubscription;
   switch (message.type) {
     case "project.update":
     case "providers_snapshot_update":
@@ -8796,6 +9008,9 @@ function legacyWantsEvent(
       return !capabilities.has(CLIENT_CAPS.explicitEventSubscriptions);
     case "agent.provider_subagents.update":
       return capabilities.has(CLIENT_CAPS.providerSubagents);
+    case "agent.side_conversation.update":
+    case "agent.side_conversation.removed":
+      return capabilities.has(CLIENT_CAPS.sideConversations);
     default:
       return true;
   }

@@ -93,6 +93,12 @@ export const AgentTracks = memo(function AgentTracks({
     },
     [openSubagentTarget],
   );
+  const handleOpenSideConversation = useCallback(
+    (parentAgentId: string, threadId: string) => {
+      openSubagentTarget({ kind: "side_conversation", parentAgentId, threadId });
+    },
+    [openSubagentTarget],
+  );
   const opensInSheet = useSubagentOpensInSheet(workspaceKey);
   const handleOpenChanges = useCallback(() => {
     if (!workspaceKey) {
@@ -125,6 +131,7 @@ export const AgentTracks = memo(function AgentTracks({
         rows={subagentRows}
         onOpenSubagent={handleOpenSubagent}
         onOpenProviderSubagent={handleOpenProviderSubagent}
+        onOpenSideConversation={handleOpenSideConversation}
         opensInSheet={opensInSheet}
         onArchiveSubagent={archiveSubagent}
         onArchiveFinished={onArchiveFinished}
