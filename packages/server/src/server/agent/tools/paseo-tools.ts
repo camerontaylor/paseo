@@ -13,7 +13,12 @@ import { z } from "zod";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
 
-import type { AgentMode, AgentProvider, AgentSessionConfig } from "../agent-sdk-types.js";
+import type {
+  AgentMode,
+  AgentProvider,
+  AgentProviderNotice,
+  AgentSessionConfig,
+} from "../agent-sdk-types.js";
 import type { AgentManager } from "../agent-manager.js";
 import { ActiveTurnBehaviorSchema, AgentProfileSchema } from "@getpaseo/protocol/messages";
 import type { DaemonConfigStore } from "../../daemon-config-store.js";
@@ -2274,17 +2279,28 @@ function createToolCatalog(
       },
       outputSchema: {
         success: z.boolean(),
+        notices: z
+          .array(
+            z.object({ type: z.enum(["info", "warning", "error"]), message: z.string() }).strict(),
+          )
+          .optional(),
       },
     },
     async ({ agentId, name, labels, settings }) => {
+      const notices: AgentProviderNotice[] = [];
       if (settings?.modeId !== undefined) {
-        await agentManager.setAgentMode(agentId, settings.modeId);
+        const notice = await agentManager.setAgentMode(agentId, settings.modeId);
+        if (notice) notices.push(notice);
       }
       if (settings?.model !== undefined) {
         await agentManager.setAgentModel(agentId, settings.model);
       }
       if (settings?.thinkingOptionId !== undefined) {
-        await agentManager.setAgentThinkingOption(agentId, settings.thinkingOptionId);
+        const notice = await agentManager.setAgentThinkingOption(
+          agentId,
+          settings.thinkingOptionId,
+        );
+        if (notice) notices.push(notice);
       }
       if (settings?.features) {
         for (const [featureId, value] of Object.entries(settings.features)) {
@@ -2295,8 +2311,11 @@ function createToolCatalog(
       await updateAgentCommand({ agentManager }, { agentId, name, labels });
 
       return {
-        content: [],
-        structuredContent: ensureValidJson({ success: true }),
+        content: notices.map((notice) => ({ type: "text" as const, text: notice.message })),
+        structuredContent: ensureValidJson({
+          success: true,
+          ...(notices.length > 0 ? { notices } : {}),
+        }),
       };
     },
   );

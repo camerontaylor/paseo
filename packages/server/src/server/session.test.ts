@@ -163,6 +163,435 @@ test("cancel_agent_request reports refusal only through its response", async () 
   ]);
 });
 
+test("side conversation ask reports archived agents unavailable without loading them", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const askSideQuestion = vi.fn();
+  const session = createSessionForTest({
+    messages,
+    agentManager: { askSideQuestion },
+    agentStorage: {
+      get: vi.fn().mockResolvedValue({ archivedAt: "2026-08-24T00:00:00.000Z" }),
+    },
+  });
+
+  await session.handleMessage({
+    type: "agent.side_conversation.ask.request",
+    parentAgentId: agentId,
+    threadId: "thread-1",
+    question: "What happened?",
+    requestId: "side-ask-1",
+  });
+
+  expect(askSideQuestion).not.toHaveBeenCalled();
+  expect(messages).toEqual([
+    {
+      type: "agent.side_conversation.ask.response",
+      payload: {
+        requestId: "side-ask-1",
+        parentAgentId: agentId,
+        threadId: "thread-1",
+        answer: { status: "unavailable" },
+        error: null,
+      },
+    },
+  ]);
+});
+
+function captureAgentManagerEvents(): {
+  subscribe: ReturnType<typeof vi.fn>;
+  dispatch: (event: AgentManagerEvent) => void;
+} {
+  const callbacks: Array<(event: AgentManagerEvent) => void> = [];
+  return {
+    subscribe: vi.fn((callback: (event: AgentManagerEvent) => void) => {
+      callbacks.push(callback);
+      return () => {};
+    }),
+    dispatch: (event) => {
+      for (const callback of callbacks) callback(event);
+    },
+  };
+}
+
+const SIDE_CONVERSATION_RECORD = {
+  parentAgentId: "11111111-1111-4111-8111-111111111111",
+  threadId: "thread-1",
+  exchanges: [{ question: "What happened?", answer: "A merge conflict." }],
+  items: [
+    { type: "user_message" as const, text: "What happened?" },
+    { type: "assistant_message" as const, text: "A merge conflict." },
+  ],
+  pendingQuestion: null,
+  lastAnswer: {
+    status: "answered" as const,
+    content: "A merge conflict.",
+    synthetic: false,
+    threading: "threaded" as const,
+  },
+};
+
+const SIDE_CONVERSATION_SNAPSHOT = {
+  parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+  threadId: SIDE_CONVERSATION_RECORD.threadId,
+  items: SIDE_CONVERSATION_RECORD.items,
+  pendingQuestion: null,
+  lastAnswer: SIDE_CONVERSATION_RECORD.lastAnswer,
+};
+
+test("side conversation manager events reach every capable client", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  // Beta's observation producers subscribe to the manager only for a source that demands
+  // agent events, so the test must attach one instead of relying on a legacy default client.
+  const capableSocket = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true }, capableSocket);
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  events.dispatch({
+    type: "side_conversation",
+    event: {
+      type: "remove",
+      parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+      threadId: SIDE_CONVERSATION_RECORD.threadId,
+    },
+  });
+
+  expect(messages).toEqual([
+    { type: "agent.side_conversation.update", payload: SIDE_CONVERSATION_SNAPSHOT },
+    {
+      type: "agent.side_conversation.removed",
+      payload: {
+        parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+        threadId: SIDE_CONVERSATION_RECORD.threadId,
+      },
+    },
+  ]);
+});
+
+test("side conversation manager events stay off the wire for clients without the capability", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({ messages, agentManager: { subscribe: events.subscribe } });
+  session.updateClientCapabilities(null, {});
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  events.dispatch({
+    type: "side_conversation",
+    event: {
+      type: "remove",
+      parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+      threadId: SIDE_CONVERSATION_RECORD.threadId,
+    },
+  });
+
+  expect(messages).toEqual([]);
+});
+
+const SIDE_CONVERSATION_REMOVAL = {
+  type: "side_conversation" as const,
+  event: {
+    type: "remove" as const,
+    parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+    threadId: SIDE_CONVERSATION_RECORD.threadId,
+  },
+};
+
+test("side conversation updates and removals reach a subscribed modern source", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    targetedMessages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  const socket = {};
+  session.updateClientCapabilities(
+    { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.sideConversations]: true },
+    socket,
+  );
+  await session.handleMessage(
+    {
+      type: "session.events.set_subscription.request",
+      requestId: "side-conversation-events",
+      events: ["agent.side_conversation.update", "agent.side_conversation.removed"],
+    },
+    socket,
+  );
+  targetedMessages.length = 0;
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  events.dispatch(SIDE_CONVERSATION_REMOVAL);
+
+  expect(targetedMessages).toEqual([
+    {
+      source: socket,
+      message: {
+        type: "agent.side_conversation.update",
+        payload: { ...SIDE_CONVERSATION_SNAPSHOT, subscriptionId: expect.any(String) },
+      },
+    },
+    {
+      source: socket,
+      message: {
+        type: "agent.side_conversation.removed",
+        payload: {
+          parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+          threadId: SIDE_CONVERSATION_RECORD.threadId,
+          subscriptionId: expect.any(String),
+        },
+      },
+    },
+  ]);
+  // The proof is the same mechanism every modern outbound message uses; subscriptionId alone is
+  // not delivery authority.
+  for (const entry of targetedMessages) {
+    expect(session.delivery.permits(socket, entry.message)).toBe(true);
+  }
+  // The proof-carrying lane replaces the legacy broadcast for modern sources.
+  expect(messages).toEqual([]);
+});
+
+test("side conversation removals skip a subscribed modern source without the capability", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    targetedMessages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  const socket = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, socket);
+  await session.handleMessage(
+    {
+      type: "session.events.set_subscription.request",
+      requestId: "side-conversation-events-uncapable",
+      events: ["agent.side_conversation.update", "agent.side_conversation.removed"],
+    },
+    socket,
+  );
+  targetedMessages.length = 0;
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  events.dispatch(SIDE_CONVERSATION_REMOVAL);
+
+  expect(targetedMessages).toEqual([]);
+  expect(messages).toEqual([]);
+  expect(
+    session.delivery.permits(socket, {
+      type: "agent.side_conversation.removed",
+      payload: {
+        parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+        threadId: SIDE_CONVERSATION_RECORD.threadId,
+      },
+    }),
+  ).toBe(false);
+});
+
+test("side conversation removals reach a capable legacy source only", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    targetedMessages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  const capableLegacySocket = {};
+  const incapableModernSocket = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true }, capableLegacySocket);
+  session.updateClientCapabilities(
+    { [CLIENT_CAPS.ownedSubscriptions]: true },
+    incapableModernSocket,
+  );
+  targetedMessages.length = 0;
+
+  events.dispatch(SIDE_CONVERSATION_REMOVAL);
+
+  expect(targetedMessages).toEqual([
+    {
+      source: capableLegacySocket,
+      message: {
+        type: "agent.side_conversation.removed",
+        payload: {
+          parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+          threadId: SIDE_CONVERSATION_RECORD.threadId,
+        },
+      },
+    },
+  ]);
+});
+
+test("a released side conversation subscription stops receiving removals", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({
+    messages,
+    targetedMessages,
+    agentManager: { subscribe: events.subscribe },
+  });
+  const socket = {};
+  session.updateClientCapabilities(
+    { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.sideConversations]: true },
+    socket,
+  );
+  await session.handleMessage(
+    {
+      type: "session.events.set_subscription.request",
+      requestId: "side-conversation-events-release",
+      events: ["agent.side_conversation.removed"],
+    },
+    socket,
+  );
+  const subscriptionId = targetedMessages
+    .map((entry) => entry.message)
+    .find(
+      (
+        message,
+      ): message is Extract<
+        SessionOutboundMessage,
+        { type: "session.events.set_subscription.response" }
+      > => message.type === "session.events.set_subscription.response",
+    )?.payload.subscriptionId;
+  if (!subscriptionId) throw new Error("subscription id missing");
+  await session.handleMessage(
+    {
+      type: "subscription.release.request",
+      requestId: "release-side-conversation",
+      subscriptionId,
+    },
+    socket,
+  );
+  targetedMessages.length = 0;
+
+  events.dispatch(SIDE_CONVERSATION_REMOVAL);
+
+  expect(targetedMessages).toEqual([]);
+});
+
+test("side conversation ask leaves the update broadcast to the manager", async () => {
+  const agentId = SIDE_CONVERSATION_RECORD.parentAgentId;
+  const messages: SessionOutboundMessage[] = [];
+  const askSideQuestion = vi.fn().mockResolvedValue(SIDE_CONVERSATION_RECORD.lastAnswer);
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      askSideQuestion,
+      getAgent: vi.fn(() => ({ id: agentId })),
+      // Any test reaching ensureUnarchivedAgentLoaded needs this stub: asAgentManager throws
+      // without it, the handler swallows that throw, and the ask answers unavailable — which
+      // reads exactly like a routing bug.
+      waitForAgentClose: vi.fn().mockResolvedValue(undefined),
+    },
+  });
+  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true });
+
+  await session.handleMessage({
+    type: "agent.side_conversation.ask.request",
+    parentAgentId: agentId,
+    threadId: "thread-1",
+    question: "What happened?",
+    requestId: "side-ask-2",
+  });
+
+  expect(askSideQuestion).toHaveBeenCalledWith(agentId, "thread-1", "What happened?");
+  expect(messages).toEqual([
+    {
+      type: "agent.side_conversation.ask.response",
+      payload: {
+        requestId: "side-ask-2",
+        parentAgentId: agentId,
+        threadId: "thread-1",
+        answer: SIDE_CONVERSATION_RECORD.lastAnswer,
+        error: null,
+      },
+    },
+  ]);
+});
+
+test("side conversation list returns every thread for the parent", async () => {
+  const agentId = SIDE_CONVERSATION_RECORD.parentAgentId;
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      getAgent: vi.fn(() => ({ id: agentId })),
+      waitForAgentClose: vi.fn().mockResolvedValue(undefined),
+      listSideConversations: vi.fn(() => [SIDE_CONVERSATION_RECORD]),
+    },
+  });
+
+  await session.handleMessage({
+    type: "agent.side_conversation.list.request",
+    parentAgentId: agentId,
+    requestId: "side-list-1",
+  });
+
+  expect(messages).toEqual([
+    {
+      type: "agent.side_conversation.list.response",
+      payload: {
+        requestId: "side-list-1",
+        parentAgentId: agentId,
+        threads: [SIDE_CONVERSATION_SNAPSHOT],
+        error: null,
+      },
+    },
+  ]);
+});
+
+test("side conversation list reports failures instead of dropping the request", async () => {
+  const agentId = SIDE_CONVERSATION_RECORD.parentAgentId;
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      getAgent: vi.fn(() => ({ id: agentId })),
+      waitForAgentClose: vi.fn().mockResolvedValue(undefined),
+      listSideConversations: vi.fn(() => {
+        throw new Error(`Unknown agent '${agentId}'`);
+      }),
+    },
+  });
+
+  await session.handleMessage({
+    type: "agent.side_conversation.list.request",
+    parentAgentId: agentId,
+    requestId: "side-list-2",
+  });
+
+  expect(messages).toEqual([
+    {
+      type: "agent.side_conversation.list.response",
+      payload: {
+        requestId: "side-list-2",
+        parentAgentId: agentId,
+        threads: [],
+        error: `Unknown agent '${agentId}'`,
+      },
+    },
+  ]);
+});
+
 test("legacy cancel_agent_request reports refusal through the activity log", async () => {
   const agentId = "11111111-1111-4111-8111-111111111111";
   const messages: SessionOutboundMessage[] = [];
