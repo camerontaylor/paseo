@@ -1242,7 +1242,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
             serverId={serverId}
             workspaceId={workspaceId}
             agentId={agentId}
-            cwd={cwd}
             subagentRows={subagentRows}
             tasks={tasks}
             archiveFinishedStatus={archiveFinishedSubagents.status}

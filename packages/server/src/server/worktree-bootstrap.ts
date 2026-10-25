@@ -3,7 +3,6 @@ import {
   packageScriptLabel,
   packageScriptCommand,
 } from "./workspace-scripts/package-scripts.js";
-import { v4 as uuidv4 } from "uuid";
 import type { Logger } from "pino";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
 import type { TerminalSession } from "../terminal/terminal.js";
