@@ -15,16 +15,48 @@
   "evidence_rule": "Source, candidate tests, built artifact, installed version pair and observed workflow are separate. No entry is release-ready until applicable candidate and platform evidence is linked.",
   "waves": {
     "D0": [],
-    "D1": ["D0"],
-    "D2": ["D1"],
-    "D3": ["D0"],
-    "D4": ["D2", "D3", "D6"],
-    "D5": ["D1", "D3", "D4"],
-    "D6": ["D1"],
-    "D7": ["D5", "D6"],
-    "D8": ["D1", "D4"],
-    "D9": ["D2", "D3", "D4", "D5", "D6", "D7", "D8"],
-    "D10": ["D9"]
+    "D1": [
+      "D0"
+    ],
+    "D2": [
+      "D1"
+    ],
+    "D3": [
+      "D0"
+    ],
+    "D4": [
+      "D2",
+      "D3",
+      "D6"
+    ],
+    "D5": [
+      "D1",
+      "D3",
+      "D4"
+    ],
+    "D6": [
+      "D1"
+    ],
+    "D7": [
+      "D5",
+      "D6"
+    ],
+    "D8": [
+      "D1",
+      "D4"
+    ],
+    "D9": [
+      "D2",
+      "D3",
+      "D4",
+      "D5",
+      "D6",
+      "D7",
+      "D8"
+    ],
+    "D10": [
+      "D9"
+    ]
   },
   "features": [
     {
@@ -704,15 +736,15 @@
       "kind": "additional-scope",
       "wave": "D7",
       "source": "legacy TM-06",
-      "disposition": "adapt",
+      "disposition": "waived-permanently",
       "acceptance": "Implement native background/permission/audio lifecycle; prove lock/unlock/interruption recovery on physical iOS; never present unsupported state as listening.",
-      "status": "IN PROGRESS",
+      "status": "WAIVED",
       "evidence": {
         "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused voice/runtime/transport suites (3ffc21ef6a, 299ef94ea); live GPT Realtime readiness handshake passed (session ACK, no audio; /tmp/paseo-d7-realtime-readiness.log).",
         "artifact": null,
         "installed": null,
-        "observed": null
+        "observed": "Permanently waived by the user on 2026-10-25: the fleet has no iPhone, physical iOS behavior (including background dictation) is unverified, and the release will not claim iOS parity. Android device results stand on their own; browser evidence does not substitute for native iOS."
       }
     },
     {

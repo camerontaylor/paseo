@@ -104,7 +104,7 @@ assembly must reproduce this tree (`git rev-parse HEAD^{tree}`).
    smoke run would touch the shared Application Support state, so it needs
    the candidate data-home override (`PASEO_TEST_APP_NAME`) or a dedicated
    macOS user.
-3. Physical iOS remains unverified — no iPhone in the fleet; recorded as an
-   explicit gap in the matrix, not waived.
+3. Physical iOS: permanently waived by the user on 2026-10-25 (no iPhone in
+   the fleet; the release makes no iOS parity claim).
 4. Matrix rows keep `installed`/`observed` open until 1-3 land; the release
    cannot be described as full parity while they are open.

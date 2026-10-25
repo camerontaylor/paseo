@@ -303,3 +303,19 @@ remain open. Physical iOS remains unverified (no iPhone).
   Application Support state.
 - Neptune Android-device check stayed empty all window; device QA remains
   the open gate for the installed-platform rows.
+
+## iOS waiver and device-QA pause — 2026-10-25
+
+The user permanently waived physical iOS (including background dictation):
+no iPhone in the fleet, iOS stays unverified, and the release will not claim
+iOS parity. The matrix row is WAIVED with that decision recorded.
+
+The Android device-QA session was paused by the user mid-setup: the candidate
+APK is installed on the SM-S921B as sh.paseo.debug (production sh.paseo
+untouched, install SHA-verified), the QA infrastructure recipe is staged on
+triton and neptune, and the first Metro-for-device attempt was killed by
+memory pressure — triton's VM shrank from 23 GiB to 11 GiB during the
+session and Metro's transformer workers were OOM-killed. Resume needs the
+infrastructure script (/tmp/d9-docs/device-infra-triton.sh on triton), the
+neptune forward script (/tmp/device-forward-neptune.sh), and enough triton
+RAM for Metro plus the isolated daemon.
