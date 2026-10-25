@@ -7,6 +7,7 @@ import {
   createMessageReceiptsStub,
   createTestCreationService,
 } from "./test-utils/session-stubs.js";
+import { EventEmitter } from "node:events";
 import { execSync } from "child_process";
 import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -28,7 +29,11 @@ import {
   type FileTransferFrame,
 } from "@getpaseo/protocol/binary-frames/index";
 import { Session } from "./session.js";
-import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
+import {
+  OWNER_PERMISSIONS,
+  SessionAuthorization,
+  type DaemonPermission,
+} from "./authorization/index.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
 import { StructuredAgentFallbackError } from "./agent/agent-response-loop.js";
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
@@ -198,15 +203,159 @@ test("side conversation ask reports archived agents unavailable without loading 
   ]);
 });
 
+test("voice attach, abort, transport loss and detach never touch the agent", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const mutating = {
+    cancelAgentRun: vi.fn(),
+    streamAgent: vi.fn(),
+    steerOrReplaceActiveTurn: vi.fn(),
+    replaceAgentRun: vi.fn(),
+    respondToPermission: vi.fn(),
+    askSideQuestion: vi.fn(),
+  };
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      getAgent: vi.fn(() => ({ id: agentId, provider: "codex", lifecycle: "running" })),
+      ...mutating,
+    },
+  });
+
+  // Attach fails cleanly here (the test session has no speech providers), which
+  // is itself part of the contract: a failed attach must not disturb the run.
+  await session.handleMessage({ type: "set_voice_mode", enabled: true, agentId, requestId: "v1" });
+  await session.handleMessage({
+    type: "voice_audio_chunk",
+    audio: "AA==",
+    format: "audio/pcm;rate=16000;bits=16",
+    isLast: false,
+  });
+  await session.handleMessage({ type: "abort_request" });
+  await session.handleMessage({ type: "set_voice_mode", enabled: false, requestId: "v2" });
+
+  for (const [name, fn] of Object.entries(mutating)) {
+    expect(fn, name).not.toHaveBeenCalled();
+  }
+  // The stop still acknowledges so the client's detach completes.
+  expect(messages).toContainEqual(
+    expect.objectContaining({
+      type: "set_voice_mode_response",
+      payload: expect.objectContaining({ requestId: "v2", enabled: false, accepted: true }),
+    }),
+  );
+});
+
+test("successful voice attach, STT failure and transport loss preserve work and scope receipts", async () => {
+  class SpeechStream extends EventEmitter {
+    requiredSampleRate = 16000;
+    async connect() {}
+    appendPcm16() {}
+    commit() {}
+    clear() {}
+    close() {
+      this.removeAllListeners();
+    }
+    flush() {}
+    reset() {}
+  }
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const permission = { id: "pending-permission" };
+  const child = { id: "child", lifecycle: "running" };
+  const sideConversation = { threadId: "side-thread", messages: ["independent question"] };
+  const agent = {
+    id: agentId,
+    provider: "codex",
+    lifecycle: "running",
+    activeForegroundTurnId: "running-turn",
+    config: {},
+    pendingPermissions: new Map([[permission.id, permission]]),
+  };
+  const mutations = {
+    cancelAgentRun: vi.fn(),
+    reloadAgentSession: vi.fn(),
+    replaceAgentRun: vi.fn(),
+    respondToPermission: vi.fn(),
+    askSideQuestion: vi.fn(),
+    archiveAgent: vi.fn(),
+    clearAgentHistory: vi.fn(),
+    streamAgent: vi.fn(),
+  };
+  const recognizer = new SpeechStream();
+  const detector = new SpeechStream();
+  const messages: SessionOutboundMessage[] = [];
+  const listForAttachment = vi.fn(async () => []);
+  const session = createSessionForTest({
+    messages,
+    voiceOwner: "principal/client",
+    messageReceipts: { send: (input) => input.send(), listForAttachment },
+    agentManager: {
+      getAgent: vi.fn((id: string) => (id === child.id ? child : agent)),
+      listAgents: vi.fn(() => [agent, child]),
+      waitForAgentClose: vi.fn(async () => {}),
+      ...mutations,
+    },
+    stt: { id: "local", createSession: () => recognizer },
+    voice: { turnDetection: { id: "local", createSession: () => detector } },
+    voiceBridge: { registerVoiceSpeakHandler: () => "generation" },
+  });
+  const source = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, source);
+  const attach = {
+    type: "set_voice_mode" as const,
+    enabled: true,
+    agentId,
+    attachmentId: "attachment",
+    requestId: "attach",
+  };
+  await session.handleMessage(attach, source);
+  expect(messages).toContainEqual(
+    expect.objectContaining({
+      type: "set_voice_mode_response",
+      payload: expect.objectContaining({ accepted: true, generation: "generation" }),
+    }),
+  );
+  await session.handleMessage(
+    {
+      type: "voice.input.receipts.read.request",
+      agentId,
+      attachmentId: "attachment",
+      generation: "generation",
+      requestId: "receipts",
+    },
+    source,
+  );
+  expect(listForAttachment).toHaveBeenCalledWith({
+    agentId,
+    attachmentId: "attachment",
+    voiceOwner: "principal/client",
+  });
+  recognizer.emit("error", new Error("recognizer failed"));
+  await session.handleMessage(
+    { type: "abort_request", attachmentId: "attachment", generation: "generation" },
+    source,
+  );
+  await session.handleMessage({ ...attach, enabled: false, generation: "generation" }, source);
+  await session.handleMessage(attach, source);
+  session.clearAgentTimelineSubscription(source);
+  await vi.waitFor(() => expect(recognizer.listenerCount("transcript")).toBe(0));
+  expect(agent.activeForegroundTurnId).toBe("running-turn");
+  expect([...agent.pendingPermissions.values()]).toEqual([permission]);
+  expect(child).toEqual({ id: "child", lifecycle: "running" });
+  expect(sideConversation.messages).toEqual(["independent question"]);
+  for (const method of Object.values(mutations)) expect(method).not.toHaveBeenCalled();
+  await session.cleanup();
+});
+
 function captureAgentManagerEvents(): {
   subscribe: ReturnType<typeof vi.fn>;
   dispatch: (event: AgentManagerEvent) => void;
 } {
-  const callbacks: Array<(event: AgentManagerEvent) => void> = [];
+  const callbacks = new Set<(event: AgentManagerEvent) => void>();
   return {
     subscribe: vi.fn((callback: (event: AgentManagerEvent) => void) => {
-      callbacks.push(callback);
-      return () => {};
+      callbacks.add(callback);
+      return () => callbacks.delete(callback);
     }),
     dispatch: (event) => {
       for (const callback of callbacks) callback(event);
@@ -488,6 +637,115 @@ test("a released side conversation subscription stops receiving removals", async
   expect(targetedMessages).toEqual([]);
 });
 
+test.each([true, false])(
+  "side conversation delivery respects each source capability (capable source last: %s)",
+  async (capableLast) => {
+    const messages: SessionOutboundMessage[] = [];
+    const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+    const events = captureAgentManagerEvents();
+    const session = createSessionForTest({
+      messages,
+      targetedMessages,
+      agentManager: { subscribe: events.subscribe },
+    });
+    const capableSource = {};
+    const otherCapableSource = {};
+    const incapableSource = {};
+    const sources = capableLast
+      ? [incapableSource, capableSource, otherCapableSource]
+      : [capableSource, otherCapableSource, incapableSource];
+    for (const source of sources) {
+      session.updateClientCapabilities(
+        {
+          [CLIENT_CAPS.ownedSubscriptions]: true,
+          [CLIENT_CAPS.sideConversations]: source !== incapableSource,
+        },
+        source,
+      );
+    }
+    // The modern lane is capability plus subscription. Every source subscribes here, including the
+    // incapable one, so the case proves capability decides rather than the subscription alone.
+    for (const [index, source] of sources.entries()) {
+      await session.handleMessage(
+        {
+          type: "session.events.set_subscription.request",
+          requestId: `side-conversation-capability-${index}`,
+          events: ["agent.side_conversation.update", "agent.side_conversation.removed"],
+        },
+        source,
+      );
+    }
+    // The subscription responses are not what this case asserts.
+    targetedMessages.length = 0;
+
+    events.dispatch({
+      type: "side_conversation",
+      event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+    });
+    expect(messages).toEqual([]);
+    expect(targetedMessages).toEqual(
+      [capableSource, otherCapableSource].map((source) => ({
+        source,
+        message: {
+          type: "agent.side_conversation.update",
+          payload: { ...SIDE_CONVERSATION_SNAPSHOT, subscriptionId: expect.any(String) },
+        },
+      })),
+    );
+
+    // Release, not capability: detaching the first capable source drops its subscriptions, and only
+    // the second one still hears about the removal.
+    session.clearAgentTimelineSubscription(capableSource);
+    targetedMessages.length = 0;
+    events.dispatch({
+      type: "side_conversation",
+      event: {
+        type: "remove",
+        parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+        threadId: SIDE_CONVERSATION_RECORD.threadId,
+      },
+    });
+    expect(targetedMessages).toEqual([
+      {
+        source: otherCapableSource,
+        message: {
+          type: "agent.side_conversation.removed",
+          payload: {
+            parentAgentId: SIDE_CONVERSATION_RECORD.parentAgentId,
+            threadId: SIDE_CONVERSATION_RECORD.threadId,
+            subscriptionId: expect.any(String),
+          },
+        },
+      },
+    ]);
+    session.clearAgentTimelineSubscription(otherCapableSource);
+    session.clearAgentTimelineSubscription(incapableSource);
+    targetedMessages.length = 0;
+    events.dispatch({
+      type: "side_conversation",
+      event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+    });
+    expect(messages).toEqual([]);
+    expect(targetedMessages).toEqual([]);
+    await session.cleanup();
+  },
+);
+
+test("side conversation events stop when the client removes its capability", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const events = captureAgentManagerEvents();
+  const session = createSessionForTest({ messages, agentManager: { subscribe: events.subscribe } });
+  session.updateClientCapabilities({ [CLIENT_CAPS.sideConversations]: true });
+  session.updateClientCapabilities({});
+
+  events.dispatch({
+    type: "side_conversation",
+    event: { type: "update", record: SIDE_CONVERSATION_RECORD },
+  });
+  expect(messages).toEqual([]);
+  await session.cleanup();
+});
+
 test("side conversation ask leaves the update broadcast to the manager", async () => {
   const agentId = SIDE_CONVERSATION_RECORD.parentAgentId;
   const messages: SessionOutboundMessage[] = [];
@@ -725,7 +983,12 @@ interface SessionForTestOptions {
   workspaceRuntimeStore?: WorkspaceRuntimeStore;
   sendToSource?: SessionOptions["onMessageToSource"];
   clientId?: string;
+  voiceOwner?: SessionOptions["voiceOwner"];
+  voiceBridge?: SessionOptions["voiceBridge"];
+  messageReceipts?: SessionOptions["messageReceipts"];
+  clientCapabilities?: Record<string, unknown>;
   permissions?: readonly DaemonPermission[];
+  agentQueueService?: SessionOptions["agentQueueService"];
   agentManager?: { [K in keyof SessionOptions["agentManager"]]?: unknown };
   agentStorage?: { [K in keyof SessionOptions["agentStorage"]]?: unknown };
   github?: Partial<ForgeService & GitHubService>;
@@ -803,10 +1066,14 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
 
   const sessionOptions: SessionOptions = {
     workspaceRuntimeStore: options.workspaceRuntimeStore ?? createWorkspaceRuntimeStore(),
-    messageReceipts: createMessageReceiptsStub(),
+    messageReceipts: options.messageReceipts ?? createMessageReceiptsStub(),
     agentMessages: createAgentMessageDeliveryStub(),
     creationService: createTestCreationService(),
     clientId: options.clientId ?? "test-client",
+    voiceOwner: options.voiceOwner,
+    voiceBridge: options.voiceBridge,
+    clientCapabilities: options.clientCapabilities,
+    agentQueueService: options.agentQueueService,
     onMessage: (message) => messages.push(message),
     ...(options.targetedMessages
       ? {
@@ -1239,6 +1506,30 @@ describe("session authorization permissions", () => {
           requestId: "restricted-ping",
           requestType: "ping",
           error: "Session is not authorized for ping",
+          code: "access_denied",
+        },
+      },
+    ]);
+  });
+
+  test("rejects a base-ref change without workspace.write", async () => {
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({ permissions: ["hub.execute"], messages });
+
+    await session.handleMessage({
+      type: "checkout.base_ref.set.request",
+      requestId: "base-ref-denied",
+      cwd: "/tmp/repo",
+      baseRef: "origin/main",
+    });
+
+    expect(messages).toEqual([
+      {
+        type: "rpc_error",
+        payload: {
+          requestId: "base-ref-denied",
+          requestType: "checkout.base_ref.set.request",
+          error: "Session is not authorized for checkout.base_ref.set.request",
           code: "access_denied",
         },
       },
@@ -6312,5 +6603,473 @@ test("a failing direct source observes fire-and-forget file replies without unha
     process.off("unhandledRejection", collect);
     await session.cleanup();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a legacy send_agent_message_request never reaches the queue service", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-legacy-send-queue-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({
+        get: vi.fn().mockResolvedValue(undefined),
+      }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      agentQueueService: queueService,
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
+        hasInFlightRun: vi.fn(() => false),
+        tryRunOutOfBand: vi.fn(() => false),
+        streamAgent: vi.fn(() => (async function* () {})()),
+        waitForAgentRunStart: vi.fn(async () => {}),
+        waitForAgentClose: vi.fn(async () => {}),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue({ id: agentId, provider: "codex", cwd: "/tmp/x" }),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+
+    await session.handleMessage({
+      type: "send_agent_message_request",
+      requestId: "legacy-1",
+      agentId,
+      text: "keep working",
+      messageId: "legacy-msg-1",
+    });
+
+    // The released response shape, produced by the receipt-backed legacy path.
+    expect(messages).toEqual([
+      {
+        type: "send_agent_message_response",
+        payload: { requestId: "legacy-1", agentId, accepted: true, error: null },
+      },
+    ]);
+    // Queue admission never happened and nothing was stored.
+    expect((await queueService.list(agentId)).items).toEqual([]);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("agent.queue.enqueue.request admits through the queue service and mirrors the update on the subscribed lane", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-rpc-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      targetedMessages,
+      agentQueueService: queueService,
+      clientCapabilities: { [CLIENT_CAPS.durableAgentQueue]: true },
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+        // Proven handler dependency: without it the enqueue request answers with
+        // `rpc_error: Request failed: createStub: "getAgent" was called but not stubbed`, so the
+        // case never reaches its response.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue(undefined),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+    // The shipped client advertises owned subscriptions and asks for the queue selector, so the
+    // response is correlated back to it and the update travels on the same proof-carrying lane.
+    const socket = {};
+    session.updateClientCapabilities(
+      { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.durableAgentQueue]: true },
+      socket,
+    );
+    await session.handleMessage(
+      {
+        type: "session.events.set_subscription.request",
+        requestId: "queue-subscription",
+        events: ["agent.queue.update"],
+      },
+      socket,
+    );
+    targetedMessages.length = 0;
+
+    await session.handleMessage(
+      {
+        type: "agent.queue.enqueue.request",
+        requestId: "q-1",
+        agentId,
+        itemId: "item-1",
+        text: "queued from the phone",
+        intent: "queue",
+      },
+      socket,
+    );
+
+    const delivered = targetedMessages
+      .filter(({ source }) => source === socket)
+      .map(({ message }) => message);
+    const response = delivered.find(
+      (message) => message.type === "agent.queue.enqueue.response",
+    ) as Extract<SessionOutboundMessage, { type: "agent.queue.enqueue.response" }>;
+    expect(response.payload.requestId).toBe("q-1");
+    expect(response.payload.error).toBeNull();
+    expect(response.payload.queue?.items[0]).toMatchObject({
+      id: "item-1",
+      text: "queued from the phone",
+      intent: "queue",
+      deliveryState: "pending",
+    });
+
+    // The update is the subscribed, proof-carrying copy, asserted independently of the response.
+    const update = delivered.find((message) => message.type === "agent.queue.update") as Extract<
+      SessionOutboundMessage,
+      { type: "agent.queue.update" }
+    >;
+    expect(update.payload.items.map((item) => item.id)).toEqual(["item-1"]);
+    expect(update.payload.subscriptionId).toEqual(expect.any(String));
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("agent.queue.update reaches only the capable sources that subscribed", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-subscription-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      targetedMessages,
+      agentQueueService: queueService,
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+        // Proven dependency for every enqueue path: without it the request answers with
+        // `rpc_error: createStub: "getAgent" was called but not stubbed` and no update is emitted.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue(undefined),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+
+    const subscribed = {};
+    const unsubscribed = {};
+    const incapable = {};
+    const later = {};
+    for (const [index, source] of [subscribed, unsubscribed, incapable].entries()) {
+      session.updateClientCapabilities(
+        {
+          [CLIENT_CAPS.ownedSubscriptions]: true,
+          [CLIENT_CAPS.durableAgentQueue]: source !== incapable,
+        },
+        source,
+      );
+      if (source !== unsubscribed) {
+        await session.handleMessage(
+          {
+            type: "session.events.set_subscription.request",
+            requestId: `queue-subscription-${index}`,
+            events: ["agent.queue.update"],
+          },
+          source,
+        );
+      }
+    }
+
+    const enqueue = (requestId: string) =>
+      session.handleMessage({
+        type: "agent.queue.enqueue.request",
+        requestId,
+        agentId,
+        itemId: `item-${requestId}`,
+        text: `queued ${requestId}`,
+        intent: "queue",
+      });
+    const queueUpdates = () =>
+      targetedMessages.filter(({ message }) => message.type === "agent.queue.update");
+    // Read the subscribe acknowledgement before the list is cleared for the delivery assertions.
+    const acknowledgement = targetedMessages.find(
+      ({ source: owner, message }) =>
+        owner === subscribed &&
+        message.type === "session.events.set_subscription.response" &&
+        message.payload.requestId === "queue-subscription-0",
+    )?.message;
+    if (acknowledgement?.type !== "session.events.set_subscription.response") {
+      throw new Error("Missing queue-subscription-0 acknowledgement");
+    }
+    const subscribedSubscriptionId = acknowledgement.payload.subscriptionId;
+
+    // The owner principal is permitted to have these delivered; the queue update is not a
+    // privileged message that a narrower principal would be denied.
+    expect(
+      new SessionAuthorization(OWNER_PERMISSIONS).allowsOutbound({
+        type: "agent.queue.update",
+      } as SessionOutboundMessage),
+    ).toBe(true);
+
+    targetedMessages.length = 0;
+    await enqueue("q-1");
+    // Capability is not enough: only the source that asked for the selector hears the update, and
+    // neither the unsubscribed nor the incapable source does.
+    expect(queueUpdates().map(({ source }) => source)).toEqual([subscribed]);
+    const initialUpdate = queueUpdates().find(({ source }) => source === subscribed)?.message;
+    if (initialUpdate?.type !== "agent.queue.update") {
+      throw new Error("Missing emitted queue update for subscribed source");
+    }
+    expect(session.delivery.permits(subscribed, initialUpdate)).toBe(true);
+    expect(session.delivery.permits(unsubscribed, initialUpdate)).toBe(false);
+    expect(session.delivery.permits(incapable, initialUpdate)).toBe(false);
+
+    // Explicit release through the protocol, distinct from detaching a source: the subscription id
+    // from the subscribe response stops delivery while the source keeps its capability.
+    await session.handleMessage(
+      {
+        type: "subscription.release.request",
+        requestId: "queue-release",
+        subscriptionId: subscribedSubscriptionId,
+      },
+      subscribed,
+    );
+    targetedMessages.length = 0;
+    await enqueue("q-2");
+    expect(queueUpdates()).toEqual([]);
+    expect(session.delivery.permits(subscribed, initialUpdate)).toBe(false);
+
+    // A later source that subscribes joins without disturbing anyone else.
+    session.updateClientCapabilities(
+      { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.durableAgentQueue]: true },
+      later,
+    );
+    await session.handleMessage(
+      {
+        type: "session.events.set_subscription.request",
+        requestId: "queue-subscription-later",
+        events: ["agent.queue.update"],
+      },
+      later,
+    );
+    targetedMessages.length = 0;
+    await enqueue("q-3");
+    expect(queueUpdates().map(({ source }) => source)).toEqual([later]);
+
+    // Downgrade: dropping the capability stops delivery, restoring it resumes.
+    session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, later);
+    targetedMessages.length = 0;
+    await enqueue("q-4");
+    expect(queueUpdates()).toEqual([]);
+    session.updateClientCapabilities(
+      { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.durableAgentQueue]: true },
+      later,
+    );
+    targetedMessages.length = 0;
+    await enqueue("q-5");
+    expect(queueUpdates().map(({ source }) => source)).toEqual([later]);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("a legacy client receives the queue update through its capability alone", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-legacy-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      targetedMessages,
+      agentQueueService: queueService,
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+        // Same proven dependency as the subscribed case: the enqueue path resolves the agent.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue(undefined),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+    // No ownedSubscriptions: this is the pre-owned-subscription client shape, so the update
+    // reaches it through the capability-gated broadcast lane instead of a subscription.
+    const legacyCapable = {};
+    const legacyIncapable = {};
+    session.updateClientCapabilities({ [CLIENT_CAPS.durableAgentQueue]: true }, legacyCapable);
+    session.updateClientCapabilities({}, legacyIncapable);
+
+    await session.handleMessage(
+      {
+        type: "agent.queue.enqueue.request",
+        requestId: "q-legacy",
+        agentId,
+        itemId: "item-legacy",
+        text: "queued from a legacy client",
+        intent: "queue",
+      },
+      legacyCapable,
+    );
+
+    const updates = targetedMessages.filter(({ message }) => message.type === "agent.queue.update");
+    expect(updates.map(({ source }) => source)).toEqual([legacyCapable]);
+    expect(updates[0]?.message).toMatchObject({
+      payload: { items: [expect.objectContaining({ id: "item-legacy" })] },
+    });
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("a client without the durableAgentQueue capability never sees the queue broadcast", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-gate-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    const session = createSessionForTest({
+      messages,
+      agentQueueService: queueService,
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: agentId }]),
+        // Proven dependency for the enqueue path, as in the subscribed case.
+        getAgent: vi.fn(() => ({
+          id: agentId,
+          provider: "codex",
+          lifecycle: "idle",
+          pendingPermissions: new Set<string>(),
+        })),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue(undefined),
+        list: vi.fn().mockResolvedValue([{ id: agentId, provider: "codex", cwd: "/tmp/x" }]),
+      },
+    });
+
+    await session.handleMessage({
+      type: "agent.queue.enqueue.request",
+      requestId: "q-1",
+      agentId,
+      itemId: "item-1",
+      text: "hidden from old clients",
+      intent: "queue",
+    });
+
+    expect(messages.some((message) => message.type === "agent.queue.update")).toBe(false);
+    expect(messages.some((message) => message.type === "agent.queue.enqueue.response")).toBe(true);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
+  }
+});
+
+test("delete_agent_request removes the agent's queue through the lifecycle", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const messages: SessionOutboundMessage[] = [];
+  const { AgentQueueService } = await import("./agent-queue/service.js");
+  const { AgentQueueStore } = await import("./agent-queue/store.js");
+  const queueDir = mkdtempSync(join(tmpdir(), "session-queue-delete-"));
+  try {
+    const queueService = new AgentQueueService({
+      store: new AgentQueueStore(queueDir),
+      agentManager: asAgentManager({}),
+      agentStorage: asAgentStorage({ get: vi.fn().mockResolvedValue(undefined) }),
+      logger: pino({ level: "silent" }),
+      sendPrompt: vi.fn(async () => ({})),
+    });
+    await queueService.enqueue({
+      agentId,
+      itemId: "item-1",
+      text: "queued",
+      intent: "queue",
+    });
+    const session = createSessionForTest({
+      messages,
+      agentQueueService: queueService,
+      agentManager: {
+        listAgents: vi.fn(() => []),
+        getAgent: vi.fn(() => null),
+        deleteAgentState: vi.fn(async () => {}),
+        flush: vi.fn(async () => {}),
+      },
+      agentStorage: {
+        get: vi.fn().mockResolvedValue({ id: agentId, provider: "codex", cwd: "/tmp/x" }),
+        list: vi.fn().mockResolvedValue([]),
+        remove: vi.fn(async () => {}),
+      },
+    });
+
+    await session.handleMessage({
+      type: "delete_agent_request",
+      agentId,
+      requestId: "del-1",
+    });
+
+    expect(messages.some((message) => message.type === "agent_deleted")).toBe(true);
+    expect((await queueService.list(agentId)).items).toEqual([]);
+  } finally {
+    rmSync(queueDir, { recursive: true, force: true });
   }
 });

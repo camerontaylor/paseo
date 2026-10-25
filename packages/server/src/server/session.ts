@@ -3,13 +3,16 @@ import type { AgentMessageDelivery } from "./agent/agent-messages/index.js";
 import { AgentDirectory } from "./agent/directory.js";
 import { ConnectedHostSession } from "./connected-hosts/index.js";
 import type { ConnectedHosts } from "./connected-hosts/index.js";
+import { TIMELINE_PAGE_BYTE_BUDGET } from "./websocket/physical-socket.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type {
+  AgentCompanionUpdateEntryRequestMessage,
   SessionEventSubscription,
   UsageReportEntry,
   ProviderUsage,
+  AgentQueueSnapshot,
 } from "@getpaseo/protocol/messages";
 import { relative } from "node:path";
 import { isAbsolute } from "node:path";
@@ -28,7 +31,6 @@ import { formatPluginSourceReference } from "@getpaseo/protocol/plugin-source-re
 import {
   serializeAgentStreamEvent,
   type AgentSnapshotPayload,
-  type AgentAttachment,
   type FirstAgentContext,
   type SessionInboundMessage,
   type SessionOutboundMessage,
@@ -68,6 +70,7 @@ import {
   waitForAgentRunStartWithTimeout,
   unarchiveAgentState,
 } from "./agent/agent-prompt.js";
+import { sendOrQueuePromptToAgent } from "./agent-queue/send-or-queue.js";
 import {
   resolveCreateAgentTitles,
   resolveFirstAgentPromptTitle,
@@ -106,6 +109,7 @@ import {
 } from "./workspace-labels/index.js";
 
 import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
+import type { AgentQueueService } from "./agent-queue/service.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
 import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import type {
@@ -125,6 +129,7 @@ import {
   detachAgentCommand,
   setAgentModeCommand,
   updateAgentCommand,
+  updateCompanionEntryCommand,
 } from "./agent/lifecycle-command.js";
 import { buildStoredAgentPayload, toAgentPayload } from "./agent/agent-projections.js";
 import { assertPluginTimelineDataSize } from "./agent/agent-timeline-content.js";
@@ -136,7 +141,6 @@ import {
   getAgentStreamEventTurnId,
   type AgentPersistenceHandle,
   type AgentPermissionResponse,
-  type AgentRunOptions,
   type AgentSessionConfig,
 } from "./agent/agent-sdk-types.js";
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
@@ -164,7 +168,6 @@ import {
   type WorkspaceMutation,
   type WorkspaceRegistry,
 } from "./workspace-registry.js";
-import { wrapSpokenInput } from "./voice-config.js";
 import { isVoicePermissionAllowed } from "./voice-permission-policy.js";
 import {
   ProjectIconReader,
@@ -439,12 +442,34 @@ const nodeSessionFileSystem: SessionFileSystem = {
 // Stub types for features under development (modules not yet available)
 type AgentMcpTransportFactory = () => Promise<unknown>;
 
+/** Collapses an optional injected subsystem to its settled nullable form. */
+function nullable<T>(value?: T | null): T | null {
+  return value ?? null;
+}
+
+const AGENT_QUEUE_RESPONSE_TYPES = {
+  "agent.queue.enqueue.request": "agent.queue.enqueue.response",
+  "agent.queue.update.request": "agent.queue.update.response",
+  "agent.queue.reorder.request": "agent.queue.reorder.response",
+  "agent.queue.delete.request": "agent.queue.delete.response",
+  "agent.queue.retry.request": "agent.queue.retry.response",
+  "agent.queue.send_now.request": "agent.queue.send_now.response",
+  "agent.queue.list.request": "agent.queue.list.response",
+} as const;
+
+type AgentQueueRequestMessage = Extract<
+  SessionInboundMessage,
+  { type: keyof typeof AGENT_QUEUE_RESPONSE_TYPES }
+>;
+
 export interface SessionOptions {
   connectedHosts?: ConnectedHosts;
   sourceId?: string;
   routed?: boolean;
   browserToolsBroker?: BrowserToolsBroker | null;
   clientId: string;
+  /** Principal/client pair that owns this session's spoken input and its receipts. */
+  voiceOwner?: string;
   permissions: readonly DaemonPermission[];
   appVersion?: string | null;
   clientCapabilities?: Record<string, unknown> | null;
@@ -464,7 +489,9 @@ export interface SessionOptions {
   worktreesRoot?: string;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
-  messageReceipts: Pick<MessageReceipts, "send">;
+  /** Absent when the daemon runs without the durable queue (pre-fork peer). */
+  agentQueueService?: AgentQueueService | null;
+  messageReceipts: Pick<MessageReceipts, "send" | "listForAttachment">;
   agentMessages: AgentMessageDelivery;
   creationService: Pick<CreationService, "create" | "subscribe">;
   projectRegistry: ProjectRegistry;
@@ -551,10 +578,21 @@ export interface SessionOptions {
     turnDetection?: Resolvable<TurnDetectionProvider | null>;
   };
   voiceBridge?: {
-    registerVoiceSpeakHandler?: (agentId: string, handler: VoiceSpeakHandler) => void;
-    unregisterVoiceSpeakHandler?: (agentId: string) => void;
-    registerVoiceCallerContext?: (agentId: string, context: VoiceCallerContext) => void;
-    unregisterVoiceCallerContext?: (agentId: string) => void;
+    registerVoiceSpeakHandler?: (
+      agentId: string,
+      attachmentId: string,
+      handler: VoiceSpeakHandler,
+      revoke: () => void,
+    ) => string;
+    unregisterVoiceSpeakHandler?: (agentId: string, generation: string) => void;
+    registerVoiceCallerContext?: (
+      agentId: string,
+      generation: string,
+      context: VoiceCallerContext,
+    ) => void;
+    unregisterVoiceCallerContext?: (agentId: string, generation: string) => void;
+    isCurrent?: (agentId: string, generation: string) => boolean;
+    hasSpokenInTurn?: (agentId: string, turnId: string) => boolean;
   };
   dictation?: {
     finalTimeoutMs?: number;
@@ -736,8 +774,11 @@ export class Session {
   private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
   private readonly clientId: string;
   private readonly authorization: SessionAuthorization;
+  private readonly agentQueueService: AgentQueueService | null;
+  private unsubscribeAgentQueue: (() => void) | null = null;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
+  private sideConversationDemandWithoutSource = false;
   private readonly sessionId: string;
   private readonly onMessage: (msg: SessionOutboundMessage) => void;
   private readonly onMessageToSource:
@@ -836,7 +877,8 @@ export class Session {
   private readonly daemonSession: DaemonSession;
   private readonly hubExecutionController: HubExecutionController | null;
   private readonly workspaceScripts: WorkspaceScriptsService;
-  private readonly messageReceipts: Pick<MessageReceipts, "send">;
+  private readonly voiceOwner?: string;
+  private readonly messageReceipts: Pick<MessageReceipts, "send" | "listForAttachment">;
   private readonly agentMessages: AgentMessageDelivery;
   private readonly createAgentLifecycleDispatch: CreateAgentLifecycleDispatch;
   private readonly creationService: Pick<CreationService, "create" | "subscribe">;
@@ -901,6 +943,7 @@ export class Session {
     } = options;
     this.browserToolsBroker = options.browserToolsBroker;
     this.clientId = clientId;
+    this.voiceOwner = options.voiceOwner;
     this.authorization = new SessionAuthorization(permissions);
 
     this.appVersion = appVersion ?? null;
@@ -945,6 +988,8 @@ export class Session {
     });
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
+    this.agentQueueService = nullable(options.agentQueueService);
+    this.unsubscribeAgentQueue = this.subscribeToAgentQueueMutations();
     this.projectRegistry = projectRegistry;
     this.workspaceRegistry = workspaceRegistry;
     this.directorySync = resolveDirectorySync(directorySync);
@@ -1264,21 +1309,24 @@ export class Session {
               agentStorage: this.agentStorage,
               logger: this.sessionLogger,
             }),
-          reloadAgentSession: (agentId, overrides) =>
-            this.agentManager.reloadAgentSession(agentId, overrides),
-          sendSpokenInput: async (agentId, text) => {
-            await this.handleSendAgentMessage(
+          sendSpokenInput: async (agentId, text, messageId) => {
+            // Speech always takes the durable queue (idle or busy) so its
+            // acceptance is one identity with truthful receipts. Detaching
+            // voice never withdraws what was already admitted.
+            if (!this.agentQueueService) throw new Error("Agent message queue is unavailable");
+            await sendOrQueuePromptToAgent({
+              agentManager: this.agentManager,
+              agentStorage: this.agentStorage,
+              queueService: this.agentQueueService,
+              logger: this.sessionLogger,
               agentId,
+              messageId,
               text,
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              { spokenInput: true },
-            );
+              intent: "queue",
+              origin: "voice",
+              voiceOwner: options.voiceOwner,
+            });
           },
-          interruptAgentIfRunning: (agentId) => this.interruptAgentIfRunning(agentId),
-          hasActiveAgentRun: (agentId) => this.hasActiveAgentRun(agentId),
         },
         logger: this.sessionLogger,
         sessionId: this.sessionId,
@@ -1308,6 +1356,11 @@ export class Session {
     appVersion = this.appVersion,
   ): void {
     this.clientCapabilities = parseClientCapabilities(capabilities);
+    if (!source) {
+      this.sideConversationDemandWithoutSource = this.clientCapabilities.has(
+        CLIENT_CAPS.sideConversations,
+      );
+    }
     if (source) {
       this.delivery.attach(source, capabilities?.[CLIENT_CAPS.ownedSubscriptions] === true);
       this.clientSources.set(source, {
@@ -1316,7 +1369,6 @@ export class Session {
         activity: this.clientSources.get(source)?.activity ?? null,
         pushToken: this.clientSources.get(source)?.pushToken ?? null,
       });
-      this.refreshObservationProducers();
       // COMPAT(ownedSubscriptions): added in v0.8.0, remove capability-driven legacy host registration after 2027-03-09.
       if (
         !this.delivery.isModern(source) &&
@@ -1338,6 +1390,7 @@ export class Session {
         }
       }
     }
+    this.refreshObservationProducers();
   }
 
   clearAgentTimelineSubscription(source: object): void {
@@ -1685,13 +1738,6 @@ export class Session {
     }
   }
 
-  private hasActiveAgentRun(agentId: string | null): boolean {
-    if (!agentId) {
-      return false;
-    }
-    return this.agentManager.hasInFlightRun(agentId);
-  }
-
   private handleAgentRunError(agentId: string, error: unknown, context: string): void {
     const message = errorToFriendlyMessage(error);
     this.sessionLogger.error({ err: error, agentId, context }, `${context} for agent ${agentId}`);
@@ -1734,7 +1780,8 @@ export class Session {
       this.wantsEvent("agent_attention_required") ||
       this.wantsEvent("agent_permission_request") ||
       this.wantsEvent("agent_permission_resolved") ||
-      this.wantsEvent("agent.provider_subagents.update");
+      this.wantsEvent("agent.provider_subagents.update") ||
+      this.hasSideConversationDemand();
     if (agents && !this.unsubscribeAgentEvents) this.subscribeToAgentEvents();
     if (!agents) {
       this.unsubscribeAgentEvents?.();
@@ -1742,6 +1789,14 @@ export class Session {
     }
     this.refreshWorkspaceProducers(workspaces);
     this.refreshCatalogProducers(legacy);
+  }
+
+  private hasSideConversationDemand(): boolean {
+    return this.clientSources.size > 0
+      ? [...this.clientSources.values()].some(({ capabilities }) =>
+          capabilities.has(CLIENT_CAPS.sideConversations),
+        )
+      : this.sideConversationDemandWithoutSource;
   }
 
   private refreshWorkspaceProducers(observing: boolean): void {
@@ -2091,6 +2146,10 @@ export class Session {
           this.forwardSideConversationUpdate(event.event);
           return;
         }
+
+        // Attached voice reads the live turn for fallback playback; it observes
+        // events without owning or disturbing them.
+        this.voiceSessions.handleAgentEvent(event.agentId, event.event, event);
 
         if (
           this.voiceSessions.isActiveForAgent(event.agentId) &&
@@ -2935,6 +2994,10 @@ export class Session {
   }
 
   private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    return this.dispatchAgentQueueMessage(msg) ?? this.dispatchAgentLifecycleOperation(msg);
+  }
+
+  private dispatchAgentLifecycleOperation(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "fetch_agents_request":
         return this.handleFetchAgents(msg);
@@ -3056,6 +3119,8 @@ export class Session {
         return this.checkoutSession.handleCheckoutSwitchBranchRequest(msg);
       case "checkout.rename_branch.request":
         return this.checkoutSession.handleCheckoutRenameBranchRequest(msg);
+      case "checkout.base_ref.set.request":
+        return this.checkoutSession.handleCheckoutBaseRefSetRequest(msg);
       case "checkout_commit_request":
         return this.checkoutSession.handleCheckoutCommitRequest(msg);
       case "checkout_merge_request":
@@ -3284,6 +3349,12 @@ export class Session {
 
   private async dispatchMiscMessage(msg: SessionInboundMessage): Promise<void> {
     switch (msg.type) {
+      case "agent.companion.update_entry.request":
+        await this.handleCompanionUpdateEntryRequest(msg);
+        return;
+      case "agent.artifacts.scan.request":
+        await this.handleAgentArtifactsScanRequest(msg.agentId, msg.requestId, msg.limit);
+        return;
       case "list_commands_request":
         await this.handleListCommandsRequest(msg);
         return;
@@ -3409,6 +3480,9 @@ export class Session {
     try {
       await this.agentStorage.remove(agentId);
       await this.agentManager.deleteAgentState(agentId);
+      // Deleting an agent removes its queue through the normal lifecycle; a
+      // re-created agent with the same id starts from an empty queue.
+      await this.agentQueueService?.deleteForAgent(agentId);
     } catch (error) {
       this.sessionLogger.error({ err: error, agentId }, `Failed to fully delete agent ${agentId}`);
     }
@@ -3593,6 +3667,102 @@ export class Session {
       didUnarchive,
       originalArchivedAt: matched.archivedAt ?? null,
     };
+  }
+
+  private async handleAgentArtifactsScanRequest(
+    agentId: string,
+    requestId: string,
+    limit: number | undefined,
+  ): Promise<void> {
+    this.sessionLogger.info(
+      { agentId, requestId, limit },
+      "Scanning agent working dir for artifacts",
+    );
+    try {
+      // Backfill targets are usually closed agents, which are not resident in
+      // the manager until something loads them.
+      await ensureAgentLoaded(agentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      const result = await this.agentManager.scanAgentArtifacts(
+        agentId,
+        limit !== undefined ? { limit } : {},
+      );
+      this.emit({
+        type: "agent.artifacts.scan.response",
+        payload: {
+          requestId,
+          agentId,
+          accepted: true,
+          error: null,
+          addedOrUpdated: result.addedOrUpdated,
+          total: result.total,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.artifacts.scan.response",
+        payload: {
+          requestId,
+          agentId,
+          accepted: false,
+          error: error instanceof Error ? error.message : String(error),
+          addedOrUpdated: 0,
+          total: 0,
+        },
+      });
+    }
+  }
+
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  private async handleCompanionUpdateEntryRequest(
+    msg: AgentCompanionUpdateEntryRequestMessage,
+  ): Promise<void> {
+    this.sessionLogger.info(
+      {
+        agentId: msg.agentId,
+        requestId: msg.requestId,
+        action: msg.action,
+      },
+      "session: agent.companion.update_entry.request",
+    );
+
+    let accepted = true;
+    let error: string | null = null;
+    try {
+      const result = await updateCompanionEntryCommand(
+        { agentManager: this.agentManager },
+        {
+          agentId: msg.agentId,
+          entryId: msg.entryId,
+          action: msg.action,
+          status: msg.status,
+          text: msg.text,
+          answerText: msg.answerText,
+          sourceId: msg.sourceId,
+        },
+      );
+      if (!result.accepted) {
+        accepted = false;
+        error = result.error ?? "Failed to update companion entry";
+        this.sessionLogger.warn({ error }, "Failed to update companion entry");
+      }
+    } catch (err) {
+      accepted = false;
+      error = err instanceof Error ? err.message : String(err);
+      this.sessionLogger.error({ err }, "session: agent.companion.update_entry.request error");
+    }
+    this.emit({
+      type: "agent.companion.update_entry.response",
+      payload: {
+        requestId: msg.requestId,
+        agentId: msg.agentId,
+        accepted,
+        error,
+      },
+    });
   }
 
   private async handleUpdateAgentRequest(
@@ -4061,60 +4231,6 @@ export class Session {
           error: message,
         },
       });
-    }
-  }
-
-  /**
-   * Handle text message to agent (with optional image attachments)
-   */
-  private async handleSendAgentMessage(
-    agentId: string,
-    text: string,
-    messageId?: string,
-    images?: Array<{ data: string; mimeType: string }>,
-    attachments?: AgentAttachment[],
-    runOptions?: AgentRunOptions,
-    options?: { spokenInput?: boolean },
-  ): Promise<{ ok: true } | { ok: false; error: string }> {
-    this.sessionLogger.info(
-      {
-        agentId,
-        textPreview: text.substring(0, 50),
-        imageCount: images?.length ?? 0,
-        attachmentCount: attachments?.length ?? 0,
-      },
-      `Sending text to agent ${agentId}${
-        images && images.length > 0 ? ` with ${images.length} image attachment(s)` : ""
-      }${
-        attachments && attachments.length > 0
-          ? ` and ${attachments.length} structured attachment(s)`
-          : ""
-      }`,
-    );
-
-    const promptText = options?.spokenInput ? wrapSpokenInput(text) : text;
-    const prompt = buildAgentPrompt(promptText, images, attachments);
-
-    try {
-      await sendPromptToAgent({
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        agentId,
-        prompt,
-        messageId,
-        runOptions,
-        // A typed or spoken message from the human answers any permission the
-        // agent is blocked on.
-        clearPendingPermissions: true,
-        logger: this.sessionLogger,
-      });
-      return { ok: true };
-    } catch (error) {
-      this.handleAgentRunError(agentId, error, "Failed to send agent message");
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
     }
   }
 
@@ -7883,6 +7999,7 @@ export class Session {
         direction,
         cursor,
         limit: pageLimit,
+        byteBudget: TIMELINE_PAGE_BYTE_BUDGET,
       });
       const selectedTimeline = {
         timeline: fetchedControlTimeline,
@@ -8536,6 +8653,285 @@ export class Session {
     }
   }
 
+  /**
+   * Mirrors queue mutations to this session's clients. Delivery is gated per
+   * source on the durableAgentQueue capability, so a client whose outbound
+   * union predates the fork never sees an event type it cannot parse.
+   */
+  private subscribeToAgentQueueMutations(): (() => void) | null {
+    const service = this.agentQueueService;
+    if (!service) {
+      return null;
+    }
+    return service.subscribeToMutations((snapshot) => {
+      this.emit({ type: "agent.queue.update", payload: snapshot });
+    });
+  }
+
+  private dispatchAgentQueueMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    if (msg.type === "voice.input.receipts.read.request") {
+      return this.handleVoiceInputReceiptsRead(msg);
+    }
+    if (msg.type === "agent.queue.get_item_images.request") {
+      return this.handleAgentQueueGetItemImagesRequest(msg);
+    }
+    if ((AGENT_QUEUE_RESPONSE_TYPES as Record<string, string>)[msg.type]) {
+      return this.handleAgentQueueRequest(msg as AgentQueueRequestMessage);
+    }
+    return undefined;
+  }
+
+  /**
+   * Answers one voice attachment's delivery receipts: queue presence means
+   * queued, the receipt record means submitted or removed. The read is scoped
+   * to the attachment this connection still owns, so a stale device cannot
+   * poll another device's speech.
+   */
+  private async handleVoiceInputReceiptsRead(
+    msg: Extract<SessionInboundMessage, { type: "voice.input.receipts.read.request" }>,
+  ): Promise<void> {
+    const respond = (
+      items: Array<{
+        messageId: string;
+        state: "queued" | "submitted" | "removed" | "unknown";
+        createdAt: string;
+      }>,
+      nextCursor: string | null,
+      error: string | null,
+    ) =>
+      this.emit({
+        type: "voice.input.receipts.read.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId: msg.agentId,
+          attachmentId: msg.attachmentId,
+          items,
+          nextCursor,
+          error,
+        },
+      });
+    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    if (!resolved.ok) {
+      respond([], null, resolved.error);
+      return;
+    }
+    if (
+      !this.voiceSessions.ownsAttachment(
+        this.delivery.currentSource,
+        resolved.agentId,
+        msg.attachmentId,
+        msg.generation,
+      )
+    ) {
+      respond([], null, "Voice attachment is no longer owned by this connection.");
+      return;
+    }
+    try {
+      const [queue, receipts] = await Promise.all([
+        this.agentQueueService?.listVoiceInputs(
+          resolved.agentId,
+          msg.attachmentId,
+          this.voiceOwner,
+        ),
+        this.messageReceipts.listForAttachment({
+          agentId: resolved.agentId,
+          attachmentId: msg.attachmentId,
+          voiceOwner: this.voiceOwner,
+        }),
+      ]);
+      const byId = new Map<
+        string,
+        {
+          messageId: string;
+          state: "queued" | "submitted" | "removed" | "unknown";
+          createdAt: string;
+        }
+      >();
+      for (const item of queue ?? []) {
+        const state =
+          item.deliveryState === "failed" || item.deliveryState === "uncertain"
+            ? "unknown"
+            : "queued";
+        byId.set(item.id, { messageId: item.id, state, createdAt: item.createdAt });
+      }
+      for (const receipt of receipts) {
+        let state: "queued" | "submitted" | "removed" | "unknown" = "unknown";
+        if (receipt.state === "sending") state = "queued";
+        else if (receipt.state === "completed") state = "submitted";
+        else if (receipt.state === "removed") state = "removed";
+        byId.set(receipt.messageId, {
+          messageId: receipt.messageId,
+          state,
+          createdAt: receipt.createdAt,
+        });
+      }
+      const all = [...byId.values()].sort(
+        (a, b) => a.createdAt.localeCompare(b.createdAt) || a.messageId.localeCompare(b.messageId),
+      );
+      const offset = msg.after
+        ? Math.max(0, all.findIndex((item) => item.messageId === msg.after) + 1)
+        : 0;
+      const limit = msg.limit ?? 50;
+      const page = all.slice(offset, offset + limit);
+      respond(page, all[offset + limit] ? (page.at(-1)?.messageId ?? null) : null, null);
+    } catch (error) {
+      respond([], null, errorToFriendlyMessage(error));
+    }
+  }
+
+  /**
+   * Queue errors carry a machine-readable code on the response (`error` field)
+   * so clients can branch on revision conflicts without parsing prose.
+   */
+  private agentQueueErrorText(error: unknown): string {
+    if (error instanceof Error && "code" in error && typeof error.code === "string") {
+      return error.code;
+    }
+    return errorToFriendlyMessage(error);
+  }
+
+  private async handleAgentQueueRequest(msg: AgentQueueRequestMessage): Promise<void> {
+    const responseType = AGENT_QUEUE_RESPONSE_TYPES[msg.type];
+    const service = this.agentQueueService;
+    if (!service) {
+      this.emit({
+        type: responseType,
+        payload: {
+          requestId: msg.requestId,
+          agentId: msg.agentId,
+          queue: null,
+          error: "This daemon does not support the durable agent message queue.",
+        },
+      });
+      return;
+    }
+
+    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    if (!resolved.ok) {
+      this.emit({
+        type: responseType,
+        payload: {
+          requestId: msg.requestId,
+          agentId: msg.agentId,
+          queue: null,
+          error: resolved.error,
+        },
+      });
+      return;
+    }
+
+    const agentId = resolved.agentId;
+    try {
+      const queue = await this.applyAgentQueueRequest(service, agentId, msg);
+      this.emit({
+        type: responseType,
+        payload: { requestId: msg.requestId, agentId, queue, error: null },
+      });
+    } catch (error) {
+      this.sessionLogger.warn(
+        { err: error, agentId, type: msg.type },
+        "Agent queue request failed",
+      );
+      this.emit({
+        type: responseType,
+        payload: {
+          requestId: msg.requestId,
+          agentId,
+          queue: null,
+          error: this.agentQueueErrorText(error),
+        },
+      });
+    }
+  }
+
+  private applyAgentQueueRequest(
+    service: AgentQueueService,
+    agentId: string,
+    msg: AgentQueueRequestMessage,
+  ): Promise<AgentQueueSnapshot> {
+    switch (msg.type) {
+      case "agent.queue.enqueue.request":
+        return service.enqueue({
+          agentId,
+          itemId: msg.itemId,
+          text: msg.text,
+          intent: msg.intent,
+          images: msg.images,
+          attachments: msg.attachments,
+          composerAttachments: msg.composerAttachments,
+        });
+      case "agent.queue.update.request":
+        return service.update(agentId, msg.itemId, msg.expectedRevision, {
+          text: msg.text,
+          images: msg.images,
+          attachments: msg.attachments,
+          composerAttachments: msg.composerAttachments,
+        });
+      case "agent.queue.reorder.request":
+        return service.reorder(agentId, msg.itemIds, msg.expectedRevision);
+      case "agent.queue.delete.request":
+        return service.remove(agentId, msg.itemId, msg.expectedRevision);
+      case "agent.queue.retry.request":
+        return service.retry(agentId, msg.itemId, msg.expectedRevision);
+      case "agent.queue.send_now.request":
+        return service.sendNow(agentId, msg.itemId, msg.expectedRevision);
+      case "agent.queue.list.request":
+        return service.list(agentId);
+    }
+  }
+
+  private async handleAgentQueueGetItemImagesRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.queue.get_item_images.request" }>,
+  ): Promise<void> {
+    const emitError = (agentId: string, error: string) => {
+      this.emit({
+        type: "agent.queue.get_item_images.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId,
+          itemId: msg.itemId,
+          images: [],
+          error,
+        },
+      });
+    };
+
+    const service = this.agentQueueService;
+    if (!service) {
+      emitError(msg.agentId, "This daemon does not support the durable agent message queue.");
+      return;
+    }
+    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    if (!resolved.ok) {
+      emitError(msg.agentId, resolved.error);
+      return;
+    }
+
+    try {
+      const images = await service.getItemImages(resolved.agentId, msg.itemId);
+      this.emit({
+        type: "agent.queue.get_item_images.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId: resolved.agentId,
+          itemId: msg.itemId,
+          images,
+          error: null,
+        },
+      });
+    } catch (error) {
+      emitError(resolved.agentId, this.agentQueueErrorText(error));
+    }
+  }
+
+  /** Admitted input counts as live: a queued follow-up must not read as "not found". */
+  private async hasLiveOrQueuedAgent(agentId: string): Promise<boolean> {
+    return (
+      Boolean(this.agentManager.getAgent(agentId)) ||
+      Boolean((await this.agentQueueService?.list(agentId))?.items.length)
+    );
+  }
+
   private async handleWaitForFinish(
     agentIdOrIdentifier: string,
     requestId: string,
@@ -8559,6 +8955,40 @@ export class Session {
     }
 
     const agentId = resolved.agentId;
+    const live = this.agentManager.getAgent(agentId);
+    if (!live && !(await this.hasLiveOrQueuedAgent(agentId))) {
+      const settled = await this.readSettledAgent(agentId);
+      if (!settled) {
+        this.emit({
+          type: "wait_for_finish_response",
+          payload: {
+            requestId,
+            status: "error",
+            final: null,
+            error: `Agent not found: ${agentId}`,
+            lastMessage: null,
+          },
+        });
+        return;
+      }
+      const { record, lastMessage } = settled;
+      const final = this.buildStoredAgentPayload(record);
+      let status: "permission" | "error" | "idle";
+      if (record.attentionReason === "permission") {
+        status = "permission";
+      } else if (record.lastStatus === "error") {
+        status = "error";
+      } else {
+        status = "idle";
+      }
+      const error = resolveWaitForFinishError({ status, final });
+      this.emit({
+        type: "wait_for_finish_response",
+        payload: { requestId, status, final, error, lastMessage },
+      });
+      return;
+    }
+
     const abortController = new AbortController();
     const hasTimeout = typeof timeoutMs === "number" && timeoutMs > 0;
     const timeoutHandle = hasTimeout
@@ -8568,10 +8998,10 @@ export class Session {
       : null;
 
     try {
-      await this.agentMessages.waitForDispatch(
-        agentId,
-        AbortSignal.any([abortController.signal, sourceSignal]),
-      );
+      const signal = AbortSignal.any([abortController.signal, sourceSignal]);
+      // Wait for both accepted message delivery and durable queue admission before observing the run.
+      await this.agentMessages.waitForDispatch(agentId, signal);
+      await this.agentQueueService?.waitForPendingDispatch(agentId, signal);
 
       const live = this.agentManager.getAgent(agentId);
       if (!live) {
@@ -8608,7 +9038,7 @@ export class Session {
       }
 
       let result = await this.agentManager.waitForAgentEvent(agentId, {
-        signal: AbortSignal.any([abortController.signal, sourceSignal]),
+        signal,
         waitForActive: true,
       });
       let final = await this.getAgentPayloadById(agentId);
@@ -8726,6 +9156,23 @@ export class Session {
     if (shouldNotify) notified.add(subscription.owner.source);
   }
 
+  /**
+   * COMPAT(durableAgentQueue): fork addition. Only clients advertising the
+   * capability may receive the queue broadcast, so a client whose outbound
+   * union predates the fork never sees an event type it cannot parse.
+   */
+  private canDeliverEventToSource(
+    message: SessionOutboundMessage,
+    source: object | undefined,
+  ): boolean {
+    if (message.type !== "agent.queue.update") {
+      return true;
+    }
+    return source
+      ? this.supportsForSource(CLIENT_CAPS.durableAgentQueue, source)
+      : this.supports(CLIENT_CAPS.durableAgentQueue);
+  }
+
   private emitSubscribedEvent(message: SessionOutboundMessage, onlySource?: object): boolean {
     const event = sessionEventCategory(message);
     if (!event) return false;
@@ -8740,25 +9187,43 @@ export class Session {
             CLIENT_CAPS.workspaceSetupObservation,
             subscription.owner.source,
           )) ||
-        (onlySource && subscription.owner.source !== onlySource)
+        (onlySource && subscription.owner.source !== onlySource) ||
+        !this.canDeliverEventToSource(message, subscription.owner.source)
       )
         continue;
       this.emitEventToOwner(subscription, message, notified);
       delivered.add(subscription.owner.source);
     }
-    // COMPAT(ownedSubscriptions): added in v0.8.0, remove implicit event delivery after 2027-03-09.
+    this.emitImplicitLegacyEvent(message, event, onlySource, delivered);
+    return true;
+  }
+
+  // COMPAT(ownedSubscriptions): added in v0.8.0, remove implicit event delivery after 2027-03-09.
+  private emitImplicitLegacyEvent(
+    message: SessionOutboundMessage,
+    event: SessionEventSubscription,
+    onlySource: object | undefined,
+    delivered: Set<object>,
+  ): void {
     if (this.onMessageToSource && this.clientSources.size > 0) {
       for (const source of this.clientSources.keys()) {
         if (
           (!onlySource || source === onlySource) &&
           !delivered.has(source) &&
           !this.delivery.isModern(source) &&
-          this.wantsEvent(event, source)
+          this.wantsEvent(event, source) &&
+          this.canDeliverEventToSource(message, source)
         )
           this.onMessageToSource(source, this.workspaceSetupMessageForClient(message, source));
       }
-    } else if (delivered.size === 0 && this.wantsEvent(event)) this.onMessage(message);
-    return true;
+      return;
+    }
+    if (
+      delivered.size === 0 &&
+      this.wantsEvent(event) &&
+      this.canDeliverEventToSource(message, undefined)
+    )
+      this.onMessage(message);
   }
 
   private emit(msg: SessionOutboundMessage): void {
@@ -8883,6 +9348,8 @@ export class Session {
     this.unsubscribePluginChanges = null;
     this.unsubscribeWorkspaceMutations?.();
     this.unsubscribeWorkspaceMutations = null;
+    this.unsubscribeAgentQueue?.();
+    this.unsubscribeAgentQueue = null;
     this.agentUpdates.dispose();
     await this.hubExecutionController?.cleanup();
     if (this.unsubscribeTerminalWorkspaceContributionEvents) {
@@ -8957,24 +9424,29 @@ const SIDE_CONVERSATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   "agent.side_conversation.removed",
 ]);
 
+/** Outbound types whose subscription category is the type itself. */
+const DIRECT_EVENT_CATEGORIES: ReadonlySet<string> = new Set([
+  "project.update",
+  "providers_snapshot_update",
+  "agent_attention_required",
+  "agent_permission_request",
+  "agent_permission_resolved",
+  "checkout_status_update",
+  "script_status_update",
+  "workspace_setup_progress",
+  "agent.provider_subagents.update",
+  "agent.queue.update",
+  "terminal_attention_required",
+  "activity_log",
+  "hub.execution.agent.update",
+  "hub.execution.agent.stream",
+]);
+
 function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubscription | null {
   if (SIDE_CONVERSATION_EVENT_TYPES.has(message.type))
     return message.type as SessionEventSubscription;
+  if (DIRECT_EVENT_CATEGORIES.has(message.type)) return message.type as SessionEventSubscription;
   switch (message.type) {
-    case "project.update":
-    case "providers_snapshot_update":
-    case "agent_attention_required":
-    case "agent_permission_request":
-    case "agent_permission_resolved":
-    case "checkout_status_update":
-    case "script_status_update":
-    case "workspace_setup_progress":
-    case "agent.provider_subagents.update":
-    case "terminal_attention_required":
-    case "activity_log":
-    case "hub.execution.agent.update":
-    case "hub.execution.agent.stream":
-      return message.type;
     case "status":
       switch (message.payload.status) {
         case "server_info":

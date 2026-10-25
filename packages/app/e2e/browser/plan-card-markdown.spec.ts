@@ -1,17 +1,30 @@
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "../support/fixtures";
+import { attachFileFromMenu } from "../support/helpers/composer";
 import { waitForPermissionPrompt } from "../support/helpers/permissions";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
+import { createAgentTabFromMenu } from "../support/helpers/workspace-tabs";
+
+const TEST_JSON = {
+  name: "handoff-draft.json",
+  mimeType: "application/json",
+  buffer: Buffer.from(JSON.stringify({ draft: "keep" })),
+};
 
 // Literal shell commands and copyright markers must survive Markdown rendering.
 test.describe("Plan card markdown", () => {
-  test("renders plan text verbatim", async ({ page }) => {
+  test("renders plan text verbatim, copies it, and opens one editable handoff draft", async ({
+    page,
+  }) => {
     test.setTimeout(180_000);
 
     const session = await seedMockAgentWorkspace({
       repoPrefix: "plan-card-markdown-",
       title: "Plan card markdown e2e",
       initialPrompt: "Emit synthetic plan approval.",
+      // A model with thinking levels, so the handoff's effort has something to carry.
+      model: "ten-second-stream",
+      thinkingOptionId: "high",
     });
 
     try {
@@ -25,6 +38,109 @@ test.describe("Plan card markdown", () => {
       await expect(planCard).toContainText("---buzz");
       await expect(planCard).not.toContainText("©");
       await expect(planCard).not.toContainText("—buzz");
+      await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+      const readClipboard = () => page.evaluate("navigator.clipboard.readText()");
+      await planCard.getByTestId("plan-copy-content").click();
+      await expect.poll(readClipboard).toContain("(c)");
+      await planCard.getByTestId("plan-copy-link").click();
+      await expect.poll(readClipboard).toContain(`/agent/${session.agentId}`);
+
+      // A draft that already holds text and an attachment. Handing off must open its own draft and
+      // leave this one alone.
+      await createAgentTabFromMenu(page);
+      const existingDraftTab = page
+        .locator('[data-testid^="workspace-tab-draft_"][aria-selected="true"]')
+        .filter({ visible: true });
+      await expect(existingDraftTab).toHaveCount(1);
+      const existingDraftTabId = await existingDraftTab.getAttribute("data-testid");
+      expect(existingDraftTabId).not.toBeNull();
+      const existingDraftComposer = page
+        .getByRole("textbox", { name: "Message agent..." })
+        .filter({ visible: true });
+      await existingDraftComposer.fill("keep this draft");
+      await attachFileFromMenu(page, TEST_JSON);
+      await expect(page.getByTestId("composer-file-attachment-pill")).toContainText(
+        TEST_JSON.name,
+        {
+          timeout: 30_000,
+        },
+      );
+
+      // The plan card lives in the source agent's tab, so hand off from there.
+      await page
+        .getByTestId(`workspace-tab-agent_${session.agentId}`)
+        .filter({ visible: true })
+        .click();
+      await planCard.getByTestId("permission-plan-handoff").click();
+      const handoffDraftTab = page
+        .locator('[data-testid^="workspace-tab-draft_"][aria-selected="true"]')
+        .filter({ visible: true });
+      await expect(handoffDraftTab).toHaveCount(1);
+      const handoffDraftTabId = await handoffDraftTab.getAttribute("data-testid");
+      expect(handoffDraftTabId).not.toBeNull();
+      expect(handoffDraftTabId).not.toBe(existingDraftTabId);
+      const composer = page
+        .getByRole("textbox", { name: "Message agent..." })
+        .filter({ visible: true });
+      await expect(composer).toBeEditable();
+      await expect(composer).toHaveValue(/Implement the following proposed plan\./);
+      await expect(composer).toHaveValue(/Add the \(c\) README note/);
+      await expect(composer).toHaveValue(new RegExp(session.agentId));
+      const sourceAgent = (await session.client.fetchAgents({ scope: "active" })).entries.find(
+        ({ agent }) => agent.id === session.agentId,
+      )?.agent;
+      expect(sourceAgent).toBeDefined();
+      expect(sourceAgent!.thinkingOptionId).toBe("high");
+      const agents = await session.client.fetchAgents({ scope: "active" });
+      expect(
+        agents.entries.filter(({ agent }) => agent.workspaceId === session.workspaceId),
+      ).toHaveLength(1);
+
+      // The draft that was already open still has its own text and attachment.
+      await page.getByTestId(existingDraftTabId!).click();
+      const restoredDraftComposer = page
+        .getByRole("textbox", { name: "Message agent..." })
+        .filter({ visible: true });
+      await expect(restoredDraftComposer).toHaveValue("keep this draft");
+      await expect(page.getByTestId("composer-file-attachment-pill")).toContainText(TEST_JSON.name);
+
+      // Submit the handoff draft, not the one that was already open.
+      await page.getByTestId(handoffDraftTabId!).click();
+      await expect(composer).toHaveValue(/Implement the following proposed plan\./);
+      const handoffPrompt = await composer.inputValue();
+      await page.getByRole("button", { name: "Send message" }).filter({ visible: true }).click();
+      await expect
+        .poll(async () => {
+          let count = 0;
+          for (const { agent } of (await session.client.fetchAgents({ scope: "active" })).entries) {
+            if (agent.workspaceId === session.workspaceId) count += 1;
+          }
+          return count;
+        })
+        .toBe(2);
+      const destination = (await session.client.fetchAgents({ scope: "active" })).entries.find(
+        ({ agent }) => agent.workspaceId === session.workspaceId && agent.id !== session.agentId,
+      )?.agent;
+      expect(destination).toBeDefined();
+      // The created agent runs on the provider the source agent used, account included.
+      expect(destination!.provider).toBe(sourceAgent!.provider);
+      expect(destination!.model).toBe(sourceAgent!.model);
+      expect(destination!.thinkingOptionId).toBe(sourceAgent!.thinkingOptionId);
+      const timelineClient = session.client as typeof session.client & {
+        fetchAgentTimeline(agentId: string): Promise<{
+          entries: Array<{ item: { type: string; text?: string } }>;
+        }>;
+      };
+      await expect
+        .poll(async () => {
+          let count = 0;
+          for (const { item } of (await timelineClient.fetchAgentTimeline(destination!.id))
+            .entries) {
+            if (item.type === "user_message" && item.text === handoffPrompt) count += 1;
+          }
+          return count;
+        })
+        .toBe(1);
     } finally {
       await session.cleanup();
     }
