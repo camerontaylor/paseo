@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
 import { resolveCallerAgentId as resolveRunCallerAgentId } from "../../utils/caller-agent.js";
+import { connectToDaemon } from "../../utils/client.js";
 import {
   resolveExistingRunWorkspace,
   runRunCommand,
   waitsForFinish,
+  resolveRunThinkingOption,
   type AgentRunOptions,
 } from "./run";
+
+vi.mock("../../utils/client.js", () => ({ connectToDaemon: vi.fn() }));
 
 const daemonTarget = { kind: "endpoint" as const, host: "example.test:12345" };
 
@@ -168,4 +172,225 @@ describe("runRunCommand option validation", () => {
       /Unsupported worktree mode/,
     );
   });
+});
+
+describe("run thinking defaults", () => {
+  const models = [
+    { id: "default-model", label: "Default", isDefault: true, defaultThinkingOptionId: "medium" },
+    {
+      id: "chosen-model",
+      label: "Chosen",
+      thinkingOptions: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High", isDefault: true },
+      ],
+    },
+  ];
+
+  it.each([
+    { model: "chosen-model", expected: "high" },
+    { model: undefined, expected: "medium" },
+    { model: "unlisted-model", expected: undefined },
+  ])("resolves the effort for $model", async ({ model, expected }) => {
+    const listProviderModels = vi.fn().mockResolvedValue({ models });
+    await expect(
+      resolveRunThinkingOption(
+        { listProviderModels },
+        {
+          provider: "custom",
+          model,
+          cwd: "/workspace",
+          thinking: undefined,
+        },
+      ),
+    ).resolves.toBe(expected);
+    expect(listProviderModels).toHaveBeenCalledWith("custom", { cwd: "/workspace" });
+  });
+
+  it("preserves explicit thinking without querying models", async () => {
+    const listProviderModels = vi.fn();
+    await expect(
+      resolveRunThinkingOption(
+        { listProviderModels },
+        {
+          provider: "custom",
+          model: "chosen-model",
+          cwd: "/workspace",
+          thinking: "low",
+        },
+      ),
+    ).resolves.toBe("low");
+    expect(listProviderModels).not.toHaveBeenCalled();
+  });
+
+  it("leaves effort unset when the chosen model has no default", async () => {
+    const listProviderModels = vi.fn().mockResolvedValue({
+      models: [
+        { id: "chosen-model", label: "Chosen", thinkingOptions: [{ id: "low", label: "Low" }] },
+      ],
+    });
+    await expect(
+      resolveRunThinkingOption(
+        { listProviderModels },
+        {
+          provider: "custom",
+          model: "chosen-model",
+          cwd: "/workspace",
+          thinking: undefined,
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("reports catalog errors instead of guessing a default", async () => {
+    const listProviderModels = vi.fn().mockResolvedValue({ error: "Catalog unavailable" });
+    await expect(
+      resolveRunThinkingOption(
+        { listProviderModels },
+        {
+          provider: "custom",
+          model: "chosen-model",
+          cwd: "/workspace",
+          thinking: undefined,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "PROVIDER_ERROR", message: "Catalog unavailable" });
+  });
+});
+
+describe("run command thinking wiring", () => {
+  const outputSchema = {
+    type: "object",
+    properties: { ok: { type: "boolean" } },
+    required: ["ok"],
+    additionalProperties: false,
+  };
+
+  function createClient() {
+    return {
+      fetchWorkspaces: vi.fn().mockResolvedValue({
+        entries: [{ id: "workspace-2", workspaceDirectory: "/workspace/resolved" }],
+        pageInfo: { nextCursor: null },
+      }),
+      listProviderModels: vi.fn().mockResolvedValue({
+        models: [{ id: "chosen-model", label: "Chosen", defaultThinkingOptionId: "high" }],
+      }),
+      createAgent: vi.fn().mockResolvedValue({
+        id: "created-agent",
+        provider: "custom",
+        cwd: "/workspace/resolved",
+        title: null,
+        status: "idle",
+      }),
+      waitForFinish: vi.fn().mockResolvedValue({ status: "idle", lastMessage: '{"ok":true}' }),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("PASEO_AGENT_ID", "");
+    vi.stubEnv("PASEO_WORKSPACE_ID", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.mocked(connectToDaemon).mockReset();
+  });
+
+  it.each([
+    { structured: false, thinking: undefined, expected: "high" },
+    { structured: true, thinking: undefined, expected: "high" },
+    { structured: false, thinking: " low ", expected: "low" },
+    { structured: true, thinking: " low ", expected: "low" },
+  ])(
+    "passes resolved workspace and effort to creation (structured=$structured, thinking=$thinking)",
+    async ({ structured, thinking, expected }) => {
+      const client = createClient();
+      vi.mocked(connectToDaemon).mockResolvedValue(
+        client as unknown as Awaited<ReturnType<typeof connectToDaemon>>,
+      );
+
+      const result = await runRunCommand(
+        "do something",
+        {
+          daemonTarget,
+          provider: "custom/chosen-model",
+          workspace: "workspace-2",
+          cwd: "/workspace/requested",
+          thinking,
+          wait: structured,
+          outputSchema: structured ? JSON.stringify(outputSchema) : undefined,
+        },
+        {} as never,
+      );
+
+      expect(connectToDaemon).toHaveBeenCalledExactlyOnceWith({ target: daemonTarget });
+      expect(client.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({
+        filter: { query: "workspace-2" },
+        page: { limit: 200 },
+      });
+      if (thinking === undefined) {
+        expect(client.listProviderModels).toHaveBeenCalledExactlyOnceWith("custom", {
+          cwd: "/workspace/resolved",
+        });
+      } else {
+        expect(client.listProviderModels).not.toHaveBeenCalled();
+      }
+      expect(client.createAgent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          provider: "custom",
+          model: "chosen-model",
+          cwd: "/workspace/resolved",
+          workspaceId: "workspace-2",
+          thinkingOptionId: expected,
+        }),
+      );
+      if (structured) {
+        expect(client.createAgent).toHaveBeenCalledWith(expect.objectContaining({ outputSchema }));
+        expect(client.waitForFinish).toHaveBeenCalledExactlyOnceWith("created-agent", 0);
+        expect(result.schema.serialize?.(result.data)).toEqual({ ok: true });
+      } else {
+        expect(client.createAgent).toHaveBeenCalledWith(
+          expect.objectContaining({ initialPrompt: "do something" }),
+        );
+        expect(client.waitForFinish).not.toHaveBeenCalled();
+      }
+      expect(result.data.agentId).toBe("created-agent");
+      expect(client.close).toHaveBeenCalledExactlyOnceWith();
+    },
+  );
+
+  it.each([false, true])(
+    "catalog failure prevents creation and closes the client (structured=%s)",
+    async (structured) => {
+      const client = createClient();
+      client.listProviderModels.mockResolvedValue({ error: "Catalog unavailable" });
+      vi.mocked(connectToDaemon).mockResolvedValue(
+        client as unknown as Awaited<ReturnType<typeof connectToDaemon>>,
+      );
+
+      await expect(
+        runRunCommand(
+          "do something",
+          {
+            daemonTarget,
+            provider: "custom/chosen-model",
+            workspace: "workspace-2",
+            cwd: "/workspace/requested",
+            wait: structured,
+            outputSchema: structured ? JSON.stringify(outputSchema) : undefined,
+          },
+          {} as never,
+        ),
+      ).rejects.toMatchObject({ code: "PROVIDER_ERROR", message: "Catalog unavailable" });
+
+      expect(connectToDaemon).toHaveBeenCalledExactlyOnceWith({ target: daemonTarget });
+      expect(client.listProviderModels).toHaveBeenCalledExactlyOnceWith("custom", {
+        cwd: "/workspace/resolved",
+      });
+      expect(client.createAgent).not.toHaveBeenCalled();
+      expect(client.waitForFinish).not.toHaveBeenCalled();
+      expect(client.close).toHaveBeenCalledExactlyOnceWith();
+    },
+  );
 });
