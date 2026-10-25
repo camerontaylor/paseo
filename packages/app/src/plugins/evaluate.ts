@@ -530,7 +530,7 @@ export function runPluginClientBundle(
     if (sdkEntry === "") return pluginSharedRuntime;
     if (sdkEntry === "/client") return clientRuntime;
     if (sdkEntry === "/client/react-native") {
-      return pluginReactNativeRuntime;
+      return pluginReactNativeCompatRuntime;
     }
     if (name === "@tanstack/react-query") return ReactQuery;
     if (name === "zod") return Zod;

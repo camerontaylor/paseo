@@ -47,8 +47,6 @@ function sidePaneId(): string | null {
 beforeEach(() => {
   usePanelStore.setState({
     mobilePanel: { target: "agent", revision: 0 },
-    explorerTab: "files",
-    explorerTabByCheckout: {},
   });
   useWorkspaceLayoutStore.setState({
     layoutMode: "split-panes",

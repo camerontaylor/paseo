@@ -4,6 +4,18 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.13.0 base decision — 2026-10-25
+
+Advance `custom` from `v0.12.0` to upstream stable `v0.13.0` (`d34d17a90`).
+Thirteen conflicts, all import or union shaped: keep the fork's plugin SDK
+alias mapping and side-conversation rows, adopt upstream's plural
+`projectAgentMessages`, `SubagentRow.address` and `pickRelayPatch`, and keep
+upstream's `pluginReactNativeEntrypoint` compat entry annotated in the derived
+SDK specifier list. Upstream removed the WebView terminal renderer; the fork's
+terminal selection tests merge without a textual conflict, so re-run the native
+selection suite rather than trusting the merge. The Desvio base moves with this
+decision; rebuild the basket before publishing or deploying.
+
 ## 0.12.0 base decision — 2026-10-20
 
 Advance the preserved beta.3 custom merge to upstream stable `v0.12.0`
