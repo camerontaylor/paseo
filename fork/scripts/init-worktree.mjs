@@ -181,6 +181,7 @@ function checkNodeVersion() {
   const [runningMajor] = running.split(".");
 
   if (pinnedMajor !== runningMajor) {
+    reexecUnderPinnedNode(pinned);
     fail(
       `node ${running} does not match the pinned major ${pinned} (.tool-versions).\n` +
         "  Run `mise install` in the worktree, or re-run under the pinned toolchain.",
@@ -188,6 +189,58 @@ function checkNodeVersion() {
   }
 
   console.log(`  Tools:   node ${running} (pinned ${pinned}, same major)`);
+}
+
+// The daemon runs setup with the PATH it started under, where mise's global node sits ahead
+// of the shims, so the worktree's .tool-versions pin never takes effect. When mise already
+// has the pinned node installed, re-run this script under it with its bin dir first on PATH,
+// so the npm and node children use it too. Returns only when that is not possible.
+function reexecUnderPinnedNode(pinned) {
+  if (isWindows || process.env.PASEO_INIT_WORKTREE_REEXEC) {
+    return;
+  }
+
+  const mise = findMise();
+  if (!mise) {
+    return;
+  }
+
+  const where = spawnSync(mise, ["where", `node@${pinned}`], {
+    cwd: targetRoot,
+    encoding: "utf8",
+  });
+  const binDir = where.status === 0 ? join(where.stdout.trim(), "bin") : null;
+  const node = binDir ? join(binDir, "node") : null;
+  if (!node || !existsSync(node)) {
+    return;
+  }
+
+  console.log(`  Tools:   node ${process.versions.node}, re-running under pinned ${pinned}`);
+  const result = spawnSync(node, process.argv.slice(1), {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      PASEO_INIT_WORKTREE_REEXEC: "1",
+    },
+  });
+  process.exit(result.status ?? 1);
+}
+
+// Same lookup as scripts/worktree-trust-mise.sh: a bare systemd unit may not have mise on PATH.
+function findMise() {
+  if (spawnSync("mise", ["--version"], { stdio: "ignore" }).status === 0) {
+    return "mise";
+  }
+  for (const candidate of [
+    process.env.MISE_INSTALL_PATH,
+    join(process.env.HOME ?? "", ".local/bin/mise"),
+  ]) {
+    if (candidate && existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function readToolVersion(tool) {
