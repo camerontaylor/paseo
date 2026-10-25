@@ -11,8 +11,10 @@ function connection(
     broadcasts?: boolean;
     browserHost?: { hostKind: string; supportedCommands: string[] };
     acknowledgeTimelineReads?: boolean;
+    sideConversationEvents?: boolean;
   } = {},
 ) {
+  let sideConversationEvents = options.sideConversationEvents ?? false;
   const sent: Array<{
     type: string;
     capabilities?: Record<string, unknown>;
@@ -47,6 +49,7 @@ function connection(
                   workspaceMultiplicity: options.workspaceMultiplicity ?? true,
                   selectiveAgentTimeline: !options.broadcasts,
                   explicitEventSubscriptions: !options.broadcasts,
+                  ...(sideConversationEvents ? { sideConversationEvents: true } : {}),
                 },
               },
             },
@@ -132,6 +135,9 @@ function connection(
     open: () => open(),
     disconnect: () => closed(),
     receive: (message: unknown) => receive(JSON.stringify({ type: "session", message })),
+    setSideConversationEvents: (value: boolean) => {
+      sideConversationEvents = value;
+    },
   };
 }
 
@@ -147,6 +153,110 @@ test("a plain client advertises every protocol capability and no browser host", 
     expect(h.sent[0].capabilities).toEqual(
       Object.fromEntries(Object.values(protocolCapabilities).map((key) => [key, true])),
     );
+  } finally {
+    await h.client.close();
+  }
+});
+
+function eventSubscriptionRequests(h: ReturnType<typeof connection>): string[][] {
+  return h.sent
+    .filter((frame) => frame.message?.type === "session.events.set_subscription.request")
+    .map((frame) => frame.message?.events ?? []);
+}
+
+test("event subscriptions drop selectors the host does not advertise", async () => {
+  const h = connection();
+  try {
+    const ready = h.client.connect();
+    h.open();
+    await ready;
+
+    const observation = h.client.observeEvents([
+      "project.update",
+      "agent.side_conversation.update",
+      "agent.side_conversation.removed",
+    ]);
+    await observation.ready;
+
+    // A daemon without the feature must never parse a selector it does not know.
+    expect(eventSubscriptionRequests(h)).toEqual([["project.update"]]);
+    await observation.release();
+  } finally {
+    await h.client.close();
+  }
+});
+
+test("event subscriptions keep fork selectors a capable host advertises", async () => {
+  const h = connection({ sideConversationEvents: true });
+  try {
+    const ready = h.client.connect();
+    h.open();
+    await ready;
+
+    const observation = h.client.observeEvents([
+      "project.update",
+      "agent.side_conversation.update",
+      "agent.side_conversation.removed",
+    ]);
+    await observation.ready;
+
+    expect(eventSubscriptionRequests(h)).toEqual([
+      ["project.update", "agent.side_conversation.update", "agent.side_conversation.removed"],
+    ]);
+    await observation.release();
+  } finally {
+    await h.client.close();
+  }
+});
+
+test("a subscription registered before the handshake sends only supported selectors", async () => {
+  const h = connection();
+  try {
+    const connecting = h.client.connect();
+    // Registered while the handshake is still in flight: the first send must already respect
+    // the features the host advertises, because that handshake lands before the registration
+    // starts.
+    const observation = h.client.observeEvents([
+      "project.update",
+      "agent.side_conversation.update",
+    ]);
+    h.open();
+    await connecting;
+    await observation.ready;
+
+    expect(eventSubscriptionRequests(h)).toEqual([["project.update"]]);
+    await observation.release();
+  } finally {
+    await h.client.close();
+  }
+});
+
+test("a downgrade reconnect drops fork selectors and keeps ordinary ones", async () => {
+  const h = connection({ sideConversationEvents: true });
+  try {
+    const ready = h.client.connect();
+    h.open();
+    await ready;
+    const observation = h.client.observeEvents([
+      "project.update",
+      "agent.side_conversation.removed",
+    ]);
+    await observation.ready;
+
+    // The host comes back older: the restore must filter against the new handshake, not the
+    // selector list as it was first sent.
+    h.setSideConversationEvents(false);
+    h.disconnect();
+    const reconnecting = h.client.connect();
+    h.open();
+    await reconnecting;
+
+    await expect.poll(() => eventSubscriptionRequests(h).length).toBe(2);
+    expect(eventSubscriptionRequests(h)).toEqual([
+      ["project.update", "agent.side_conversation.removed"],
+      ["project.update"],
+    ]);
+    await observation.release();
   } finally {
     await h.client.close();
   }
