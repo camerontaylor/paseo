@@ -35,6 +35,18 @@ active-query reuse and additive Usage snapshots. Rebuild the accepted beta.1
 basket separately, retiring carries only after proving upstream equivalence.
 Publication and host deployment remain gated by the fleet release cycle.
 
+## 0.13.0 same-base rebuild: tree-kill carry — 2026-10-25
+
+No new upstream tag: `v0.13.0` was already merged into `custom`. Rebuild
+`mine` on the same base to ship the new basket carry
+`fix/tree-kill-spare-detached` (upstream #7843, 402d083f5e). Paseo tree-killed
+a shared `jcode serve` whenever one ACP adapter (including the short-lived
+history-resume adapter) closed, failing every other jcode agent with
+`Jcode daemon disconnected` / `Broken pipe (os error 32)`. The carry makes
+tree-kill spare `setsid` descendants. This cycle syncs with `origin/custom`
+(which carries the `fork/repros/tree-kill-detached` harness) and gates a new
+`0.13.0-mine.<stamp>`; the pluto canary also runs that harness.
+
 ## 0.11.2 base decision — 2026-10-11
 
 Advance `custom` and the Desvio base to upstream `v0.11.2`, the newest

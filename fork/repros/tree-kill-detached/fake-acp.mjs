@@ -62,6 +62,8 @@ async function ensureServer() {
 
 const input = Writable.toWeb(process.stdout);
 const output = Readable.toWeb(process.stdin);
+// The connection drives itself from stdin; constructing it is the whole point.
+// oxlint-disable-next-line eslint/no-new
 new AgentSideConnection((conn) => ({
   async initialize() {
     return { protocolVersion: 1, agentCapabilities: { loadSession: false }, authMethods: [] };

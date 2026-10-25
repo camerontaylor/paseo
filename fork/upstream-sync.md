@@ -99,6 +99,17 @@ direction for a security default and a miserable thing to debug from the symptom
 schema at runtime and asserts every type is authorized. It is the cheapest guard
 against this whole class. Run it on any sync.
 
+**Worktree dependencies can be stale.** `init-worktree` in link mode shares the
+source checkout's `node_modules`; when the shared checkout's lockfile is older
+than the worktree's, typecheck fails on unrelated packages (the 2026-10-25
+cycle saw `commander` typings from a v0.11.2 install). Use `--mode=install`
+for a release gate, and `trash` the linked `node_modules` dirs first so
+`npm ci` cannot write through the symlinks into the shared checkout.
+
+**Fork-only files still get linted.** `lint` covers `fork/`; the repro
+harness landed on `custom` with a `no-new` error that only the next sync's
+gate caught. Run `npm run lint` after adding anything under `fork/`.
+
 ## Where the evidence goes stale
 
 A feature branch's own "all suites green" note is scoped to the base it was written
