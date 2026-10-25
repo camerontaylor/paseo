@@ -370,6 +370,136 @@ describe("toAgentPayload", () => {
     });
   });
 
+  it("omits accumulated async question records from wire persistence", () => {
+    const questions = [
+      {
+        id: "q-1",
+        prompt: "Which module should be read next?",
+        answers: [{ id: "a-1", text: "src/index.ts" }],
+      },
+    ];
+    const agent = createManagedAgent({
+      provider: "codex",
+      config: { provider: "codex" },
+      persistence: {
+        provider: "codex",
+        sessionId: "persist-questions",
+        metadata: {
+          conversationId: "conversation-questions",
+          asyncQuestions: questions,
+        },
+      },
+    });
+
+    const payload = toAgentPayload(agent);
+
+    expect(payload.persistence).toEqual({
+      provider: "codex",
+      sessionId: "persist-questions",
+      metadata: { conversationId: "conversation-questions" },
+    });
+    expect(agent.persistence?.metadata?.asyncQuestions).toEqual(questions);
+
+    const record = toStoredAgentRecord(agent);
+    expect(record.persistence?.metadata?.asyncQuestions).toEqual(questions);
+    expect(buildStoredAgentPayload(record, ["codex"]).persistence?.metadata).toEqual({
+      conversationId: "conversation-questions",
+    });
+  });
+
+  it("drops persistence metadata that only held async question records", () => {
+    const payload = toAgentPayload(
+      createManagedAgent({
+        provider: "codex",
+        config: { provider: "codex" },
+        persistence: {
+          provider: "codex",
+          sessionId: "persist-questions-only",
+          metadata: { asyncQuestions: [{ id: "q-only" }] },
+        },
+      }),
+    );
+
+    expect(payload.persistence).toEqual({
+      provider: "codex",
+      sessionId: "persist-questions-only",
+    });
+  });
+
+  it("trims mixed resume metadata without changing pending questions or retained stream facts", () => {
+    const permission = createPermission({ provider: "codex", kind: "question" });
+    const agent = createManagedAgent({
+      provider: "codex",
+      config: { provider: "codex" },
+      pendingPermissions: new Map([[permission.id, permission]]),
+      persistence: {
+        provider: "codex",
+        sessionId: "mixed-resume",
+        nativeHandle: { threadId: "native-thread" },
+        metadata: {
+          asyncQuestions: [{ id: "question-log", resolution: ["synthetic answer"] }],
+          mcpServers: { hub: { type: "http", url: "https://hub.test/mcp" } },
+          conversationId: "conversation-mixed",
+          unrelated: { retained: true },
+        },
+      },
+      artifacts: [
+        {
+          path: "/tmp/report.md",
+          name: "report.md",
+          kind: "markdown",
+          mimeType: "text/markdown",
+          size: 12,
+          createdAt: "2025-01-01T00:00:00.000Z",
+          updatedAt: "2025-01-01T00:00:00.000Z",
+        },
+      ],
+      companionEntries: [
+        {
+          id: "question:retained",
+          kind: "question",
+          text: "Keep this question?",
+          status: "open",
+          timestamp: "2025-01-01T00:00:00.000Z",
+          truncated: false,
+        },
+      ],
+    });
+    const originalPersistence = structuredClone(agent.persistence);
+    const record = toStoredAgentRecord(agent);
+    const originalRecord = structuredClone(record);
+    const payload = toAgentPayload(agent);
+    const storedPayload = buildStoredAgentPayload(record, ["codex"]);
+    const expectedPersistence = {
+      provider: "codex",
+      sessionId: "mixed-resume",
+      nativeHandle: { threadId: "native-thread" },
+      metadata: { conversationId: "conversation-mixed", unrelated: { retained: true } },
+    };
+
+    expect(payload.persistence).toEqual(expectedPersistence);
+    expect(storedPayload.persistence).toEqual(expectedPersistence);
+    expect(payload.pendingPermissions).toEqual([
+      {
+        ...permission,
+        input: { command: "ls" },
+        metadata: { requestedAt: "2025-02-01T12:00:00.000Z" },
+      },
+    ]);
+    expect(storedPayload.pendingPermissions).toEqual([]);
+    expect(payload.artifacts).toEqual(agent.artifacts);
+    expect(storedPayload.artifacts).toEqual(agent.artifacts);
+    expect(payload.companionEntries).toEqual(agent.companionEntries);
+    expect(storedPayload.companionEntries).toEqual(agent.companionEntries);
+    expect(record.artifacts).toEqual(agent.artifacts);
+    expect(record.companionEntries).toEqual(agent.companionEntries);
+    expect(agent.persistence).toEqual(originalPersistence);
+    expect(record).toEqual(originalRecord);
+    payload.persistence!.metadata!.conversationId = "wire-mutation";
+    expect(agent.persistence).toEqual(originalPersistence);
+    expect(record).toEqual(originalRecord);
+  });
+
   it("strips MCP metadata from stored wire payloads while preserving private persistence", () => {
     const record = toStoredAgentRecord(
       createManagedAgent({

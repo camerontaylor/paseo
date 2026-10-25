@@ -1,0 +1,15 @@
+{
+  "agentId": "12345678-1234-4123-8123-123456789abc",
+  "revision": 1,
+  "items": [
+    {
+      "id": "pending-copy-1",
+      "text": "keep this queued prompt",
+      "intent": "queue",
+      "deliveryState": "pending",
+      "attempts": 0,
+      "attemptSeq": 0,
+      "createdAt": "2026-10-08T00:00:00.000Z"
+    }
+  ]
+}

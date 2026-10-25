@@ -13,6 +13,7 @@ import { DaemonLinkEndpoint, VirtualHostSocket } from "./connected-hosts/index.j
 import { ConnectedHosts } from "./connected-hosts/index.js";
 import { stat } from "node:fs/promises";
 import type { CreationSnapshot } from "@getpaseo/protocol/messages";
+import type { AgentQueueService } from "./agent-queue/service.js";
 import { CreationService } from "./creation/index.js";
 import { MessageReceipts } from "./message-receipts/index.js";
 import { WebSocket, WebSocketServer } from "ws";
@@ -30,7 +31,11 @@ import type { ProjectRegistry, WorkspaceRegistry } from "./workspace-registry.js
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
 import type { ScheduleService } from "./schedule/service.js";
 import type { CheckoutDiffManager, CheckoutDiffMetrics } from "./checkout-diff-manager.js";
-import type { DaemonConfigStore, MutableDaemonConfig } from "./daemon-config-store.js";
+import type {
+  DaemonConfigStore,
+  MutableDaemonConfig,
+  ProviderRename,
+} from "./daemon-config-store.js";
 import {
   type ServerInfoStatusPayload,
   type ScriptStatusUpdateMessage,
@@ -394,6 +399,11 @@ function resolveCapabilityReason(params: {
   return state.message;
 }
 
+/** Collapses an optional injected subsystem to its settled nullable form. */
+function nullable<T>(value?: T | null): T | null {
+  return value ?? null;
+}
+
 function buildServerCapabilities(params: {
   readiness: SpeechReadinessSnapshot | null;
 }): ServerCapabilities | undefined {
@@ -480,6 +490,7 @@ type SessionConnection = ReconnectableSessionConnection | PluginSessionConnectio
 interface SocketSessionOptions {
   sourceId?: string;
   clientId: string;
+  principalId: string;
   appVersion: string | null;
   clientCapabilities: Record<string, unknown> | null;
   permissions: readonly DaemonPermission[];
@@ -594,7 +605,18 @@ export class VoiceAssistantWebSocketServer {
   private dictation!: {
     finalTimeoutMs?: number;
   } | null;
-  private readonly voiceSpeakHandlers = new Map<string, VoiceSpeakHandler>();
+  private readonly voiceSpeakHandlers = new Map<
+    string,
+    {
+      principalId: string;
+      clientId: string;
+      attachmentId: string;
+      generation: string;
+      handler: VoiceSpeakHandler;
+      revoke: () => void;
+    }
+  >();
+  private readonly spokenTurns = new Map<string, string>();
   private readonly voiceCallerContexts = new Map<string, VoiceCallerContext>();
   private readonly workspaceSetupObservation = new WorkspaceSetupObservation();
   private readonly workspaceSetupRuntime: WorkspaceSetupRuntime;
@@ -612,6 +634,12 @@ export class VoiceAssistantWebSocketServer {
   private eventLoopDelayMonitor: ReturnType<typeof monitorEventLoopDelay> | null = null;
   private unsubscribeSpeechReadiness: (() => void) | null = null;
   private unsubscribeDaemonConfigChange: (() => void) | null = null;
+  /**
+   * Serializes persisted-agent migrations across config changes. Two renames that overlap can
+   * strand a record: an A to B migration that is still writing when B to C runs finds no B
+   * records, and the first migration then persists B after configuration already says C.
+   */
+  private providerRenameMigration: Promise<void> = Promise.resolve();
   private unsubscribeTerminalActivity: (() => void) | null = null;
   private readonly browserToolsBroker: BrowserToolsBroker | null;
   private readonly hubRelationships: HubRelationshipManagement | null;
@@ -621,6 +649,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly directorySync = new DirectorySyncService();
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
+  private readonly agentQueueService: AgentQueueService | null;
 
   private async validateCompletedCreation(snapshot: CreationSnapshot): Promise<void> {
     if (snapshot.workspace && snapshot.kind === "workspace") {
@@ -641,6 +670,8 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
+  // Wiring every subsystem is one long decision list by nature.
+  // oxlint-disable-next-line complexity
   constructor(
     server: HTTPServer,
     logger: pino.Logger,
@@ -688,6 +719,7 @@ export class VoiceAssistantWebSocketServer {
     pluginRuntime?: SessionOptions["pluginRuntime"],
     orchestrationSkills?: SessionOptions["orchestrationSkills"],
     workspaceLabelService?: WorkspaceLabelService,
+    agentQueueService?: AgentQueueService | null,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
@@ -705,6 +737,7 @@ export class VoiceAssistantWebSocketServer {
     this.hubRelationships = hubRelationships ?? null;
     this.pluginRuntime = pluginRuntime;
     this.orchestrationSkills = orchestrationSkills;
+    this.agentQueueService = nullable(agentQueueService);
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.agentMessages = createAgentMessageDelivery({
@@ -733,6 +766,9 @@ export class VoiceAssistantWebSocketServer {
         ),
     });
     this.messageReceipts = new MessageReceipts(join(paseoHome, "agent-requests"));
+    // The queue's drains and the legacy send path share one receipt owner, so a
+    // spoken item's acceptance is readable through the same records.
+    this.agentQueueService?.setMessageReceipts(this.messageReceipts);
     this.creationService = new CreationService(
       join(paseoHome, "creations"),
       this.logger.child({ module: "creation" }),
@@ -787,8 +823,14 @@ export class VoiceAssistantWebSocketServer {
       providerSnapshotManager: this.providerSnapshotManager,
       updateProviderRegistry: (state) => this.agentManager.updateProviderRegistry(state),
     });
-    const unsubscribeChange = this.daemonConfigStore.onChange((config) => {
+    const unsubscribeChange = this.daemonConfigStore.onChange((config, details) => {
+      // Live agents move first: the registry already knows the new id, and repointing them
+      // before storage means a persistence flush can't write the old id back.
+      for (const rename of details.renamedProviders) {
+        this.agentManager.renameProviderOnLiveAgents(rename.from, rename.to);
+      }
       this.broadcastDaemonConfigChanged(config);
+      this.enqueueProviderRenameMigration([...details.renamedProviders]);
     });
     this.unsubscribeDaemonConfigChange = () => {
       unsubscribeProviderConfig();
@@ -1140,6 +1182,8 @@ export class VoiceAssistantWebSocketServer {
     this.unsubscribeSpeechReadiness = null;
     this.unsubscribeDaemonConfigChange?.();
     this.unsubscribeDaemonConfigChange = null;
+    // Drain queued migrations so a pending rename cannot write storage after teardown.
+    await this.providerRenameMigration;
     this.unsubscribeTerminalActivity?.();
     this.unsubscribeTerminalActivity = null;
     if (this.runtimeMetricsInterval) {
@@ -1215,22 +1259,24 @@ export class VoiceAssistantWebSocketServer {
     this.wss.close();
   }
 
-  private sendToClient(ws: WebSocketLike, message: WSOutboundMessage): void {
-    this.sendMessageToSockets([ws], message, true);
+  private sendToClient(ws: WebSocketLike, message: WSOutboundMessage): boolean {
+    return this.sendMessageToSockets([ws], message, true) > 0;
   }
 
+  /** Returns the number of sockets the frame was handed to. */
   private sendMessageToSockets(
     sockets: Iterable<WebSocketLike>,
     message: WSOutboundMessage,
     reportRejection = false,
-  ): void {
+  ): number {
     const prepared = this.prepareJsonDelivery(sockets, message, reportRejection);
-    if (!prepared) return;
+    if (!prepared) return 0;
     for (const ws of prepared.sockets) {
       this.sendFrameToClient(ws, prepared.payload, prepared.bytes, () => {
         this.runtimeMetrics.recordOutboundMessage(message, ws.bufferedAmount);
       });
     }
+    return prepared.sockets.length;
   }
 
   private prepareJsonDelivery(
@@ -1396,8 +1442,8 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
-  private sendToConnection(connection: SessionConnection, message: WSOutboundMessage): void {
-    this.sendMessageToSockets(connection.sockets, message);
+  private sendToConnection(connection: SessionConnection, message: WSOutboundMessage): boolean {
+    return this.sendMessageToSockets(connection.sockets, message) > 0;
   }
 
   private sendBinaryToConnection(connection: SessionConnection, frame: Uint8Array): void {
@@ -1486,6 +1532,7 @@ export class VoiceAssistantWebSocketServer {
 
     const session = this.createSocketSession({
       clientId,
+      principalId: admission.principalId,
       appVersion,
       clientCapabilities,
       permissions: admission.permissions,
@@ -1498,7 +1545,10 @@ export class VoiceAssistantWebSocketServer {
         if (!connection) {
           return;
         }
-        this.sendToConnection(connection, wrapSessionMessage(msg));
+        const sent = this.sendToConnection(connection, wrapSessionMessage(msg));
+        if (msg.type === "audio_output" && !sent) {
+          throw new Error("Voice output has no connected client");
+        }
       },
       onMessageToSource: async (source, msg) => {
         if (!connection || !connection.sockets.has(source as WebSocketLike)) {
@@ -1576,6 +1626,8 @@ export class VoiceAssistantWebSocketServer {
       sourceId: options.sourceId,
       browserToolsBroker: this.browserToolsBroker,
       clientId: options.clientId,
+      /** Voice receipt reads are scoped to the principal/client pair that spoke. */
+      voiceOwner: JSON.stringify([options.principalId, options.clientId]),
       appVersion: options.appVersion,
       clientCapabilities: options.clientCapabilities,
       permissions: options.permissions,
@@ -1600,6 +1652,7 @@ export class VoiceAssistantWebSocketServer {
       worktreesRoot: this.worktreesRoot,
       agentManager: this.agentManager,
       agentStorage: this.agentStorage,
+      agentQueueService: this.agentQueueService ?? undefined,
       messageReceipts: this.messageReceipts,
       agentMessages: this.agentMessages,
       creationService: this.creationService,
@@ -1637,20 +1690,48 @@ export class VoiceAssistantWebSocketServer {
         turnDetection: () => this.speech?.resolveTurnDetection() ?? null,
       },
       voiceBridge: {
-        registerVoiceSpeakHandler: (agentId, handler) => {
-          if (this.voiceSpeakHandlers.has(agentId))
-            throw new Error("Voice mode is already active for this agent");
-          this.voiceSpeakHandlers.set(agentId, handler);
+        registerVoiceSpeakHandler: (agentId, attachmentId, handler, revoke) => {
+          const previous = this.voiceSpeakHandlers.get(agentId);
+          if (
+            previous &&
+            (previous.principalId !== options.principalId ||
+              previous.clientId !== options.clientId ||
+              previous.attachmentId !== attachmentId)
+          )
+            throw new Error("Voice mode is already active for this agent on another device");
+          const generation = randomUUID();
+          this.voiceSpeakHandlers.set(agentId, {
+            principalId: options.principalId,
+            clientId: options.clientId,
+            attachmentId,
+            generation,
+            handler,
+            revoke,
+          });
+          previous?.revoke();
+          return generation;
         },
-        unregisterVoiceSpeakHandler: (agentId) => {
-          this.voiceSpeakHandlers.delete(agentId);
+        unregisterVoiceSpeakHandler: (agentId, generation) => {
+          if (this.voiceSpeakHandlers.get(agentId)?.generation === generation) {
+            this.voiceSpeakHandlers.delete(agentId);
+          }
         },
-        registerVoiceCallerContext: (agentId, context) => {
-          this.voiceCallerContexts.set(agentId, context);
+        registerVoiceCallerContext: (agentId, generation, context) => {
+          if (this.voiceSpeakHandlers.get(agentId)?.generation === generation) {
+            this.voiceCallerContexts.set(agentId, context);
+          }
         },
-        unregisterVoiceCallerContext: (agentId) => {
-          this.voiceCallerContexts.delete(agentId);
+        unregisterVoiceCallerContext: (agentId, generation) => {
+          if (
+            !this.voiceSpeakHandlers.has(agentId) ||
+            this.voiceSpeakHandlers.get(agentId)?.generation === generation
+          ) {
+            this.voiceCallerContexts.delete(agentId);
+          }
         },
+        hasSpokenInTurn: (agentId, turnId) => this.spokenTurns.get(agentId) === turnId,
+        isCurrent: (agentId, generation) =>
+          this.voiceSpeakHandlers.get(agentId)?.generation === generation,
       },
       dictation:
         this.dictation || this.speech
@@ -1965,6 +2046,8 @@ export class VoiceAssistantWebSocketServer {
         workspaceSetupObservation: true,
         workspaceSortTimes: true,
         // COMPAT(providersSnapshot): keep optional until all clients rely on snapshot flow.
+        // COMPAT(checkoutBaseRefSet): added in fork v0.10.1, remove after 2027-09-30 when the supported daemon floor advertises it.
+        checkoutBaseRefSet: true,
         providersSnapshot: true,
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: true,
@@ -1988,6 +2071,8 @@ export class VoiceAssistantWebSocketServer {
         // and legacy fallback after 2027-01-17 once the supported daemon floor
         // is >= v0.2.0.
         forgeSearch: true,
+        // COMPAT(forgeSearchChecks): added in v0.10.1-fork, remove after 2027-09-30.
+        forgeSearchChecks: true,
         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
         ...(this.advertiseDaemonStatusRpc ? { daemonStatusRpc: true } : {}),
         // COMPAT(daemonConfigReload): added in v0.4.0, remove gate after 2027-02-14.
@@ -2016,12 +2101,21 @@ export class VoiceAssistantWebSocketServer {
         // COMPAT(terminalSizeOwnership): added in v0.2.6, remove gate after 2027-02-02.
         "terminal-size-ownership": true,
         workspaceTerminals: true,
+        packageJsonScripts: true,
         // COMPAT(rewind): added in v0.1.X, drop the gate when floor >= v0.1.X.
         rewind: true,
         // COMPAT(agentTimelinePromptIndex): added in v0.2.X, drop the gate when floor >= v0.2.X.
         agentTimelinePromptIndex: true,
         // COMPAT(agentHistorySearch): added in v0.3.0, remove gate after 2027-02-07.
         agentHistorySearch: true,
+        // COMPAT(durableAgentQueue): added in 0.11.0-beta.3.fork.1, fork-only —
+        // stock peers never gain it, so the gate lasts as long as stock peers
+        // are supported. Gates the agent.queue.* surface end to end.
+        durableAgentQueueV1: true,
+        // COMPAT(durableVoiceInputV1): added in TM-04 on 2026-10-08. Keep
+        // the gate while stock peers are supported. This contract adapts source
+        // voiceConcurrentInput to TM-02 admission and receipt reconciliation.
+        durableVoiceInputV1: this.agentQueueService !== null,
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
         checkoutRefresh: true,
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
@@ -2040,6 +2134,8 @@ export class VoiceAssistantWebSocketServer {
         workspaceFileEditing: true,
         // COMPAT(fileByteWrites): added in v0.13.0, remove gate after 2027-04-20.
         fileByteWrites: true,
+        // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+        companionStreamPortV1: true,
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: true,
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
@@ -2083,6 +2179,10 @@ export class VoiceAssistantWebSocketServer {
         // COMPAT(providerRemoval): added in v0.1.105, drop the gate when floor >= v0.1.105.
         providerRemoval: true,
         hopliteProvider: this.providerSnapshotManager.supportsConfigRequiredProvider("hoplite"),
+        // COMPAT(providerConfigReplace): added in v0.2.X, remove after 2027-02-02 when old daemons are unsupported.
+        providerConfigReplace: true,
+        // COMPAT(providerConfigRename): added in v0.2.X, remove after 2027-02-02 when old daemons are unsupported.
+        providerConfigRename: true,
         // COMPAT(importSessionWorkspaceTarget): added in v0.1.110, remove gate after 2027-01-16.
         importSessionWorkspaceTarget: true,
         // COMPAT(importSessionSearch): added in v0.7.3, remove gate after 2027-03-02.
@@ -2153,6 +2253,47 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
+  /**
+   * Storage migration is async, so it runs after the config broadcast. Clients get a second
+   * `daemon_config_changed` once records have moved, which is what makes them refetch the
+   * agent list and see the migrated agents under the new provider id.
+   */
+  private enqueueProviderRenameMigration(renames: readonly ProviderRename[]): void {
+    if (renames.length === 0) {
+      return;
+    }
+    // The stored tail stays settled on failure so one bad migration cannot wedge the ones
+    // queued behind it. Per-rename failures are isolated inside migrateRenamedProviders.
+    this.providerRenameMigration = this.providerRenameMigration
+      .then(() => this.migrateRenamedProviders(renames))
+      .catch((error) => {
+        this.logger.error({ err: error }, "Provider rename migration chain failed");
+      });
+  }
+
+  private async migrateRenamedProviders(renames: readonly ProviderRename[]): Promise<void> {
+    if (renames.length === 0) {
+      return;
+    }
+    let migratedAny = false;
+    for (const rename of renames) {
+      try {
+        const migrated = await this.agentStorage.renameProvider(rename.from, rename.to);
+        migratedAny ||= migrated.length > 0;
+      } catch (err) {
+        this.logger.error(
+          { err, fromProviderId: rename.from, toProviderId: rename.to },
+          "Failed to migrate agent records for renamed provider",
+        );
+      }
+    }
+    if (migratedAny) {
+      // Read the store at completion: a change that landed while the migration ran already
+      // broadcast its own config, and republishing the captured one would supersede it.
+      this.broadcastDaemonConfigChanged(this.daemonConfigStore.get());
+    }
+  }
+
   private broadcastDaemonConfigChanged(config: MutableDaemonConfig): void {
     this.broadcast(this.createDaemonConfigChangedMessage(config));
   }
@@ -2184,7 +2325,10 @@ export class VoiceAssistantWebSocketServer {
   }
 
   public resolveVoiceSpeakHandler(callerAgentId: string): VoiceSpeakHandler | null {
-    return this.voiceSpeakHandlers.get(callerAgentId) ?? null;
+    // Record actual tool invocation even while detached, so reconnect cannot read it twice.
+    const turnId = this.agentManager.getAgent(callerAgentId)?.activeForegroundTurnId;
+    if (turnId) this.spokenTurns.set(callerAgentId, turnId);
+    return this.voiceSpeakHandlers.get(callerAgentId)?.handler ?? null;
   }
 
   public resolveVoiceCallerContext(callerAgentId: string): VoiceCallerContext | null {
@@ -2927,8 +3071,7 @@ export class VoiceAssistantWebSocketServer {
       nowMs,
     });
 
-    const title = terminalAttentionTitle(params.reason);
-    const body = params.terminalName;
+    const { title, body } = this.terminalAttentionCopy(params);
 
     if (plan.shouldPush) {
       void this.pushNotificationSender
@@ -2971,6 +3114,26 @@ export class VoiceAssistantWebSocketServer {
         this.sessions.get(ws)!.session.publishToSource(ws, message.message);
       else this.sendToClient(ws, message);
     }
+  }
+
+  private terminalAttentionCopy(params: {
+    terminalId: string;
+    workspaceId?: string;
+    terminalName: string;
+    reason: TerminalAttentionReason;
+  }): { title: string; body: string } {
+    const script = params.workspaceId
+      ? this.scriptRuntimeStore
+          ?.listForWorkspace(params.workspaceId)
+          .find((entry) => entry.terminalId === params.terminalId && entry.type === "script")
+      : null;
+    if (script?.lifecycle === "stopped" && params.reason === "finished") {
+      return {
+        title: script.exitCode === 0 ? "Script finished" : "Script failed",
+        body: `${params.terminalName} (exit ${script.exitCode ?? "unknown"})`,
+      };
+    }
+    return { title: terminalAttentionTitle(params.reason), body: params.terminalName };
   }
 }
 
