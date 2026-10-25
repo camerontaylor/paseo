@@ -407,8 +407,8 @@
         "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused voice/runtime/transport suites (3ffc21ef6a, 299ef94ea); live GPT Realtime readiness handshake passed (session ACK, no audio; /tmp/paseo-d7-realtime-readiness.log).",
         "artifact": null,
-        "installed": null,
-        "observed": null
+        "installed": "Samsung SM-S921B (Android 16/API 36), sh.paseo.debug 0.12.0, APK a68cc3be…, isolated QA daemon localhost:45681 + Metro 8099 (neptune), 2026-10-25 session (evidence /tmp/d9-qa/ on neptune: results.tsv, session-notes.txt, screenshots 00–07).",
+        "observed": "PASS (limited): empty-workspace voice creation created exactly one matching agent, no initial prompt/empty turn, voice enabled after ACK; forced failure left a retryable selection and retry created exactly one new matching agent (lastUserMessageAt/lastAssistantMessageAt null). Creation-ACK navigation race not instrumented; attachment-draft path untested."
       }
     },
     {
@@ -711,8 +711,8 @@
         "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused voice/runtime/transport suites (3ffc21ef6a, 299ef94ea); live GPT Realtime readiness handshake passed (session ACK, no audio; /tmp/paseo-d7-realtime-readiness.log).",
         "artifact": null,
-        "installed": null,
-        "observed": null
+        "installed": "Samsung SM-S921B (Android 16/API 36), sh.paseo.debug 0.12.0, APK a68cc3be…, isolated QA daemon localhost:45681 + Metro 8099 (neptune), 2026-10-25 session (evidence /tmp/d9-qa/ on neptune: results.tsv, session-notes.txt, screenshots 00–07).",
+        "observed": "FAIL observed: spoken attempts on both ordinary-voice and GPT paths ended in repeated 'Microphone lost. Voice stopped.' diagnostics (phase playing); no verified delivery or playback in the session. GPT-side Listen only / End listening / Clear voice context and mute-after-loss all worked. Root cause not yet isolated (device capture vs app capture management)."
       }
     },
     {
@@ -727,8 +727,8 @@
         "candidate": "c272ea69ee169a32b9a4a5182b5de9680faa4c6d",
         "tests": "Focused voice/runtime/transport suites (3ffc21ef6a, 299ef94ea); live GPT Realtime readiness handshake passed (session ACK, no audio; /tmp/paseo-d7-realtime-readiness.log).",
         "artifact": null,
-        "installed": null,
-        "observed": null
+        "installed": "Samsung SM-S921B (Android 16/API 36), sh.paseo.debug 0.12.0, APK a68cc3be…, isolated QA daemon localhost:45681 + Metro 8099 (neptune), 2026-10-25 session (evidence /tmp/d9-qa/ on neptune: results.tsv, session-notes.txt, screenshots 00–07).",
+        "observed": "BLOCKED on device: the ordinary Paseo voice surface (and its verbal mute UX, 'Listening for ‘unmute microphone’') does not render while openaiRealtimeVoice capability is enabled — only the GPT entry shows. Verbal mute and false-positive certification remain unexercised. Separate finding: GPT mute state survived a real transport loss (close 1006, hello resumed) and media interruption."
       }
     },
     {

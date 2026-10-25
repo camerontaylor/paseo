@@ -319,3 +319,37 @@ session and Metro's transformer workers were OOM-killed. Resume needs the
 infrastructure script (/tmp/d9-docs/device-infra-triton.sh on triton), the
 neptune forward script (/tmp/device-forward-neptune.sh), and enough triton
 RAM for Metro plus the isolated daemon.
+
+## Android device QA results — 2026-10-25 (Sol on neptune)
+
+A Sol agent (codex/gpt-6.1-sol, neptune daemon, workspace tmad-device-qa)
+ran the D7 flows with the human present. Evidence: /tmp/d9-qa/ on neptune
+(results.tsv, session-notes.txt, daemon-evidence.jsonl, screenshots 00–07).
+
+- PASS: direct connection + auth to the isolated daemon; mic permission
+  deny/grant/retry with explicit errors; empty-workspace voice creation
+  (exactly one agent per attempt, retry semantics, no empty turns); GPT
+  mute state surviving a real transport loss (close 1006, hello resumed)
+  and media interruption; Listen only / End listening / Clear voice
+  context.
+- FAIL (the reported "voice detection glitches"): spoken attempts on both
+  voice paths ended in repeated "Microphone lost. Voice stopped."
+  diagnostics; no verified delivery or playback. Root cause not isolated.
+- BLOCKED: verbal mute certification — the ordinary voice surface does not
+  render while openaiRealtimeVoice is enabled, so its verbal-mute UX and
+  false-positive checks stay unexercised.
+- INCONCLUSIVE: Bluetooth route switching, confounded by adb transport
+  resets (recovered over TLS wireless).
+- Provenance: Sol observed the branch tip at e1425a70b — past the
+  4438b33c7 recorded at handover (branch moved during QA; APK identity
+  unchanged).
+
+### sh.paseo.debug is the user's primary workspace
+
+The fork deploys to the user's phone as sh.paseo.debug — it is their
+daily-driver app, not a disposable QA shell. During this session a
+launcher reset used `pm clear sh.paseo.debug`, which wiped its stored
+pairings/settings (agent data lives on daemons and was unaffected; the QA
+session re-paired it to the QA daemon). Any future device work must treat
+sh.paseo.debug as primary state: no pm clear, no reinstall without asking,
+and prefer an explicit second app or the user's own reset.
