@@ -4,6 +4,7 @@ import { PLUGIN_SDK_PACKAGE_NAMES } from "@getpaseo/plugin";
 export const PLUGIN_CLIENT_ONLY_SDK_SPECIFIERS = PLUGIN_SDK_PACKAGE_NAMES.flatMap((name) => [
   `${name}/client`,
   `${name}/client/ui`,
+  // COMPAT(pluginReactNativeEntrypoint): added in v0.13.0, remove after 2027-04-20
   `${name}/client/react-native`,
 ]);
 

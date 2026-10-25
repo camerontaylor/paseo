@@ -1,3 +1,4 @@
+import type { AgentAddress } from "@getpaseo/protocol/addresses";
 import type { Agent } from "@/stores/session-store";
 import type { SubagentRow } from "./select";
 
@@ -22,8 +23,8 @@ export type ManagedSubagentSnapshot = Pick<Agent, "id" | "status" | "parentAgent
 
 export interface ArchiveFinishedSubagentsDeps {
   parentAgentId: string;
-  getManagedSubagent: (id: string) => ManagedSubagentSnapshot | undefined;
-  archiveManagedSubagent: (id: string) => Promise<void>;
+  getManagedSubagent: (address: AgentAddress) => ManagedSubagentSnapshot | undefined;
+  archiveManagedSubagent: (address: AgentAddress) => Promise<void>;
   dismissProviderSubagents: (ids: string[]) => void;
 }
 
@@ -58,12 +59,12 @@ function eligibleSignature(rows: readonly SubagentRow[]): string {
   return identitySignature(rowIdentities(rows));
 }
 
-function managedRowIdentity(id: string): string {
-  return `paseo:${id}`;
+function managedRowIdentity(address: AgentAddress): string {
+  return `paseo:${address.serverId}:${address.agentId}`;
 }
 
 function rowIdentity(row: SubagentRow): string {
-  if (row.kind === "paseo") return managedRowIdentity(row.id);
+  if (row.kind === "paseo") return managedRowIdentity(row.address);
   return row.kind === "provider" ? `provider:${row.id}` : `side_conversation:${row.id}`;
 }
 
@@ -173,7 +174,7 @@ async function runArchiveFinished(
   reportProgress: (completedCount: number) => void,
 ): Promise<{ outcome: ArchiveFinishedOutcome; retryableFailureIds: Set<string> }> {
   const providerIds = rows.filter((row) => row.kind === "provider").map((row) => row.id);
-  const paseoIds = rows.filter((row) => row.kind === "paseo").map((row) => row.id);
+  const paseoAddresses = rows.filter((row) => row.kind === "paseo").map((row) => row.address);
   let completedCount = 0;
   const outcome = emptyOutcome();
   const retryableFailureIds = new Set<string>();
@@ -185,15 +186,16 @@ async function runArchiveFinished(
     reportProgress(completedCount);
   }
 
-  for (const id of paseoIds) {
-    if (canArchiveManagedSubagent(deps.getManagedSubagent(id), deps.parentAgentId)) {
+  for (const address of paseoAddresses) {
+    const id = address.agentId;
+    if (canArchiveManagedSubagent(deps.getManagedSubagent(address), deps.parentAgentId)) {
       try {
-        await deps.archiveManagedSubagent(id);
+        await deps.archiveManagedSubagent(address);
         outcome.archivedPaseoIds.push(id);
       } catch (error) {
         outcome.failures.push({ id, error });
-        if (canArchiveManagedSubagent(deps.getManagedSubagent(id), deps.parentAgentId)) {
-          retryableFailureIds.add(managedRowIdentity(id));
+        if (canArchiveManagedSubagent(deps.getManagedSubagent(address), deps.parentAgentId)) {
+          retryableFailureIds.add(managedRowIdentity(address));
         }
       }
     } else {

@@ -87,6 +87,14 @@ terminal reports; they need an app update to show Usage against a repaired daemo
 responses remain parseable. Do not infer support from `usageSources`, which all these hosts
 advertise.
 
+Workspace setup details negotiate `workspace_setup_observation` with
+`server_info.features.workspaceSetupObservation`. Capable clients cannot request details through
+the legacy session event category. The setup panel owns a workspace-scoped observation while
+active and visible; directory metadata signals failures without requesting output. Older clients
+retain their legacy event delivery. A new app makes no setup event demand on older hosts and
+requires a host update to view details. Subscription-capable older hosts honor that absence of
+demand; broadcast-era hosts require an update before wire silence is guaranteed.
+
 ## Every shim is tagged and dated
 
 A shim that exists for old-app or old-daemon support carries a comment naming it, the version it arrived in, and when it can go:
