@@ -79,6 +79,7 @@ fi
 
 # Re-enter with every workspace stamped before Metro or electron-builder runs.
 if [ "${PASEO_BUILD_VERSION_STAMPED:-}" != 1 ]; then
+  export PASEO_PACKAGE_VERSION
   exec node "$BUILD_DIR/fork/scripts/build-version.mjs" -- bash "$0" "$@"
 fi
 VERSION="$PASEO_PACKAGE_VERSION"
