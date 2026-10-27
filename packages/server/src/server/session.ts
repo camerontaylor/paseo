@@ -8932,6 +8932,39 @@ export class Session {
     );
   }
 
+  /** Answer a wait with the settled record, or a not-found error. */
+  private async emitUnavailableFinishResponse(agentId: string, requestId: string): Promise<void> {
+    const settled = await this.readSettledAgent(agentId);
+    if (!settled) {
+      this.emit({
+        type: "wait_for_finish_response",
+        payload: {
+          requestId,
+          status: "error",
+          final: null,
+          error: `Agent not found: ${agentId}`,
+          lastMessage: null,
+        },
+      });
+      return;
+    }
+    const { record, lastMessage } = settled;
+    const final = this.buildStoredAgentPayload(record);
+    let status: "permission" | "error" | "idle";
+    if (record.attentionReason === "permission") {
+      status = "permission";
+    } else if (record.lastStatus === "error") {
+      status = "error";
+    } else {
+      status = "idle";
+    }
+    const error = resolveWaitForFinishError({ status, final });
+    this.emit({
+      type: "wait_for_finish_response",
+      payload: { requestId, status, final, error, lastMessage },
+    });
+  }
+
   private async handleWaitForFinish(
     agentIdOrIdentifier: string,
     requestId: string,
@@ -8957,35 +8990,7 @@ export class Session {
     const agentId = resolved.agentId;
     const live = this.agentManager.getAgent(agentId);
     if (!live && !(await this.hasLiveOrQueuedAgent(agentId))) {
-      const settled = await this.readSettledAgent(agentId);
-      if (!settled) {
-        this.emit({
-          type: "wait_for_finish_response",
-          payload: {
-            requestId,
-            status: "error",
-            final: null,
-            error: `Agent not found: ${agentId}`,
-            lastMessage: null,
-          },
-        });
-        return;
-      }
-      const { record, lastMessage } = settled;
-      const final = this.buildStoredAgentPayload(record);
-      let status: "permission" | "error" | "idle";
-      if (record.attentionReason === "permission") {
-        status = "permission";
-      } else if (record.lastStatus === "error") {
-        status = "error";
-      } else {
-        status = "idle";
-      }
-      const error = resolveWaitForFinishError({ status, final });
-      this.emit({
-        type: "wait_for_finish_response",
-        payload: { requestId, status, final, error, lastMessage },
-      });
+      await this.emitUnavailableFinishResponse(agentId, requestId);
       return;
     }
 
@@ -9003,37 +9008,9 @@ export class Session {
       await this.agentMessages.waitForDispatch(agentId, signal);
       await this.agentQueueService?.waitForPendingDispatch(agentId, signal);
 
-      const live = this.agentManager.getAgent(agentId);
-      if (!live) {
-        const settled = await this.readSettledAgent(agentId);
-        if (!settled) {
-          this.emit({
-            type: "wait_for_finish_response",
-            payload: {
-              requestId,
-              status: "error",
-              final: null,
-              error: `Agent not found: ${agentId}`,
-              lastMessage: null,
-            },
-          });
-          return;
-        }
-        const { record, lastMessage } = settled;
-        const final = this.buildStoredAgentPayload(record);
-        let status: "permission" | "error" | "idle";
-        if (record.attentionReason === "permission") {
-          status = "permission";
-        } else if (record.lastStatus === "error") {
-          status = "error";
-        } else {
-          status = "idle";
-        }
-        const error = resolveWaitForFinishError({ status, final });
-        this.emit({
-          type: "wait_for_finish_response",
-          payload: { requestId, status, final, error, lastMessage },
-        });
+      const currentLive = this.agentManager.getAgent(agentId);
+      if (!currentLive) {
+        await this.emitUnavailableFinishResponse(agentId, requestId);
         return;
       }
 
