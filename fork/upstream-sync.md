@@ -69,6 +69,12 @@ the live base and carries are in `~/.paseo-fork/desvio.conf` and
 
 ## The joints that rot without conflicting
 
+At 0.13.2, enriched-markdown's upstream lifecycle patch overlaps our Android
+selection patch. Merge the patched dependency sources, then regenerate only
+the affected patch sections. Keep upstream height invalidation and settled-row
+measurement guards; a patch that applies can still discard either behavior.
+The [audit](audit-0.13.2.md) records the retained selection contract.
+
 The fork carries new protocol message types. Upstream keeps adding exhaustive maps
 and switches over _all_ message types. Neither side conflicts; the build fails.
 

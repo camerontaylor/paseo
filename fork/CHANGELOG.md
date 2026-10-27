@@ -4,6 +4,20 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.13.2 base decision — 2026-10-27
+
+Advance `custom` to upstream stable `v0.13.2` (`d2941157a`). Regenerate the
+enriched-markdown patch from a source merge: retain Android cell selection,
+short link taps and whole-table copy alongside upstream's settled-row
+measurement and lifecycle fixes. The other upstream changes merge cleanly.
+
+Patch application, `build:server`, typecheck, lint and the seven authorization
+tests pass. Android device/instrumentation validation remains outstanding.
+The [difference audit](audit-0.13.2.md) assesses permanent work and the live
+external basket, including upstream replacements and plugin extraction options.
+No carries are removed and no plugins are migrated. Rebuild and gate the basket
+before publishing or deploying.
+
 ## 0.13.0 base decision — 2026-10-25
 
 Advance `custom` from `v0.12.0` to upstream stable `v0.13.0` (`d34d17a90`).
