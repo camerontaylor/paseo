@@ -53,9 +53,7 @@ so a replacement staged afterwards waits behind the adapter's stop fence, which 
 provider proves the old prompt terminal and every session-scoped cancellation write for the stop has
 settled. The wait behind that fence is bounded by a ten-second admission deadline that starts when the
 replacement is staged behind the stop, not when the stop is installed — staging is when your wait
-begins. The fork-local GJC provider is why the value is ten seconds: its own abort budget is the same
-10 seconds (`fork/plans/ralplan-gjc-acp-cancellation-boundary.md` has the specifics), so a
-slow-but-healthy abort can consume the whole window. That expiry is the documented fail-closed
+begins. Expiry is the documented fail-closed
 outcome: the deadline bounds your wait and never manufactures readiness. Recovery is
 a later request, or closing and recreating the agent. [`docs/providers.md`](./providers.md) states
 what each provider owes that fence and names the deadline constant with its expiry semantics.

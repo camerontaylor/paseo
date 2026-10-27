@@ -2707,8 +2707,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
    * Provider-specific proof for a stop settled by the death path, recorded
    * after the ledger is closed and before the staged successor is rejected.
    * The generic boundary records none; a subclass records what its own stop
-   * gate still owes (a GJC ownerless abort settles its pending attempt as a
-   * reject so the gate names the real reason).
+   * gate still owes.
    */
   protected recordProviderStopDeath(stop: ACPStopRecord, reason: string): void {
     void stop;

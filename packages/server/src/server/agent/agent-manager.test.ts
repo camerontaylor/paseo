@@ -12267,8 +12267,7 @@ test("a timed-out side question aborts the provider instead of leaving it runnin
 // the manager's 2s settlement window and the adapter's 10s admission deadline;
 // nothing sleeps.
 //
-// Numbered against the plan's "Manager integration tests" list in
-// fork/plans/ralplan-gjc-acp-cancellation-boundary.md.
+// Readiness and admission invariants are documented in docs/providers.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface CapturedLog {
