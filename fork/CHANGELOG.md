@@ -15,8 +15,11 @@ Patch application, `build:server`, typecheck, lint and the seven authorization
 tests pass. Android device/instrumentation validation remains outstanding.
 The [difference audit](audit-0.13.2.md) assesses permanent work and the live
 external basket, including upstream replacements and plugin extraction options.
-No carries are removed and no plugins are migrated. Rebuild and gate the basket
-before publishing or deploying.
+The concurrent unified artifact-version change is retained; its 27 release-tool
+and eight native-version tests pass on this base. Neptune's Desvio base pin and
+manifest header now name 0.13.2, with backups beside both files. No carries are
+removed and no plugins are migrated. Rebuild and gate the basket before
+publishing or deploying.
 
 ## 0.13.0 base decision — 2026-10-25
 

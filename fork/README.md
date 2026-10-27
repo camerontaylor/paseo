@@ -40,8 +40,8 @@ Native ZCode: [SDK validation](zcode-sdk-validation.md) and
 | [plans/proposal-auto-release-cycle.md](plans/proposal-auto-release-cycle.md) | Design for the implemented release detector. Setup and recovery: [release-watch.md](release-watch.md). The cycle itself is in the fleet runbook. |
 | [plans/](plans/)                                                                               | Dispatch briefs and ralplan output for fork work. `brief-*.md` are ready-to-paste gjc dispatches; `ralplan-*.md` are the plans they produce.                                                                                                         |
 | [release-watch.md](release-watch.md) | Automatic upstream-release detection on neptune: launchd setup, autonomy levels, result handoff and recovery. |
-| [scripts/](scripts/)                                                                           | Fork-local tooling. `release-fork.mjs` stages, renames and gates a fork npm release; it never publishes without both `--publish` and `--yes-i-am-publishing`. `--fork-number auto` reads the next N from the registry. `init-worktree.mjs` brings a transient worktree up in under a second — see [worktrees.md](worktrees.md).                                                                                        |
-| [`.github/workflows/fork-npm-publish.yml`](../.github/workflows/fork-npm-publish.yml)         | Publishes every push to `mine` as `@camerontaylor/paseo-*@<base>-fork.N` (dist-tags `latest` + `fork`, both on the newest build) via npm trusted publishing, plus a `fork/v<version>` tag and GitHub Release. Runbook, bootstrap and the two hard constraints (GitHub-hosted runners only; first publish needs a token): `~/.local/agents/docs/paseo.md` § *Fork release channel*. |
+| [scripts/](scripts/)                                                                           | Fork-local tooling. `release-fork.mjs` stages, renames and gates a fork npm release; it never publishes without both `--publish` and `--yes-i-am-publishing`. New releases use the [shared build version](build-versions.md); `--fork-number auto` is an explicit legacy retry. `init-worktree.mjs` brings a transient worktree up in under a second — see [worktrees.md](worktrees.md).                                                                                        |
+| [`.github/workflows/fork-npm-publish.yml`](../.github/workflows/fork-npm-publish.yml)         | Publishes every push to `mine` as `@camerontaylor/paseo-*@<shared build version>` (dist-tags `latest` + `fork`, both on the newest build) via npm trusted publishing, plus a `fork/v<version>` tag and GitHub Release. Runbook, bootstrap and the two hard constraints (GitHub-hosted runners only; first publish needs a token): `~/.local/agents/docs/paseo.md` § *Fork release channel*. |
 | [scripts/migrate-zcode-native.mjs](scripts/migrate-zcode-native.mjs) | Prepare native ZCode policy/config migration with private backups; see [native instructions](zcode-system-prompt.md). |
 | [CHANGELOG.md](CHANGELOG.md)                                                                   | Fork-only release notes and base decisions. Upstream `CHANGELOG.md` is never touched.                                                                                                                                                                |
 
@@ -53,6 +53,11 @@ should do, it is ours, because upstream has said that decision is the maintainer
 #1628 and #3629 are the worked example. The same problem — worktree setup running
 under a non-interactive `bash -c` with no shell init — was closed NOT_PLANNED as a
 feature request and is open as a defect. Framing decides the outcome.
+
+## Build versions
+
+[Build version naming](build-versions.md) owns the shared app, CLI, daemon and npm stamp
+and the Desvio packaging task setup.
 
 ## Build sources
 

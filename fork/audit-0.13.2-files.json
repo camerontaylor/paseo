@@ -12,8 +12,8 @@
     {
       "label": "custom-before-sync",
       "base": "d34d17a9072149320ace35ec2a2e5c7dcd992cb3",
-      "head": "7dd67b921bc88a8f1165e94c17c2aa6bf1a123c2",
-      "file_count": 213,
+      "head": "2ba7b8a31463c74dc49eef9fcf2446a254596199",
+      "file_count": 221,
       "files": [
         {
           "status": "A",
@@ -118,6 +118,10 @@
         {
           "status": "A",
           "path": "fork/briefs/release-cycle.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/build-versions.md"
         },
         {
           "status": "A",
@@ -265,11 +269,19 @@
         },
         {
           "status": "A",
+          "path": "fork/scripts/build-version.mjs"
+        },
+        {
+          "status": "A",
           "path": "fork/scripts/init-worktree.mjs"
         },
         {
           "status": "A",
           "path": "fork/scripts/migrate-zcode-native.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/package-desktop.sh"
         },
         {
           "status": "A",
@@ -344,6 +356,14 @@
           "path": "lefthook.yml"
         },
         {
+          "status": "M",
+          "path": "package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/app.config.js"
+        },
+        {
           "status": "A",
           "path": "packages/app/e2e/browser/side-conversations.spec.ts"
         },
@@ -394,6 +414,14 @@
         {
           "status": "A",
           "path": "packages/app/modules/paseo-scroll/android/src/androidTest/java/sh/paseo/scroll/SelectionTestActivity.kt"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/native-release-version.js"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/native-release-version.test.ts"
         },
         {
           "status": "M",
@@ -854,6 +882,10 @@
         {
           "status": "M",
           "path": "public-docs/plugins/providers.md"
+        },
+        {
+          "status": "M",
+          "path": "scripts/build-apk.mjs"
         },
         {
           "status": "A",

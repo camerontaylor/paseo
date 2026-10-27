@@ -101,7 +101,7 @@ export default {
   expo: {
     name: variant.name,
     slug: "voice-mobile",
-    version: nativeReleaseVersion.appVersion,
+    version: pkg.version,
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: "paseo",
@@ -112,6 +112,10 @@ export default {
       infoPlist: {
         NSMicrophoneUsageDescription: "This app needs access to the microphone for voice commands.",
         ITSAppUsesNonExemptEncryption: false,
+        // iOS requires a numeric marketing version; About uses the stamped app manifest.
+        ...(pkg.version !== nativeReleaseVersion.appVersion
+          ? { CFBundleShortVersionString: nativeReleaseVersion.appVersion }
+          : {}),
       },
       bundleIdentifier: variant.packageId,
       ...(variant.googleServiceInfoPlist
