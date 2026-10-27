@@ -6,6 +6,9 @@ plans. The [archive](https://github.com/camerontaylor/agents/blob/c0826d394ae64c
 research and plans with source SHA and file hashes. Use the agents fleet runbook
 for release operations; no host configuration is installed by this checkout.
 Historical `fork/plans/...` references resolve under `archive/fork/plans/` there.
+The [carried history inventory](https://github.com/camerontaylor/agents/blob/a306ec8437f1b2156d43fb04d6d75cdb5b2c6c15/docs/paseo-fork/archive/carry-successor-c7eb036ac/provenance.json)
+preserves later basket plans, handovers and campaign inputs from the assembled
+successor, including modified versions of the original archive files.
 
 This directory retains tooling that must travel with the assembled source:
 
