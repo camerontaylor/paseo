@@ -239,6 +239,26 @@ export function writePaseoWorktreeMetadata(
   writePaseoWorktreeMetadataFile(worktreeRoot, metadata);
 }
 
+/** Re-point an existing worktree at an exact base ref, preserving unrelated metadata. */
+export function writePaseoWorktreeBaseRef(
+  worktreeRoot: string,
+  options: { baseRef: string },
+): PaseoWorktreeMetadata {
+  const metadata = readPaseoWorktreeMetadata(worktreeRoot);
+  if (!metadata) {
+    throw new Error(
+      `Missing Paseo worktree base metadata: ${getPaseoWorktreeMetadataPath(worktreeRoot)}`,
+    );
+  }
+  const baseRef = options.baseRef.trim();
+  const baseRefName = branchNameFromRef(baseRef);
+  assertValidBaseRef(baseRef);
+  assertValidBaseRef(baseRefName);
+  const next: PaseoWorktreeMetadata = { ...metadata, baseRefName, baseRef };
+  writePaseoWorktreeMetadataFile(worktreeRoot, next);
+  return next;
+}
+
 export function writePaseoWorktreeRuntimeMetadata(
   worktreeRoot: string,
   options: { worktreePort: number },

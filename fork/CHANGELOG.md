@@ -43,6 +43,13 @@ this stable base before publishing or deploying. Real OMP on Triton remains
 unverified because its selected provider has no credentials; preserve the failed
 receipt and verify authenticated providers during host canaries.
 
+The stable basket retains the accepted beta.1 owner deltas. Retire duplicate
+#7179 and #7169 production carries in favor of stable upstream implementations;
+keep fork closed-session/mode-error guards, sourced message identity, symmetric
+OMP command/ACK tests and cleanup failure reporting. Keep #6762, #7057, #7062,
+#7146 and #7106 because they remain unmerged. Preserve workspace-relative file
+opening and account cache invalidation through stable's replacement owners.
+
 ## 0.12.0-beta.3 base decision — 2026-10-19
 
 Advance from the reviewed beta.1 custom merge to upstream `v0.12.0-beta.3`.

@@ -102,3 +102,35 @@ it("ignores a pending probe when its view is left", async () => {
   await pending;
   expect(opened).toEqual([]);
 });
+
+it("resolves relative links from the agent cwd into the workspace before probing folders", async () => {
+  const { createInlinePathOpener } = await import("./path-open");
+  const probes: string[] = [];
+  const opened: string[] = [];
+  const errors: Array<string | null> = [];
+  const opener = createInlinePathOpener({
+    workspaceRoot: "/repo",
+    sourceCwd: "/repo/project",
+    client: {
+      listDirectory: async (root, file) => {
+        probes.push(`${root}:${file}`);
+      },
+    },
+    openFile: (location) => {
+      opened.push(`file:${location.path}`);
+    },
+    openDirectory: (directory) => {
+      opened.push(`directory:${directory}`);
+    },
+    onError: (error) => {
+      errors.push(error);
+    },
+  });
+  await opener.open({ raw: "./docs", path: "./docs" }, "preferred");
+  expect(probes).toEqual(["/repo:project/docs"]);
+  expect(opened).toEqual(["directory:project/docs"]);
+  expect(errors).toEqual([null]);
+  await opener.open({ raw: "/outside/", path: "/outside/" }, "preferred");
+  expect(errors).toEqual([null, "outsideWorkspaceDirectory"]);
+  expect(opened).toEqual(["directory:project/docs"]);
+});
