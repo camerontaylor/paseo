@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import { computeBuildVersion, validateBuildVersion } from "./build-version.mjs";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -27,6 +30,7 @@ import {
   relinkCopiedSymlinks,
   resolveForkScope,
   rewriteDistSpecifiers,
+  rewriteStagedManifests,
   rewritePackageJsonDoc,
   rewriteRootPackageJsonDoc,
   rewriteShippedFileSpecifiers,
@@ -607,4 +611,150 @@ test("native profiles translate ACP permissions and refuse conflicting settings"
     () => normalizeNativeProfileFeatures({ featureValues: { auto_accept: "true" } }),
     /Unsupported ZCode auto_accept value/,
   );
+});
+
+test("stamps the daemon web UI, desktop, CLI and root with the same published version", () => {
+  const stage = mkdtempSync(path.join(tmpdir(), "paseo-version-surfaces-"));
+  const rootDoc = {
+    name: "paseo",
+    version: CTX.baseVersion,
+    workspaces: [
+      "packages/app",
+      "packages/desktop",
+      "packages/cli",
+      "packages/server",
+      "packages/highlight",
+      "packages/relay",
+      "packages/protocol",
+      "packages/client",
+      "packages/plugin",
+    ],
+  };
+  try {
+    writeFileSync(path.join(stage, "package.json"), JSON.stringify(rootDoc));
+    for (const workspace of rootDoc.workspaces) {
+      mkdirSync(path.join(stage, workspace), { recursive: true });
+      writeFileSync(
+        path.join(stage, workspace, "package.json"),
+        JSON.stringify({
+          name: `@getpaseo/${path.basename(workspace)}`,
+          version: CTX.baseVersion,
+          publishConfig: { access: "public" },
+        }),
+      );
+    }
+    rewriteStagedManifests(stage, CTX);
+    for (const workspace of [".", ...rootDoc.workspaces]) {
+      const manifest = JSON.parse(
+        readFileSync(path.join(stage, workspace, "package.json"), "utf8"),
+      );
+      assert.equal(manifest.version, CTX.forkVersion, workspace);
+    }
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+});
+
+test("computes one UTC fork version for a source commit, including beta bases", () => {
+  const revision = "0123456789abcdef0123456789abcdef01234567";
+  const commitTime = Date.parse("2026-10-27T05:42:00Z") / 1000;
+  assert.equal(
+    computeBuildVersion("0.13.0", revision, commitTime),
+    "0.13.0-fork.261027-0542.g0123456789ab",
+  );
+  assert.equal(
+    computeBuildVersion("0.13.0-beta.2", revision, commitTime),
+    "0.13.0-beta.2.fork.261027-0542.g0123456789ab",
+  );
+  assert.throws(() => validateBuildVersion("0.13.0", "0.12.0-fork.1"), /Expected a fork/);
+  assert.throws(() => validateBuildVersion("0.13.0", "0.13.0.fork.1"), /separator/);
+});
+
+test("failed and interrupted builds restore every original manifest byte", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "paseo-build-version-"));
+  const manifests = new Map();
+  const version = "0.13.0-fork.261027-0542.g0123456789ab";
+  try {
+    mkdirSync(path.join(root, "fork/scripts"), { recursive: true });
+    mkdirSync(path.join(root, "scripts"));
+    copyFileSync(
+      new URL("./build-version.mjs", import.meta.url),
+      path.join(root, "fork/scripts/build-version.mjs"),
+    );
+    copyFileSync(
+      new URL("../../scripts/is-main-module.mjs", import.meta.url),
+      path.join(root, "scripts/is-main-module.mjs"),
+    );
+    const workspaces = ["packages/app", "packages/desktop", "packages/server", "packages/cli"];
+    for (const workspace of [".", ...workspaces]) {
+      mkdirSync(path.join(root, workspace), { recursive: true });
+      const file = path.join(root, workspace, "package.json");
+      const doc = {
+        name: path.basename(workspace),
+        version: "0.13.0",
+        workspaces,
+        dependencies: { "@getpaseo/server": "0.13.0", "@getpaseo/client": "*", react: "19.2.0" },
+      };
+      const original = JSON.stringify(doc); // Deliberately preserve nonstandard formatting.
+      manifests.set(file, original);
+      writeFileSync(file, original);
+    }
+    const result = spawnSync(
+      process.execPath,
+      [
+        "fork/scripts/build-version.mjs",
+        "--",
+        process.execPath,
+        "-e",
+        `
+      const fs = require("node:fs");
+      const root = require("./package.json");
+      const versions = [root, ...root.workspaces.map(p => require("./" + p + "/package.json"))];
+      fs.writeFileSync("observed.json", JSON.stringify({ versions, env: process.env.PASEO_PACKAGE_VERSION }));
+      process.exit(23);
+    `,
+      ],
+      { cwd: root, env: { ...process.env, PASEO_PACKAGE_VERSION: version }, encoding: "utf8" },
+    );
+    assert.equal(result.status, 23, result.stderr);
+    const observed = JSON.parse(readFileSync(path.join(root, "observed.json"), "utf8"));
+    assert.equal(observed.env, version);
+    for (const manifest of observed.versions) {
+      assert.equal(manifest.version, version);
+      assert.deepEqual(manifest.dependencies, {
+        "@getpaseo/server": version,
+        "@getpaseo/client": "*",
+        react: "19.2.0",
+      });
+    }
+    for (const [file, original] of manifests) assert.equal(readFileSync(file, "utf8"), original);
+    const interrupted = spawn(
+      process.execPath,
+      [
+        "fork/scripts/build-version.mjs",
+        "--",
+        process.execPath,
+        "-e",
+        "console.log('ready'); setInterval(() => {}, 1000)",
+      ],
+      {
+        cwd: root,
+        env: { ...process.env, PASEO_PACKAGE_VERSION: version },
+      },
+    );
+    const stopped = new Promise((resolve, reject) => {
+      interrupted.once("error", reject);
+      interrupted.once("close", resolve);
+    });
+    await new Promise((resolve) =>
+      interrupted.stdout.on("data", (chunk) => {
+        if (chunk.toString().includes("ready")) resolve();
+      }),
+    );
+    interrupted.kill("SIGTERM");
+    assert.equal(await stopped, 1);
+    for (const [file, original] of manifests) assert.equal(readFileSync(file, "utf8"), original);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

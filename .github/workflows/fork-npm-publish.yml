@@ -3,8 +3,8 @@
 #
 # Every push to `mine` (the desvio-assembled build branch) cuts a fork release:
 # fork/scripts/release-fork.mjs stages a clean copy of HEAD, renames the 7
-# publishable workspaces to @camerontaylor/paseo-*, stamps <base>-fork.N with N
-# read from the registry (unioned across all 7 packages), rebuilds, runs
+# publishable workspaces to @camerontaylor/paseo-*, stamps the same commit-derived
+# version as desktop and Android via fork/scripts/build-version.mjs, rebuilds, runs
 # the pack-list gate, publishes under `latest` (set by the publish itself —
 # trusted publishing cannot write dist-tags, so the `fork` re-point is
 # best-effort and warns), pushes the fork/v<version> tag and creates a
@@ -39,14 +39,13 @@ on:
         description: "Build, rename and gate only — no publish, tag or release"
         type: boolean
         default: false
-      fork_number:
-        description: "Fork number N for <base>-fork.N; `auto` reads the registry"
+      build_version:
+        description: "Shared fork build version; blank derives it from the source commit"
         type: string
-        default: auto
+        default: ""
 
-# Releases serialise and never cancel each other: a cancelled job could have
-# published 3 of 7 packages, and the next run's `auto` numbering would step
-# past the hole. Let the older run finish; the newer one then publishes N+1.
+# Releases serialise and never cancel each other: cancelling could publish only
+# part of the seven-package set. Finish each commit before starting the next.
 concurrency:
   group: fork-npm-publish
   cancel-in-progress: false
@@ -129,10 +128,10 @@ jobs:
       - name: Stage, rename, build, gate, publish
         env:
           GH_TOKEN: ${{ github.token }}
-          FORK_NUMBER: ${{ inputs.fork_number || 'auto' }}
+          PASEO_PACKAGE_VERSION: ${{ inputs.build_version }}
         run: |
           set -euo pipefail
-          args=(--fork-number "$FORK_NUMBER" --keep-staging --staging-dir "$RUNNER_TEMP/fork-release")
+          args=(--keep-staging --staging-dir "$RUNNER_TEMP/fork-release")
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             args+=(--dry-run)
           else

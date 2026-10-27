@@ -2,7 +2,7 @@
 // Fork release tooling — fork/plans/ralplan-fork-release-channel.md, Sitting 1 step 2.
 //
 // Stages a clean copy of the release commit (git archive HEAD), renames the 7
-// publishable workspace packages to @<scope>/paseo-* @ <base>.fork.N, rebuilds
+// publishable workspace packages to @<scope>/paseo-* at the shared build version, rebuilds
 // inside the staged tree (release:check subset), reproduces the stock prepack
 // artifacts (the daemon web UI export into the server dist), rewrites
 // compiled dist specifiers and shipped docs/bin that name the upstream scope,
@@ -17,6 +17,7 @@
 // prints the exact commands and refuses.
 
 import { spawnSync } from "node:child_process";
+import { resolveBuildVersion, stampBuildVersion, validateBuildVersion } from "./build-version.mjs";
 import {
   copyFileSync,
   cpSync,
@@ -371,9 +372,9 @@ function parseArgs(argv) {
     publish: false,
     yesIAmPublishing: false,
     keepStaging: false,
-    // "auto" asks the registry for the next free N (the CI path); a number is
-    // the hand-picked N (the bootstrap and local paths).
-    forkNumber: process.env.FORK_NUMBER ?? "1",
+    // Explicit legacy numbering remains available for retrying old releases.
+    forkNumber: process.env.FORK_NUMBER ?? null,
+    version: process.env.PASEO_PACKAGE_VERSION ?? null,
     stagingDir: null,
     githubRelease: true,
   };
@@ -385,6 +386,10 @@ function parseArgs(argv) {
       args.yesIAmPublishing = true;
     } else if (arg === "--keep-staging") {
       args.keepStaging = true;
+    } else if (arg === "--version") {
+      i += 1;
+      args.version = argv[i];
+      if (!args.version) throw new Error("--version requires a fork build version");
     } else if (arg === "--fork-number") {
       i += 1;
       args.forkNumber = argv[i];
@@ -397,7 +402,10 @@ function parseArgs(argv) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
-  if (args.forkNumber !== "auto") {
+  if (args.version && args.forkNumber !== null) {
+    throw new Error("Use --version or --fork-number, not both");
+  }
+  if (args.forkNumber !== null && args.forkNumber !== "auto") {
     args.forkNumber = Number(args.forkNumber);
     if (!Number.isInteger(args.forkNumber) || args.forkNumber < 1) {
       throw new Error(`--fork-number must be a positive integer or "auto", got ${args.forkNumber}`);
@@ -506,14 +514,19 @@ function stageReleaseCopy(repoRoot, stage) {
   }
 }
 
-function rewriteStagedManifests(stage, rootDoc, rewriteContext) {
+export function rewriteStagedManifests(stage, rewriteContext) {
+  stampBuildVersion(stage, rewriteContext.forkVersion);
   for (const name of RELEASE_PACKAGES) {
     const packageJsonPath = path.join(stage, "packages", name, "package.json");
     const rewritten = rewritePackageJsonDoc(readJson(packageJsonPath), rewriteContext);
     assertPublishAccess(rewritten, `packages/${name}`);
     writeJson(packageJsonPath, rewritten);
   }
-  writeJson(path.join(stage, "package.json"), rewriteRootPackageJsonDoc(rootDoc, rewriteContext));
+  const stampedRoot = readJson(path.join(stage, "package.json"));
+  writeJson(
+    path.join(stage, "package.json"),
+    rewriteRootPackageJsonDoc(stampedRoot, rewriteContext),
+  );
 }
 
 function buildAndTypecheckStagedTree(stage) {
@@ -653,11 +666,18 @@ function main() {
   const repoRoot = repoRootFromScript();
   const rootDoc = readJson(path.join(repoRoot, "package.json"));
   const baseVersion = rootDoc.version;
-  const forkNumber =
-    args.forkNumber === "auto"
-      ? nextForkNumber(baseVersion, publishedVersions(forkScope, repoRoot))
-      : args.forkNumber;
-  const forkVersion = computeForkVersion(baseVersion, forkNumber);
+  let forkVersion;
+  if (args.version) {
+    forkVersion = validateBuildVersion(baseVersion, args.version);
+  } else if (args.forkNumber !== null) {
+    const forkNumber =
+      args.forkNumber === "auto"
+        ? nextForkNumber(baseVersion, publishedVersions(forkScope, repoRoot))
+        : args.forkNumber;
+    forkVersion = computeForkVersion(baseVersion, forkNumber);
+  } else {
+    forkVersion = resolveBuildVersion(repoRoot);
+  }
   const branch = capture("git", ["rev-parse", "--abbrev-ref", "HEAD"], repoRoot).trim();
 
   console.log(`fork release: scope=${forkScope} base=${baseVersion} version=${forkVersion}`);
@@ -674,7 +694,7 @@ function main() {
   let completed = false;
   try {
     stageReleaseCopy(repoRoot, stage);
-    rewriteStagedManifests(stage, rootDoc, {
+    rewriteStagedManifests(stage, {
       forkScope,
       forkRepository: resolveForkRepository(),
       baseVersion,
