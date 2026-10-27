@@ -145,6 +145,34 @@ async function settle(): Promise<void> {
 }
 
 describe("VoiceSession streaming transcription", () => {
+  test.each(["", "legacy dictation"])(
+    "emits buffered transcript %j without voice mode",
+    async (text) => {
+      const { voiceSession, sttSession, host } = createVoiceSession();
+      const processing = voiceSession.handleAudioChunk({
+        type: "voice_audio_chunk",
+        audio: Buffer.alloc(3200).toString("base64"),
+        format: "audio/pcm;rate=16000;bits=16",
+        isLast: true,
+      });
+      try {
+        await vi.waitFor(() => expect(sttSession.commitCount).toBe(1));
+        sttSession.emitCommitted({ segmentId: "segment-1", previousSegmentId: null });
+        sttSession.emitTranscript({ segmentId: "segment-1", transcript: text, isFinal: true });
+        await processing;
+        expect(host.emitted.filter((event) => event.type === "transcription_result")).toEqual([
+          {
+            type: "transcription_result",
+            payload: expect.objectContaining({ text, requestId: expect.any(String) }),
+          },
+        ]);
+        expect(host.spokenInput).toEqual([]);
+      } finally {
+        await voiceSession.cleanup();
+      }
+    },
+  );
+
   test("a negotiated attachment rejects missing tokens and stale mute/stop requests", async () => {
     const { voiceSession, host } = createVoiceSession();
     await voiceSession.handleSetVoiceMode(true, VOICE_AGENT_ID, "start", {

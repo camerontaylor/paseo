@@ -455,6 +455,8 @@ export const ru: TranslationResources = {
       viewDiagram: "Показать диаграмму",
     },
     actions: {
+      pinToStream: "Закрепить в потоке",
+      trackQAndA: "Отслеживать вопросы и ответы",
       copyCode: "Скопировать код",
       copyTurn: "Скопировать ответ",
       copyMessage: "Копировать сообщение",

@@ -202,8 +202,8 @@ describe("wire schema compatibility", () => {
       features: { checkoutBaseRefSet: true },
     });
 
-    expect(legacy.features.checkoutBaseRefSet).toBeUndefined();
-    expect(capable.features.checkoutBaseRefSet).toBe(true);
+    expect(legacy.features?.checkoutBaseRefSet).toBeUndefined();
+    expect(capable.features?.checkoutBaseRefSet).toBe(true);
   });
 
   test("base ref mutation uses a correlated request and response", () => {

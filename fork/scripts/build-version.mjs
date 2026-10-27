@@ -118,8 +118,13 @@ if (isMainModule(import.meta.url)) {
     // npm and shell build commands launch grandchildren; stop the whole build
     // before restoring manifests that those processes may still be reading.
     const forwardSignal = (signal) => {
-      if (process.platform === "win32") child.kill(signal);
-      else process.kill(-child.pid, signal);
+      try {
+        if (process.platform === "win32") child.kill(signal);
+        else process.kill(-child.pid, signal);
+      } catch (error) {
+        // The close handler still owns manifest restoration after the group exits.
+        if (error?.code !== "ESRCH") throw error;
+      }
     };
     const interrupt = () => forwardSignal("SIGINT");
     const terminate = () => forwardSignal("SIGTERM");

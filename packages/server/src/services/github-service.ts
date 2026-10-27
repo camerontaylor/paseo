@@ -1729,7 +1729,8 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
             ...entry,
             owner: repository.data.parent.owner.login,
             name: repository.data.parent.name,
-            headRepositoryOwner: repository.data.owner?.login ?? entry.owner,
+            headRepositoryOwner:
+              entry.headRepositoryOwner ?? repository.data.owner?.login ?? entry.owner,
           });
           continue;
         }

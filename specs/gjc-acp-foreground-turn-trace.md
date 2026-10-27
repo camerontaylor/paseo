@@ -16,7 +16,7 @@ The user did not supply an agent ID or timestamp. The title `ralplan — gjc-acp
 
 ## Runtime trace
 
-Primary evidence from `/Users/ctaylor/.paseo/daemon.log`:
+Primary evidence from `~/.paseo/daemon.log`:
 
 - Line 507: Paseo logged `cancelAgentRun: acknowledged turn still active after timeout, force-canceling` for foreground turn `8c2d8690-2166-4172-ac65-7e9cf29c13af`.
 - Line 508, one millisecond later: the same agent and GJC provider session failed with `A foreground turn is already active`; manager `activeForegroundTurnId` was already `null`.
@@ -24,17 +24,19 @@ Primary evidence from `/Users/ctaylor/.paseo/daemon.log`:
 - Line 510: the complete `send_agent_message_request` lasted `2004ms`, matching Paseo's 2-second forced-settlement boundary.
 - Lines 240 and 256: two independent GJC sessions previously reached Paseo's 3,640-second ACP silence watchdog after an `agent_failed` frame. These are evidence of an upstream trigger for cancellation, but they do not by themselves explain the immediate replacement conflict.
 
-The persisted agent snapshot at `/Users/ctaylor/.paseo/agents/Users-ctaylor-.paseo-worktrees-22xk82t3-plan-gjc-acp-busy-turn/c242d577-8ac1-409a-a10e-7f6570a6e9b6.json` records the same provider session and final error. This rejects a UI-only explanation for the matched incident.
+The persisted agent snapshot at `~/.paseo/agents/<workspace-key>/c242d577-8ac1-409a-a10e-7f6570a6e9b6.json` records the same provider session and final error. This rejects a UI-only explanation for the matched incident.
 
 ## Causal path
 
-1. Paseo's manager uses `INTERRUPT_SESSION_TIMEOUT_MS = 2_000` for an interrupt whose ACP cancel notification was written successfully ([agent-manager.ts](/Users/ctaylor/repos/paseo/packages/server/src/server/agent/agent-manager.ts:86), [agent-manager.ts](/Users/ctaylor/repos/paseo/packages/server/src/server/agent/agent-manager.ts:2725)).
-2. If the tracked run has not settled after two seconds, the manager emits a synthetic `turn_canceled`, settling its own run state ([agent-manager.ts](/Users/ctaylor/repos/paseo/packages/server/src/server/agent/agent-manager.ts:2737)).
-3. Generic ACP `interrupt()` only awaits `connection.cancel()` ([acp-agent.ts](/Users/ctaylor/repos/paseo/packages/server/src/server/agent/providers/acp-agent.ts:2167)). ACP `session/cancel` is a notification, so SDK completion means the notification was written; it is not proof that the outstanding `session/prompt` has settled.
-4. The ACP adapter separately retains `activeForegroundTurnId` until the original prompt resolves or rejects and `finishTurn()` runs ([acp-agent.ts](/Users/ctaylor/repos/paseo/packages/server/src/server/agent/providers/acp-agent.ts:1623), [acp-agent.ts](/Users/ctaylor/repos/paseo/packages/server/src/server/agent/providers/acp-agent.ts:2938)).
-5. The manager starts the pending replacement immediately after its synthetic cancellation. The ACP adapter's local guard sees the old ID and throws `A foreground turn is already active` ([acp-agent.ts](/Users/ctaylor/repos/paseo/packages/server/src/server/agent/providers/acp-agent.ts:1616)).
+This trace describes packaged `0.7.0-beta.2`. Source links identify repository files; line numbers from the investigated checkout are omitted.
 
-Installed GJC `0.15.5` makes this window likely. Its ACP frontend allows up to 5 seconds after its internal cancellation acknowledgement for an authoritative terminal before resolving the old prompt as `cancelled` (`CANCEL_SETTLEMENT_GRACE_MS = 5_000` in `/Users/ctaylor/.cache/.bun/install/global/node_modules/@gajae-code/coding-agent/src/modes/acp/acp-agent.ts`). That is an upper bound, not a guaranteed five-second delay, and its clock does not start at exactly the same point as Paseo's.
+1. Paseo's manager uses `INTERRUPT_SESSION_TIMEOUT_MS = 2_000` for an interrupt whose ACP cancel notification was written successfully ([agent-manager.ts](../packages/server/src/server/agent/agent-manager.ts), [agent-manager.ts](../packages/server/src/server/agent/agent-manager.ts)).
+2. If the tracked run has not settled after two seconds, the manager emits a synthetic `turn_canceled`, settling its own run state ([agent-manager.ts](../packages/server/src/server/agent/agent-manager.ts)).
+3. Generic ACP `interrupt()` only awaits `connection.cancel()` ([acp-agent.ts](../packages/server/src/server/agent/providers/acp-agent.ts)). ACP `session/cancel` is a notification, so SDK completion means the notification was written; it is not proof that the outstanding `session/prompt` has settled.
+4. The ACP adapter separately retains `activeForegroundTurnId` until the original prompt resolves or rejects and `finishTurn()` runs ([acp-agent.ts](../packages/server/src/server/agent/providers/acp-agent.ts), [acp-agent.ts](../packages/server/src/server/agent/providers/acp-agent.ts)).
+5. The manager starts the pending replacement immediately after its synthetic cancellation. The ACP adapter's local guard sees the old ID and throws `A foreground turn is already active` ([acp-agent.ts](../packages/server/src/server/agent/providers/acp-agent.ts)).
+
+Installed GJC `0.15.5` makes this window likely. Its ACP frontend allows up to 5 seconds after its internal cancellation acknowledgement for an authoritative terminal before resolving the old prompt as `cancelled` (`CANCEL_SETTLEMENT_GRACE_MS = 5_000` in `<Bun global node_modules>/@gajae-code/coding-agent/src/modes/acp/acp-agent.ts`). That is an upper bound, not a guaranteed five-second delay, and its clock does not start at exactly the same point as Paseo's.
 
 ## Hypothesis verdicts
 
@@ -46,8 +48,8 @@ The immediate error is generated by Paseo's local ACP guard, not by a GJC busy r
 
 ### 2. Stale runtime or configuration: disconfirmed
 
-- Paseo is the packaged `0.7.0-beta.2` daemon using `/Users/ctaylor/.paseo` on port 6767.
-- The provider command is the absolute `/Users/ctaylor/.local/bin/gjc acp` and reports GJC `0.15.5`.
+- Paseo is the packaged `0.7.0-beta.2` daemon using `~/.paseo` on port 6767.
+- The provider command is the absolute `~/.local/bin/gjc acp` and reports GJC `0.15.5`.
 - The affected ACP frontend processes started after the installed package files. The five-second behavior lives in those frontends, not only in the older detached broker.
 - No second Paseo daemon or alternate development home was active.
 - GJC's setup check reports permission/abort-scope configuration drift, but neither setting changes the hard-coded settlement grace or explains the 2,004 ms boundary.

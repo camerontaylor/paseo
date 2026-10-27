@@ -457,6 +457,8 @@ export const ja: TranslationResources = {
       viewDiagram: "図を表示",
     },
     actions: {
+      pinToStream: "ストリームにピン留め",
+      trackQAndA: "質問と回答を追跡",
       copyCode: "コードをコピー",
       copyTurn: "ターンをコピー",
       copyMessage: "メッセージをコピー",

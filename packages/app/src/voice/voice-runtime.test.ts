@@ -679,6 +679,32 @@ describe("voice runtime", () => {
     });
   });
 
+  it("cleans up a stale capture start before switching hosts", async () => {
+    const first = createSessionAdapter("server-1");
+    const second = createSessionAdapter("server-2");
+    const { runtime, engine } = createRuntime();
+    let release!: () => void;
+    const capture = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(engine.startCapture).mockImplementationOnce(() => capture);
+    runtime.registerSession(first);
+    runtime.registerSession(second);
+    const starting = runtime.startVoice("server-1", "agent-1");
+    await vi.waitFor(() => expect(engine.startCapture).toHaveBeenCalledTimes(1));
+    const switching = runtime.startVoice("server-2", "agent-2");
+    release();
+    await Promise.all([starting, switching]);
+    expect(first.setVoiceMode).toHaveBeenLastCalledWith(false);
+    expect(engine.stopCapture).toHaveBeenCalled();
+    expect(runtime.getSnapshot()).toMatchObject({
+      isVoiceMode: true,
+      activeServerId: "server-2",
+      activeAgentId: "agent-2",
+    });
+    await runtime.destroy();
+  });
+
   it("an old host gets no durable attachment, so no receipts are read", async () => {
     const adapter = createSessionAdapter();
     const { runtime, engine } = createRuntime({

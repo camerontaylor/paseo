@@ -452,6 +452,8 @@ export const en = {
       viewDiagram: "View diagram",
     },
     actions: {
+      pinToStream: "Pin to stream",
+      trackQAndA: "Track Q&A",
       copyCode: "Copy code",
       copyTurn: "Copy turn",
       copyMessage: "Copy message",

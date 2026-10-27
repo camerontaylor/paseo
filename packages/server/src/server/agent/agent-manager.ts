@@ -2373,64 +2373,66 @@ export class AgentManager {
     answerText?: string;
     sourceId?: string;
   }): Promise<void> {
-    const liveAgent = this.getAgent(input.agentId);
-    let entries = liveAgent?.companionEntries;
-    if (!liveAgent) {
-      if (!this.registry) return;
-      const stored = await this.registry.get(input.agentId);
-      if (!stored) return;
-      entries = restoreCompanionEntries({ companionEntries: stored.companionEntries });
-    } else {
-      entries = entries ?? [];
-    }
-
-    if (!entries) return;
-    let next = [...entries];
-
-    if (input.action === "update_status" && input.entryId && input.status) {
-      next = next.map((e) =>
-        e.id === input.entryId && (e.kind === "question" || e.kind === "feature_request")
-          ? { ...e, status: input.status as "open" | "reviewed" | "done" }
-          : e,
-      );
-    } else if (input.action === "add_pin") {
-      const pinId = `pin:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const appended = appendManualCompanionEntry(next, {
-        id: pinId,
-        kind: "pin",
-        timestamp: new Date().toISOString(),
-        text: input.text ?? "",
-        truncated: false,
-        sourceId: input.sourceId,
-      });
-      if (appended.error) {
-        throw new Error(appended.error);
+    await this.runLifecycleMutation(input.agentId, async () => {
+      const liveAgent = this.agents.get(input.agentId);
+      let entries = liveAgent?.companionEntries;
+      if (!liveAgent) {
+        if (!this.registry) return;
+        const stored = await this.registry.get(input.agentId);
+        if (!stored) return;
+        entries = restoreCompanionEntries({ companionEntries: stored.companionEntries });
+      } else {
+        entries = entries ?? [];
       }
-      next = appended.entries;
-    } else if (input.action === "remove_pin" && input.entryId) {
-      next = next.filter((e) => !(e.id === input.entryId && e.kind === "pin"));
-    } else if (input.action === "add_q_and_a") {
-      const qnaId = `qa:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const appended = appendManualCompanionEntry(next, {
-        id: qnaId,
-        kind: "q_and_a",
-        timestamp: new Date().toISOString(),
-        text: input.text ?? "",
-        answer: input.answerText,
-        truncated: false,
-      });
-      if (appended.error) {
-        throw new Error(appended.error);
-      }
-      next = appended.entries;
-    }
 
-    if (liveAgent) {
-      liveAgent.companionEntries = next;
-      this.emitState(liveAgent, { persist: true });
-    } else {
-      await this.writeStoredMetadata(input.agentId, { companionEntries: next });
-    }
+      if (!entries) return;
+      let next = [...entries];
+
+      if (input.action === "update_status" && input.entryId && input.status) {
+        next = next.map((e) =>
+          e.id === input.entryId && (e.kind === "question" || e.kind === "feature_request")
+            ? { ...e, status: input.status as "open" | "reviewed" | "done" }
+            : e,
+        );
+      } else if (input.action === "add_pin") {
+        const pinId = `pin:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+        const appended = appendManualCompanionEntry(next, {
+          id: pinId,
+          kind: "pin",
+          timestamp: new Date().toISOString(),
+          text: input.text ?? "",
+          truncated: false,
+          sourceId: input.sourceId,
+        });
+        if (appended.error) {
+          throw new Error(appended.error);
+        }
+        next = appended.entries;
+      } else if (input.action === "remove_pin" && input.entryId) {
+        next = next.filter((e) => !(e.id === input.entryId && e.kind === "pin"));
+      } else if (input.action === "add_q_and_a") {
+        const qnaId = `qa:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+        const appended = appendManualCompanionEntry(next, {
+          id: qnaId,
+          kind: "q_and_a",
+          timestamp: new Date().toISOString(),
+          text: input.text ?? "",
+          answer: input.answerText,
+          truncated: false,
+        });
+        if (appended.error) {
+          throw new Error(appended.error);
+        }
+        next = appended.entries;
+      }
+
+      if (liveAgent) {
+        liveAgent.companionEntries = next;
+        this.emitState(liveAgent, { persist: true });
+      } else {
+        await this.writeStoredMetadata(input.agentId, { companionEntries: next });
+      }
+    });
   }
 
   async detachAgent(agentId: string): Promise<{
@@ -5084,7 +5086,7 @@ export class AgentManager {
   private async collectArtifactsForTurn(agent: ActiveManagedAgent): Promise<void> {
     try {
       const collection = await this.artifactCollector.finishTurn(agent.id, agent.artifacts);
-      if (!collection) {
+      if (!collection || this.agents.get(agent.id) !== agent) {
         return;
       }
       agent.artifacts = collection.artifacts;

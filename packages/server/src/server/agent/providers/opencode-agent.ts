@@ -2463,6 +2463,7 @@ function appendOpenCodeChildSessionDetected(
 ): boolean {
   if (
     child.id === state.sessionId ||
+    state.sideQuestionSessionIds?.has(child.id) === true ||
     !isOpenCodeSessionTrackedByParent(child.parentSessionId, state)
   ) {
     return false;
@@ -4262,6 +4263,7 @@ class OpenCodeAgentSession implements AgentSession {
     statusesByDirectory: Map<string, Record<string, unknown> | null>,
     recovered: boolean,
   ): Promise<void> {
+    if (this.sideQuestionSessionIds.has(child.id)) return;
     const directory = child.directory ?? this.config.cwd;
     const snapshot = statusesByDirectory.get(directory) ?? null;
     const status = readOpenCodeRecord(snapshot?.[child.id]);

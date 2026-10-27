@@ -460,6 +460,8 @@ export const es: TranslationResources = {
       viewDiagram: "Ver diagrama",
     },
     actions: {
+      pinToStream: "Fijar en el flujo",
+      trackQAndA: "Seguir preguntas y respuestas",
       copyCode: "Copiar código",
       copyTurn: "Copiar turno",
       copyMessage: "Copiar mensaje",

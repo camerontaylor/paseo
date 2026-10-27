@@ -465,6 +465,7 @@ describe("WorkspaceScriptsButton", () => {
       fireEvent.click(document.querySelector('[data-testid="workspace-scripts-button"]')!);
     });
     await waitFor(() => expect(document.body.textContent).toContain("Invalid package.json"));
+    expect(document.body.textContent).not.toContain("No scripts");
     listWorkspaceScriptsMock.mockResolvedValue({
       error: null,
       scripts: [

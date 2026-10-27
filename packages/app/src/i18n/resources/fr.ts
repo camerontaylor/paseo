@@ -460,6 +460,8 @@ export const fr: TranslationResources = {
       viewDiagram: "Afficher le diagramme",
     },
     actions: {
+      pinToStream: "Épingler dans le flux",
+      trackQAndA: "Suivre les questions et réponses",
       copyCode: "Copier le code",
       copyTurn: "Copier l’échange",
       copyMessage: "Copier le message",

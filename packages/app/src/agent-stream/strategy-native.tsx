@@ -130,6 +130,14 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
   // Chat find scrolls by message id without re-registering the viewport handle per row change.
   const historyRowsRef = useRef(historyRows);
   historyRowsRef.current = historyRows;
+  const scrollRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retriedScrollRowRef = useRef<string | null>(null);
+  const clearScrollRetry = useCallback(() => {
+    if (scrollRetryRef.current !== null) clearTimeout(scrollRetryRef.current);
+    scrollRetryRef.current = null;
+    retriedScrollRowRef.current = null;
+  }, []);
+  useEffect(() => clearScrollRetry, [agentId, clearScrollRetry]);
   const liveHeadRef = useRef(segments.liveHead);
   liveHeadRef.current = segments.liveHead;
   const getHistoryStartPaginationInput = useStableEvent((): HistoryStartPaginationInput => {
@@ -368,6 +376,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
         markNativeViewportSettling();
       },
       scrollToMessage: (messageId) => {
+        clearScrollRetry();
         const matches = (item: StreamItem) =>
           item.id === messageId || getStreamItemMessageId(item) === messageId;
         const index = historyRowsRef.current.findIndex(matches);
@@ -389,7 +398,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
         viewportRef.current = null;
       }
     };
-  }, [agentId, bottomAnchorController, markNativeViewportSettling, viewportRef]);
+  }, [agentId, bottomAnchorController, clearScrollRetry, markNativeViewportSettling, viewportRef]);
 
   const isScrollEventNearBottom = useStableEvent(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -443,11 +452,16 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
   // Variable row heights and no getItemLayout: estimate, let the list measure, retry once.
   const handleScrollToIndexFailed = useStableEvent(
     (info: { index: number; averageItemLength: number }) => {
+      const row = historyRowsRef.current[info.index];
+      if (!row || scrollRetryRef.current !== null || retriedScrollRowRef.current === row.id) return;
+      retriedScrollRowRef.current = row.id;
       flatListRef.current?.scrollToOffset({
         offset: info.averageItemLength * info.index,
         animated: false,
       });
-      setTimeout(() => {
+      scrollRetryRef.current = setTimeout(() => {
+        scrollRetryRef.current = null;
+        if (historyRowsRef.current[info.index]?.id !== row.id) return;
         flatListRef.current?.scrollToIndex({
           index: info.index,
           viewPosition: 0.5,

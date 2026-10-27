@@ -11,8 +11,7 @@ import {
   type MenuPageDefinition,
 } from "@/components/ui/dropdown-menu";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
-import { useSessionStore } from "@/stores/session-store";
-import { useFetchQuery } from "@/data/query";
+import { usePackageScriptDiscovery } from "./use-package-script-discovery";
 import type { Theme } from "@/styles/theme";
 import { openServiceUrl } from "@/utils/open-service-url";
 import type {
@@ -104,35 +103,12 @@ export function useWorkspaceScriptsMenuPages({
   menuOpen = false,
 }: UseWorkspaceScriptsMenuPagesInput): WorkspaceScriptsMenuPages {
   const { t } = useTranslation();
-  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
-  // COMPAT(packageJsonScripts): added in fork v0.10.1, remove gate after 2027-04-01.
-  const supportsPackages = useSessionStore(
-    (state) => state.sessions[serverId]?.serverInfo?.features?.packageJsonScripts === true,
-  );
-  const packageQuery = useFetchQuery({
-    dataShape: "value",
-    staleTimeMs: 0,
-    queryKey: ["workspace-package-scripts", serverId, workspaceId],
-    enabled: menuOpen && supportsPackages && client !== null,
-    queryFn: async () => {
-      if (!client) throw new Error(t("common.errors.daemonClientUnavailable"));
-      const result = await client.listWorkspaceScripts(workspaceId);
-      if (result.error) throw new Error(result.error);
-      return { scripts: result.scripts ?? [] };
-    },
+  const { scripts, packageQuery, supportsPackages } = usePackageScriptDiscovery({
+    serverId,
+    workspaceId,
+    scripts: workspaceScripts,
+    menuOpen,
   });
-  const scripts = useMemo(() => {
-    if (!packageQuery.data) return workspaceScripts;
-    const live = new Map(workspaceScripts.map((script) => [script.scriptName, script]));
-    const discovered = packageQuery.data.scripts.filter((script) => script.packageJson);
-    const packageIds = new Set(discovered.map((script) => script.scriptName));
-    const configured = workspaceScripts.filter(
-      (script) =>
-        !script.packageJson ||
-        (script.lifecycle === "running" && !packageIds.has(script.scriptName)),
-    );
-    return [...configured, ...discovered.map((script) => live.get(script.scriptName) ?? script)];
-  }, [packageQuery.data, workspaceScripts]);
   const retryDiscovery = useCallback(() => {
     void packageQuery.refetch();
   }, [packageQuery]);

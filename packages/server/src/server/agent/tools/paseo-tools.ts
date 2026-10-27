@@ -2780,6 +2780,29 @@ function createToolCatalog(
   );
 
   registerTool(
+    "list_heartbeats",
+    {
+      title: "List heartbeats",
+      description: "List your heartbeats.",
+      inputSchema: {},
+      outputSchema: { schedules: z.array(ScheduleSummarySchema) },
+    },
+    async () => {
+      if (!scheduleService) throw new Error("Schedule service is not configured");
+      if (!callerAgentId) {
+        throw new PaseoToolInputError("list_heartbeats requires an agent-scoped session");
+      }
+      const schedules = (await scheduleService.list())
+        .filter(
+          (schedule) =>
+            schedule.target.type === "agent" && schedule.target.agentId === callerAgentId,
+        )
+        .map((schedule) => toScheduleSummary(schedule));
+      return { content: [], structuredContent: ensureValidJson({ schedules }) };
+    },
+  );
+
+  registerTool(
     "delete_heartbeat",
     {
       title: "Delete heartbeat",
@@ -2804,7 +2827,8 @@ function createToolCatalog(
     "list_schedules",
     {
       title: "List schedules",
-      description: "List all schedules managed by the daemon.",
+      description:
+        "List new-agent schedules managed by the daemon. Use list_heartbeats for your own heartbeats.",
       inputSchema: {},
       outputSchema: {
         schedules: z.array(ScheduleSummarySchema),
@@ -2815,9 +2839,9 @@ function createToolCatalog(
         throw new Error("Schedule service is not configured");
       }
 
-      const schedules = (await scheduleService.list()).map((schedule) =>
-        toScheduleSummary(schedule),
-      );
+      const schedules = (await scheduleService.list())
+        .filter((schedule) => schedule.target.type === "new-agent")
+        .map((schedule) => toScheduleSummary(schedule));
       return {
         content: [],
         structuredContent: ensureValidJson({ schedules }),

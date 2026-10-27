@@ -450,6 +450,8 @@ export const zhCN: TranslationResources = {
       viewDiagram: "查看图表",
     },
     actions: {
+      pinToStream: "固定到动态流",
+      trackQAndA: "跟踪问答",
       copyCode: "复制代码",
       copyTurn: "复制回合",
       copyMessage: "复制消息",

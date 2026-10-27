@@ -11,6 +11,7 @@ export interface AgentInputSubmitActionInput<TAttachment> {
   forceSend?: boolean;
   isAgentRunning: boolean;
   canSubmit: boolean;
+  /** Owns clearing the draft after a recoverable queue admission. */
   queueMessage: (input: { message: string; attachments: TAttachment[] }) => void;
   submitMessage: (input: { message: string; attachments: TAttachment[] }) => Promise<void>;
   clearDraft: (lifecycle: "sent" | "abandoned") => void;
@@ -44,10 +45,6 @@ export async function submitAgentInput<TAttachment>(
 
   if (input.isAgentRunning && !input.forceSend) {
     input.queueMessage({ message: trimmedMessage, attachments });
-    if (shouldClearOnSubmit) {
-      input.setUserInput("");
-      input.setAttachments([]);
-    }
     return "queued";
   }
 

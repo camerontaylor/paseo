@@ -1574,6 +1574,8 @@ function ComposerContentImpl({
   useEffect(() => () => cursorPublication.cancel(), [cursorPublication]);
   const autocompleteRef = useRef<ComposerAutocompleteHandle>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isQueuePreparing, setIsQueuePreparing] = useState(false);
+  const queuePreparingRef = useRef(false);
   const [pendingFiles, setPendingFiles] = useState<PendingFileAttachment[]>([]);
   const nextPendingFileId = useRef(0);
   const isUploadingFile = pendingFiles.length > 0;
@@ -1600,7 +1602,8 @@ function ComposerContentImpl({
     workspaceId,
     agentId,
   });
-  const isComposerLocked = resolveIsComposerLocked(submitBehavior, isSubmitLoading);
+  const isComposerLocked =
+    isQueuePreparing || resolveIsComposerLocked(submitBehavior, isSubmitLoading);
   const keyboardHandlerIdRef = useRef(
     `message-input:${serverId}:${agentId}:${Math.random().toString(36).slice(2)}`,
   );
@@ -1877,13 +1880,22 @@ function ComposerContentImpl({
   const queueMessage = useCallback(
     (queuedMessage: string, queuedAttachments: ComposerAttachment[]) => {
       const clearComposer = () => {
-        setUserInput("");
+        replaceUserInput("");
         setSelectedAttachments([]);
         resetSuppression();
-        clearSentAttachments(queuedAttachments);
       };
 
       if (supportsDurableQueue && client) {
+        if (queuePreparingRef.current) return;
+        queuePreparingRef.current = true;
+        setIsQueuePreparing(true);
+        let preparingFinished = false;
+        const finishPreparing = () => {
+          if (preparingFinished) return;
+          preparingFinished = true;
+          queuePreparingRef.current = false;
+          setIsQueuePreparing(false);
+        };
         void (async () => {
           const result = await queueComposerMessageOnServer({
             client,
@@ -1897,12 +1909,18 @@ function ComposerContentImpl({
             queue: queueWriter,
             applySnapshot: (snapshot) => applyAgentQueueSnapshot(serverId, snapshot),
             outbox: queueOutbox,
+            onAdmitted: () => {
+              clearComposer();
+              clearSentAttachments(queuedAttachments);
+              finishPreparing();
+            },
           });
-          if (result.error) {
-            setSendError(result.error);
-          }
-        })();
-        clearComposer();
+          if (result.error) setSendError(result.error);
+        })()
+          .catch((error: unknown) => {
+            setSendError(resolveErrorMessage(error) ?? t("composer.errors.failedToSend"));
+          })
+          .finally(finishPreparing);
         return;
       }
 
@@ -1915,6 +1933,7 @@ function ComposerContentImpl({
       if (!result.queued) return;
 
       clearComposer();
+      clearSentAttachments(queuedAttachments);
     },
     [
       agentId,
@@ -1926,7 +1945,8 @@ function ComposerContentImpl({
       resetSuppression,
       serverId,
       setSelectedAttachments,
-      setUserInput,
+      replaceUserInput,
+      t,
       supportsDurableQueue,
       supportsForgeSearch,
     ],
@@ -2942,7 +2962,11 @@ function ComposerContentImpl({
   const messageInputContainerRef = useRef<View>(null);
 
   const isSubmitLoadingVisible =
-    isProcessing || isSubmitLoading || isUploadingFile || pendingNativeImagePastes > 0;
+    isQueuePreparing ||
+    isProcessing ||
+    isSubmitLoading ||
+    isUploadingFile ||
+    pendingNativeImagePastes > 0;
   const isSubmitDisabled =
     isSubmitLoadingVisible || (waitForForgeAutoAttachOnSubmit && isForgeResolving);
 
@@ -3043,7 +3067,7 @@ function ComposerContentImpl({
                   placeholder={messagePlaceholder}
                   autoFocus={messageInputAutoFocus}
                   autoFocusKey={`${serverId}:${agentId}:${autoFocusKey ?? ""}`}
-                  disabled={isSubmitLoading}
+                  disabled={isSubmitLoading || isQueuePreparing}
                   leftContent={leftContent}
                   beforeVoiceContent={beforeVoiceContent}
                   rightContent={rightContent}

@@ -531,6 +531,8 @@ export interface QueueComposerMessageOnServerInput {
   queue: QueueWriter;
   applySnapshot: (snapshot: AgentQueueSnapshot) => void;
   outbox?: QueueOutboxWriter;
+  /** Called once the outbox or daemon owns a recoverable copy of the draft. */
+  onAdmitted?: () => void;
 }
 
 /**
@@ -593,11 +595,17 @@ export async function queueComposerMessageOnServer(
     attachments: wirePayload.attachments,
     composerAttachments: toQueuedComposerAttachments(input.attachments),
   };
-  input.outbox?.add(enqueueInput);
+  try {
+    input.outbox?.add(enqueueInput);
+  } catch (error) {
+    return rollBack(error);
+  }
+  if (input.outbox) input.onAdmitted?.();
   try {
     const snapshot = await input.client.enqueueAgentMessage(enqueueInput);
     input.outbox?.remove(enqueueInput.itemId);
     input.applySnapshot(snapshot);
+    if (!input.outbox) input.onAdmitted?.();
     return optimistic;
   } catch (error) {
     if (input.outbox) {
@@ -660,12 +668,6 @@ export async function takeQueuedComposerMessage(
 
   try {
     const images = await input.client.getQueuedAgentMessageImages(input.agentId, input.messageId);
-    const snapshot = await input.client.deleteQueuedAgentMessage(
-      input.agentId,
-      input.messageId,
-      input.expectedRevision,
-    );
-    input.applySnapshot(snapshot);
     const restoredImages = await Promise.all(
       images.map(async (image) => ({
         kind: "image" as const,
@@ -676,6 +678,12 @@ export async function takeQueuedComposerMessage(
         }),
       })),
     );
+    const snapshot = await input.client.deleteQueuedAgentMessage(
+      input.agentId,
+      input.messageId,
+      input.expectedRevision,
+    );
+    input.applySnapshot(snapshot);
     return {
       status: "taken",
       text: item.text,

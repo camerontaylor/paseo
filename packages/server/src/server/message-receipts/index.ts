@@ -100,7 +100,12 @@ export class MessageReceipts {
     const records = await Promise.all(
       files
         .filter((name) => name.endsWith(".json"))
-        .map((name) => readReceipt(path.join(this.directory, name))),
+        .map((name) =>
+          readReceipt(path.join(this.directory, name)).catch((error: unknown) => {
+            if (error instanceof SyntaxError || error instanceof z.ZodError) return null;
+            throw error;
+          }),
+        ),
     );
     const byId = new Map<string, VoiceInputReceipt>();
     const priority = { pending: 0, sending: 1, completed: 2, removed: 3 };

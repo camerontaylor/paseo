@@ -1297,7 +1297,7 @@ export async function setCheckoutBaseRef(
     exactRef = hasOrigin ? `refs/remotes/origin/${requested}` : `refs/heads/${requested}`;
   }
   const selectedBaseName = branchNameFromRef(exactRef);
-  if (facts.currentBranch && exactRef === `refs/heads/${facts.currentBranch}`) {
+  if (facts.currentBranch && selectedBaseName === facts.currentBranch) {
     throw new Error(`Base branch cannot be the current branch: ${selectedBaseName}`);
   }
 
@@ -1470,13 +1470,17 @@ async function getGitConfigValue(
   cwd: string,
   key: string,
   context?: CheckoutContext,
+  scope?: "local",
 ): Promise<string | null> {
   try {
-    const { stdout } = await getRunGitCommand(context)(["config", "--get", key], {
-      cwd,
-      envOverlay: READ_ONLY_GIT_ENV,
-      logger: context?.logger,
-    });
+    const { stdout } = await getRunGitCommand(context)(
+      ["config", ...(scope ? ["--local"] : []), "--get", key],
+      {
+        cwd,
+        envOverlay: READ_ONLY_GIT_ENV,
+        logger: context?.logger,
+      },
+    );
     const value = stdout.trim();
     return value.length > 0 ? value : null;
   } catch {
@@ -1661,9 +1665,14 @@ export async function resolveRepositoryDefaultBranch(
     repoRoot,
     PASEO_BASE_BRANCH_CONFIG_KEY,
     context,
+    "local",
   );
   if (configuredBaseBranch) {
-    return configuredBaseBranch;
+    let ref = configuredBaseBranch;
+    if (!isQualifiedBranchRef(ref)) {
+      ref = ref.startsWith("origin/") ? `refs/remotes/${ref}` : `refs/heads/${ref}`;
+    }
+    if (await doesGitRefExist(repoRoot, ref, context)) return configuredBaseBranch;
   }
   try {
     const { stdout } = await getRunGitCommand(context)(

@@ -995,8 +995,6 @@ interface QueueMessageContext {
   attachments: ComposerAttachment[];
   cwd: string;
   onQueue: ((payload: MessagePayload) => void) | undefined;
-  replaceText: (text: string) => void;
-  onMinimizeHeight: () => void;
   exitFullscreen: () => void;
 }
 
@@ -1006,8 +1004,6 @@ function queueMessageImpl(ctx: QueueMessageContext): void {
   if (!trimmed && ctx.attachments.length === 0) return;
   ctx.exitFullscreen();
   ctx.onQueue({ text: trimmed, attachments: ctx.attachments, cwd: ctx.cwd });
-  ctx.replaceText("");
-  ctx.onMinimizeHeight();
 }
 
 function computeIsRealtimeVoiceForAgent(
@@ -1702,11 +1698,9 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           attachments,
           cwd,
           onQueue,
-          replaceText,
-          onMinimizeHeight: minimizeInputHeight,
           exitFullscreen,
         }),
-      [attachments, cwd, onQueue, replaceText, minimizeInputHeight, exitFullscreen],
+      [attachments, cwd, onQueue, exitFullscreen],
     );
 
     const handleDefaultSendAction = useCallback(() => {

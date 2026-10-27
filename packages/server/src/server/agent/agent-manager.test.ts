@@ -63,6 +63,7 @@ import type {
 } from "./agent-sdk-types.js";
 import type { PaseoToolCatalog } from "./tools/types.js";
 import type { ProviderDefinition } from "./provider-registry.js";
+import type { AgentArtifactCollector } from "./artifacts/collector.js";
 
 const DESKTOP_OPEN_AGENT_TAB_LABEL = getOpenAgentTabLabel("desktop-client");
 const MOBILE_OPEN_AGENT_TAB_LABEL = getOpenAgentTabLabel("mobile-client");
@@ -1767,6 +1768,106 @@ test("flush waits for rejected session cleanup that starts after shutdown", asyn
   expect(await creation).toBeInstanceOf(AgentManagerShuttingDownError);
   await flushing;
   expect(manager.listAgents()).toEqual([]);
+});
+
+test.each([true, false])("retains concurrent companion edits with live=%s", async (live) => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-companion-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    if (!live) await manager.closeAgent(agent.id);
+    await Promise.all([
+      manager.updateCompanionEntry({ agentId: agent.id, action: "add_pin", text: "pin" }),
+      manager.updateCompanionEntry({
+        agentId: agent.id,
+        action: "add_q_and_a",
+        text: "question",
+        answerText: "answer",
+      }),
+    ]);
+    if (live) {
+      manager.notifyAgentState(agent.id);
+      expect(manager.getAgent(agent.id)?.companionEntries).toMatchObject([
+        { kind: "pin", text: "pin" },
+        { kind: "q_and_a", text: "question", answer: "answer" },
+      ]);
+      await manager.closeAgent(agent.id);
+    }
+    await storage.flush();
+    expect((await storage.get(agent.id))?.companionEntries).toMatchObject([
+      { kind: "pin", text: "pin" },
+      { kind: "q_and_a", text: "question", answer: "answer" },
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id);
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("artifact collection completing after closure preserves the closed snapshot", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-artifact-close-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+  });
+  const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const internals = asInternals<{
+    agents: Map<string, ManagedAgent>;
+    artifactCollector: AgentArtifactCollector;
+    collectArtifactsForTurn(agent: ManagedAgent): Promise<void>;
+  }>(manager);
+  const agent = internals.agents.get(created.id)!;
+  const collected = deferred<void>();
+  const release = deferred<void>();
+  const finishTurn = internals.artifactCollector.finishTurn.bind(internals.artifactCollector);
+  // Hold a real filesystem collection at its completion boundary to reproduce closure mid-scan.
+  const spy = vi
+    .spyOn(internals.artifactCollector, "finishTurn")
+    .mockImplementation(async (...args) => {
+      const result = await finishTurn(...args);
+      collected.resolve();
+      await release.promise;
+      return result;
+    });
+  const states: string[] = [];
+  const unsubscribe = manager.subscribe(
+    (event) => {
+      if (event.type === "agent_state") states.push(event.agent.lifecycle);
+    },
+    { agentId: created.id, replayState: false },
+  );
+  try {
+    internals.artifactCollector.beginTurn(created.id, workdir);
+    writeFileSync(join(workdir, "result.md"), "result");
+    const collecting = internals.collectArtifactsForTurn(agent);
+    await collected.promise;
+    await manager.closeAgent(created.id);
+    states.length = 0;
+    release.resolve();
+    await collecting;
+    await storage.flush();
+    expect(states).toEqual([]);
+    expect((await storage.get(created.id))?.lastStatus).toBe("closed");
+  } finally {
+    release.resolve();
+    spy.mockRestore();
+    unsubscribe();
+    await manager.closeAgent(created.id);
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test("does not persist an initializing session after shutdown closes it", async () => {

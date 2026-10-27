@@ -56,7 +56,7 @@ Gradle auto-fetches the rest once licenses are accepted — newer platform/build
 `avdmanager` honours `XDG_CONFIG_HOME` and writes AVDs to `$XDG_CONFIG_HOME/.android/avd`. The `emulator` binary does not — it searches only `$ANDROID_AVD_HOME`, `$ANDROID_SDK_HOME/avd`, and `$HOME/.android/avd`. So if you set `XDG_CONFIG_HOME`, the two halves of the same SDK disagree: `avdmanager list avd` shows `paseo` while `emulator @paseo` dies with `Unknown AVD name [paseo]`. Export the bridge:
 
 ```bash
-export ANDROID_AVD_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/.android/avd"
+export ANDROID_AVD_HOME="${XDG_CONFIG_HOME:-$HOME}/.android/avd"
 emulator -list-avds     # must print `paseo` before `emulator @paseo` will work
 ```
 
@@ -109,8 +109,8 @@ npm run dev:android     # Build/install the debug app and start development
 npm run dev:ios         # Build/install the iOS development app
 ```
 
-A debug build compiles native code for all four ABIs by default (`reactNativeArchitectures` in
-`packages/app/android/gradle.properties`). An emulator only needs one, and Skia, Reanimated,
+A debug build compiles native code for the ABIs listed by `reactNativeArchitectures` in
+the generated `packages/app/android/gradle.properties`. An emulator only needs one, and Skia, Reanimated,
 Worklets and friends dominate a cold build, so restrict it when you are only targeting the
 emulator:
 
@@ -172,7 +172,7 @@ PASEO_PROFILE_BUILD=1 npm run android:production
 Those markers emit only while a system trace records `sh.paseo` (`perfetto -a sh.paseo ...`);
 they do not produce Downloads files.
 
-Debug builds compile both 64-bit ABIs (`arm64-v8a` and `x86_64`). Testing against an Intel-hosted x86_64 emulator needs only one of them — `-PreactNativeArchitectures=x86_64`, the property the F-Droid section below uses, halves the native compile once `expo prebuild` has generated `android/`.
+For emulator builds, restrict the architecture as described under [Local build + install](#local-build--install).
 
 ## Running on an emulator against a worktree daemon
 

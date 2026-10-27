@@ -8,6 +8,7 @@ import {
   Copy,
   CopyX,
   Ellipsis,
+  FileCode2,
   MessageCirclePlus,
   Pencil,
   RotateCw,
@@ -26,6 +27,7 @@ import type { WorkspaceTabMenuEntry } from "@/screens/workspace/workspace-tab-me
 import type { Theme } from "@/styles/theme";
 
 const ThemedEllipsis = withUnistyles(Ellipsis);
+const ThemedFileCode2 = withUnistyles(FileCode2);
 const ThemedCopy = withUnistyles(Copy);
 const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedArrowLeftToLine = withUnistyles(ArrowLeftToLine);
@@ -64,6 +66,8 @@ function MobileTabDropdownMenuItem({
         return <ThemedCopyX size={16} uniProps={mutedColorMapping} />;
       case "message-circle-plus":
         return <ThemedMessageCirclePlus size={16} uniProps={mutedColorMapping} />;
+      case "file-code-2":
+        return <ThemedFileCode2 size={16} uniProps={mutedColorMapping} />;
       case "pencil":
         return <ThemedPencil size={16} uniProps={mutedColorMapping} />;
       case "x":

@@ -8543,3 +8543,121 @@ test("closes before admission when a protected-capable daemon is reached in lega
   expect(daemonReceived).toHaveLength(1);
   expect(JSON.parse(daemonReceived[0] as string)).toMatchObject({ type: "hello" });
 });
+
+const gatedCompanionRpcs = [
+  {
+    feature: "companionStreamPortV1",
+    call: (client: DaemonClient) =>
+      client.updateCompanionEntry({ agentId: "agent-1", action: "add_pin", text: "note" }),
+    responseType: "agent.companion.update_entry.response",
+    payload: { agentId: "agent-1", accepted: true, error: null },
+    error: "Update the host to use the companion stream.",
+    expected: undefined,
+  },
+  {
+    feature: "agentArtifactsScan",
+    call: (client: DaemonClient) => client.scanAgentArtifacts("agent-1"),
+    responseType: "agent.artifacts.scan.response",
+    payload: { agentId: "agent-1", accepted: true, addedOrUpdated: 1, total: 1, error: null },
+    error: "Update the host to scan agent artifacts.",
+    expected: { addedOrUpdated: 1, total: 1 },
+  },
+  {
+    feature: "durableVoiceInputV1",
+    call: (client: DaemonClient) =>
+      client.readVoiceInputReceipts({
+        agentId: "agent-1",
+        attachmentId: "voice-1",
+        generation: "generation-1",
+      }),
+    responseType: "voice.input.receipts.read.response",
+    payload: {
+      agentId: "agent-1",
+      attachmentId: "voice-1",
+      items: [],
+      nextCursor: null,
+      error: null,
+    },
+    error: "Update the host to read voice input receipts.",
+    expected: expect.objectContaining({
+      agentId: "agent-1",
+      attachmentId: "voice-1",
+      items: [],
+      nextCursor: null,
+      error: null,
+    }),
+  },
+];
+test.each(gatedCompanionRpcs)(
+  "rejects $feature RPCs before sending to an old host",
+  async (rpc) => {
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_unit_test",
+      logger: createMockLogger(),
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+    const connected = client.connect();
+    mock.triggerOpen();
+    await connected;
+    await expect(rpc.call(client)).rejects.toThrow(rpc.error);
+    expect(mock.sent).toHaveLength(0);
+  },
+);
+test.each(gatedCompanionRpcs)("dispatches $feature RPCs to a capable host", async (rpc) => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  mock.triggerOpen({ features: { [rpc.feature]: true } });
+  await connected;
+  const result = rpc.call(client);
+  await vi.waitFor(() => expect(mock.sent).toHaveLength(1));
+  const request = parseSentFrame(mock.sent[0]);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: rpc.responseType,
+      payload: { ...rpc.payload, requestId: request.requestId },
+    }),
+  );
+  await expect(result).resolves.toEqual(rpc.expected);
+  expect(mock.sent).toHaveLength(1);
+});
+
+test.each(gatedCompanionRpcs)(
+  "queues $feature RPCs while connecting to a capable host",
+  async (rpc) => {
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_unit_test",
+      logger: createMockLogger(),
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+    const connected = client.connect();
+    const result = rpc.call(client);
+    expect(mock.sent).toHaveLength(0);
+    mock.triggerOpen({ features: { [rpc.feature]: true } });
+    await connected;
+    await vi.waitFor(() => expect(mock.sent).toHaveLength(1));
+    const request = parseSentFrame(mock.sent[0]);
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: rpc.responseType,
+        payload: { ...rpc.payload, requestId: request.requestId },
+      }),
+    );
+    await expect(result).resolves.toEqual(rpc.expected);
+  },
+);

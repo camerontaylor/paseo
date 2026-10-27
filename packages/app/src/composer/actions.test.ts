@@ -1099,6 +1099,67 @@ function createFakeQueueClient(
 }
 
 describe("queueComposerMessageOnServer", () => {
+  it.each(["encoding", "outbox", "enqueue"])(
+    "keeps the draft until admission succeeds: %s failure",
+    async (failure) => {
+      const onAdmitted = vi.fn();
+      const result = await queueComposerMessageOnServer({
+        client: createFakeQueueClient({
+          enqueueAgentMessage: async () => {
+            throw new Error("enqueue failed");
+          },
+        }),
+        agentId: "agent",
+        text: "original draft",
+        attachments: [{ kind: "image", metadata: imageMetadata }],
+        encodeImages: async () => {
+          if (failure === "encoding") throw new Error("encoding failed");
+          return [];
+        },
+        queue: createFakeQueue(),
+        applySnapshot: () => {},
+        onAdmitted,
+        outbox:
+          failure === "enqueue"
+            ? undefined
+            : {
+                add: () => {
+                  if (failure === "outbox") throw new Error("outbox failed");
+                },
+                remove: () => {},
+              },
+      });
+      expect(result.error).toBe(`${failure} failed`);
+      expect(onAdmitted).not.toHaveBeenCalled();
+    },
+  );
+
+  it("releases the draft after storing the outbox, before awaiting the daemon", async () => {
+    const events: string[] = [];
+    let rejectEnqueue!: (error: Error) => void;
+    const result = queueComposerMessageOnServer({
+      client: createFakeQueueClient({
+        enqueueAgentMessage: () => {
+          events.push("send");
+          return new Promise((_resolve, reject) => {
+            rejectEnqueue = reject;
+          });
+        },
+      }),
+      agentId: "agent",
+      text: "original draft",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      queue: createFakeQueue(),
+      applySnapshot: () => {},
+      onAdmitted: () => events.push("clear draft"),
+      outbox: { add: () => events.push("store copy"), remove: () => {} },
+    });
+    await vi.waitFor(() => expect(events).toEqual(["store copy", "clear draft", "send"]));
+    rejectEnqueue(new Error("offline"));
+    expect((await result).error).toBeUndefined();
+  });
+
   it("shows the message locally before the daemon answers, then applies the snapshot", async () => {
     const queue = createFakeQueue();
     const client = createFakeQueueClient();
@@ -1320,6 +1381,34 @@ describe("takeQueuedComposerMessage", () => {
       text: "look",
       attachments: [{ kind: "image", metadata: imageMetadata }],
     });
+  });
+
+  it("keeps the durable message when image persistence fails", async () => {
+    const item = { id: "item-1", text: "look", attachments: [] };
+    const queue = createFakeQueue(new Map([["agent", [item]]]));
+    const client = createFakeQueueClient({
+      getQueuedAgentMessageImages: async () => [
+        { id: "srv-1", mimeType: "image/png", data: "AAAA" },
+      ],
+    });
+    const snapshots: AgentQueueSnapshot[] = [];
+
+    const result = await takeQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "item-1",
+      expectedRevision: 0,
+      queue,
+      persistImage: async () => {
+        throw new Error("storage full");
+      },
+      applySnapshot: (snapshot) => snapshots.push(snapshot),
+    });
+
+    expect(result).toEqual({ status: "failed", errorMessage: "storage full" });
+    expect(client.removed).toEqual([]);
+    expect(snapshots).toEqual([]);
+    expect(queue.state.get("agent")).toEqual([item]);
   });
 
   it("reports missing when the message already drained", async () => {

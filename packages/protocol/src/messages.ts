@@ -4177,7 +4177,7 @@ export const ServerInfoStatusPayloadSchema = z
         // released daemon understands. Remove the gate after 2027-10-01 once
         // the supported daemon floor is past every 0.11.x host.
         durableAgentQueueV1: z.boolean().optional(),
-        // COMPAT(durableVoiceInputV1): fork addition (TM-04). Gates voice
+        // COMPAT(durableVoiceInputV1): added in fork v0.13.2, gate lasts while stock peers are supported. Gates voice
         // attachment admission into the durable agent queue; an old daemon
         // never answers voice.input.receipts.read requests.
         durableVoiceInputV1: z.boolean().optional(),
@@ -4202,6 +4202,8 @@ export const ServerInfoStatusPayloadSchema = z
         // that saw those names would expect the source's flat companion RPC, which this
         // daemon does not accept.
         companionStreamPortV1: z.boolean().optional(),
+        // COMPAT(agentArtifactsScan): added in fork v0.13.2, gate lasts while stock peers are supported.
+        agentArtifactsScan: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: z.boolean().optional(),
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
@@ -4224,7 +4226,7 @@ export const ServerInfoStatusPayloadSchema = z
         providerSubagentNesting: z.boolean().optional(),
         // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
         sideConversations: z.boolean().optional(),
-        // COMPAT(sideConversationEvents): added in 0.12.0-beta.1.fork.1 — session event
+        // COMPAT(sideConversationEvents): added in 0.12.0-beta.1.fork.1, remove after 2027-04-27 once the fork daemon floor includes event selectors. Session event
         // subscriptions can carry the side-conversation update/removal stream, so a modern
         // (owned-subscription) client can receive proofs for those events. Older fork daemons
         // advertise sideConversations without this selector support, so clients gate on it.

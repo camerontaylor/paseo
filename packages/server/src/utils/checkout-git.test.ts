@@ -3945,6 +3945,39 @@ const x = 1;
     expect(status).toMatchObject({ isGit: true, baseRef: "develop" });
   });
 
+  it("falls back when the configured repository base no longer exists", async () => {
+    execFileSync("git", ["config", "--local", "paseo.baseBranch", "refs/heads/deleted"], {
+      cwd: repoDir,
+    });
+    await expect(resolveRepositoryDefaultBranch(repoDir)).resolves.toBe("main");
+  });
+
+  it("ignores a base branch from global git config", async () => {
+    execFileSync("git", ["branch", "develop"], { cwd: repoDir });
+    const config = join(tempDir, "global.gitconfig");
+    writeFileSync(config, "[paseo]\nbaseBranch = develop\n");
+    const previous = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = config;
+    try {
+      await expect(resolveRepositoryDefaultBranch(repoDir)).resolves.toBe("main");
+    } finally {
+      if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = previous;
+    }
+  });
+
+  it.each(["main", "origin/main", "refs/remotes/origin/main"])(
+    "rejects current remote branch base %s",
+    async (ref) => {
+      execFileSync("git", ["update-ref", "refs/remotes/origin/main", "refs/heads/main"], {
+        cwd: repoDir,
+      });
+      await expect(setCheckoutBaseRef(repoDir, ref)).rejects.toThrow(
+        "Base branch cannot be the current branch: main",
+      );
+    },
+  );
+
   it("preserves a qualified local origin/foo base for a plain checkout", async () => {
     execFileSync("git", ["checkout", "-b", "origin/foo"], { cwd: repoDir });
     commitFile(repoDir, "local-origin-foo.txt", "local\n", "local origin/foo");

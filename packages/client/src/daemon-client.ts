@@ -3410,6 +3410,11 @@ export class DaemonClient {
     answerText?: string;
     sourceId?: string;
   }): Promise<void> {
+    await this.whenConnected();
+    // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+    if (this.lastServerInfoMessage?.features?.companionStreamPortV1 !== true) {
+      throw new Error("Update the host to use the companion stream.");
+    }
     const payload =
       await this.sendNamespacedCorrelatedSessionRequest<"agent.companion.update_entry.response">({
         message: {
@@ -3437,6 +3442,11 @@ export class DaemonClient {
     agentId: string,
     options?: { limit?: number },
   ): Promise<{ addedOrUpdated: number; total: number }> {
+    await this.whenConnected();
+    // COMPAT(agentArtifactsScan): added in fork v0.13.2, gate lasts while stock peers are supported.
+    if (this.lastServerInfoMessage?.features?.agentArtifactsScan !== true) {
+      throw new Error("Update the host to scan agent artifacts.");
+    }
     const payload =
       await this.sendNamespacedCorrelatedSessionRequest<"agent.artifacts.scan.response">({
         message: {
@@ -4531,6 +4541,11 @@ export class DaemonClient {
   }): Promise<
     Extract<SessionOutboundMessage, { type: "voice.input.receipts.read.response" }>["payload"]
   > {
+    await this.whenConnected();
+    // COMPAT(durableVoiceInputV1): added in fork v0.13.2, gate lasts while stock peers are supported.
+    if (this.lastServerInfoMessage?.features?.durableVoiceInputV1 !== true) {
+      throw new Error("Update the host to read voice input receipts.");
+    }
     const requestId = this.createRequestId();
     const response = await this.sendRequest({
       requestId,

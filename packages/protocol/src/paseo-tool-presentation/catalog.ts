@@ -270,6 +270,7 @@ export const PASEO_TOOL_CATALOG = {
     detail: { promptField: "prompt", inputOrder: AUTOMATION_FIELDS },
   },
   list_schedules: { label: "List schedules" },
+  list_heartbeats: { label: "List heartbeats" },
   inspect_schedule: {
     label: "Inspect schedule",
     context: field("id"),

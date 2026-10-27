@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -159,6 +159,31 @@ test("attachment receipts retain client authority across owner reconstruction", 
   ).toHaveLength(1);
 });
 
+test("attachment receipts survive malformed unrelated files", async () => {
+  const { requests, directory } = await fixture();
+  await requests.send({
+    agentId: "agent",
+    messageId: "attempt",
+    attachment: {
+      messageId: "speech",
+      attachmentId: "attachment",
+      createdAt: "2026-10-02T12:00:00.000Z",
+    },
+    request: {},
+    send: async () => {},
+  });
+  await writeFile(path.join(directory, "broken.json"), "{");
+  await writeFile(path.join(directory, "invalid.json"), JSON.stringify({ state: "invalid" }));
+  await expect(
+    new MessageReceipts(directory).listForAttachment({
+      agentId: "agent",
+      attachmentId: "attachment",
+    }),
+  ).resolves.toEqual([
+    { messageId: "speech", state: "completed", createdAt: "2026-10-02T12:00:00.000Z" },
+  ]);
+});
+
 test("in-flight dispatch is reported as sending, and removal waits for it", async () => {
   const { requests } = await fixture();
   const input = {
@@ -246,4 +271,12 @@ test("completed logical speech wins over an older ambiguous attempt", async () =
       voiceOwner: "owner",
     }),
   ).toEqual([expect.objectContaining({ messageId: "speech", state: "completed" })]);
+});
+
+test("attachment reads surface filesystem errors instead of returning incomplete receipts", async () => {
+  const { requests, directory } = await fixture();
+  await mkdir(path.join(directory, "unreadable.json"));
+  await expect(
+    requests.listForAttachment({ agentId: "agent", attachmentId: "voice" }),
+  ).rejects.toMatchObject({ code: "EISDIR" });
 });

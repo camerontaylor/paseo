@@ -458,6 +458,8 @@ export const ptBR: TranslationResources = {
       viewDiagram: "Ver diagrama",
     },
     actions: {
+      pinToStream: "Fixar no fluxo",
+      trackQAndA: "Acompanhar perguntas e respostas",
       copyCode: "Copiar código",
       copyTurn: "Copiar turno",
       copyMessage: "Copiar mensagem",

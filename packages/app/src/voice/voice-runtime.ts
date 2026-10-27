@@ -1058,6 +1058,8 @@ export function createVoiceRuntime(deps: VoiceRuntimeDeps): VoiceRuntime {
               throw new Error("Host did not acknowledge this voice attachment");
             await deps.engine.startCapture();
             if (state.generation !== generation) {
+              await deps.engine.stopCapture().catch(() => undefined);
+              await disableVoice(session.adapter, voiceTransport()).catch(() => undefined);
               return undefined;
             }
 

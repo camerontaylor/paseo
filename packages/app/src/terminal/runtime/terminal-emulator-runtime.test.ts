@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, onTestFinished } from "vitest";
 
 vi.mock("@xterm/addon-clipboard", () => ({
   ClipboardAddon: class ClipboardAddon {
@@ -680,9 +680,10 @@ describe("terminal-emulator-runtime", () => {
         restoreWebglRenderer: typeof restoreWebglRenderer;
       }
     ).restoreWebglRenderer = restoreWebglRenderer;
-    (globalThis as unknown as { window: { requestAnimationFrame: typeof raf } }).window = {
-      requestAnimationFrame: raf,
-    };
+    vi.stubGlobal("window", { requestAnimationFrame: raf });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
 
     runtime.restoreSurface();
 

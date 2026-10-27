@@ -5669,6 +5669,9 @@ describe("create_heartbeat MCP tool", () => {
     ).rejects.toThrow("create_heartbeat requires an agent-scoped session");
 
     expect(createOrReplace).not.toHaveBeenCalled();
+    await expect(registeredTool(server, "list_heartbeats").handler({})).rejects.toThrow(
+      "list_heartbeats requires an agent-scoped session",
+    );
   });
 });
 
@@ -7385,7 +7388,6 @@ it("MCP negotiates unsupported initialization dates and rejects unsupported requ
   }
 });
 
-
 it("rejects hidden agent-worktree placement and directs callers to workspace creation", async () => {
   const { agentManager, agentStorage } = createTestDeps();
   const server = await createAgentMcpServer({
@@ -7546,7 +7548,7 @@ describe("local durable finish subscription MCP wiring", () => {
 });
 
 describe("list_schedules MCP tool", () => {
-  it("lists scoped and foreign heartbeats while preserving deletion ownership", async () => {
+  it("hides heartbeats from schedule tools while preserving heartbeat deletion ownership", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mcp-list-owned-heartbeats-"));
     const logger = createTestLogger();
     const storage = new AgentStorage(join(directory, "agents"), logger);
@@ -7589,14 +7591,17 @@ describe("list_schedules MCP tool", () => {
       const schedules = z
         .array(z.record(z.string(), z.unknown()))
         .parse(result.structuredContent.schedules);
-      expect(schedules).toHaveLength(2);
-      expect(schedules).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: ownHeartbeat.id, target: ownHeartbeat.target }),
-          expect.objectContaining({ id: foreignHeartbeat.id, target: foreignHeartbeat.target }),
-        ]),
+      expect(schedules).toEqual([]);
+      const heartbeats = await invokeToolWithParsedInput(
+        registeredTool(server, "list_heartbeats"),
+        {},
       );
-      for (const schedule of schedules) expect(schedule).not.toHaveProperty("runs");
+      expect(heartbeats.structuredContent.schedules).toEqual([
+        expect.objectContaining({ id: ownHeartbeat.id }),
+      ]);
+      for (const schedule of heartbeats.structuredContent.schedules as object[]) {
+        expect(schedule).not.toHaveProperty("runs");
+      }
 
       const deleteTool = registeredTool(server, "delete_heartbeat");
       await expect(
@@ -7612,15 +7617,13 @@ describe("list_schedules MCP tool", () => {
       );
       expect(await scheduleService.inspect(foreignHeartbeat.id)).toEqual(foreignHeartbeat);
       const remaining = await invokeToolWithParsedInput(listTool, {});
-      expect(remaining.structuredContent.schedules).toEqual([
-        expect.objectContaining({ id: foreignHeartbeat.id, target: foreignHeartbeat.target }),
-      ]);
+      expect(remaining.structuredContent.schedules).toEqual([]);
     } finally {
       await removeAgentStateDir(agentManager, storage, directory);
     }
   });
 
-  it("lists new-agent schedules and agent heartbeats without run history", async () => {
+  it("lists only new-agent schedules without run history", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mcp-list-schedules-"));
     const logger = createTestLogger();
     const storage = new AgentStorage(join(directory, "agents"), logger);
@@ -7661,11 +7664,10 @@ describe("list_schedules MCP tool", () => {
       const schedules = z
         .array(z.record(z.string(), z.unknown()))
         .parse(result.structuredContent.schedules);
-      expect(schedules).toHaveLength(2);
+      expect(schedules).toHaveLength(1);
       expect(schedules).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ id: scheduled.id, target: scheduled.target, status: "active" }),
-          expect.objectContaining({ id: heartbeat.id, target: heartbeat.target, status: "paused" }),
         ]),
       );
       for (const schedule of schedules) expect(schedule).not.toHaveProperty("runs");

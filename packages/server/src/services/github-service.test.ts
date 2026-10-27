@@ -1489,6 +1489,55 @@ describe("ForgeService", () => {
     service.dispose?.();
   });
 
+  it("keeps the checkout owner through nested fork redirects", async () => {
+    const pr = batchPollPrNodeJson({
+      url: "https://github.com/upstream/widgets/pull/42",
+      headRefName: "feat-a",
+      headRefOid: "oid-a",
+      headRepositoryOwner: { login: "forkowner" },
+    });
+    const runner = createScriptedRunner([
+      batchPollStatusJson({
+        t0: batchPollRepositoryJson([], {
+          isFork: true,
+          parent: { owner: { login: "middle" }, name: "widgets" },
+        }),
+      }),
+      batchPollStatusJson({
+        t0: batchPollRepositoryJson([], {
+          isFork: true,
+          owner: { login: "middle" },
+          parent: { owner: { login: "upstream" }, name: "widgets" },
+        }),
+      }),
+      batchPollStatusJson({ t0: batchPollRepositoryJson([pr]) }),
+      batchPollStatusJson({ t0: batchPollChecksAliasJson([]) }),
+    ]);
+    const service = createGitHubService({
+      ttlMs: 0,
+      runner: runner.runner,
+      resolveGhPath: async () => "/usr/bin/gh",
+      resolveRepoHost: async () => null,
+      resolveRepoSlug: async () => "forkowner/widgets",
+    });
+    const statuses: Array<CurrentPullRequestStatus | null> = [];
+    const subscription = service.retainCurrentPullRequestStatusPoll?.({
+      cwd: "/ws-a",
+      headRef: "feat-a",
+      headSha: "oid-a",
+      onStatus: (status) => statuses.push(status),
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      await flushMicrotasks();
+      expect(statuses).toEqual([expect.objectContaining({ number: 42, repoOwner: "upstream" })]);
+      expect(currentPullRequestStatusCalls(runner.calls)).toHaveLength(0);
+    } finally {
+      subscription?.unsubscribe();
+      service.dispose?.();
+    }
+  });
+
   it("resolves a PR the fork opened against itself without redirecting to the parent", async () => {
     let now = 0;
     const parent = { owner: { login: "upstream" }, name: "widgets" };

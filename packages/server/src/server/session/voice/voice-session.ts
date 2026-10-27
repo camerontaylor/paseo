@@ -1186,6 +1186,7 @@ export class VoiceSession {
         { requestId: result.requestId },
         "Skipping voice agent processing because voice mode is disabled",
       );
+      emitTranscript();
       await this.flushPendingAudioSegments("voice mode disabled");
       return;
     }
@@ -1523,6 +1524,10 @@ export class VoiceSession {
       msg.type === "transcription_result" ||
       msg.type === "voice_input_state"
     ) {
+      if (msg.type === "transcription_result" && !this.isVoiceMode) {
+        this.host.emit(msg);
+        return;
+      }
       if (!this.currentAttachment()) return;
       this.host.emit({
         ...msg,

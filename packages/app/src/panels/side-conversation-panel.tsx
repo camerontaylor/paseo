@@ -91,6 +91,9 @@ function SideConversationPanel() {
   const record = useSideConversationStore((state) =>
     state.records.get(sideConversationKey(serverId, target.parentAgentId, target.threadId)),
   );
+  const threadKey = sideConversationKey(serverId, target.parentAgentId, target.threadId);
+  const currentThreadKey = useRef(threadKey);
+  currentThreadKey.current = threadKey;
   const inputRef = useRef<EditingTextInputHandle>(null);
   const [question, setQuestion] = useState("");
   const [loadState, setLoadState] = useState<SideConversationLoadState>("loading");
@@ -103,6 +106,10 @@ function SideConversationPanel() {
   useEffect(() => {
     setLoadState("loading");
     setHadRecord(false);
+    setIsSubmitting(false);
+    setSubmitError(null);
+    setQuestion("");
+    inputRef.current?.replaceText("");
   }, [serverId, target.parentAgentId, target.threadId]);
 
   useEffect(() => {
@@ -140,17 +147,41 @@ function SideConversationPanel() {
     setIsSubmitting(true);
     setQuestion("");
     inputRef.current?.replaceText("");
+    const submittedThreadKey = threadKey;
+    const isCurrentThread = () => currentThreadKey.current === submittedThreadKey;
     void client
       .askSideConversation(target.parentAgentId, target.threadId, nextQuestion)
-      .then(() => refreshSideConversation(client, serverId, target.parentAgentId, target.threadId))
-      .catch((error: unknown) => {
-        setQuestion(nextQuestion);
-        inputRef.current?.replaceText(nextQuestion);
-        const detail = error instanceof Error ? error.message : "";
-        setSubmitError(t("sideConversations.errors.failed", { error: detail }));
-      })
-      .finally(() => setIsSubmitting(false));
-  }, [client, isPending, question, serverId, supported, t, target.parentAgentId, target.threadId]);
+      .then(
+        async () => {
+          try {
+            await refreshSideConversation(client, serverId, target.parentAgentId, target.threadId);
+          } catch {
+            if (isCurrentThread()) setLoadState("failed");
+          }
+          return undefined;
+        },
+        (error: unknown) => {
+          if (!isCurrentThread()) return;
+          setQuestion(nextQuestion);
+          inputRef.current?.replaceText(nextQuestion);
+          const detail = error instanceof Error ? error.message : "";
+          setSubmitError(t("sideConversations.errors.failed", { error: detail }));
+        },
+      )
+      .finally(() => {
+        if (isCurrentThread()) setIsSubmitting(false);
+      });
+  }, [
+    client,
+    isPending,
+    question,
+    serverId,
+    supported,
+    t,
+    target.parentAgentId,
+    target.threadId,
+    threadKey,
+  ]);
 
   const notice = answerNotice(record?.lastAnswer, t);
   const placeholder = resolveSideConversationPlaceholder({

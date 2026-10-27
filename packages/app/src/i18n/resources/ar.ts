@@ -451,6 +451,8 @@ export const ar: TranslationResources = {
       viewDiagram: "عرض المخطط",
     },
     actions: {
+      pinToStream: "تثبيت في التدفق",
+      trackQAndA: "تتبع الأسئلة والأجوبة",
       copyCode: "نسخ الرمز",
       copyTurn: "نسخ بدوره",
       copyMessage: "انسخ الرسالة",

@@ -56,6 +56,7 @@ export function CompanionFeed({
   const [filter, setFilter] = useState<StreamFilter>("all");
   const [onlyOpen, setOnlyOpen] = useState(true);
   const [pinText, setPinText] = useState("");
+  const [isPinSubmitting, setIsPinSubmitting] = useState(false);
   const noteInput = useRef<EditingTextInputHandle>(null);
 
   const items = useMemo(() => buildCompanionFeed(entries, artifacts), [entries, artifacts]);
@@ -164,14 +165,23 @@ export function CompanionFeed({
   );
 
   const handleToggleOnlyOpen = useCallback(() => setOnlyOpen((v) => !v), []);
-  const handleSubmitPin = useCallback(() => {
-    if (!pinText.trim()) return;
-    client
-      ?.updateCompanionEntry({ agentId, action: "add_pin", text: pinText.trim() })
-      .catch(reportFailure);
-    setPinText("");
-    noteInput.current?.replaceText("");
-  }, [client, agentId, pinText, reportFailure]);
+  const handleSubmitPin = useCallback(async () => {
+    if (!pinText.trim() || isPinSubmitting) return;
+    if (!client) {
+      reportFailure();
+      return;
+    }
+    setIsPinSubmitting(true);
+    try {
+      await client.updateCompanionEntry({ agentId, action: "add_pin", text: pinText.trim() });
+      setPinText("");
+      noteInput.current?.replaceText("");
+    } catch {
+      reportFailure();
+    } finally {
+      setIsPinSubmitting(false);
+    }
+  }, [client, agentId, pinText, isPinSubmitting, reportFailure]);
 
   const header = useMemo(
     () => (
@@ -230,15 +240,27 @@ export function CompanionFeed({
               style={styles.pinInput}
               placeholder={t("agentPanel.stream.notePlaceholder")}
               initialValue=""
+              editable={!isPinSubmitting}
               onChangeText={setPinText}
               onSubmitEditing={handleSubmitPin}
             />
-            <Button onPress={handleSubmitPin}>{t("agentPanel.stream.addNote")}</Button>
+            <Button onPress={handleSubmitPin} loading={isPinSubmitting}>
+              {t("agentPanel.stream.addNote")}
+            </Button>
           </View>
         )}
       </View>
     ),
-    [connection, viewTab, filter, onlyOpen, t, handleToggleOnlyOpen, handleSubmitPin],
+    [
+      connection,
+      viewTab,
+      filter,
+      onlyOpen,
+      t,
+      handleToggleOnlyOpen,
+      handleSubmitPin,
+      isPinSubmitting,
+    ],
   );
 
   const empty = useMemo(

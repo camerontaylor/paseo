@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import type { GestureResponderEvent } from "react-native";
 import { Pressable, Text, View } from "react-native";
-import { useFetchQuery } from "@/data/query";
+import { usePackageScriptDiscovery } from "./use-package-script-discovery";
 import {
   ChevronDown,
   ChevronRight,
@@ -14,7 +14,7 @@ import {
 } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import { useSessionStore, type WorkspaceDescriptor } from "@/stores/session-store";
+import { type WorkspaceDescriptor } from "@/stores/session-store";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -504,44 +504,21 @@ export function WorkspaceScriptsButton({
   hideLabels,
 }: WorkspaceScriptsButtonProps): ReactElement | null {
   const { t } = useTranslation();
-  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
-  // COMPAT(packageJsonScripts): added in fork v0.10.1, remove gate after 2027-04-01.
-  const supportsPackages = useSessionStore(
-    (state) => state.sessions[serverId]?.serverInfo?.features?.packageJsonScripts === true,
-  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [search, setSearch] = useState("");
   const handleMenuOpenChange = useCallback((open: boolean) => {
     setMenuOpen(open);
     if (open) setSearch("");
   }, []);
-  const packageQuery = useFetchQuery({
-    dataShape: "value",
-    staleTimeMs: 0,
-    queryKey: ["workspace-package-scripts", serverId, workspaceId],
-    enabled: menuOpen && supportsPackages && client !== null,
-    queryFn: async () => {
-      if (!client) throw new Error(t("common.errors.daemonClientUnavailable"));
-      const result = await client.listWorkspaceScripts(workspaceId);
-      if (result.error) throw new Error(result.error);
-      return { scripts: result.scripts ?? [] };
-    },
+  const { scripts, packageQuery, supportsPackages } = usePackageScriptDiscovery({
+    serverId,
+    workspaceId,
+    scripts: workspaceScripts,
+    menuOpen,
   });
   const retryDiscovery = useCallback(() => {
     void packageQuery.refetch();
   }, [packageQuery]);
-  const scripts = useMemo(() => {
-    if (!packageQuery.data) return workspaceScripts;
-    const live = new Map(workspaceScripts.map((script) => [script.scriptName, script]));
-    const discovered = packageQuery.data.scripts.filter((script) => script.packageJson);
-    const packageIds = new Set(discovered.map((script) => script.scriptName));
-    const configured = workspaceScripts.filter(
-      (script) =>
-        !script.packageJson ||
-        (script.lifecycle === "running" && !packageIds.has(script.scriptName)),
-    );
-    return [...configured, ...discovered.map((script) => live.get(script.scriptName) ?? script)];
-  }, [packageQuery.data, workspaceScripts]);
   const groups = useMemo(() => {
     const grouped = new Map<string, WorkspaceDescriptor["scripts"]>();
     const terms = search.toLowerCase().trim().split(/\s+/).filter(Boolean);
@@ -650,7 +627,7 @@ export function WorkspaceScriptsButton({
                 {t("common.actions.retry")}
               </DropdownMenuItem>
             ) : null}
-            {groups.length === 0 && !packageQuery.isFetching ? (
+            {groups.length === 0 && !packageQuery.isFetching && !packageQuery.isError ? (
               <DropdownMenuLabel>
                 {t(
                   search.trim()

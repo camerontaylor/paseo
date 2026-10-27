@@ -2136,6 +2136,7 @@ export class VoiceAssistantWebSocketServer {
         fileByteWrites: true,
         // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
         companionStreamPortV1: true,
+        agentArtifactsScan: true,
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: true,
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.

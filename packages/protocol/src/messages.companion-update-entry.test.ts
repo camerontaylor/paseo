@@ -84,9 +84,10 @@ describe("agent.companion.update_entry wire contract", () => {
       status: "server_info",
       serverId: "server-1",
       version: "0.11.0-beta.3-fork",
-      features: { companionStreamPortV1: true },
+      features: { companionStreamPortV1: true, agentArtifactsScan: true },
     });
     expect(info.features?.companionStreamPortV1).toBe(true);
+    expect(info.features?.agentArtifactsScan).toBe(true);
     expect(
       ServerInfoStatusPayloadSchema.safeParse({ features: { companionStream: true } }).success,
     ).toBe(false);
