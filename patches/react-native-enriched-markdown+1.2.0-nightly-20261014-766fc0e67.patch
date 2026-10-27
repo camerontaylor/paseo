@@ -1,4 +1,3 @@
-// UPSTREAM: https://github.com/software-mansion/enriched-markdown/pull/997
 diff --git a/node_modules/react-native-enriched-markdown/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EventEmitters.cpp b/node_modules/react-native-enriched-markdown/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EventEmitters.cpp
 index 77465ad..94997f7 100644
 --- a/node_modules/react-native-enriched-markdown/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/EventEmitters.cpp
@@ -40,7 +39,7 @@ index 0a1c6c2..5935112 100644
  
    struct OnLinkLongPress {
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
-index c12937c..8105833 100644
+index c12937c..9b7f342 100644
 --- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
 +++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdown.kt
 @@ -95,7 +95,7 @@ class EnrichedMarkdown(
@@ -52,7 +51,23 @@ index c12937c..8105833 100644
    private var onLinkLongPressCallback: ((String) -> Unit)? = null
    private var onTaskListItemPressCallback: ((Int, Boolean, String) -> Unit)? = null
    private var onLatexErrorCallback: LatexErrorReporter? = null
-@@ -296,7 +296,7 @@ class EnrichedMarkdown(
+@@ -259,6 +259,8 @@ class EnrichedMarkdown(
+   fun setIsSelectable(value: Boolean) {
+     if (selectable == value) return
+     selectable = value
++    dirtyFlags += DirtyFlag.RECREATE_SEGMENTS
++    renderPending = true
+     segmentViews.filterIsInstance<EnrichedMarkdownInternalText>().forEach {
+       it.setIsSelectable(value)
+     }
+@@ -291,12 +293,14 @@ class EnrichedMarkdown(
+   }
+ 
+   private fun applySelectionColorsToSegments() {
++    dirtyFlags += DirtyFlag.RECREATE_SEGMENTS
++    renderPending = true
+     segmentViews.filterIsInstance<EnrichedMarkdownInternalText>().forEach {
+       it.applySelectionColors(selectionColor, selectionHandleColor)
      }
    }
  
@@ -61,7 +76,7 @@ index c12937c..8105833 100644
      onLinkPressCallback = callback
    }
  
-@@ -405,7 +405,7 @@ class EnrichedMarkdown(
+@@ -405,7 +409,7 @@ class EnrichedMarkdown(
      val codeLinkRegex = inlineCodeLinkRegex
      val renderId = ++currentRenderId
  
@@ -70,7 +85,7 @@ index c12937c..8105833 100644
        try {
          val filtered =
            if (isStreaming) {
-@@ -418,13 +418,13 @@ class EnrichedMarkdown(
+@@ -418,13 +422,13 @@ class EnrichedMarkdown(
  
          if (renderableMarkdown.isEmpty()) {
            postToMain(renderId) { applyRenderedSegments(emptyList(), false) }
@@ -86,7 +101,7 @@ index c12937c..8105833 100644
            }
  
          val segments = splitASTIntoSegments(ast)
-@@ -478,6 +478,11 @@ class EnrichedMarkdown(
+@@ -478,6 +482,11 @@ class EnrichedMarkdown(
        if (forceHeight || topologyChanged || heightBefore != heightAfter) {
          MeasurementStore.invalidate(id)
          requestLayout()
@@ -98,7 +113,7 @@ index c12937c..8105833 100644
        }
      }
    }
-@@ -646,8 +651,12 @@ class EnrichedMarkdown(
+@@ -646,8 +655,12 @@ class EnrichedMarkdown(
      renderId: Long,
      action: () -> Unit,
    ) {
@@ -556,7 +571,7 @@ index 0afa2c0..4454e2c 100644
      blockquoteStyle: BlockquoteStyle?,
      onLatexError: LatexErrorReporter?,
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/segments/SegmentViewCreators.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/segments/SegmentViewCreators.kt
-index c9644d1..58b2f4e 100644
+index c9644d1..67c8600 100644
 --- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/segments/SegmentViewCreators.kt
 +++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/segments/SegmentViewCreators.kt
 @@ -67,7 +67,7 @@ data class SegmentViewConfig(
@@ -568,19 +583,45 @@ index c9644d1..58b2f4e 100644
    val onLinkLongPress: ((String) -> Unit)?,
    val onTaskListItemPress: ((taskIndex: Int, checked: Boolean, itemText: String) -> Unit)?,
    val onContextMenuItemPress: ((itemText: String, selectedText: String, selectionStart: Int, selectionEnd: Int) -> Unit)?,
+@@ -131,6 +131,9 @@ object SegmentViewCreators {
+     segment: RenderedSegment.Table,
+     config: SegmentViewConfig,
+   ) = TableContainerView(config.context, config.style).apply {
++    selectable = config.selectable
++    selectionColor = config.selectionColor
++    selectionHandleColor = config.selectionHandleColor
+     dynamicProps = config.dynamicProps
+     allowFontScaling = config.allowFontScaling
+     maxFontSizeMultiplier = config.maxFontSizeMultiplier
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/segments/TableContainerView.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/segments/TableContainerView.kt
-index e190548..b2e6cf2 100644
+index e190548..8dd0036 100644
 --- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/segments/TableContainerView.kt
 +++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/segments/TableContainerView.kt
-@@ -19,7 +19,6 @@ import android.view.Gravity
+@@ -15,12 +15,17 @@ import android.text.StaticLayout
+ import android.text.TextPaint
+ import android.text.style.AlignmentSpan
+ import android.text.style.MetricAffectingSpan
++import android.os.Build
++import android.view.ActionMode
++import android.view.Menu
++import android.view.MenuItem
++import android.view.textclassifier.TextClassifier
+ import android.view.Gravity
  import android.view.MotionEvent
  import android.view.View
  import android.widget.FrameLayout
 -import android.widget.HorizontalScrollView
  import androidx.core.view.ViewCompat
++import com.swmansion.enriched.markdown.R
  import com.swmansion.enriched.markdown.accessibility.AccessibilityLabels
  import com.swmansion.enriched.markdown.parser.MarkdownASTNode
-@@ -38,6 +37,7 @@ import com.swmansion.enriched.markdown.utils.text.span.prepareWidthAwareSpans
+ import com.swmansion.enriched.markdown.parser.MarkdownASTNode.NodeType
+@@ -35,9 +40,12 @@ import com.swmansion.enriched.markdown.utils.common.serialization.MarkdownASTSer
+ import com.swmansion.enriched.markdown.utils.text.conversion.HTMLGenerator
+ import com.swmansion.enriched.markdown.utils.text.extensions.replaceMathSpansWithPlaceholders
+ import com.swmansion.enriched.markdown.utils.text.span.prepareWidthAwareSpans
++import com.swmansion.enriched.markdown.utils.text.view.applySelectableState
++import com.swmansion.enriched.markdown.utils.text.view.applySelectionColors
  import com.swmansion.enriched.markdown.utils.text.view.LinkLongPressMovementMethod
  import com.swmansion.enriched.markdown.utils.text.view.cancelJSTouchForLinkTap
  import com.swmansion.enriched.markdown.utils.text.view.reallowParentInterceptIfLinkReleased
@@ -588,8 +629,16 @@ index e190548..b2e6cf2 100644
  import com.swmansion.enriched.markdown.views.ContextMenuPopup
  import kotlin.math.ceil
  import kotlin.math.max
-@@ -57,7 +57,7 @@ class TableContainerView(
+@@ -55,9 +63,15 @@ class TableContainerView(
+   private val density = resources.displayMetrics.density
+   private val isRtl = resources.isLayoutRTL()
  
++  var selectable = true
++  var selectionColor: Int? = null
++  var selectionHandleColor: Int? = null
++  private val copyTableItemId = View.generateViewId()
++  private val copyMarkdownItemId = View.generateViewId()
++
    var allowFontScaling = true
    var maxFontSizeMultiplier = 0f
 -  var onLinkPress: ((String) -> Unit)? = null
@@ -597,7 +646,7 @@ index e190548..b2e6cf2 100644
    var onLinkLongPress: ((String) -> Unit)? = null
    var accessibilityLabels: AccessibilityLabels = AccessibilityLabels()
      set(value) {
-@@ -70,7 +70,7 @@ class TableContainerView(
+@@ -70,7 +84,7 @@ class TableContainerView(
    var dynamicProps: DynamicBlockProps = DynamicBlockProps()
  
    private val scrollView =
@@ -606,6 +655,91 @@ index e190548..b2e6cf2 100644
        isHorizontalScrollBarEnabled = true
        overScrollMode = View.OVER_SCROLL_NEVER
        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+@@ -290,7 +304,35 @@ class TableContainerView(
+             Layout.Alignment.ALIGN_OPPOSITE -> Gravity.END
+             else -> Gravity.START
+           }
+-        setOnLongClickListener { view -> showContextMenu(view) }
++        applySelectableState(selectable)
++        (movementMethod as LinkLongPressMovementMethod).preferTextSelection = selectable
++        applySelectionColors(selectionColor, selectionHandleColor)
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) setTextClassifier(TextClassifier.NO_OP)
++        if (selectable) {
++          customSelectionActionModeCallback = object : ActionMode.Callback {
++            override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
++              menu.add(Menu.NONE, copyTableItemId, Menu.NONE, R.string.enriched_copy_table)
++              menu.add(Menu.NONE, copyMarkdownItemId, Menu.NONE, R.string.enriched_copy_table_markdown)
++              return true
++            }
++
++            override fun onPrepareActionMode(mode: ActionMode, menu: Menu) = false
++
++            override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
++              when (item.itemId) {
++                copyTableItemId -> copyTable()
++                copyMarkdownItemId -> copyTableAsMarkdown()
++                else -> return false
++              }
++              mode.finish()
++              return true
++            }
++
++            override fun onDestroyActionMode(mode: ActionMode) = Unit
++          }
++        } else {
++          setOnLongClickListener { view -> showContextMenu(view) }
++        }
+       }
+     val horizontalPadding = tableStyle.cellPaddingHorizontal
+     val verticalPadding = tableStyle.cellPaddingVertical
+@@ -394,27 +436,31 @@ class TableContainerView(
+ 
+   private fun showContextMenu(anchor: View): Boolean {
+     if (!dynamicProps.enableBlockContextMenu) return false
+-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+     ContextMenuPopup.show(anchor, this) {
+-      item(ContextMenuPopup.Icon.COPY, dynamicProps.copyLabel) {
+-        val plainText = rows.joinToString("\n") { row -> row.joinToString("\t") { it.plainText } }
+-        if (plainText.isNotEmpty()) {
+-          val displayMetrics = context.resources.displayMetrics
+-          val tableRows =
+-            rows.map { row ->
+-              row.map { cell -> Triple(cell.attributedText as CharSequence, cell.isHeader, cell.alignment) }
+-            }
+-          val html = HTMLGenerator.generateTableHTML(tableRows, styleConfig, displayMetrics.scaledDensity, displayMetrics.density)
+-          clipboard.setPrimaryClip(ClipData.newHtmlText("Table", plainText, html))
+-        }
+-      }
+-      item(ContextMenuPopup.Icon.DOCUMENT, dynamicProps.copyAsMarkdownLabel) {
+-        if (tableMarkdown.isNotEmpty()) clipboard.setPrimaryClip(ClipData.newPlainText("Table", tableMarkdown))
+-      }
++      item(ContextMenuPopup.Icon.COPY, dynamicProps.copyLabel) { copyTable() }
++      item(ContextMenuPopup.Icon.DOCUMENT, dynamicProps.copyAsMarkdownLabel) { copyTableAsMarkdown() }
+     }
+     return true
+   }
+ 
++  private fun copyTable() {
++    val plainText = rows.joinToString("\n") { row -> row.joinToString("\t") { it.plainText } }
++    if (plainText.isEmpty()) return
++    val displayMetrics = context.resources.displayMetrics
++    val tableRows = rows.map { row ->
++      row.map { cell -> Triple(cell.attributedText as CharSequence, cell.isHeader, cell.alignment) }
++    }
++    val html = HTMLGenerator.generateTableHTML(tableRows, styleConfig, displayMetrics.scaledDensity, displayMetrics.density)
++    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
++    clipboard.setPrimaryClip(ClipData.newHtmlText("Table", plainText, html))
++  }
++
++  private fun copyTableAsMarkdown() {
++    if (tableMarkdown.isEmpty()) return
++    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
++    clipboard.setPrimaryClip(ClipData.newPlainText("Table", tableMarkdown))
++  }
++
+   private fun buildMarkdownFromRows(): String =
+     rows.joinToString("") { row ->
+       val line = "| ${row.joinToString(" | ") { it.markdownText }} |\n"
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/LinkSpan.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/LinkSpan.kt
 index ff00069..f3e13aa 100644
 --- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/spans/LinkSpan.kt
@@ -3237,3 +3371,49 @@ index eaa3279..05a02eb 100644
  private:
    int forceHeightRecalculationCounter_{0};
    std::shared_ptr<MarkdownTextMeasurementManager> measurementsManager_;
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/view/LinkLongPressMovementMethod.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/view/LinkLongPressMovementMethod.kt
+index 16c125e..d710dff 100644
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/view/LinkLongPressMovementMethod.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/utils/text/view/LinkLongPressMovementMethod.kt
+@@ -26,6 +26,9 @@ import kotlin.math.abs
+  * See: https://github.com/software-mansion/enriched-markdown/issues/580
+  */
+ class LinkLongPressMovementMethod : ArrowKeyMovementMethod() {
++  // Table cells use long-press for selection, including recognized file links.
++  var preferTextSelection = false
++
+   private val handler = Handler(Looper.getMainLooper())
+   private var longPressRunnable: Runnable? = null
+ 
+@@ -70,7 +73,9 @@ class LinkLongPressMovementMethod : ArrowKeyMovementMethod() {
+           }
+         isLinkTouchActive = pressedLink != null || pressedImage != null || pressedCodeBlock != null
+         isTouchWithinTextBounds = charOffsetAt(widget, event) != null || pressedCodeBlock != null
+-        pressedLink?.let { scheduleLongPress(widget, it) }
++        if (!preferTextSelection || !widget.isTextSelectable) {
++          pressedLink?.let { scheduleLongPress(widget, it) }
++        }
+       }
+ 
+       MotionEvent.ACTION_MOVE -> {
+@@ -103,7 +108,9 @@ class LinkLongPressMovementMethod : ArrowKeyMovementMethod() {
+         // LinkSpan.onClick itself swallows the click that follows a completed
+         // long-press (and resets its internal flag), so it is always invoked
+         // for a tap that started and ended on the same link.
+-        if (tappedLink != null && findLinkSpan(widget, buffer, event) === tappedLink) {
++        if (tappedLink != null && findLinkSpan(widget, buffer, event) === tappedLink &&
++          !(preferTextSelection && widget.hasSelection())
++        ) {
+           tappedLink.onClick(widget)
+           return true
+         }
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/res/values/strings.xml b/node_modules/react-native-enriched-markdown/android/src/main/res/values/strings.xml
+new file mode 100644
+index 0000000..b7c2292
+--- /dev/null
++++ b/node_modules/react-native-enriched-markdown/android/src/main/res/values/strings.xml
+@@ -0,0 +1,4 @@
++<resources>
++    <string name="enriched_copy_table">Copy table</string>
++    <string name="enriched_copy_table_markdown">Copy table as Markdown</string>
++</resources>
