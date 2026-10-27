@@ -121,8 +121,8 @@ cd packages/app/android && ./gradlew :app:installDebug -PreactNativeArchitecture
 Use `arm64-v8a` for an Apple Silicon AVD or a physical device. Check `adb shell getprop
 ro.product.cpu.abi` if you are unsure.
 
-`build:apk` writes `artifacts/paseo-dogfood-universal.apk`; `build:apk:arm64` writes
-`artifacts/paseo-dogfood-arm64.apk`. Neither command launches or installs on a device. Both enable
+`build:apk` writes `artifacts/paseo-<build-version>-universal.apk`; `build:apk:arm64` writes
+`artifacts/paseo-<build-version>-arm64.apk`. Fork naming is defined in [fork/build-versions.md](../fork/build-versions.md). Neither command launches or installs on a device. Both enable
 `PASEO_WATCHDOG_BUILD=1`, the production React profiling renderer, and Android's shell-profileable
 flag. These builds keep the production package ID (`sh.paseo`) and release optimizations. Use this APK for
 personal dogfooding. Android system-trace spans require the separate `PASEO_PROFILE_BUILD=1` flag;
