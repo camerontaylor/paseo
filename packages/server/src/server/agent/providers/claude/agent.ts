@@ -5176,6 +5176,7 @@ class ClaudeAgentSession implements AgentSession {
       provider: "claude",
       name: toolName,
       kind,
+      description: readNonEmptyString(options.decisionReason)?.trim(),
       ...buildClaudeQuestionPermissionSummary(toolName, input),
       input: requestInput,
       detail: toolDetail,

@@ -2,7 +2,24 @@
 
 Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
-`fork/plans/ralplan-fork-release-channel.md` for the plan of record.
+[the archived release-channel plan](https://github.com/camerontaylor/agents/blob/c0826d394ae64c0768849a304734bd942ebbcf92/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
+
+## 0.13.2 base decision — 2026-10-27
+
+Advance `custom` to upstream stable `v0.13.2` (`d2941157a`). Regenerate the
+enriched-markdown patch from a source merge: retain Android cell selection,
+short link taps and whole-table copy alongside upstream's settled-row
+measurement and lifecycle fixes. The other upstream changes merge cleanly.
+
+Patch application, `build:server`, typecheck, lint and the seven authorization
+tests pass. Android device/instrumentation validation remains outstanding.
+The [difference audit](https://github.com/camerontaylor/agents/blob/c0826d394ae64c0768849a304734bd942ebbcf92/docs/paseo-fork/archive/fork/audit-0.13.2.md) assesses permanent work and the live
+external basket, including upstream replacements and plugin extraction options.
+The concurrent unified artifact-version change is retained; its 27 release-tool
+and eight native-version tests pass on this base. Neptune's Desvio base pin and
+manifest header now name 0.13.2, with backups beside both files. No carries are
+removed and no plugins are migrated. Rebuild and gate the basket before
+publishing or deploying.
 
 ## 0.13.0 base decision — 2026-10-25
 
@@ -25,6 +42,13 @@ Retain the beta.3 postmortem below. Rebuild and gate the accepted basket on
 this stable base before publishing or deploying. Real OMP on Triton remains
 unverified because its selected provider has no credentials; preserve the failed
 receipt and verify authenticated providers during host canaries.
+
+The stable basket retains the accepted beta.1 owner deltas. Retire duplicate
+#7179 and #7169 production carries in favor of stable upstream implementations;
+keep fork closed-session/mode-error guards, sourced message identity, symmetric
+OMP command/ACK tests and cleanup failure reporting. Keep #6762, #7057, #7062,
+#7146 and #7106 because they remain unmerged. Preserve workspace-relative file
+opening and account cache invalidation through stable's replacement owners.
 
 ## 0.12.0-beta.3 base decision — 2026-10-19
 

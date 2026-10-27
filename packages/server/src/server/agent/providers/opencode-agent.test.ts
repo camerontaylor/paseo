@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createTestLogger } from "../../../test-utils/test-logger.js";
+import { asInternals } from "../../test-utils/class-mocks.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/client";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { OpenCodeEventSource } from "./opencode/event-consumer.js";
@@ -6280,6 +6281,55 @@ describe("OpenCode provider subagent contract", () => {
         },
       },
     ]);
+  });
+
+  test("excludes side-question forks from discovered child rows and history", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const openCodeClient = new TestOpenCodeClient();
+    openCodeClient.sessionCreateResponse = { data: { id: "ses_parent" } };
+    openCodeClient.sessionChildrenResponses = [
+      {
+        data: [
+          { id: "ses_side", parentID: "ses_parent", title: "Side question" },
+          { id: "ses_child", parentID: "ses_parent", title: "Real child" },
+        ],
+      },
+      { data: [] },
+      { data: [] },
+    ];
+    runtime.enqueueClient(openCodeClient);
+    const client = new OpenCodeAgentClient(createTestLogger(), undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+    });
+    const session = await client.createSession({ provider: "opencode", cwd: "/workspace/repo" });
+    asInternals<{ registerSideQuestionFork(id: string): void }>(session).registerSideQuestionFork(
+      "ses_side",
+    );
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await vi.waitFor(() => expect(openCodeClient.calls.sessionChildren).toHaveLength(3));
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      expect(events).toEqual([
+        {
+          type: "provider_subagent",
+          provider: "opencode",
+          event: {
+            type: "upsert",
+            id: "ses_child",
+            parentSubagentId: null,
+            description: "Real child",
+            status: "completed",
+          },
+        },
+      ]);
+      expect(openCodeClient.calls.sessionMessages).toEqual([
+        { sessionID: "ses_child", directory: "/workspace/repo" },
+      ]);
+    } finally {
+      await session.close();
+    }
   });
 
   test("hydrates persisted child messages into the provider subagent timeline", async () => {

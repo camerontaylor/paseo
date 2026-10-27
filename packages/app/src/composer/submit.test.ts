@@ -104,7 +104,7 @@ describe("submitAgentInput", () => {
     expect(clearDraft).toHaveBeenCalledWith("sent");
   });
 
-  it("queues while the agent is running and clears the composer immediately", async () => {
+  it("leaves draft clearing to queue admission while the agent is running", async () => {
     const queueMessage = vi.fn();
     const submitMessage = vi.fn();
     const clearDraft = vi.fn();
@@ -134,8 +134,8 @@ describe("submitAgentInput", () => {
       attachments: [{ id: "img-1" }],
     });
     expect(submitMessage).not.toHaveBeenCalled();
-    expect(setUserInput).toHaveBeenCalledWith("");
-    expect(setAttachments).toHaveBeenCalledWith([]);
+    expect(setUserInput).not.toHaveBeenCalled();
+    expect(setAttachments).not.toHaveBeenCalled();
     expect(setSendError).not.toHaveBeenCalled();
     expect(setIsProcessing).not.toHaveBeenCalled();
     expect(clearDraft).not.toHaveBeenCalled();

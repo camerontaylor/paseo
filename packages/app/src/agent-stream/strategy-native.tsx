@@ -25,6 +25,7 @@ import { useStableEvent } from "@/hooks/use-stable-event";
 import { useKeyboardStreamInset } from "@/keyboard/shift";
 import { shouldAnimateNativeScrollToBottom } from "./native-scroll-animation";
 import { useRevisedHistoryRows } from "./history-row-revision";
+import { getStreamItemMessageId } from "./presentation";
 import { useBottomAnchorController } from "./bottom-anchor-controller";
 import { useScrollKeyboardDismiss } from "./scroll-keyboard-dismiss/use-scroll-keyboard-dismiss";
 import type { StreamRenderInput, StreamStrategy, StreamViewportHandle } from "./strategy";
@@ -126,6 +127,19 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     return [...segments.historyVirtualized, ...segments.historyMounted];
   }, [segments.historyMounted, segments.historyVirtualized]);
   const historyRows = useRevisedHistoryRows(historyItems, historyRowRevision);
+  // Chat find scrolls by message id without re-registering the viewport handle per row change.
+  const historyRowsRef = useRef(historyRows);
+  historyRowsRef.current = historyRows;
+  const scrollRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retriedScrollRowRef = useRef<string | null>(null);
+  const clearScrollRetry = useCallback(() => {
+    if (scrollRetryRef.current !== null) clearTimeout(scrollRetryRef.current);
+    scrollRetryRef.current = null;
+    retriedScrollRowRef.current = null;
+  }, []);
+  useEffect(() => clearScrollRetry, [agentId, clearScrollRetry]);
+  const liveHeadRef = useRef(segments.liveHead);
+  liveHeadRef.current = segments.liveHead;
   const getHistoryStartPaginationInput = useStableEvent((): HistoryStartPaginationInput => {
     const metrics = streamViewportMetricsRef.current;
     const hasMeasuredViewport =
@@ -361,6 +375,22 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
         bottomAnchorController.prepareForStickyViewportChange();
         markNativeViewportSettling();
       },
+      scrollToMessage: (messageId) => {
+        clearScrollRetry();
+        const matches = (item: StreamItem) =>
+          item.id === messageId || getStreamItemMessageId(item) === messageId;
+        const index = historyRowsRef.current.findIndex(matches);
+        if (index >= 0) {
+          // A far row scrolls past the near-bottom threshold, which handleScroll reads
+          // as leaving the bottom and releases the sticky anchor.
+          flatListRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
+          return;
+        }
+        // Live head rows render in the list header, at offset 0 of the inverted list.
+        if (liveHeadRef.current.some(matches)) {
+          flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+        }
+      },
     };
     viewportRef.current = handle;
     return () => {
@@ -368,7 +398,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
         viewportRef.current = null;
       }
     };
-  }, [agentId, bottomAnchorController, markNativeViewportSettling, viewportRef]);
+  }, [agentId, bottomAnchorController, clearScrollRetry, markNativeViewportSettling, viewportRef]);
 
   const isScrollEventNearBottom = useStableEvent(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -418,6 +448,28 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
       });
     }
   });
+
+  // Variable row heights and no getItemLayout: estimate, let the list measure, retry once.
+  const handleScrollToIndexFailed = useStableEvent(
+    (info: { index: number; averageItemLength: number }) => {
+      const row = historyRowsRef.current[info.index];
+      if (!row || scrollRetryRef.current !== null || retriedScrollRowRef.current === row.id) return;
+      retriedScrollRowRef.current = row.id;
+      flatListRef.current?.scrollToOffset({
+        offset: info.averageItemLength * info.index,
+        animated: false,
+      });
+      scrollRetryRef.current = setTimeout(() => {
+        scrollRetryRef.current = null;
+        if (historyRowsRef.current[info.index]?.id !== row.id) return;
+        flatListRef.current?.scrollToIndex({
+          index: info.index,
+          viewPosition: 0.5,
+          animated: true,
+        });
+      }, 50);
+    },
+  );
 
   const handleScrollBeginDrag = useStableEvent((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     clearPendingUserScrollEnd();
@@ -598,6 +650,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
       onMomentumScrollEnd={handleMomentumScrollEnd}
       scrollEventThrottle={16}
       onContentSizeChange={handleContentSizeChange}
+      onScrollToIndexFailed={handleScrollToIndexFailed}
       maintainVisibleContentPosition={maintainVisibleContentPosition}
       // Tall Markdown rows exhaust a shallow window during flings. Keep the initial
       // render small, then refill a deeper window in batches large enough to keep up.

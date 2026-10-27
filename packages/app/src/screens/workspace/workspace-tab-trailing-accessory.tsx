@@ -8,9 +8,11 @@ import {
   Copy,
   CopyX,
   Ellipsis,
+  FileCode2,
   MessageCirclePlus,
   Pencil,
   RotateCw,
+  Search,
   X,
 } from "lucide-react-native";
 import {
@@ -25,6 +27,7 @@ import type { WorkspaceTabMenuEntry } from "@/screens/workspace/workspace-tab-me
 import type { Theme } from "@/styles/theme";
 
 const ThemedEllipsis = withUnistyles(Ellipsis);
+const ThemedFileCode2 = withUnistyles(FileCode2);
 const ThemedCopy = withUnistyles(Copy);
 const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedArrowLeftToLine = withUnistyles(ArrowLeftToLine);
@@ -33,6 +36,7 @@ const ThemedCopyX = withUnistyles(CopyX);
 const ThemedMessageCirclePlus = withUnistyles(MessageCirclePlus);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedX = withUnistyles(X);
+const ThemedSearch = withUnistyles(Search);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -62,10 +66,14 @@ function MobileTabDropdownMenuItem({
         return <ThemedCopyX size={16} uniProps={mutedColorMapping} />;
       case "message-circle-plus":
         return <ThemedMessageCirclePlus size={16} uniProps={mutedColorMapping} />;
+      case "file-code-2":
+        return <ThemedFileCode2 size={16} uniProps={mutedColorMapping} />;
       case "pencil":
         return <ThemedPencil size={16} uniProps={mutedColorMapping} />;
       case "x":
         return <ThemedX size={16} uniProps={mutedColorMapping} />;
+      case "search":
+        return <ThemedSearch size={16} uniProps={mutedColorMapping} />;
       default:
         return undefined;
     }

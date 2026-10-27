@@ -138,6 +138,8 @@ export default defineConfig({
     },
     // Bundle the CJS dependencies of the excluded gesture-handler package for the browser.
     include: [
+      "react",
+      "react-dom/client",
       "react/jsx-runtime",
       "react/compiler-runtime",
       "expo-router/react-navigation",
@@ -149,6 +151,8 @@ export default defineConfig({
       "tiny-invariant",
       "react-native-gesture-handler > hoist-non-react-statics",
       "react-native-gesture-handler > invariant",
+      "react-native-web/dist/exports/StyleSheet/compiler/createReactDOMStyle",
+      "react-native-web/dist/exports/StyleSheet/preprocess",
     ],
     exclude: [
       "react-native-reanimated",

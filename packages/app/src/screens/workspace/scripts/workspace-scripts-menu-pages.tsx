@@ -5,11 +5,13 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import {
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSubTrigger,
   type MenuPageDefinition,
 } from "@/components/ui/dropdown-menu";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
+import { usePackageScriptDiscovery } from "./use-package-script-discovery";
 import type { Theme } from "@/styles/theme";
 import { openServiceUrl } from "@/utils/open-service-url";
 import type {
@@ -55,6 +57,11 @@ function scriptPageId(scriptName: string): string {
   return `${SCRIPTS_PAGE_ID}/${scriptName}`;
 }
 
+/** Discovered package scripts carry the package's own script name. */
+function scriptLabel(script: WorkspaceScript): string {
+  return script.packageJson?.script ?? script.scriptName;
+}
+
 export interface UseWorkspaceScriptsMenuPagesInput {
   serverId: string;
   workspaceId: string;
@@ -63,6 +70,8 @@ export interface UseWorkspaceScriptsMenuPagesInput {
   onScriptTerminalStarted: (terminalId: string) => void;
   onViewTerminal: (terminalId: string) => void;
   onOpenUrlInBrowserTab: (url: string) => void;
+  /** Package-script discovery runs only while the owning menu is open. */
+  menuOpen?: boolean;
 }
 
 export interface WorkspaceScriptsMenuPages {
@@ -86,13 +95,30 @@ export interface WorkspaceScriptsMenuPages {
 export function useWorkspaceScriptsMenuPages({
   serverId,
   workspaceId,
-  scripts,
+  scripts: workspaceScripts,
   liveTerminalIds,
   onScriptTerminalStarted,
   onViewTerminal,
   onOpenUrlInBrowserTab,
+  menuOpen = false,
 }: UseWorkspaceScriptsMenuPagesInput): WorkspaceScriptsMenuPages {
   const { t } = useTranslation();
+  const { scripts, packageQuery, supportsPackages } = usePackageScriptDiscovery({
+    serverId,
+    workspaceId,
+    scripts: workspaceScripts,
+    menuOpen,
+  });
+  const retryDiscovery = useCallback(() => {
+    void packageQuery.refetch();
+  }, [packageQuery]);
+  const discovery = useMemo(
+    () => ({
+      fetching: packageQuery.isFetching,
+      error: packageQuery.isError ? packageQuery.error.message : null,
+    }),
+    [packageQuery.error, packageQuery.isError, packageQuery.isFetching],
+  );
   const actions = useWorkspaceScriptActions({
     serverId,
     workspaceId,
@@ -102,22 +128,35 @@ export function useWorkspaceScriptsMenuPages({
   const summary = useMemo(() => summarizeScripts(scripts), [scripts]);
 
   const trigger = useMemo(
-    () => (scripts.length === 0 ? null : <ScriptsMenuTrigger summary={summary} />),
-    [scripts.length, summary],
+    () =>
+      scripts.length === 0 && !supportsPackages ? null : <ScriptsMenuTrigger summary={summary} />,
+    [scripts.length, summary, supportsPackages],
   );
 
   const pages = useMemo<MenuPageDefinition[]>(() => {
-    if (scripts.length === 0) return [];
     const liveTerminalIdSet = new Set(liveTerminalIds);
-    return [
-      {
+    const entries: MenuPageDefinition[] = [];
+    // The trigger shows on a capable host even before discovery returns, so the Scripts page has
+    // to exist too; its own loading, error and empty rows keep the target valid and the failure
+    // visible.
+    if (scripts.length > 0 || supportsPackages) {
+      entries.push({
         id: SCRIPTS_PAGE_ID,
         title: t("workspace.scripts.title"),
-        content: <ScriptsPage scripts={scripts} actions={actions} />,
-      },
+        content: (
+          <ScriptsPage
+            scripts={scripts}
+            actions={actions}
+            discovery={discovery}
+            onRetryDiscovery={retryDiscovery}
+          />
+        ),
+      });
+    }
+    entries.push(
       ...scripts.map((script) => ({
         id: scriptPageId(script.scriptName),
-        title: script.scriptName,
+        title: scriptLabel(script),
         content: (
           <ScriptPage
             script={script}
@@ -132,8 +171,19 @@ export function useWorkspaceScriptsMenuPages({
           />
         ),
       })),
-    ];
-  }, [actions, liveTerminalIds, onOpenUrlInBrowserTab, onViewTerminal, scripts, t]);
+    );
+    return entries;
+  }, [
+    actions,
+    liveTerminalIds,
+    discovery,
+    onOpenUrlInBrowserTab,
+    onViewTerminal,
+    retryDiscovery,
+    scripts,
+    supportsPackages,
+    t,
+  ]);
 
   return { trigger, pages, needsAttention: summary.tone === "unhealthy" };
 }
@@ -171,10 +221,15 @@ function ScriptsMenuTrigger({ summary }: { summary: ScriptsSummary }): ReactElem
 function ScriptsPage({
   scripts,
   actions,
+  discovery,
+  onRetryDiscovery,
 }: {
   scripts: WorkspaceDescriptor["scripts"];
   actions: WorkspaceScriptActions;
+  discovery: { fetching: boolean; error: string | null };
+  onRetryDiscovery: () => void;
 }): ReactElement {
+  const { t } = useTranslation();
   return (
     <>
       {scripts.map((script) =>
@@ -184,6 +239,20 @@ function ScriptsPage({
           <StoppedScriptRow key={script.scriptName} script={script} actions={actions} />
         ),
       )}
+      {discovery.fetching ? <DropdownMenuLabel>{t("common.loading")}</DropdownMenuLabel> : null}
+      {discovery.error ? (
+        <DropdownMenuItem
+          description={discovery.error}
+          closeOnSelect={false}
+          onSelect={onRetryDiscovery}
+          testID="workspace-scripts-discovery-retry"
+        >
+          {t("common.actions.retry")}
+        </DropdownMenuItem>
+      ) : null}
+      {scripts.length === 0 && !discovery.fetching && !discovery.error ? (
+        <DropdownMenuLabel>{t("workspace.scripts.states.empty")}</DropdownMenuLabel>
+      ) : null}
     </>
   );
 }
@@ -198,7 +267,7 @@ function RunningScriptRow({ script }: { script: WorkspaceScript }): ReactElement
       leading={leading}
       testID={`workspace-scripts-row-${script.scriptName}`}
     >
-      {script.scriptName}
+      {scriptLabel(script)}
     </DropdownMenuSubTrigger>
   );
 }
@@ -236,7 +305,7 @@ function StoppedScriptRow({
       onSelect={handleSelect}
       testID={`workspace-scripts-row-${script.scriptName}`}
     >
-      {script.scriptName}
+      {scriptLabel(script)}
     </DropdownMenuItem>
   );
 }

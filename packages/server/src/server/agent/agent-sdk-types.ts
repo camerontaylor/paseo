@@ -129,6 +129,8 @@ export interface ProviderSnapshotEntry {
   status: ProviderStatus;
   enabled: boolean;
   source?: "builtin" | "custom";
+  /** Builtin provider this entry extends, when it is a custom provider account. */
+  baseProviderId?: string;
   error?: string;
   models?: AgentModelDefinition[];
   modes?: AgentMode[];
@@ -197,6 +199,8 @@ export type AgentPromptContentBlock =
 export type AgentPromptInput = string | AgentPromptContentBlock[];
 
 export interface AgentRunOptions {
+  /** Manager admission guard, checked synchronously with the run reservation. */
+  requireNoPendingPermissions?: boolean;
   outputSchema?: unknown;
   resumeFrom?: AgentPersistenceHandle;
   maxThinkingTokens?: number;

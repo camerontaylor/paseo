@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, onTestFinished } from "vitest";
 
 vi.mock("@xterm/addon-clipboard", () => ({
   ClipboardAddon: class ClipboardAddon {
@@ -658,6 +658,41 @@ describe("terminal-emulator-runtime", () => {
       shouldClaim: false,
     });
     expect(refresh).toHaveBeenCalledWith(0, 11);
+  });
+
+  it("restoreSurface refits and reloads the WebGL renderer", () => {
+    const runtime = new TerminalEmulatorRuntime();
+    const fitAndEmitResize = vi.fn();
+    const restoreWebglRenderer = vi.fn();
+    const raf = vi.fn((callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+
+    (
+      runtime as unknown as {
+        fitAndEmitResize: typeof fitAndEmitResize;
+        restoreWebglRenderer: typeof restoreWebglRenderer;
+      }
+    ).fitAndEmitResize = fitAndEmitResize;
+    (
+      runtime as unknown as {
+        restoreWebglRenderer: typeof restoreWebglRenderer;
+      }
+    ).restoreWebglRenderer = restoreWebglRenderer;
+    vi.stubGlobal("window", { requestAnimationFrame: raf });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+
+    runtime.restoreSurface();
+
+    expect(restoreWebglRenderer).toHaveBeenCalledTimes(2);
+    expect(fitAndEmitResize).toHaveBeenCalledTimes(2);
+    expect(fitAndEmitResize).toHaveBeenCalledWith({
+      forceRefresh: true,
+      shouldClaim: false,
+    });
   });
 
   it("passively refits when the page becomes visible again", () => {

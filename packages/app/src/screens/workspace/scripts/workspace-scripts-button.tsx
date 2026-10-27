@@ -1,8 +1,10 @@
-import { useCallback, useMemo, type ReactElement } from "react";
+import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import type { GestureResponderEvent } from "react-native";
 import { Pressable, Text, View } from "react-native";
+import { usePackageScriptDiscovery } from "./use-package-script-discovery";
 import {
   ChevronDown,
+  ChevronRight,
   Copy,
   Eye,
   Play,
@@ -12,14 +14,17 @@ import {
 } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import type { WorkspaceDescriptor } from "@/stores/session-store";
+import { type WorkspaceDescriptor } from "@/stores/session-store";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   useDropdownMenuClose,
 } from "@/components/ui/dropdown-menu";
+import { MenuTextField } from "@/components/ui/menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MENU_ITEM_HEIGHT } from "@/components/ui/menu/menu-geometry";
 import { openServiceUrl } from "@/utils/open-service-url";
@@ -52,6 +57,7 @@ interface WorkspaceScriptsButtonProps {
 
 const ThemedPlay = withUnistyles(Play);
 const ThemedSquareTerminal = withUnistyles(SquareTerminal);
+const ThemedChevronRight = withUnistyles(ChevronRight);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedEye = withUnistyles(Eye);
 const ThemedCopy = withUnistyles(Copy);
@@ -317,6 +323,7 @@ function ScriptRow({
   onOpenUrlInBrowserTab,
 }: ScriptRowProps): ReactElement {
   const { t } = useTranslation();
+  const scriptLabel = script.packageJson?.script ?? script.scriptName;
   const isRunning = script.lifecycle === "running";
   const exitCode = script.exitCode ?? null;
   const { selected: selectedLink, targets: linkTargets } = actions.resolveLinks(script);
@@ -357,7 +364,7 @@ function ScriptRow({
     isRunning && liveTerminalId ? (
       <ScriptRowActionButton
         accessibilityLabel={t("workspace.scripts.accessibility.viewTerminal", {
-          scriptName: script.scriptName,
+          scriptName: scriptLabel,
         })}
         testID={`workspace-scripts-view-${script.scriptName}`}
         icon="terminal"
@@ -369,7 +376,7 @@ function ScriptRow({
   const openServiceAction = selectedLink ? (
     <ScriptRowActionButton
       accessibilityLabel={t("workspace.scripts.accessibility.openService", {
-        scriptName: script.scriptName,
+        scriptName: scriptLabel,
       })}
       testID={`workspace-scripts-open-${script.scriptName}`}
       icon="open"
@@ -381,7 +388,7 @@ function ScriptRow({
   const lifecycleAction = isRunning ? (
     <ScriptRowActionButton
       accessibilityLabel={t("workspace.scripts.accessibility.stopScript", {
-        scriptName: script.scriptName,
+        scriptName: scriptLabel,
       })}
       testID={`workspace-scripts-stop-${script.scriptName}`}
       disabled={actions.isStopPending}
@@ -392,7 +399,7 @@ function ScriptRow({
   ) : (
     <ScriptRowActionButton
       accessibilityLabel={t("workspace.scripts.accessibility.runScript", {
-        scriptName: script.scriptName,
+        scriptName: scriptLabel,
       })}
       testID={`workspace-scripts-start-${script.scriptName}`}
       disabled={actions.isStartPending}
@@ -406,13 +413,13 @@ function ScriptRow({
     <View
       testID={`workspace-scripts-item-${script.scriptName}`}
       accessibilityLabel={t("workspace.scripts.accessibility.script", {
-        scriptName: script.scriptName,
+        scriptName: scriptLabel,
       })}
     >
       <View style={styles.scriptHeader}>
         <ScriptIcon script={script} size={14} />
         <Text style={scriptNameStyle} numberOfLines={1}>
-          {script.scriptName}
+          {scriptLabel}
         </Text>
         {showExitBadge ? <ExitCodeBadge code={exitCode} /> : null}
         <View style={styles.spacer} />
@@ -421,7 +428,7 @@ function ScriptRow({
         {isRunning ? (
           <ScriptRowActionButton
             accessibilityLabel={t("workspace.scripts.accessibility.restartScript", {
-              scriptName: script.scriptName,
+              scriptName: scriptLabel,
             })}
             testID={`workspace-scripts-restart-${script.scriptName}`}
             disabled={actions.isStopPending}
@@ -447,10 +454,49 @@ function ScriptRow({
   );
 }
 
+function ScriptGroup({
+  path,
+  collapsible,
+  children,
+}: {
+  path: string;
+  collapsible: boolean;
+  children: ReactNode;
+}): ReactNode {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(path === "package.json");
+  const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
+  const Icon = expanded ? ThemedChevronDown : ThemedChevronRight;
+  const leading = useMemo(() => <Icon size={14} uniProps={mutedColorMapping} />, [Icon]);
+  if (!path) return children;
+  const directory =
+    path === "package.json"
+      ? t("workspace.scripts.rootPackage")
+      : path.slice(0, -"/package.json".length);
+  return (
+    <>
+      <DropdownMenuSeparator />
+      {collapsible ? (
+        <DropdownMenuItem
+          closeOnSelect={false}
+          onSelect={toggleExpanded}
+          leading={leading}
+          testID={`workspace-scripts-group-${path}`}
+        >
+          {directory}
+        </DropdownMenuItem>
+      ) : (
+        <DropdownMenuLabel>{path}</DropdownMenuLabel>
+      )}
+      {!collapsible || expanded ? children : null}
+    </>
+  );
+}
+
 export function WorkspaceScriptsButton({
   serverId,
   workspaceId,
-  scripts,
+  scripts: workspaceScripts,
   liveTerminalIds = [],
   onScriptTerminalStarted,
   onViewTerminal,
@@ -458,6 +504,42 @@ export function WorkspaceScriptsButton({
   hideLabels,
 }: WorkspaceScriptsButtonProps): ReactElement | null {
   const { t } = useTranslation();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const handleMenuOpenChange = useCallback((open: boolean) => {
+    setMenuOpen(open);
+    if (open) setSearch("");
+  }, []);
+  const { scripts, packageQuery, supportsPackages } = usePackageScriptDiscovery({
+    serverId,
+    workspaceId,
+    scripts: workspaceScripts,
+    menuOpen,
+  });
+  const retryDiscovery = useCallback(() => {
+    void packageQuery.refetch();
+  }, [packageQuery]);
+  const groups = useMemo(() => {
+    const grouped = new Map<string, WorkspaceDescriptor["scripts"]>();
+    const terms = search.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    for (const script of scripts) {
+      const path = script.packageJson?.path ?? "";
+      const label = script.packageJson?.script ?? script.scriptName;
+      const searchable = `${label} ${path}`.toLowerCase();
+      if (!terms.every((term) => searchable.includes(term))) continue;
+      const group = grouped.get(path) ?? [];
+      group.push(script);
+      grouped.set(path, group);
+    }
+    return [...grouped.entries()].sort(([left], [right]) => {
+      if (left === "") return -1;
+      if (right === "") return 1;
+      if (left === "package.json") return -1;
+      if (right === "package.json") return 1;
+      return left.localeCompare(right);
+    });
+  }, [scripts, search]);
+  const packageCount = groups.filter(([path]) => path !== "").length;
   const actions = useWorkspaceScriptActions({
     serverId,
     workspaceId,
@@ -474,7 +556,7 @@ export function WorkspaceScriptsButton({
     [],
   );
 
-  if (scripts.length === 0) {
+  if (scripts.length === 0 && !supportsPackages) {
     return null;
   }
 
@@ -485,7 +567,7 @@ export function WorkspaceScriptsButton({
   return (
     <View style={styles.row}>
       <View style={styles.splitButton}>
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={handleMenuOpenChange} compactMode="sheet">
           <DropdownMenuTrigger
             testID="workspace-scripts-button"
             style={triggerStyle}
@@ -502,20 +584,58 @@ export function WorkspaceScriptsButton({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            minWidth={200}
-            maxWidth={280}
+            minWidth={280}
+            maxWidth={360}
+            maxHeight={420}
+            scrollable
+            sheetTitle={t("workspace.scripts.title")}
             testID="workspace-scripts-menu"
           >
-            {scripts.map((script) => (
-              <ScriptRow
-                key={script.scriptName}
-                script={script}
-                liveTerminalIdSet={liveTerminalIdSet}
-                actions={actions}
-                onViewTerminal={onViewTerminal}
-                onOpenUrlInBrowserTab={onOpenUrlInBrowserTab}
-              />
+            <MenuTextField
+              initialValue={search}
+              onChangeText={setSearch}
+              placeholder={t("workspace.scripts.searchPlaceholder")}
+              testID="workspace-scripts-search"
+            />
+            {groups.map(([path, group]) => (
+              <ScriptGroup
+                key={path}
+                path={path}
+                collapsible={path !== "" && packageCount > 1 && !search.trim()}
+              >
+                {group.map((script) => (
+                  <ScriptRow
+                    key={script.scriptName}
+                    script={script}
+                    liveTerminalIdSet={liveTerminalIdSet}
+                    actions={actions}
+                    onViewTerminal={onViewTerminal}
+                    onOpenUrlInBrowserTab={onOpenUrlInBrowserTab}
+                  />
+                ))}
+              </ScriptGroup>
             ))}
+            {packageQuery.isFetching ? (
+              <DropdownMenuLabel>{t("common.loading")}</DropdownMenuLabel>
+            ) : null}
+            {packageQuery.isError ? (
+              <DropdownMenuItem
+                description={packageQuery.error.message}
+                closeOnSelect={false}
+                onSelect={retryDiscovery}
+              >
+                {t("common.actions.retry")}
+              </DropdownMenuItem>
+            ) : null}
+            {groups.length === 0 && !packageQuery.isFetching && !packageQuery.isError ? (
+              <DropdownMenuLabel>
+                {t(
+                  search.trim()
+                    ? "workspace.scripts.states.noMatches"
+                    : "workspace.scripts.states.empty",
+                )}
+              </DropdownMenuLabel>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </View>

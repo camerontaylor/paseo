@@ -16,7 +16,7 @@ import {
   type TimelineSubscription,
 } from "./connection/index.js";
 import { CreationClient } from "./creation/index.js";
-import type { CreationSnapshot } from "@getpaseo/protocol/messages";
+import type { AgentQueueSnapshot, CreationSnapshot } from "@getpaseo/protocol/messages";
 import type { z } from "zod";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 // Split value/type imports: the desvio basket drops the value import once no
@@ -32,6 +32,7 @@ import {
   AgentRefreshedStatusPayloadSchema,
   AgentResumedStatusPayloadSchema,
   CheckoutRenameBranchResponseSchema,
+  CheckoutBaseRefSetResponseSchema,
   parseServerInfoStatusPayload,
   RenameTerminalResponseSchema,
   RestartRequestedStatusPayloadSchema,
@@ -39,6 +40,9 @@ import {
   DaemonUpdateResponseSchema,
   SessionInboundMessageSchema,
   type ActiveTurnBehavior,
+  type AgentAttachmentWire,
+  type QueuedAgentDeliveryIntent,
+  type QueuedComposerAttachment,
   type ServerInfoStatusPayload,
 } from "@getpaseo/protocol/messages";
 import { validateWSOutboundMessage } from "@getpaseo/protocol/validation/ws-outbound";
@@ -543,6 +547,7 @@ type CheckoutPrStatusPayload = CheckoutPrStatusResponse["payload"];
 type PullRequestTimelinePayload = PullRequestTimelineResponse["payload"];
 type CheckoutSwitchBranchPayload = CheckoutSwitchBranchResponse["payload"];
 export type RenameBranchResult = z.infer<typeof CheckoutRenameBranchResponseSchema>["payload"];
+export type SetCheckoutBaseRefResult = z.infer<typeof CheckoutBaseRefSetResponseSchema>["payload"];
 type StashSavePayload = StashSaveResponse["payload"];
 type StashPopPayload = StashPopResponse["payload"];
 type StashListPayload = StashListResponse["payload"];
@@ -940,6 +945,11 @@ export interface RenameBranchInput {
   branch: string;
   requestId?: string;
 }
+export interface SetCheckoutBaseRefInput {
+  cwd: string;
+  baseRef: string;
+  requestId?: string;
+}
 export interface RenameTerminalInput {
   terminalId: string;
   title: string;
@@ -1280,6 +1290,12 @@ export function supportsUsageReports(features: ServerInfoStatusPayload["features
   return features?.usageSources === true || features?.providerUsageList === true;
 }
 
+/** Identifies the voice attachment a voice message belongs to. */
+export interface VoiceTransport {
+  attachmentId: string;
+  generation: string;
+}
+
 /**
  * Event selectors a host only understands behind a handshake feature. Anything absent from this
  * map is part of the base protocol and always sent. The client drops mapped selectors the
@@ -1291,6 +1307,9 @@ const EVENT_SELECTOR_FEATURES: Partial<
   // COMPAT(sideConversationEvents): added in 0.12.0-beta.1.fork.1.
   "agent.side_conversation.update": "sideConversationEvents",
   "agent.side_conversation.removed": "sideConversationEvents",
+  // COMPAT(durableAgentQueueV1): added in 0.12.0-beta.1.fork.1. An old daemon rejects the whole
+  // subscription request when it parses an unknown selector, so this one is dropped before send.
+  "agent.queue.update": "durableAgentQueueV1",
 };
 
 function buildFetchAgentsRequest(
@@ -3382,6 +3401,66 @@ export class DaemonClient {
     }
   }
 
+  async updateCompanionEntry(input: {
+    agentId: string;
+    entryId?: string;
+    action: "update_status" | "add_pin" | "remove_pin" | "add_q_and_a";
+    status?: "open" | "reviewed" | "done";
+    text?: string;
+    answerText?: string;
+    sourceId?: string;
+  }): Promise<void> {
+    await this.whenConnected();
+    // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+    if (this.lastServerInfoMessage?.features?.companionStreamPortV1 !== true) {
+      throw new Error("Update the host to use the companion stream.");
+    }
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.companion.update_entry.response">({
+        message: {
+          type: "agent.companion.update_entry.request",
+          agentId: input.agentId,
+          entryId: input.entryId,
+          action: input.action,
+          status: input.status,
+          text: input.text,
+          answerText: input.answerText,
+          sourceId: input.sourceId,
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "updateCompanionEntry rejected");
+    }
+  }
+
+  /**
+   * Backfills an agent's artifact feed from files already on disk. Needed for
+   * agents whose work predates the artifact feed, whose feeds are otherwise
+   * permanently empty.
+   */
+  async scanAgentArtifacts(
+    agentId: string,
+    options?: { limit?: number },
+  ): Promise<{ addedOrUpdated: number; total: number }> {
+    await this.whenConnected();
+    // COMPAT(agentArtifactsScan): added in fork v0.13.2, gate lasts while stock peers are supported.
+    if (this.lastServerInfoMessage?.features?.agentArtifactsScan !== true) {
+      throw new Error("Update the host to scan agent artifacts.");
+    }
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.artifacts.scan.response">({
+        message: {
+          type: "agent.artifacts.scan.request",
+          agentId,
+          ...(options?.limit !== undefined ? { limit: options.limit } : {}),
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "scanAgentArtifacts rejected");
+    }
+    return { addedOrUpdated: payload.addedOrUpdated, total: payload.total };
+  }
+
   async renameProject(
     projectId: string,
     customName: string | null,
@@ -3959,6 +4038,159 @@ export class DaemonClient {
     return this.sendAgentMessage(agentId, text, options);
   }
 
+  // ==========================================================================
+  // Durable agent message queue — see docs/queue-mirroring.md.
+  // Gated on server_info.features.durableAgentQueueV1; callers must check the
+  // flag before reaching any of these. Mutations are revision-checked: a stale
+  // expectedRevision is rejected with the `queue_revision_conflict` code
+  // instead of overwriting another device's edit.
+  // ==========================================================================
+
+  /**
+   * Admits a prompt into the durable queue with an explicit delivery intent.
+   * `itemId` comes from the caller so an optimistic local row and the stored
+   * item share an id, which makes a reconnect retry of the same enqueue a
+   * daemon-side no-op instead of a duplicate.
+   */
+  async enqueueAgentMessage(input: {
+    agentId: string;
+    itemId: string;
+    text: string;
+    intent: QueuedAgentDeliveryIntent;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: AgentAttachmentWire[];
+    composerAttachments?: QueuedComposerAttachment[];
+  }): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.enqueue.response">({
+        message: {
+          type: "agent.queue.enqueue.request",
+          agentId: input.agentId,
+          itemId: input.itemId,
+          text: input.text,
+          intent: input.intent,
+          ...(input.images?.length ? { images: input.images } : {}),
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          ...(input.composerAttachments?.length
+            ? { composerAttachments: input.composerAttachments }
+            : {}),
+        },
+      }),
+    );
+  }
+
+  async updateQueuedAgentMessage(input: {
+    agentId: string;
+    itemId: string;
+    text: string;
+    expectedRevision: number;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: AgentAttachmentWire[];
+    composerAttachments?: QueuedComposerAttachment[];
+  }): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.update.response">({
+        message: {
+          type: "agent.queue.update.request",
+          agentId: input.agentId,
+          itemId: input.itemId,
+          text: input.text,
+          expectedRevision: input.expectedRevision,
+          ...(input.images?.length ? { images: input.images } : {}),
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          ...(input.composerAttachments?.length
+            ? { composerAttachments: input.composerAttachments }
+            : {}),
+        },
+      }),
+    );
+  }
+
+  async reorderQueuedAgentMessages(
+    agentId: string,
+    itemIds: string[],
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.reorder.response">({
+        message: { type: "agent.queue.reorder.request", agentId, itemIds, expectedRevision },
+      }),
+    );
+  }
+
+  async deleteQueuedAgentMessage(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.delete.response">({
+        message: { type: "agent.queue.delete.request", agentId, itemId, expectedRevision },
+      }),
+    );
+  }
+
+  async retryQueuedAgentMessage(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.retry.response">({
+        message: { type: "agent.queue.retry.request", agentId, itemId, expectedRevision },
+      }),
+    );
+  }
+
+  async sendQueuedAgentMessageNow(
+    agentId: string,
+    itemId: string,
+    expectedRevision: number,
+  ): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.send_now.response">({
+        message: { type: "agent.queue.send_now.request", agentId, itemId, expectedRevision },
+      }),
+    );
+  }
+
+  async listQueuedAgentMessages(agentId: string): Promise<AgentQueueSnapshot> {
+    return this.requireAgentQueuePayload(
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.list.response">({
+        message: { type: "agent.queue.list.request", agentId },
+      }),
+    );
+  }
+
+  /**
+   * Fetches the image bytes of one queued item. A device that did not queue the
+   * item has no local copy, so pulling it back into the composer would
+   * otherwise drop the images.
+   */
+  async getQueuedAgentMessageImages(
+    agentId: string,
+    itemId: string,
+  ): Promise<Array<{ id: string; mimeType: string; fileName?: string | null; data: string }>> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.queue.get_item_images.response">({
+        message: { type: "agent.queue.get_item_images.request", agentId, itemId },
+      });
+    if (payload.error) {
+      throw new Error(payload.error);
+    }
+    return payload.images;
+  }
+
+  private requireAgentQueuePayload(payload: {
+    queue: AgentQueueSnapshot | null;
+    error: string | null;
+  }): AgentQueueSnapshot {
+    if (!payload.queue) {
+      throw new Error(payload.error ?? "Agent queue request rejected");
+    }
+    return payload.queue;
+  }
+
   async rewindAgent(
     agentId: string,
     messageId: string,
@@ -4257,12 +4489,23 @@ export class DaemonClient {
   // Audio / Voice
   // ============================================================================
 
-  async setVoiceMode(enabled: boolean, agentId?: string): Promise<SetVoiceModePayload> {
+  async setVoiceMode(
+    enabled: boolean,
+    agentId?: string,
+    input?: {
+      /** Voice attachment identity; the host binds its transport generation to it. */
+      attachmentId?: string;
+      /** Supplied when an existing attachment reclaims itself after a reconnect. */
+      generation?: string;
+    },
+  ): Promise<SetVoiceModePayload> {
     const requestId = this.createRequestId();
     const message = SessionInboundMessageSchema.parse({
       type: "set_voice_mode",
       enabled,
       ...(agentId ? { agentId } : {}),
+      ...(input?.attachmentId ? { attachmentId: input.attachmentId } : {}),
+      ...(input?.generation ? { generation: input.generation } : {}),
       requestId,
     });
     const response = await this.sendRequest({
@@ -4288,8 +4531,47 @@ export class DaemonClient {
     return response;
   }
 
-  async sendVoiceAudioChunk(audio: string, format: string, isLast = false): Promise<void> {
-    this.sendSessionMessage({ type: "voice_audio_chunk", audio, format, isLast });
+  /** Reads this attachment's delivery receipts so the panel can show truthful state. */
+  async readVoiceInputReceipts(input: {
+    agentId: string;
+    attachmentId: string;
+    generation: string;
+    after?: string;
+    limit?: number;
+  }): Promise<
+    Extract<SessionOutboundMessage, { type: "voice.input.receipts.read.response" }>["payload"]
+  > {
+    await this.whenConnected();
+    // COMPAT(durableVoiceInputV1): added in fork v0.13.2, gate lasts while stock peers are supported.
+    if (this.lastServerInfoMessage?.features?.durableVoiceInputV1 !== true) {
+      throw new Error("Update the host to read voice input receipts.");
+    }
+    const requestId = this.createRequestId();
+    const response = await this.sendRequest({
+      requestId,
+      message: { type: "voice.input.receipts.read.request", requestId, ...input },
+      select: (msg) =>
+        msg.type === "voice.input.receipts.read.response" && msg.payload.requestId === requestId
+          ? msg.payload
+          : null,
+    });
+    if (response.error) throw new Error(response.error);
+    return response;
+  }
+
+  async sendVoiceAudioChunk(
+    audio: string,
+    format: string,
+    isLast = false,
+    transport?: VoiceTransport,
+  ): Promise<void> {
+    this.sendSessionMessage({
+      type: "voice_audio_chunk",
+      audio,
+      format,
+      isLast,
+      ...transport,
+    });
   }
 
   async startDictationStream(dictationId: string, format: string): Promise<void> {
@@ -4501,12 +4783,17 @@ export class DaemonClient {
     this.sendSessionMessageStrict({ type: "dictation_stream_cancel", dictationId });
   }
 
-  async abortRequest(): Promise<void> {
-    this.sendSessionMessage({ type: "abort_request" });
+  async abortRequest(transport?: VoiceTransport): Promise<void> {
+    this.sendSessionMessage({ type: "abort_request", ...transport });
   }
 
-  async audioPlayed(id: string): Promise<void> {
-    this.sendSessionMessage({ type: "audio_played", id });
+  async audioPlayed(id: string, error?: string, transport?: VoiceTransport): Promise<void> {
+    this.sendSessionMessageStrict({
+      type: "audio_played",
+      id,
+      ...(error !== undefined ? { error } : {}),
+      ...transport,
+    });
   }
 
   // ============================================================================
@@ -4915,6 +5202,19 @@ export class DaemonClient {
         branch: input.branch,
       },
       responseType: "checkout.rename_branch.response",
+    });
+  }
+
+  async setCheckoutBaseRef(input: SetCheckoutBaseRefInput): Promise<SetCheckoutBaseRefResult> {
+    this.requireCheckoutBaseRefSupport();
+    return this.sendCorrelatedSessionRequest({
+      requestId: input.requestId,
+      message: {
+        type: "checkout.base_ref.set.request",
+        cwd: input.cwd,
+        baseRef: input.baseRef,
+      },
+      responseType: "checkout.base_ref.set.response",
     });
   }
 
@@ -6700,6 +7000,14 @@ export class DaemonClient {
     // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
     if (this.lastServerInfoMessage?.features?.sideConversations !== true) {
       throw new Error("Update the host to use side conversations.");
+    }
+  }
+
+  private requireCheckoutBaseRefSupport(): void {
+    // COMPAT(checkoutBaseRefSet): added in fork v0.10.1, remove after 2027-09-30. An older
+    // daemon cannot parse the request, so the client must not send it.
+    if (this.lastServerInfoMessage?.features?.checkoutBaseRefSet !== true) {
+      throw new Error("Update the host to change the comparison base.");
     }
   }
 

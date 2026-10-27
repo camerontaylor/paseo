@@ -23,6 +23,22 @@ describe("native release version", () => {
     });
   });
 
+  it.each([
+    ["0.13.0-fork.261027-0542.g0123456789ab", "0.13.0", "13000999"],
+    ["0.13.0-beta.2.fork.261027-0542.g0123456789ab", "0.13.0", "13000002"],
+    ["0.13.0-fork.4", "0.13.0", "13000999"],
+    ["0.13.0-mine.261025-1520", "0.13.0", "13000999"],
+  ])(
+    "preserves numeric native metadata for fork version %s",
+    (version, appVersion, iosBuildNumber) => {
+      expect(getNativeReleaseVersion(version)).toEqual({
+        appVersion,
+        androidVersionCode: 13000,
+        iosBuildNumber,
+      });
+    },
+  );
+
   it("rejects beta numbers that consume the stable iOS build slot", () => {
     expect(() => getNativeReleaseVersion("0.2.6-beta.999")).toThrow(
       "iOS beta number must be between 1 and 998",
