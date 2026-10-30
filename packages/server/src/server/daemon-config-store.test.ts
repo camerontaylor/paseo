@@ -30,6 +30,7 @@ function reloadableConfig(
     enableTerminalAgentHooks: daemon.enableTerminalAgentHooks ?? false,
     idleRuntimeCleanup: agents.idleRuntimeCleanup !== false,
     appendSystemPrompt: daemon.appendSystemPrompt ?? "",
+    appendSystemPromptExcludedProviders: daemon.appendSystemPromptExcludedProviders,
     terminalProfiles: daemon.terminalProfiles,
     agentProfiles: daemon.agentProfiles,
     cors: { allowedOrigins: [] },
@@ -1228,6 +1229,32 @@ describe("DaemonConfigStore reload", () => {
     writeConfig(paseoHome, { daemon: { browserTools: { enabled: "yes" } } });
     await expect(store.reload()).rejects.toThrow("Invalid config");
     expect(store.get().browserTools.enabled).toBe(false);
+  });
+
+  test("reload applies and removes provider policy exclusions without discarding shared policy", async () => {
+    const { paseoHome, store, persisted } = createReloadableStore();
+    writeConfig(paseoHome, {
+      ...persisted,
+      daemon: {
+        ...persisted.daemon,
+        appendSystemPrompt: "Shared policy",
+        appendSystemPromptExcludedProviders: ["zcode"],
+      },
+    });
+    const seen: unknown[] = [];
+    store.onFieldChange("appendSystemPromptExcludedProviders", (value) => seen.push(value));
+    expect((await store.reload()).appliedPaths).toContain(
+      "daemon.appendSystemPromptExcludedProviders",
+    );
+    expect(store.get().appendSystemPrompt).toBe("Shared policy");
+    expect(store.get().appendSystemPromptExcludedProviders).toEqual(["zcode"]);
+    writeConfig(paseoHome, {
+      ...persisted,
+      daemon: { ...persisted.daemon, appendSystemPrompt: "Shared policy" },
+    });
+    await store.reload();
+    expect(store.get().appendSystemPromptExcludedProviders ?? []).toEqual([]);
+    expect(seen).toHaveLength(2);
   });
 
   test("removing providers and optional profiles clears live state", async () => {

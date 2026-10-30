@@ -1,0 +1,3339 @@
+{
+  "date": "2026-10-27",
+  "target": {
+    "ref": "v0.13.2",
+    "commit": "d2941157a8f91512daf54fc688241d416e8f5ebd"
+  },
+  "previous_base": {
+    "ref": "v0.13.0",
+    "commit": "d34d17a9072149320ace35ec2a2e5c7dcd992cb3"
+  },
+  "comparisons": [
+    {
+      "label": "custom-before-sync",
+      "base": "d34d17a9072149320ace35ec2a2e5c7dcd992cb3",
+      "head": "2ba7b8a31463c74dc49eef9fcf2446a254596199",
+      "file_count": 221,
+      "files": [
+        {
+          "status": "A",
+          "path": ".claude/commands/fork-handover.md"
+        },
+        {
+          "status": "M",
+          "path": ".github/workflows/ci.yml"
+        },
+        {
+          "status": "A",
+          "path": ".github/workflows/fork-ci.yml"
+        },
+        {
+          "status": "A",
+          "path": ".github/workflows/fork-npm-publish.yml"
+        },
+        {
+          "status": "M",
+          "path": ".oxfmtrc.json"
+        },
+        {
+          "status": "M",
+          "path": "CLAUDE.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/agent-lifecycle.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/android.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/development.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/explorer-sidebar.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/mobile-testing.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/plugins.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/product.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/protocol-compatibility.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/providers.md"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100011.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100012.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100013.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100014.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100021.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100022.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100023.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100024.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/CHANGELOG.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/README.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/briefs/release-cycle.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/build-versions.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/ci.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/claude-local.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/feature-ledger.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/fork-survey-2026-10-12.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-2026-08-29.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-2026-09-04.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u1-2026-10-17.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-upstream-reconcile-2026-09-07.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/infi-pc-intake-2026-09-30.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/intakes/2026-10-17/infi-pc.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/intakes/2026-10-17/panic8.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/intakes/2026-10-17/tmad.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/intakes/2026-10-17/upstream-pins.json"
+        },
+        {
+          "status": "A",
+          "path": "fork/launchd/local.paseo-release-watch.plist"
+        },
+        {
+          "status": "A",
+          "path": "fork/local-fork-candidates.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ralplan-fork-release-channel.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ralplan-gjc-acp-busy-turn.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ralplan-gjc-acp-cancellation-boundary.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ultragoal-acp-cancellation-boundary-fix-pass.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ultragoal-gjc-acp-cancellation-boundary.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/infi-pc-intake-work-items.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/plan-cancellation-boundary-fix-pass.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/proposal-auto-release-cycle.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/ralplan-fork-release-channel.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/ralplan-fork-updates.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/ralplan-gjc-acp-busy-turn.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/ralplan-gjc-acp-cancellation-boundary.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/review-gjc-acp-cancellation-boundary.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/upgrade-0.12.0-beta.1.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/validation-batches-acp-cancellation-boundary-fix-pass.json"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/validation-batches-gjc-acp-cancellation-boundary.json"
+        },
+        {
+          "status": "A",
+          "path": "fork/release-watch.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/repros/tree-kill-detached/README.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/repros/tree-kill-detached/fake-acp.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/repros/tree-kill-detached/repro.sh"
+        },
+        {
+          "status": "A",
+          "path": "fork/repros/tree-kill-detached/server.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/build-version.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/init-worktree.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/migrate-zcode-native.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/package-desktop.sh"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/prepare-zcode-native-entry.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-fork.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-fork.test.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-watch.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-watch.sh"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-watch.test.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/side-conversations-2026-08-23.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/side-conversations-phase1-plan.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-candidates.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-prs-2026-09-07.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-prs-2026-10-12.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-research-2026-08-22.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-since-0.11.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-sync.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/worktrees.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/zcode-sdk-validation.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/zcode-system-prompt.md"
+        },
+        {
+          "status": "M",
+          "path": "lefthook.yml"
+        },
+        {
+          "status": "M",
+          "path": "package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/app.config.js"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/browser/side-conversations.spec.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/mobile/agent-device/native-terminal-basic.android.ad"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/mobile/agent-device/native-terminal-selection-panels.android.ad"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/mobile/agent-device/side-conversation-basic.android.ad"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/mobile/run-side-conversation-android.sh"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/mobile/support/remove-side-conversation-fixture.mjs"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/mobile/support/seed-side-conversation-fixture.mjs"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/support/helpers/isolated-host-daemon.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/support/helpers/side-conversations.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/modules/paseo-scroll/android/build.gradle"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/modules/paseo-scroll/android/src/androidTest/AndroidManifest.xml"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/modules/paseo-scroll/android/src/androidTest/java/sh/paseo/scroll/ScrollSelectionTest.kt"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/modules/paseo-scroll/android/src/androidTest/java/sh/paseo/scroll/SelectionTestActivity.kt"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/native-release-version.js"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/native-release-version.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/contexts/session-context.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/ar.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/en.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/es.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/fr.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/ja.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/ko.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/pt-BR.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/ru.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/zh-CN.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/agent-tracks.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/panel-manifest.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/panel-manifest.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/provider-subagent-panel.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/register-panels.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/panels/side-conversation-panel-state.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/panels/side-conversation-panel-state.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/panels/side-conversation-panel.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/plugins/evaluate.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/plugins/evaluate.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/compact-workspace-header/tab-switcher.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-tab-menu.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-tab-menu.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-tab-trailing-accessory.test.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-tab-trailing-accessory.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/side-conversations/routing.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/side-conversations/start.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/side-conversations/store.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/side-conversations/store.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/archive-finished.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/opens-in-sheet.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/select.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/select.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/track-presentation.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/track-presentation.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/track.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/workspace-tabs/identity.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/workspace-tabs/identity.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/workspace-tabs/model.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/workspace-tabs/open-beside.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/client/src/connection.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/client/src/connection/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/client/src/daemon-client.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/client/src/daemon-client.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/plugin/src/index.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/plugin/src/sdk-specifiers.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/plugin/src/server/provider.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/src/client-capabilities.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/src/messages.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/src/messages.wire-compat.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/protocol/tests/side-conversation.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-manager.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-manager.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-sdk-types.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/mcp-server.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/plugin-provider.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/plugin-provider.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/provider-registry-wrap.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/provider-registry.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/provider-registry.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/acp-agent.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/acp-agent.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/agent.real.e2e.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/agent.runtime-exit.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/agent.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/model-manifest.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/claude/side-question.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/claude/side-question.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/gjc-acp-agent.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/gjc-acp-agent.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/mock-load-test-agent.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/opencode-agent.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/opencode/side-question.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/opencode/side-question.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/pi/agent.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/pi/agent.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/pi/effort-cache-notice.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/pi/effort-cache-notice.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/pi/rpc-types.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/side-conversations/manager.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/side-conversations/store.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/side-conversations/store.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/tools/paseo-tools.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/authorization/operation-permissions.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/bootstrap.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/config.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/daemon-config-store.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/daemon-config-store.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/persisted-config.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/bundle-evaluator.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/compiler.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/compiler.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/plugin-process-protocol.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/plugin-process.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/plugin-process.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/plugin-sdk-specifiers.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/runtime.posix.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/usage/usage-session.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/usage/usage-session.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/websocket-server.ts"
+        },
+        {
+          "status": "M",
+          "path": "paseo.json"
+        },
+        {
+          "status": "M",
+          "path": "patches/react-native-enriched-markdown+1.2.0-nightly-20261014-766fc0e67.patch"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/client/settings.tsx"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/index.client.tsx"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/index.server.ts"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/paseo-plugin.json"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/server/provider.ts"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/shared/status.ts"
+        },
+        {
+          "status": "M",
+          "path": "public-docs/plugins/providers.md"
+        },
+        {
+          "status": "M",
+          "path": "scripts/build-apk.mjs"
+        },
+        {
+          "status": "A",
+          "path": "scripts/worktree-trust-mise.sh"
+        },
+        {
+          "status": "A",
+          "path": "specs/effort-cache-guard-design.md"
+        },
+        {
+          "status": "A",
+          "path": "specs/gjc-acp-foreground-turn-trace.md"
+        }
+      ]
+    },
+    {
+      "label": "upstream-upgrade",
+      "base": "d34d17a9072149320ace35ec2a2e5c7dcd992cb3",
+      "head": "d2941157a8f91512daf54fc688241d416e8f5ebd",
+      "file_count": 32,
+      "files": [
+        {
+          "status": "M",
+          "path": "CHANGELOG.md"
+        },
+        {
+          "status": "M",
+          "path": "CHANGELOG.zh-CN.md"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/130011.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/130012.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/130013.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/130014.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/130021.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/130022.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/130023.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/130024.txt"
+        },
+        {
+          "status": "M",
+          "path": "package-lock.json"
+        },
+        {
+          "status": "M",
+          "path": "package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar-workspace-list.test.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar-workspace-list.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar/sidebar-group-visibility.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/ui/isolated-bottom-sheet-modal/index.test.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/cli/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/client/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/desktop/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/expo-two-way-audio/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/highlight/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/plugin/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/relay/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/package.json"
+        },
+        {
+          "status": "M",
+          "path": "packages/website/package.json"
+        },
+        {
+          "status": "M",
+          "path": "patches/@gorhom+bottom-sheet+5.2.14.patch"
+        },
+        {
+          "status": "M",
+          "path": "patches/react-native-enriched-markdown+1.2.0-nightly-20261014-766fc0e67.patch"
+        },
+        {
+          "status": "A",
+          "path": "patches/react-native-reanimated+4.5.5.patch"
+        },
+        {
+          "status": "M",
+          "path": "plugins/package.json"
+        },
+        {
+          "status": "M",
+          "path": "scripts/postinstall-patches.mjs"
+        }
+      ]
+    },
+    {
+      "label": "cumulative-basket-before-sync",
+      "base": "d34d17a9072149320ace35ec2a2e5c7dcd992cb3",
+      "head": "6fe8977d9f21f190c45fac7b7017124ea8f17fb1",
+      "file_count": 568,
+      "files": [
+        {
+          "status": "A",
+          "path": ".claude/commands/fork-handover.md"
+        },
+        {
+          "status": "M",
+          "path": ".github/workflows/ci.yml"
+        },
+        {
+          "status": "A",
+          "path": ".github/workflows/fork-ci.yml"
+        },
+        {
+          "status": "A",
+          "path": ".github/workflows/fork-npm-publish.yml"
+        },
+        {
+          "status": "M",
+          "path": ".oxfmtrc.json"
+        },
+        {
+          "status": "M",
+          "path": ".oxlintrc.json"
+        },
+        {
+          "status": "M",
+          "path": "CLAUDE.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/agent-lifecycle.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/android.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/architecture.md"
+        },
+        {
+          "status": "A",
+          "path": "docs/artifact-feed.png"
+        },
+        {
+          "status": "A",
+          "path": "docs/companion-stream.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/custom-providers.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/design.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/development.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/explorer-sidebar.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/expo-router.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/forge-providers.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/glossary.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/mobile-testing.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/plugins.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/product.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/protocol-compatibility.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/providers.md"
+        },
+        {
+          "status": "A",
+          "path": "docs/queue-mirroring.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/service-proxy.md"
+        },
+        {
+          "status": "M",
+          "path": "docs/terminal-activity.md"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100011.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100012.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100013.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100014.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100021.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100022.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100023.txt"
+        },
+        {
+          "status": "A",
+          "path": "fastlane/metadata/android/en-US/changelogs/100024.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/CHANGELOG.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/README.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/briefs/release-cycle.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/campaign/upgrade-0.12.0.manifest.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/ci.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/claude-local.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/feature-ledger.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/fork-survey-2026-10-12.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-2026-08-29.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-2026-09-04.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u1-2026-10-17.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u2a-2026-10-17.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u2b-2026-10-17.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u2c-2026-10-17.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u2d-2026-10-17.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u2e-2026-10-18.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u2f-2026-10-18.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u3-6762-2026-10-18.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u3-7057-2026-10-18.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u3-7062-2026-10-18.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u3-7106-2026-10-18.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u3-7146-2026-10-18.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u3-7169-2026-10-18.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-beta-upgrade-u3-7179-2026-10-18.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/handover-upstream-reconcile-2026-09-07.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/infi-pc-intake-2026-09-30.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/intakes/2026-10-17/infi-pc.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/intakes/2026-10-17/panic8.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/intakes/2026-10-17/tmad.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/intakes/2026-10-17/upstream-pins.json"
+        },
+        {
+          "status": "A",
+          "path": "fork/launchd/local.paseo-release-watch.plist"
+        },
+        {
+          "status": "A",
+          "path": "fork/local-fork-candidates.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ralplan-fork-release-channel.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ralplan-gjc-acp-busy-turn.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ralplan-gjc-acp-cancellation-boundary.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ultragoal-acp-cancellation-boundary-fix-pass.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/brief-ultragoal-gjc-acp-cancellation-boundary.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/infi-pc-intake-work-items.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/plan-cancellation-boundary-fix-pass.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/proposal-auto-release-cycle.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/ralplan-fork-release-channel.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/ralplan-fork-updates.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/ralplan-gjc-acp-busy-turn.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/ralplan-gjc-acp-cancellation-boundary.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/review-gjc-acp-cancellation-boundary.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-desvio-0.11.1.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-maintained-port-plan.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port-work-items.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/STATUS.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/briefs/COMMON.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/briefs/ORCHESTRATOR.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/briefs/brief-P0.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/briefs/brief-P2.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/briefs/brief-TM01.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/briefs/brief-TM02.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/briefs/brief-TM03.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/briefs/brief-TM04.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/briefs/brief-TM07.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/.baseline-merge-status.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/.manifest-refs.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P0-feature-map.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P0-inputs.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P0.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P2.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-assembly-2026-10-08.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-conflict-resolution-log-2026-10-08.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-runtime/README.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-runtime/p6-final-enabled-runtime.log"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-runtime/p6-frozen-voice-client-server-tests.log"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-runtime/p6-full-custom-voice-app-tests.log"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-runtime/p6-full-custom-voice-client-server-tests.log"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-runtime/p6-noqueue-custom-runtime.log"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-runtime/pending-fixture.json.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-runtime/queue-removal-enabled-runtime-check.ts.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/P6-runtime/queue-removal-runtime-check.ts.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/TM-01.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/TM-02.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/TM-03.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/TM-04-2026-10-08.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/TM-07.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/desvio-0.11.1-focused-tests.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/desvio-0.11.1-runtime.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/manifest-frozen-2026-10-02.txt"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/pluto-cli-typecheck-2026-10-08.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/pluto-readiness-2026-10-08.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/pluto-side-conversation-events-2026-10-08.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/pluto-side-conversation-review-2026-10-08.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/review-P0.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/review-P2.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/review-P6-final-2026-10-08.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/review-TM-01-delta.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/review-TM-01.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/review-TM-02.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/review-TM-03.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/review-TM-04-2026-10-08.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/review-TM-07.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/tmad-port/evidence/stream-rollback.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/upgrade-0.12.0-beta.1.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/validation-batches-acp-cancellation-boundary-fix-pass.json"
+        },
+        {
+          "status": "A",
+          "path": "fork/plans/validation-batches-gjc-acp-cancellation-boundary.json"
+        },
+        {
+          "status": "A",
+          "path": "fork/release-watch.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/init-worktree.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/migrate-zcode-native.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/prepare-zcode-native-entry.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-fork.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-fork.test.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-watch.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-watch.sh"
+        },
+        {
+          "status": "A",
+          "path": "fork/scripts/release-watch.test.mjs"
+        },
+        {
+          "status": "A",
+          "path": "fork/side-conversations-2026-08-23.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/side-conversations-phase1-plan.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-candidates.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-prs-2026-09-07.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-prs-2026-10-12.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-research-2026-08-22.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-since-0.11.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/upstream-sync.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/worktrees.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/zcode-sdk-validation.md"
+        },
+        {
+          "status": "A",
+          "path": "fork/zcode-system-prompt.md"
+        },
+        {
+          "status": "M",
+          "path": "lefthook.yml"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/browser/agent-message-submission.spec.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/browser/agent-stream-ui.spec.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/browser/branch-switcher.spec.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/browser/pinned-prompt.spec.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/browser/plan-card-markdown.spec.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/browser/project-pull-requests.spec.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/browser/provider-account-create.spec.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/browser/provider-removal.spec.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/browser/side-conversations.spec.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/browser/workspace-package-scripts.spec.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/mobile/agent-device/native-terminal-basic.android.ad"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/mobile/agent-device/native-terminal-selection-panels.android.ad"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/mobile/agent-device/side-conversation-basic.android.ad"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/mobile/run-side-conversation-android.sh"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/mobile/support/remove-side-conversation-fixture.mjs"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/mobile/support/seed-side-conversation-fixture.mjs"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/support/helpers/branch-switcher.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/support/helpers/daemon-websocket-gate.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/support/helpers/e2e-worker.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/support/helpers/isolated-host-daemon.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/support/helpers/seed-client.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/support/helpers/settings.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/e2e/support/helpers/side-conversations.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/support/helpers/workspace-setup.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/e2e/support/helpers/workspace-ui.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/package.json"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/scripts/generate-voice-failure-phrases.mjs"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/agent-stream/chat-find/index.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/chat-find/matches.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/chat-find/matches.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/chat-find/native-viewport.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/chat-find/native-viewport.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/agent-stream/chat-find/ranges.browser.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/pinned-prompt/model.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/pinned-prompt/model.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/pinned-prompt/pinned-prompt.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/pinned-prompt/pinned-prompt.web.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/pinned-prompt/use-pinned-prompt.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/agent-stream/reading-signal.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/agent-stream/strategy-native.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/agent-stream/turn-footer.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/agent-stream/view.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/app/_layout.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/app/new.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/artifacts/feed.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/assistant-file-links/parse.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/assistant-file-links/parse.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/assistant-file-links/path-open.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/assistant-file-links/path-open.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/assistant-selection-copy/content.browser.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/audio/audio-engine.native.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/audio/audio-engine.native.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/audio/audio-engine.web.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/audio/audio-engine.web.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/audio/playback.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/audio/playback.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/command-center/agent-control-contributions.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/companion-stream/feed.test.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/companion-stream/feed.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/companion-stream/model.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/companion-stream/model.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/combined-model-selector.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/message.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/model-browser.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/plan-card.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/components/plan-copy-actions.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/components/plan-handoff-button.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/components/plan-handoff.test.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/components/plan-handoff.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/components/provider-account-sheet.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/provider-icon-name.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/provider-icon-name.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/provider-icons.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/components/realtime-voice-overlay.test.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/realtime-voice-overlay.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar-workspace-list.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar/project-leading-visual.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar/sidebar-workspace-menu.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar/sidebar-workspace-row-content.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar/workspace-meta-row/index.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar/workspace-meta-row/meta-items.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar/workspace-meta-row/service-summary.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/sidebar/workspace-meta-row/service-summary.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/terminal-emulator-contract.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/terminal-emulator-native-grid.native.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/terminal-emulator.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/terminal-pane.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/components/ui/segmented-control.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/composer/actions.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/composer/actions.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/composer/agent-controls/model-sheet.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/composer/index.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/composer/input/input.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/composer/input/state.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/composer/input/state.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/composer/queue-sync.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/composer/queue-sync.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/contexts/session-context.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/contexts/session-queue-resume.test.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/contexts/voice-context.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/data/provider-icons.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/git/use-forge-search-query.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/git/use-forge-search-query.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/hooks/sidebar-workspaces-view-model.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/hooks/sidebar-workspaces-view-model.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/hooks/use-keyboard-shortcuts.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/hooks/use-sidebar-workspaces-list.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/hooks/use-status-pulse.browser.test.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/hooks/use-status-pulse.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/ar.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/en.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/es.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/fr.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/ja.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/ko.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/pt-BR.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/ru.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/i18n/resources/zh-CN.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/keyboard/actions.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/keyboard/keyboard-shortcuts.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/keyboard/keyboard-shortcuts.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/keyboard/route-shortcut.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/keyboard/route-shortcut.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/model.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/model.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/record-location.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/recorder.test.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/recorder.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/replay.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/replay.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/select-active-tab.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/select-active-tab.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/store.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/navigation/history/store.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/agent-panel.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/agent-tracks.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/panel-manifest.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/panel-manifest.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/provider-subagent-panel.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/panels/register-panels.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/panels/side-conversation-panel-state.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/panels/side-conversation-panel-state.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/panels/side-conversation-panel.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/plugins/evaluate.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/plugins/evaluate.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/provider-accounts/provider-account-form-model.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/provider-accounts/provider-account-form-model.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/provider-accounts/use-provider-account-form-model.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/provider-selection/provider-selection.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/provider-selection/provider-selection.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/runtime/host-features.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/runtime/host-runtime.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/runtime/replica-cache/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/new-workspace-screen.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/project-pull-requests/checks-view.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/project-pull-requests/checks.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/project-pull-requests/checks.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/project-pull-requests/model.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/project-pull-requests/model.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/project-pull-requests/overlay-frame.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/project-pull-requests/overlay-frame.web.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/project-pull-requests/shortcut.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/project-pull-requests/view.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/settings/providers-section.test.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/settings/providers-section.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/compact-workspace-header/tab-switcher.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/scripts/workspace-scripts-button.test.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/scripts/workspace-scripts-button.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/scripts/workspace-scripts-menu-pages.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/workspace/workspace-header-branch-options.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/workspace/workspace-header-branch-options.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/workspace/workspace-header-branches.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-header-menu.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-header-project-row.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-header-source.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/screens/workspace/workspace-recent-agents-menu.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-screen.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-source-of-truth.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-tab-menu.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-tab-menu.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-tab-trailing-accessory.test.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/screens/workspace/workspace-tab-trailing-accessory.tsx"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/side-conversations/routing.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/side-conversations/start.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/side-conversations/store.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/side-conversations/store.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/stores/agent-view-store.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/stores/navigation-active-workspace-store/navigation.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/stores/queue-outbox-store/index.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/stores/queue-outbox-store/model.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/stores/queue-outbox-store/model.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/stores/session-store.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/stores/session-store.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/archive-finished.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/opens-in-sheet.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/select.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/select.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/track-presentation.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/track-presentation.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/subagents/track.tsx"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/terminal/runtime/terminal-emulator-runtime.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/terminal/runtime/terminal-emulator-runtime.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/utils/agent-snapshots.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/utils/host-routes.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/utils/provider-definitions.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/voice/input-receipt-cue.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/voice/voice-failure-cue.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/voice/voice-failure-phrases.mulaw.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/voice/voice-failure.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/voice/voice-failure.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/voice/voice-runtime.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/voice/voice-runtime.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/workspace-tabs/identity.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/workspace-tabs/identity.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/workspace-tabs/model.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/src/workspace-tabs/open-beside.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/workspace-tabs/recently-closed.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/app/src/workspace-tabs/recently-closed.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/test-stubs/lucide-react-native.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/app/vitest.config.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/cli/src/commands/agent/artifacts-scan.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/cli/src/commands/agent/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/cli/src/commands/agent/run.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/cli/src/commands/agent/run.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/cli/src/commands/provider/add.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/cli/src/commands/provider/add.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/cli/src/commands/provider/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/cli/src/commands/provider/ls.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/cli/src/commands/provider/rm.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/cli/src/commands/provider/shared.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/cli/tests/15-provider.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/client/src/connection.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/client/src/connection/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/client/src/daemon-client.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/client/src/daemon-client.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/desktop/src/daemon/quit-lifecycle.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/desktop/src/daemon/quit-lifecycle.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/desktop/src/main.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/plugin/src/index.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/plugin/src/sdk-specifiers.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/plugin/src/server/provider.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/src/agent-types.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/src/client-capabilities.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/protocol/src/companion-stream.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/protocol/src/messages.agent-queue.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/protocol/src/messages.artifacts.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/src/messages.checkout-pr-schema.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/protocol/src/messages.companion-update-entry.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/src/messages.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/protocol/src/messages.voice-flow.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/src/messages.wire-compat.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/protocol/src/provider-manifest.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/protocol/tests/side-conversation.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent-queue/send-or-queue.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent-queue/send-or-queue.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent-queue/service.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent-queue/service.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent-queue/store.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent-queue/store.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-loading.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-manager.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-manager.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-projections.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-projections.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-prompt.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-prompt.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-sdk-types.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-storage.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-storage.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-timeline-store-types.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/agent-timeline-store.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/artifacts/backfill.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/artifacts/collector.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/artifacts/collector.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/companion-stream.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/companion-stream.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/lifecycle-command.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/mcp-server.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/mcp-shared.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/plugin-provider.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/plugin-provider.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/provider-registry-wrap.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/provider-registry.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/provider-registry.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/provider-snapshot-manager.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/provider-snapshot-manager.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/acp-agent.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/acp-agent.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/agent.live-settings.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/agent.real.e2e.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/agent.runtime-exit.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/agent.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/agent.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/claude/model-manifest.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/claude/side-question.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/claude/side-question.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/codex-async-questions.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/codex/tool-call-mapper.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/codex/tool-call-mapper.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/generic-acp-agent.request-errors.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/gjc-acp-agent.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/gjc-acp-agent.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/mock-load-test-agent.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/omp/agent.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/opencode-agent.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/opencode/side-question.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/opencode/side-question.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/pi/agent.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/pi/agent.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/pi/effort-cache-notice.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/providers/pi/effort-cache-notice.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/providers/pi/rpc-types.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/side-conversations/manager.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/side-conversations/store.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/side-conversations/store.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/timeline-page-bounds.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/agent/timeline-page-bounds.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/timeline-projection.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/tools/paseo-tools.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/tts-manager.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/agent/tts-manager.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/atomic-file.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/authorization/operation-permissions.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/bootstrap.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/bootstrap.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/config.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/creation/index.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/creation/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/daemon-config-store.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/daemon-config-store.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/daemon-e2e/agent-queue-mirroring.e2e.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/daemon-e2e/claude-settings-mid-turn.real.e2e.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/daemon-e2e/omp.real.e2e.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/daemon-e2e/timeline-byte-bound.e2e.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/hub/daemon-executions.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/hub/test-utils/relationship-harness.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/message-receipts/index.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/message-receipts/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/persisted-config.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/persistence-hooks.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/bundle-evaluator.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/compiler.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/compiler.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/index.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/plugin-process-protocol.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/plugin-process.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/plugin-process.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/plugin-sdk-specifiers.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/runtime.posix.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/plugins/usage-sources/index.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/plugins/usage-sources/provider-account-discovery.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/plugins/usage-sources/provider-accounts.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/plugins/usage-sources/provider-accounts.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/script-health-monitor.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/script-status-projection.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session.voice-mcp-config.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/checkout/checkout-session.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/checkout/checkout-session.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/usage/usage-session.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/usage/usage-session.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/voice/index.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/voice/index.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/session/voice/voice-recognition-issue.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/session/voice/voice-recognition-issue.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/voice/voice-session.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/voice/voice-session.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/voice/voice-turn-controller.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/voice/voice-turn-controller.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/workspace-scripts/workspace-scripts-service.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/session/workspace-scripts/workspace-scripts-service.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/test-utils/session-stubs.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/voice-config.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/voice-types.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/websocket-server.provider-rename.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/websocket-server.relay-reconnect.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/websocket-server.terminal-notifications.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/websocket-server.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/websocket/physical-socket.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/workspace-script-runtime-store.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/workspace-scripts/package-scripts.test.ts"
+        },
+        {
+          "status": "A",
+          "path": "packages/server/src/server/workspace-scripts/package-scripts.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/worktree-bootstrap.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/server/worktree-bootstrap.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/services/forge-service.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/services/github-service.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/services/github-service.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/utils/checkout-git.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/utils/checkout-git.ts"
+        },
+        {
+          "status": "M",
+          "path": "packages/server/src/utils/worktree-metadata.ts"
+        },
+        {
+          "status": "M",
+          "path": "paseo.json"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/client/settings.tsx"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/index.client.tsx"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/index.server.ts"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/paseo-plugin.json"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/server/provider.ts"
+        },
+        {
+          "status": "A",
+          "path": "plugin-examples/sdk-identity/shared/status.ts"
+        },
+        {
+          "status": "A",
+          "path": "plugins/account-usage.test.ts"
+        },
+        {
+          "status": "M",
+          "path": "plugins/claude-usage-source/server/usage.ts"
+        },
+        {
+          "status": "M",
+          "path": "plugins/claude-usage-source/shared/input.ts"
+        },
+        {
+          "status": "M",
+          "path": "plugins/codex-usage-source/server/usage.ts"
+        },
+        {
+          "status": "M",
+          "path": "plugins/codex-usage-source/shared/input.ts"
+        },
+        {
+          "status": "M",
+          "path": "plugins/copilot-usage-source/server/usage.ts"
+        },
+        {
+          "status": "M",
+          "path": "plugins/copilot-usage-source/shared/input.ts"
+        },
+        {
+          "status": "M",
+          "path": "public-docs/plugins/providers.md"
+        },
+        {
+          "status": "A",
+          "path": "scripts/worktree-trust-mise.sh"
+        },
+        {
+          "status": "A",
+          "path": "specs/effort-cache-guard-design.md"
+        },
+        {
+          "status": "A",
+          "path": "specs/gjc-acp-foreground-turn-trace.md"
+        }
+      ]
+    }
+  ],
+  "manifest_carries": [
+    {
+      "ref": "origin/custom",
+      "commit": "c5e2ebc5b00f99c81399d8bc175308084fd05071"
+    },
+    {
+      "ref": "origin/upgrade/basket-0.12.0",
+      "commit": "568972505113179d03cc6e2c2c899ba16243cc42"
+    },
+    {
+      "ref": "origin/upgrade/basket-0.13",
+      "commit": "6fe8977d9f21f190c45fac7b7017124ea8f17fb1"
+    },
+    {
+      "ref": "origin/fix/tree-kill-spare-detached",
+      "commit": "402d083f5e83a737d30ffc07314e37324aa7ff44"
+    }
+  ]
+}

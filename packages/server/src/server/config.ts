@@ -523,6 +523,12 @@ function resolveAppendSystemPrompt(persisted: ReturnType<typeof loadPersistedCon
   return persisted.daemon?.appendSystemPrompt ?? "";
 }
 
+function resolveAppendSystemPromptExcludedProviders(
+  persisted: ReturnType<typeof loadPersistedConfig>,
+): string[] {
+  return persisted.daemon?.appendSystemPromptExcludedProviders ?? [];
+}
+
 function resolveBrowserToolsEnabled(persisted: ReturnType<typeof loadPersistedConfig>): boolean {
   return persisted.daemon?.browserTools?.enabled ?? false;
 }
@@ -551,6 +557,7 @@ function resolveStaticLoadConfigSettings(
     browserToolsEnabled: resolveBrowserToolsEnabled(persisted),
     autoArchiveAfterMerge: persisted.daemon?.autoArchiveAfterMerge ?? false,
     appendSystemPrompt: resolveAppendSystemPrompt(persisted),
+    appendSystemPromptExcludedProviders: resolveAppendSystemPromptExcludedProviders(persisted),
     ...resolveProfileLists(persisted),
     hostnames: mergeHostnames([
       persisted.daemon?.hostnames,
@@ -581,6 +588,7 @@ export type ResolvedDaemonSettings = Pick<
   | "autoArchiveAfterMerge"
   | "enableTerminalAgentHooks"
   | "appendSystemPrompt"
+  | "appendSystemPromptExcludedProviders"
   | "terminalProfiles"
   | "agentProfiles"
   | "skillSelection"

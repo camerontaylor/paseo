@@ -67,6 +67,12 @@ function ProviderSubagentChildTrack({
         rows={rows}
         onOpenSubagent={NOOP_SUBAGENT}
         onOpenProviderSubagent={onOpenProviderSubagent}
+        // Unreachable, and deliberately so: this track is the nested provider view,
+        // and select.ts returns providerRows alone when providerParentSubagentId is
+        // set, so no side_conversation row can arrive here. Side conversations belong
+        // to the managed agent, not to a provider subagent. Same reasoning as the other
+        // NOOP_SUBAGENT props on this track.
+        onOpenSideConversation={NOOP_SUBAGENT}
         sheetTabFor={sheetTabFor}
         onArchiveSubagent={NOOP_SUBAGENT}
       />

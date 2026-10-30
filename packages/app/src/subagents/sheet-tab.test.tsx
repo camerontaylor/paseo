@@ -9,7 +9,7 @@ import { useSessionStore, type Agent } from "@/stores/session-store";
 import { normalizeAgentSnapshot, projectAgentSnapshot } from "@/utils/agent-snapshots";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
-import { useSubagentSheetTab } from "./sheet-tab";
+import { subagentRowTarget, useSubagentSheetTab } from "./sheet-tab";
 import { selectSubagentsForParent, type SubagentRow } from "./select";
 
 vi.mock("@react-native-async-storage/async-storage", () => {
@@ -117,6 +117,31 @@ afterEach(() => {
 });
 
 describe("useSubagentSheetTab", () => {
+  it("keeps side conversations as tabs on compact layouts", () => {
+    seedParentWithChild();
+    const store = useWorkspaceLayoutStore.getState();
+    store.setLayoutMode("compact");
+    const row: SubagentRow = {
+      kind: "side_conversation",
+      id: "thread-1",
+      parentAgentId: "parent",
+      provider: "claude",
+      title: "Side question",
+      description: null,
+      subtitle: null,
+      status: "idle",
+      requiresAttention: false,
+      createdAt: AGENT_TIMESTAMP,
+    };
+    const { result } = renderHook(() => useSubagentSheetTab(workspaceKey, "parent-tab")(row));
+    expect(subagentRowTarget(row)).toEqual({
+      kind: "side_conversation",
+      parentAgentId: "parent",
+      threadId: "thread-1",
+    });
+    expect(result.current).toBeNull();
+  });
+
   it("re-renders the row's sheet as the child's tab opens and closes", () => {
     const row = seedParentWithChild();
     const store = useWorkspaceLayoutStore.getState();

@@ -7,12 +7,59 @@ import {
   AgentSnapshotPayloadSchema,
   AgentTimelineItemPayloadSchema,
   ServerInfoStatusPayloadSchema,
+  SessionEventsSetSubscriptionRequestSchema,
   SessionOutboundMessageSchema,
   WSHelloMessageSchema,
   WorkspaceSetupSnapshotSchema,
   WorkspaceSetupProgressMessageSchema,
   AgentTimelineEntryPayloadSchema,
 } from "./messages.js";
+
+test("side conversation events parse with and without the owned proof tag", () => {
+  const removed = {
+    type: "agent.side_conversation.removed",
+    payload: { parentAgentId: "agent", threadId: "thread" },
+  };
+  expect(SessionOutboundMessageSchema.parse(removed)).toEqual(removed);
+  const ownedRemoved = {
+    ...removed,
+    payload: { ...removed.payload, subscriptionId: "sub-1" },
+  };
+  expect(SessionOutboundMessageSchema.parse(ownedRemoved)).toEqual(ownedRemoved);
+
+  const update = {
+    type: "agent.side_conversation.update",
+    payload: {
+      parentAgentId: "agent",
+      threadId: "thread",
+      items: [],
+      pendingQuestion: null,
+      lastAnswer: null,
+    },
+  };
+  expect(SessionOutboundMessageSchema.parse(update)).toEqual(update);
+  const ownedUpdate = { ...update, payload: { ...update.payload, subscriptionId: "sub-1" } };
+  expect(SessionOutboundMessageSchema.parse(ownedUpdate)).toEqual(ownedUpdate);
+});
+
+test("side conversation selectors and the handshake feature parse", () => {
+  const selectors = ["agent.side_conversation.update", "agent.side_conversation.removed"];
+  expect(
+    SessionEventsSetSubscriptionRequestSchema.parse({
+      type: "session.events.set_subscription.request",
+      requestId: "request",
+      events: selectors,
+    }).events,
+  ).toEqual(selectors);
+
+  expect(
+    ServerInfoStatusPayloadSchema.parse({
+      status: "server_info",
+      serverId: "server",
+      features: { sideConversations: true, sideConversationEvents: true },
+    }).features,
+  ).toEqual({ sideConversations: true, sideConversationEvents: true });
+});
 
 test("terminal listings accept older rows and retain new per-terminal directories", () => {
   const response = {
@@ -438,6 +485,33 @@ test("usage login errors are additive and older reports still parse", () => {
   expect(SessionOutboundMessageSchema.parse(oldMessage)).toEqual(oldMessage);
   expect(SessionOutboundMessageSchema.parse(newMessage)).toEqual(newMessage);
   expect(legacy.parse(newMessage)).toEqual(oldMessage);
+});
+
+test("usage terminal responses accept beta.3 reports and beta.4 streaming completion", () => {
+  const legacy = z.object({
+    type: z.literal("usage.list_reports.response"),
+    payload: z.object({ requestId: z.string(), reports: z.array(z.unknown()) }),
+  });
+  const reports = [
+    {
+      id: "fixture:one",
+      sourceId: "fixture",
+      sourceLabel: "Fixture",
+      account: {},
+      fetchedAt: "2026-10-08T00:00:00.000Z",
+      report: { status: "available", windows: [] },
+    },
+  ];
+  const beta3 = { type: "usage.list_reports.response", payload: { requestId: "usage", reports } };
+  const current = { ...beta3, payload: { ...beta3.payload, error: null } };
+  expect(SessionOutboundMessageSchema.parse(beta3)).toEqual(beta3);
+  expect(SessionOutboundMessageSchema.parse(current)).toEqual(current);
+  expect(legacy.parse(current)).toEqual(beta3);
+  const streaming = {
+    type: "usage.list_reports.response",
+    payload: { requestId: "usage", error: null },
+  };
+  expect(SessionOutboundMessageSchema.parse(streaming)).toEqual(streaming);
 });
 
 test("usage entries accept older failures and additive successful snapshots", () => {
