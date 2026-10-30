@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { TimelineProjection, type ProjectedTimelineRow } from "./timeline-projection.js";
+import {
+  TimelineProjection,
+  type ProjectedTimelinePageSelection,
+  type ProjectedTimelineRow,
+} from "./timeline-projection.js";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
 import type {
   AgentTimelineFetchOptions,
   AgentTimelineFetchResult,
   AgentTimelineRow,
 } from "./agent-timeline-store-types.js";
+
+import { largestFittingProjectedLimit } from "./timeline-page-bounds.js";
 
 export interface SeedAgentTimelineOptions {
   items?: readonly AgentTimelineItem[];
@@ -102,13 +108,39 @@ export class InMemoryAgentTimelineStore {
       hasRows &&
       cursor.seq < state.minSeq - 1;
     const reset = staleCursor || gap;
-    const page = state.projection.selectPage({
-      bounds: window,
-      direction: reset ? "tail" : direction,
-      cursorSeq: cursor?.seq,
-      limit: options?.limit ?? DEFAULT_TIMELINE_FETCH_LIMIT,
-      wholeTurns: options?.wholeTurns,
-    });
+    const pageLimit = options?.limit ?? DEFAULT_TIMELINE_FETCH_LIMIT;
+    const pages = new Map<number, ProjectedTimelinePageSelection>();
+    const selectPage = (limit: number): ProjectedTimelinePageSelection => {
+      const cached = pages.get(limit);
+      if (cached) return cached;
+      const page = state.projection.selectPage({
+        wholeTurns: options?.wholeTurns,
+        bounds: window,
+        direction: reset ? "tail" : direction,
+        cursorSeq: cursor?.seq,
+        limit,
+      });
+      pages.set(limit, page);
+      return page;
+    };
+    let page = selectPage(pageLimit);
+    if (options?.byteBudget !== undefined && page.entries.length > 1) {
+      const bytes = new Map<number, number>();
+      const measurePageBytes = (limit: number): number => {
+        const cached = bytes.get(limit);
+        if (cached !== undefined) return cached;
+        const measured = Buffer.byteLength(JSON.stringify(selectPage(limit).entries));
+        bytes.set(limit, measured);
+        return measured;
+      };
+      const limit = largestFittingProjectedLimit({
+        maxLimit: pageLimit === 0 ? page.entries.length : pageLimit,
+        budgetBytes: options.byteBudget,
+        measurePageBytes,
+      });
+      page = selectPage(limit);
+    }
+
     return {
       epoch: state.epoch,
       direction,

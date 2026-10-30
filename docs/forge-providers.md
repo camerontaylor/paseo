@@ -221,5 +221,8 @@ are stale, run `npm run build:server`.
 - GitHub PR polling owns one account-wide GraphQL budget. Coordinate retained
   targets per host, batch their reads, and stop until GitHub's reset time when
   the reserve is exhausted. Never add a per-target GitHub request to the poll
-  path. Resolve fork PRs through their parent repository without abandoning the
-  shared batch.
+  path.
+- Check a fork's own PRs before its parent's. `gh` resolves a fork's base to
+  its parent, so its ordinary PR commands can miss a PR opened against the
+  fork itself. Keep parent lookup in the shared batch and decide the redirect
+  per entry per tick: sibling branches can have PRs in different repositories.

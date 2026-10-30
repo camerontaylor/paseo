@@ -24,7 +24,18 @@ export function createPlaybackQueue<Source>(
     active = item;
     try {
       if (item.controller.signal.aborted) throw new Error("Playback stopped");
-      item.resolve(await start(item.source, item.controller.signal));
+      // Decoding can outlive cancellation. Release this owner immediately;
+      // the engine checks the same signal before starting prepared audio.
+      let cancelPlayback: () => void = () => {};
+      const canceled = new Promise<never>((_resolve, reject) => {
+        cancelPlayback = () => reject(new Error("Playback stopped"));
+        item.controller.signal.addEventListener("abort", cancelPlayback, { once: true });
+      });
+      try {
+        item.resolve(await Promise.race([start(item.source, item.controller.signal), canceled]));
+      } finally {
+        item.controller.signal.removeEventListener("abort", cancelPlayback);
+      }
     } catch (error) {
       item.reject(error);
     } finally {

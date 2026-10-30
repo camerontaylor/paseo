@@ -249,6 +249,28 @@ export async function writePaseoWorktreeMetadata(
   });
 }
 
+/** Re-point an existing worktree at an exact base ref, preserving unrelated metadata. */
+export async function writePaseoWorktreeBaseRef(
+  worktreeRoot: string,
+  options: { baseRef: string },
+): Promise<PaseoWorktreeMetadata> {
+  return mutateMetadata(worktreeRoot, async (root) => {
+    const metadata = await readMetadataFile(root);
+    if (!metadata) {
+      throw new Error(
+        `Missing Paseo worktree base metadata: ${await getPaseoWorktreeMetadataPath(root)}`,
+      );
+    }
+    const baseRef = options.baseRef.trim();
+    const baseRefName = branchNameFromRef(baseRef);
+    assertValidBaseRef(baseRef);
+    assertValidBaseRef(baseRefName);
+    const next: PaseoWorktreeMetadata = { ...metadata, baseRefName, baseRef };
+    await writePaseoWorktreeMetadataFile(root, next);
+    return next;
+  });
+}
+
 export async function writePaseoWorktreeRuntimeMetadata(
   worktreeRoot: string,
   options: { worktreePort: number },

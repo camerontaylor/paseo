@@ -40,7 +40,11 @@ import {
   summarizeACPRequestError,
 } from "./acp-agent.js";
 import { createIdleRuntimeCleanup } from "../idle-runtime-cleanup/index.js";
-import type { ProcessTerminator, TreeKillTarget } from "../../../utils/tree-kill.js";
+import type {
+  ProcessTerminator,
+  TerminateWithTreeKillOptions,
+  TreeKillTarget,
+} from "../../../utils/tree-kill.js";
 import {
   COPILOT_AGENT_FEATURE_OPTION,
   COPILOT_ALLOW_ALL_MODE_ID,
@@ -179,12 +183,14 @@ function createSession(
 // terminations hang until releaseAll(), letting tests observe parallelism.
 class FakeTerminator {
   readonly terminated: TreeKillTarget[] = [];
+  readonly options = new Map<TreeKillTarget, TerminateWithTreeKillOptions>();
   private readonly pending: Array<() => void> = [];
 
   constructor(private readonly mode: "immediate" | "deferred" = "immediate") {}
 
-  readonly terminate: ProcessTerminator = async (child) => {
+  readonly terminate: ProcessTerminator = async (child, options) => {
     this.terminated.push(child);
+    this.options.set(child, options);
     if (this.mode === "deferred") {
       await new Promise<void>((resolve) => this.pending.push(resolve));
     }
@@ -445,10 +451,7 @@ function prepareConfiguredOverrideSession(
 }
 
 test("ACP setModel only uses config-option fallback when the matching select choice contains the model", async () => {
-  const logger = createTestLogger();
-  const childLogger = { trace: vi.fn(), warn: vi.fn() };
-  vi.spyOn(logger, "child").mockReturnValue(asInternals<typeof logger>(childLogger));
-  const session = createSessionWithConfig({}, logger);
+  const session = createSessionWithConfig({});
   const setSessionConfigOption = vi.fn(async () => ({
     configOptions: [
       {
@@ -485,10 +488,8 @@ test("ACP setModel only uses config-option fallback when the matching select cho
 
   setSessionConfigOption.mockClear();
 
-  await expect(session.setModel("new-provider-model")).resolves.toBeUndefined();
-  expect(childLogger.warn).toHaveBeenCalledWith(
-    { value: "new-provider-model" },
-    expect.stringContaining("is not a valid claude-acp model config option"),
+  await expect(session.setModel("new-provider-model")).rejects.toThrow(
+    "Model 'new-provider-model' is not a valid claude-acp model config option",
   );
   expect(setSessionConfigOption).not.toHaveBeenCalled();
 });
@@ -1049,7 +1050,55 @@ describe("ACP selection validity helpers", () => {
 });
 
 describe("ACPAgentSession Zed parity", () => {
-  test("applies valid stored mode/model values, routes current_mode_update, and skips invalid Cursor-style stored values with warnings", async () => {
+  test("reports ACP mode rejection details during startup", async () => {
+    const session = createSessionWithConfig({ modeId: "yolo" });
+    const rejected = prepareConfiguredOverrideSession(session, {
+      currentMode: "default",
+      availableModes: [
+        { id: "default", label: "Default" },
+        { id: "yolo", label: "YOLO" },
+      ],
+      connection: {
+        setSessionMode: vi.fn(async () => {
+          throw {
+            code: -32603,
+            message: "Internal error",
+            data: { details: "Cannot enable privileged approval modes in an untrusted folder." },
+          };
+        }),
+      },
+    });
+    await expect(rejected.internals.applyConfiguredOverrides()).rejects.toThrow(
+      "Internal error: Cannot enable privileged approval modes in an untrusted folder.",
+    );
+  });
+
+  test("normalizes nonstandard mode rejection objects through the ACP request wrapper", async () => {
+    const session = createSessionWithConfig({ modeId: "yolo" });
+    const rejection = { error: { code: -32603, data: { details: "Synthetic mode rejection" } } };
+    const setSessionMode = vi.fn(async () => {
+      throw rejection;
+    });
+    const rejected = prepareConfiguredOverrideSession(session, {
+      currentMode: "default",
+      availableModes: [
+        { id: "default", label: "Default" },
+        { id: "yolo", label: "YOLO" },
+      ],
+      connection: { setSessionMode },
+    });
+    const result = rejected.internals.applyConfiguredOverrides();
+    await expect(result).rejects.toBeInstanceOf(Error);
+    await expect(result).rejects.toThrow(new Error(JSON.stringify(rejection)));
+    expect(setSessionMode).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "session-1",
+      modeId: "yolo",
+    });
+    expect(rejected.setSessionConfigOption).not.toHaveBeenCalled();
+    expect(await session.getCurrentMode()).toBe("default");
+  });
+
+  test("applies valid stored values and mode updates, warns for invalid modes, and rejects invalid models", async () => {
     const validSession = createSessionWithConfig({ modeId: "plan", model: "sonnet" });
     const valid = prepareConfiguredOverrideSession(validSession, {
       currentMode: "default",
@@ -1105,16 +1154,14 @@ describe("ACPAgentSession Zed parity", () => {
       availableModels: [{ modelId: "sonnet", name: "Sonnet", description: null }],
     });
 
-    await expect(invalid.internals.applyConfiguredOverrides()).resolves.toBeUndefined();
+    await expect(invalid.internals.applyConfiguredOverrides()).rejects.toThrow(
+      "Model 'opus' is not a valid claude-acp model",
+    );
     expect(invalid.setSessionMode).not.toHaveBeenCalled();
     expect(invalid.unstableSetSessionModel).not.toHaveBeenCalled();
     expect(childLogger.warn).toHaveBeenCalledWith(
       { value: expect.stringContaining("acceptEdits") },
       expect.stringContaining("not valid"),
-    );
-    expect(childLogger.warn).toHaveBeenCalledWith(
-      { value: expect.stringContaining("opus") },
-      expect.stringContaining("not a valid"),
     );
   });
 
@@ -1134,14 +1181,8 @@ describe("ACPAgentSession Zed parity", () => {
     expect(setSessionConfigOption).not.toHaveBeenCalled();
   });
 
-  test("does not fail session start when configured model cannot be applied by ACP", async () => {
-    const logger = createTestLogger();
-    const childLogger = { trace: vi.fn(), warn: vi.fn() };
-    vi.spyOn(logger, "child").mockReturnValue(asInternals<typeof logger>(childLogger));
-    const session = createSessionWithConfig(
-      { provider: "deepseek-tui", model: "deepseek/v4" },
-      logger,
-    );
+  test("fails session start when configured model cannot be applied by ACP", async () => {
+    const session = createSessionWithConfig({ provider: "deepseek-tui", model: "deepseek/v4" });
     const { internals, setSessionConfigOption, unstableSetSessionModel } =
       prepareConfiguredOverrideSession(session, {
         currentModel: null,
@@ -1150,13 +1191,11 @@ describe("ACPAgentSession Zed parity", () => {
         connection: { unstable_setSessionModel: undefined },
       });
 
-    await expect(internals.applyConfiguredOverrides()).resolves.toBeUndefined();
+    await expect(internals.applyConfiguredOverrides()).rejects.toThrow(
+      "deepseek-tui does not expose ACP model selection",
+    );
     expect(unstableSetSessionModel).not.toHaveBeenCalled();
     expect(setSessionConfigOption).not.toHaveBeenCalled();
-    expect(childLogger.warn).toHaveBeenCalledWith(
-      { value: "deepseek/v4" },
-      "deepseek-tui does not expose ACP model selection; using provider default model",
-    );
   });
 
   test("routes config_option_update and refreshes derived mode, model, and thinking state", async () => {
@@ -2601,6 +2640,7 @@ describe("ACPAgentSession slash commands", () => {
         {
           name: "research_codebase",
           description: "Search the workspace for relevant files",
+          input: { hint: "query" },
         },
         {
           name: "create_plan",
@@ -2613,7 +2653,7 @@ describe("ACPAgentSession slash commands", () => {
       {
         name: "research_codebase",
         description: "Search the workspace for relevant files",
-        argumentHint: "",
+        argumentHint: "query",
         kind: "command",
       },
       {
@@ -2628,7 +2668,7 @@ describe("ACPAgentSession slash commands", () => {
       {
         name: "research_codebase",
         description: "Search the workspace for relevant files",
-        argumentHint: "",
+        argumentHint: "query",
         kind: "command",
       },
       {
@@ -2686,6 +2726,16 @@ describe("ACPAgentSession", () => {
     });
     expect(summary.message).not.toContain("[object Object]");
     expect(summary.diagnostic).toContain("Droid process exited unexpectedly");
+  });
+
+  test("preserves details from nonstandard ACP rejection objects", () => {
+    // A JSON-RPC rejection envelope without a top-level message is not an ACP error and
+    // not an Error, so it must be serialized rather than coerced to "[object Object]".
+    const summary = summarizeACPRequestError({
+      error: { code: -32603, data: { details: "Workspace is not trusted" } },
+    });
+    expect(summary.message).toContain("Workspace is not trusted");
+    expect(summary.message).not.toBe("[object Object]");
   });
 
   test("accepts ACP extension notifications without failing the JSON-RPC connection", async () => {
@@ -3562,6 +3612,9 @@ describe("ACPAgentSession close() tree-kill", () => {
 
     expect(terminator.terminated).toContain(child);
     expect(child.kill).not.toHaveBeenCalled();
+    // The provider may front a daemon other sessions share; a hung adapter
+    // must not take it down on the force signal.
+    expect(terminator.options.get(child)?.spareDetachedOnForce).toBe(true);
   });
 
   test("close() terminates the provider when cancel and closeSession never settle", async () => {
@@ -3607,6 +3660,8 @@ describe("ACPAgentSession close() tree-kill", () => {
 
     expect(terminator.terminated).toContain(terminalChild);
     expect(terminalChild.kill).not.toHaveBeenCalled();
+    // Terminal commands are tool processes: reap anything they detached.
+    expect(terminator.options.get(terminalChild)?.spareDetachedOnForce).toBeUndefined();
   });
 
   test("close() terminates terminal child processes in parallel", async () => {
@@ -5855,13 +5910,13 @@ describe("custom ACP provider with configured models", () => {
     expect((await session.getRuntimeInfo()).model).toBe("stealth/pixel-canary");
   });
 
-  test("keeps the agent's model when the requested model is neither advertised nor configured", async () => {
+  test("rejects creation when the requested model is neither advertised nor configured", async () => {
     const registry = buildRegistry({
       additionalModels: [{ id: "stealth/pixel-canary", label: "Pixel Canary" }],
     });
 
-    const created = await createSessionOnModel(registry, "stale/removed-model");
-
-    expect((await created.getRuntimeInfo()).model).toBe("advertised-default");
+    await expect(createSessionOnModel(registry, "stale/removed-model")).rejects.toThrow(
+      "Model 'stale/removed-model' is not a valid acp model",
+    );
   });
 });

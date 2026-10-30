@@ -23,6 +23,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import express from "express";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Readable } from "node:stream";
 import { realpathSync } from "node:fs";
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
@@ -31,6 +32,8 @@ import { z } from "zod";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { createAgentMcpServer as createAgentMcpServerWithDependencies } from "./mcp-server.js";
+import { createPaseoToolCatalog } from "./tools/paseo-tools.js";
+import { TTSManager } from "./tts-manager.js";
 import { AgentManager, type ManagedAgent } from "./agent-manager.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent-storage.js";
 import { createTestAgentClients } from "../test-utils/fake-agent-client.js";
@@ -53,6 +56,7 @@ import {
   AgentListItemPayloadSchema,
   AgentPermissionRequestPayloadSchema,
   AgentSnapshotPayloadSchema,
+  AudioPlayedMessageSchema,
 } from "@getpaseo/protocol/messages";
 import {
   createPersistedProjectRecord,
@@ -67,7 +71,7 @@ import type {
   StoredSchedule,
   UpdateScheduleInput,
 } from "@getpaseo/protocol/schedule/types";
-import type { ScheduleService } from "../schedule/service.js";
+import { ScheduleService } from "../schedule/service.js";
 import type { WorkspaceGitService } from "../workspace-git-service.js";
 import {
   createPaseoWorktree as createPaseoWorktreeService,
@@ -344,6 +348,8 @@ interface ConfigureProviderEntry {
   label?: string;
   description?: string;
   enabled?: boolean;
+  source?: "builtin" | "custom";
+  baseProviderId?: string;
   defaultModeId?: string;
   modes?: AgentMode[];
 }
@@ -360,6 +366,8 @@ function buildSnapshotEntry(entry: ConfigureProviderEntry): ProviderSnapshotEntr
       enabled: false,
       ...(entry.label !== undefined ? { label: entry.label } : {}),
       ...(entry.description !== undefined ? { description: entry.description } : {}),
+      ...(entry.source !== undefined ? { source: entry.source } : {}),
+      ...(entry.baseProviderId !== undefined ? { baseProviderId: entry.baseProviderId } : {}),
       ...(entry.defaultModeId !== undefined ? { defaultModeId: entry.defaultModeId } : {}),
       modes: [],
     };
@@ -370,6 +378,8 @@ function buildSnapshotEntry(entry: ConfigureProviderEntry): ProviderSnapshotEntr
     enabled: true,
     ...(entry.label !== undefined ? { label: entry.label } : {}),
     ...(entry.description !== undefined ? { description: entry.description } : {}),
+    ...(entry.source !== undefined ? { source: entry.source } : {}),
+    ...(entry.baseProviderId !== undefined ? { baseProviderId: entry.baseProviderId } : {}),
     ...(entry.defaultModeId !== undefined ? { defaultModeId: entry.defaultModeId } : {}),
     modes: entry.modes ?? [],
   };
@@ -3551,6 +3561,13 @@ class HeldTurnAgentSession implements AgentSession {
     this.pushEvent({ type: "turn_completed", provider: this.provider, turnId });
   }
 
+  /** Start a turn nobody prompted, as a provider does when it retries or wakes on its own. */
+  startOwnTurn(): void {
+    const turnId = randomUUID();
+    this.activeTurnId = turnId;
+    this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
+  }
+
   failTurn(error: string): void {
     const turnId = this.activeTurnId;
     if (!turnId) throw new Error("No held turn to fail");
@@ -4165,6 +4182,320 @@ describe("send_agent_prompt MCP tool", () => {
     },
   );
 
+  it("completes its durable subscription at an error before autonomous recovery", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "mcp-error-recovery-notification-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const parentClient = new HeldTurnAgentClient("claude", false);
+    const childClient = new HeldTurnAgentClient("codex", true);
+    const agentManager = new AgentManager({
+      clients: { claude: parentClient, codex: childClient },
+      registry: storage,
+      logger,
+    });
+    try {
+      const parent = await agentManager.createAgent(
+        { provider: "claude", cwd: existingCwd },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      const child = await agentManager.createAgent(
+        { provider: "codex", cwd: existingCwd, title: "Recovering child" },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        callerAgentId: parent.id,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+      const tool = registeredTool(server, "send_agent_prompt");
+      await invokeToolWithParsedInput(tool, { agentId: child.id, prompt: "Do the task" });
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
+
+      childClient.sessions[0]!.failTurn("Provider resource exhausted");
+      await vi.waitFor(() => {
+        expect(parentClient.sessions[0]!.prompts).toHaveLength(1);
+        expect(parentClient.sessions[0]!.prompts[0]).toContain(
+          `Agent ${child.id} (Recovering child) errored.`,
+        );
+      });
+      await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
+
+      childClient.sessions[0]!.startOwnTurn();
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
+      childClient.sessions[0]!.finishTurn("Opened the PR");
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("idle"));
+      expect(parentClient.sessions[0]!.prompts).toHaveLength(1);
+      await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
+
+      childClient.sessions[0]!.startOwnTurn();
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
+      childClient.sessions[0]!.finishTurn("Later turn");
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("idle"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(parentClient.sessions[0]!.prompts).toHaveLength(1);
+    } finally {
+      await removeAgentStateDir(agentManager, storage, workdir);
+    }
+  });
+
+  it("requires a new subscription for each recovered child turn", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "mcp-repeated-recovery-notification-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const parentClient = new HeldTurnAgentClient("claude", false);
+    const childClient = new HeldTurnAgentClient("codex", true);
+    const agentManager = new AgentManager({
+      clients: { claude: parentClient, codex: childClient },
+      registry: storage,
+      logger,
+    });
+    try {
+      const parent = await agentManager.createAgent(
+        { provider: "claude", cwd: existingCwd, title: "Recovery parent" },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      const child = await agentManager.createAgent(
+        { provider: "codex", cwd: existingCwd, title: "Recovering child" },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        callerAgentId: parent.id,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+      const tool = registeredTool(server, "send_agent_prompt");
+      await invokeToolWithParsedInput(tool, { agentId: child.id, prompt: "Do the recovery task" });
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
+      const childSession = childClient.sessions[0]!;
+      const parentSession = parentClient.sessions[0]!;
+
+      for (const count of [1, 2]) {
+        if (count === 2) {
+          await invokeToolWithParsedInput(tool, { agentId: child.id, prompt: "Retry the task" });
+          await vi.waitFor(() =>
+            expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"),
+          );
+        }
+        childSession.failTurn(`Synthetic recovery error ${count}`);
+        await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("error"));
+        await vi.waitFor(() => expect(parentSession.prompts).toHaveLength(count));
+        await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
+        expect(parseAgentMessage(parentSession.prompts[count - 1]!)).toMatchObject({
+          id: expect.any(String),
+          source: {
+            kind: "agent-notification",
+            agentId: child.id,
+            title: "Recovering child",
+            event: "errored",
+          },
+          text: expect.stringContaining(`[System Error] Synthetic recovery error ${count}`),
+        });
+      }
+
+      await invokeToolWithParsedInput(tool, { agentId: child.id, prompt: "Finish the task" });
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
+      const finalText = "Completed the autonomous recovery task.";
+      childSession.finishTurn(finalText);
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("idle"));
+      await vi.waitFor(() => expect(parentSession.prompts).toHaveLength(3));
+      await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
+      expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toMatchObject(
+        ["errored", "errored", "finished"].map((event) => ({
+          source: {
+            kind: "agent-notification",
+            agentId: child.id,
+            serverId: "self",
+            event,
+          },
+          text: expect.stringContaining(
+            event === "finished" ? finalText : "Synthetic recovery error",
+          ),
+        })),
+      );
+      expect(childSession.prompts).toHaveLength(3);
+      expect(parseAgentMessage(childSession.prompts[0]!)).toEqual({
+        id: expect.any(String),
+        source: { kind: "agent-message", agentId: parent.id, title: "Recovery parent" },
+        text: "Do the recovery task",
+      });
+    } finally {
+      await removeAgentStateDir(agentManager, storage, workdir);
+    }
+  });
+
+  it("refreshes attention edges independently of rearmed sourced recovery notifications", async () => {
+    const cleanup: Array<() => void | Promise<void>> = [
+      () => {
+        vi.useRealTimers();
+      },
+    ];
+    const cleanupFailures: unknown[] = [];
+    let primaryFailed = false;
+    try {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-18T02:00:00.000Z"));
+      const workdir = await mkdtemp(join(tmpdir(), "mcp-attention-recovery-"));
+      cleanup.push(() => removeTempDir(workdir));
+      const storage = new AgentStorage(join(workdir, "agents"), logger);
+      cleanup.push(() => storage.flush());
+      const parentClient = new HeldTurnAgentClient("claude", false);
+      const childClient = new HeldTurnAgentClient("codex", true);
+      const callbacks: Array<{ agentId: string; provider: AgentProvider; reason: string }> = [];
+      const agentManager = new AgentManager({
+        clients: { claude: parentClient, codex: childClient },
+        registry: storage,
+        logger,
+        onAgentAttention: (event) => callbacks.push(event),
+      });
+      cleanup.push(() => agentManager.flushForShutdown());
+      const parent = await agentManager.createAgent(
+        { provider: "claude", cwd: existingCwd, title: "Attention parent" },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      cleanup.push(() => agentManager.closeAgent(parent.id));
+      const child = await agentManager.createAgent(
+        { provider: "codex", cwd: existingCwd, title: "Attention child" },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      cleanup.push(() => agentManager.closeAgent(child.id));
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        callerAgentId: parent.id,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+      cleanup.push(() => server.close());
+      await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+        agentId: child.id,
+        prompt: "Observe recovery attention",
+      });
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
+      const childSession = childClient.sessions[0]!;
+      const parentSession = parentClient.sessions[0]!;
+      const snapshots: Date[] = [];
+      const childCallbacks = () => callbacks.filter((event) => event.agentId === child.id);
+      const expectedNotifications = [
+        { event: "errored", body: "[System Error] Attention recovery error 1" },
+        {
+          event: "errored",
+          body: "[System Error] Attention recovery error 1[System Error] Attention recovery error 2",
+        },
+        {
+          event: "finished",
+          body: "[System Error] Attention recovery error 1[System Error] Attention recovery error 2Attention recovery completed.",
+        },
+      ].map(({ event, body }) => ({
+        id: expect.any(String),
+        source: {
+          kind: "agent-notification",
+          agentId: child.id,
+          title: "Attention child",
+          serverId: "self",
+          event,
+        },
+        text: expect.stringContaining(
+          event === "finished"
+            ? "Attention recovery completed."
+            : body.slice(body.lastIndexOf("[System Error]")),
+        ),
+      }));
+      for (const cycle of [0, 1, 2]) {
+        if (cycle > 0) {
+          await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+            agentId: child.id,
+            prompt: "Retry attention recovery",
+          });
+          await vi.waitFor(() =>
+            expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"),
+          );
+        }
+        vi.setSystemTime(new Date(Date.UTC(2026, 9, 18, 2, cycle + 1)));
+        if (cycle < 2) childSession.failTurn(`Attention recovery error ${cycle + 1}`);
+        else childSession.finishTurn("Attention recovery completed.");
+        const lifecycle = cycle < 2 ? "error" : "idle";
+        const reason = cycle < 2 ? "error" : "finished";
+        await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe(lifecycle));
+        await vi.waitFor(() => expect(parentSession.prompts).toHaveLength(cycle + 1));
+        await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
+        await agentManager.flush();
+        await storage.flush();
+        const attention = agentManager.getAgent(child.id)!.attention;
+        if (!attention.requiresAttention) throw new Error("Expected unread recovery attention");
+        expect(attention.attentionReason).toBe(reason);
+        if (cycle > 0)
+          expect(attention.attentionTimestamp.getTime()).toBeGreaterThan(
+            snapshots[cycle - 1]!.getTime(),
+          );
+        snapshots.push(attention.attentionTimestamp);
+        expect(childCallbacks()).toEqual(
+          Array.from({ length: cycle + 1 }, (_, index) => ({
+            agentId: child.id,
+            provider: "codex",
+            reason: index < 2 ? "error" : "finished",
+          })),
+        );
+        expect(await new AgentStorage(join(workdir, "agents"), logger).get(child.id)).toMatchObject(
+          {
+            lastStatus: lifecycle,
+            requiresAttention: true,
+            attentionReason: reason,
+            attentionTimestamp: attention.attentionTimestamp.toISOString(),
+          },
+        );
+        expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toEqual(
+          expectedNotifications.slice(0, cycle + 1),
+        );
+        agentManager.notifyAgentState(child.id);
+        agentManager.notifyAgentState(child.id);
+        await agentManager.flush();
+        await storage.flush();
+        expect(agentManager.getAgent(child.id)!.attention).toEqual(attention);
+        expect(childCallbacks()).toHaveLength(cycle + 1);
+        expect(
+          (await new AgentStorage(join(workdir, "agents"), logger).get(child.id))
+            ?.attentionTimestamp,
+        ).toBe(attention.attentionTimestamp.toISOString());
+        expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toEqual(
+          expectedNotifications.slice(0, cycle + 1),
+        );
+      }
+      expect(childSession.prompts).toHaveLength(3);
+      expect(parseAgentMessage(childSession.prompts[0]!)).toEqual({
+        id: expect.any(String),
+        source: { kind: "agent-message", agentId: parent.id, title: "Attention parent" },
+        text: "Observe recovery attention",
+      });
+    } catch (error) {
+      primaryFailed = true;
+      throw error;
+    } finally {
+      for (const release of cleanup.toReversed()) {
+        try {
+          await release();
+        } catch (error) {
+          cleanupFailures.push(error);
+        }
+      }
+      if (primaryFailed && cleanupFailures.length) {
+        logger.warn(
+          { err: new AggregateError(cleanupFailures) },
+          "Attention MCP test cleanup failed",
+        );
+      }
+    }
+    if (cleanupFailures.length)
+      throw new AggregateError(cleanupFailures, "Attention MCP test cleanup failed");
+  });
+
   it.each(["out_of_band", "out_of_band_interrupt", "startup_failure"] as const)(
     "preserves %s dispatch notification semantics",
     async (scenario) => {
@@ -4573,6 +4904,7 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
         await vi.waitFor(() => {
           expect(agentManager.getAgent(childId)?.activeTurnId).toMatch(/^autonomous-/);
         });
+        const originalTurnId = agentManager.getAgent(childId)?.activeTurnId;
 
         const response = await invokeToolWithParsedInput(tool, {
           agentId: childId,
@@ -4591,6 +4923,7 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
         });
         expect(ompSession.abortRequested).toBe(false);
         expect(agentManager.getAgent(childId)?.lifecycle).toBe("running");
+        expect(agentManager.getAgent(childId)?.activeTurnId).toBe(originalTurnId);
 
         ompSession.finishTurn();
         await expectOneFinishNotification(agentManager, parentClient, childId);
@@ -4600,16 +4933,32 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
     },
   );
 
-  it.each(["before ack", "after ack"])(
-    "reports an idle follow-up rejected %s and notifies its parent",
-    async (order) => {
+  it.each([
+    { command: "follow-up", streamingBehavior: "followUp", order: "before ack" },
+    { command: "follow-up", streamingBehavior: "followUp", order: "after ack" },
+    { command: "steer", streamingBehavior: "steer", order: "before ack" },
+    { command: "steer", streamingBehavior: "steer", order: "after ack" },
+  ] as const)(
+    "reports an idle /$command rejected $order and notifies its parent",
+    async ({ command, streamingBehavior, order }) => {
       const { agentManager, storage, workdir, parentClient, ompSession, childId, tool } =
         await setupOmpChild();
       try {
-        ompSession.promptAck = { requestId: "follow-up-rejected" };
+        const requestId = `${command}-rejected`;
+        ompSession.promptAck = { requestId };
+        let releaseAck!: () => void;
+        const ackGate = new Promise<void>((resolve) => {
+          releaseAck = resolve;
+        });
+        const actualPrompt = ompSession.prompt.bind(ompSession);
+        const promptCall = vi.spyOn(ompSession, "prompt").mockImplementationOnce(async (input) => {
+          const ack = await actualPrompt(input);
+          await ackGate;
+          return ack;
+        });
         const rejection = {
           type: "prompt_result",
-          id: "follow-up-rejected",
+          id: requestId,
           agentInvoked: false,
           status: "error",
           sessionSettled: true,
@@ -4618,10 +4967,18 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
         const promptStarted = ompSession.nextPrompt();
         const response = invokeToolWithParsedInput(tool, {
           agentId: childId,
-          prompt: "/follow-up check the build",
+          prompt: `/${command} check the build`,
         });
         await promptStarted;
+        expect(ompSession.prompts).toEqual([
+          { message: "check the build", imageCount: 0, streamingBehavior },
+        ]);
+        await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
+        ompSession.emit({ ...rejection, id: "unrelated-request" });
+        expect(agentManager.getAgent(childId)?.lifecycle).toBe("running");
         if (order === "before ack") ompSession.emit(rejection);
+        releaseAck();
+        expect(await promptCall.mock.results[0].value).toEqual({ requestId });
         await response;
         if (order === "after ack") ompSession.emit(rejection);
         await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("error"));
@@ -4632,41 +4989,49 @@ describe("send_agent_prompt MCP tool to an OMP child", () => {
         expect(parentClient.sessions[0]!.prompts[0]).toContain(
           `Agent ${childId} (OMP child) errored.`,
         );
+        expect(ompSession.abortRequested).toBe(false);
       } finally {
         await removeAgentStateDir(agentManager, storage, workdir);
       }
     },
   );
 
-  it("lets an idle child start a run with the follow-up", async () => {
-    const { agentManager, storage, workdir, parentClient, ompSession, childId, tool } =
-      await setupOmpChild();
-    try {
-      const response = await invokeToolWithParsedInput(tool, {
-        agentId: childId,
-        prompt: "/follow-up check the build",
-      });
+  it.each([
+    { command: "follow-up", streamingBehavior: "followUp" },
+    { command: "steer", streamingBehavior: "steer" },
+  ] as const)(
+    "lets an idle child start a run with /$command",
+    async ({ command, streamingBehavior }) => {
+      const { agentManager, storage, workdir, parentClient, ompSession, childId, tool } =
+        await setupOmpChild();
+      try {
+        const response = await invokeToolWithParsedInput(tool, {
+          agentId: childId,
+          prompt: `/${command} check the build`,
+        });
 
-      expect(response.structuredContent).toMatchObject({
-        success: true,
-        deliveryStatus: "queued",
-        status: "idle",
-      });
-      await vi.waitFor(() => {
-        expect(ompSession.prompts).toEqual([
-          { message: "check the build", imageCount: 0, streamingBehavior: "followUp" },
-        ]);
-      });
+        expect(response.structuredContent).toMatchObject({
+          success: true,
+          deliveryStatus: "queued",
+          status: "idle",
+        });
+        await vi.waitFor(() => {
+          expect(ompSession.prompts).toEqual([
+            { message: "check the build", imageCount: 0, streamingBehavior },
+          ]);
+        });
 
-      ompSession.beginTurn();
-      ompSession.streamAssistantText("Build is green");
-      await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
-      ompSession.finishTurn();
-      await expectOneFinishNotification(agentManager, parentClient, childId);
-    } finally {
-      await removeAgentStateDir(agentManager, storage, workdir);
-    }
-  });
+        ompSession.beginTurn();
+        ompSession.streamAssistantText("Build is green");
+        await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
+        ompSession.finishTurn();
+        await expectOneFinishNotification(agentManager, parentClient, childId);
+        expect(ompSession.abortRequested).toBe(false);
+      } finally {
+        await removeAgentStateDir(agentManager, storage, workdir);
+      }
+    },
+  );
 });
 
 describe("update_agent MCP tool", () => {
@@ -5788,6 +6153,8 @@ describe("provider listing MCP tool", () => {
         provider: "zai" as AgentProvider,
         label: "ZAI",
         description: "Custom Claude profile",
+        source: "custom",
+        baseProviderId: "claude",
         defaultModeId: "default",
         modes: [{ id: "default", label: "Default", description: "Custom mode" }],
       }),
@@ -5819,6 +6186,8 @@ describe("provider listing MCP tool", () => {
           status: "available",
           description: "Custom Claude profile",
           enabled: true,
+          source: "custom",
+          baseProviderId: "claude",
           modes: [{ id: "default", label: "Default", description: "Custom mode" }],
         },
       ],
@@ -6050,6 +6419,37 @@ describe("provider MCP tools", () => {
     });
   });
 
+  it("identifies a provider account and its base provider", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const provStub = createProviderSnapshotManagerStub();
+    const accountEntry = buildSnapshotEntry({
+      provider: "claude-work",
+      label: "Claude Work",
+      description: "Work account",
+      source: "custom",
+      baseProviderId: "claude",
+    });
+    provStub.getProvider.mockResolvedValue(accountEntry);
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: provStub.manager,
+      logger,
+    });
+    const tool = registeredTool(server, "inspect_provider");
+
+    const response = await tool.handler({ provider: "claude-work", cwd: "~/repo" });
+
+    expect(response.structuredContent).toEqual(
+      expect.objectContaining({
+        provider: "claude-work",
+        label: "Claude Work",
+        source: "custom",
+        baseProviderId: "claude",
+      }),
+    );
+  });
+
   it("rejects disabled providers without fetching models", async () => {
     const { agentManager, agentStorage } = createTestDeps();
     const provStub = createProviderSnapshotManagerStub();
@@ -6116,34 +6516,126 @@ describe("speak MCP tool", () => {
     );
   });
 
-  it("fails when no speak handler exists", async () => {
+  it("returns an MCP error when the client reports failed audio playback", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const tts = new TTSManager("voice-output-test", logger, {
+      async synthesizeSpeech() {
+        return { stream: Readable.from([Buffer.from("audio")]), format: "pcm" };
+      },
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: "voice-agent-failed-output",
+      enableVoiceTools: true,
+      resolveSpeakHandler:
+        () =>
+        async ({ text, signal }) => {
+          await tts.generateAndWaitForPlayback(
+            text,
+            (message) => {
+              if (message.type !== "audio_output") return;
+              const response = AudioPlayedMessageSchema.parse({
+                type: "audio_played",
+                id: message.payload.id,
+                error: "Audio playback timed out",
+              });
+              tts.confirmAudioPlayed(response.id, response.error);
+            },
+            signal ?? new AbortController().signal,
+            true,
+          );
+        },
+      logger,
+    });
+    const client = await connectInMemoryMcpClient(server);
+    try {
+      const result = await client.callTool({ name: "speak", arguments: { text: "Hello." } });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "Audio playback failed: Audio playback timed out" },
+      ]);
+    } finally {
+      tts.cleanup();
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it.each([{ enabled: false }, { disabledTools: ["speak"] }])(
+    "keeps speak available independently of the Paseo tool policy: %j",
+    async (paseoToolPolicy) => {
+      const { agentManager, agentStorage } = createTestDeps();
+      const options = {
+        agentManager,
+        agentStorage,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        callerAgentId: "voice-agent",
+        paseoToolPolicy,
+        logger,
+      };
+      const catalog = createPaseoToolCatalog(options);
+      expect(catalog.getTool("speak")).toBeDefined();
+      const server = await createAgentMcpServer(options);
+      const client = await connectInMemoryMcpClient(server);
+      try {
+        expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("speak");
+        expect(
+          (await client.callTool({ name: "speak", arguments: { text: "Hello" } }))
+            .structuredContent,
+        ).toMatchObject({ ok: false });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    },
+  );
+
+  it("settles when no speak handler is attached", async () => {
     const { agentManager, agentStorage } = createTestDeps();
     const server = await createAgentMcpServer({
       agentManager,
       agentStorage,
       providerSnapshotManager: createOpenCodeManager().manager,
       callerAgentId: "voice-agent-2",
-      enableVoiceTools: true,
       resolveSpeakHandler: () => null,
       logger,
     });
     const tool = registeredTool(server, "speak");
-    await expect(tool.handler({ text: "Hello." })).rejects.toThrow(
-      "No speak handler registered for your session",
+    const result = await tool.handler({ text: "Hello." });
+    expect(result).toEqual(
+      expect.objectContaining({
+        content: [{ type: "text", text: "Voice is not attached. Continue in the chat." }],
+        structuredContent: { ok: false },
+      }),
     );
   });
 
-  it("does not register speak tool unless voice tools are enabled", async () => {
+  it("advertises speak before attachment in MCP and native agent catalogs", async () => {
     const { agentManager, agentStorage } = createTestDeps();
     const server = await createAgentMcpServer({
       agentManager,
       agentStorage,
       providerSnapshotManager: createOpenCodeManager().manager,
       callerAgentId: "agent-no-voice",
+      resolveSpeakHandler: () => null,
       logger,
     });
     const tool = lookupTool(server, "speak");
-    expect(tool).toBeUndefined();
+    expect(tool).toBeDefined();
+    const catalog = createPaseoToolCatalog({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: "agent-no-voice",
+      resolveSpeakHandler: () => null,
+      logger,
+    });
+    expect(catalog.getTool("speak")?.name).toBe("speak");
+    expect(await catalog.executeTool("speak", { text: "Hello." })).toEqual(
+      expect.objectContaining({ structuredContent: { ok: false } }),
+    );
   });
 });
 
@@ -7060,6 +7552,140 @@ describe("local durable finish subscription MCP wiring", () => {
     } finally {
       await mcp?.close();
       await removeAgentStateDir(manager, storage, workdir);
+    }
+  });
+});
+
+describe("list_schedules MCP tool", () => {
+  it("lists scoped and foreign heartbeats while preserving deletion ownership", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mcp-list-owned-heartbeats-"));
+    const logger = createTestLogger();
+    const storage = new AgentStorage(join(directory, "agents"), logger);
+    const agentManager = new AgentManager({ clients: {}, registry: storage, logger });
+    const unexpected = async (): Promise<never> => {
+      throw new Error("Unexpected schedule execution");
+    };
+    const scheduleService = new ScheduleService({
+      paseoHome: directory,
+      logger,
+      agentManager,
+      agentStorage: storage,
+      createAgent: unexpected,
+      createDirectoryWorkspace: unexpected,
+      createPaseoWorktreeWorkspace: unexpected,
+      archiveWorkspace: unexpected,
+    });
+    try {
+      const callerAgentId = randomUUID();
+      const ownHeartbeat = await scheduleService.createOrReplace({
+        prompt: "Check own progress",
+        cadence: { type: "every", everyMs: 60_000 },
+        target: { type: "agent", agentId: callerAgentId },
+      });
+      const foreignHeartbeat = await scheduleService.createOrReplace({
+        prompt: "Check foreign progress",
+        cadence: { type: "every", everyMs: 60_000 },
+        target: { type: "agent", agentId: randomUUID() },
+      });
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        scheduleService,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        callerAgentId,
+        logger,
+      });
+      const listTool = registeredTool(server, "list_schedules");
+      const result = await invokeToolWithParsedInput(listTool, {});
+      const schedules = z
+        .array(z.record(z.string(), z.unknown()))
+        .parse(result.structuredContent.schedules);
+      expect(schedules).toHaveLength(2);
+      expect(schedules).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: ownHeartbeat.id, target: ownHeartbeat.target }),
+          expect.objectContaining({ id: foreignHeartbeat.id, target: foreignHeartbeat.target }),
+        ]),
+      );
+      for (const schedule of schedules) expect(schedule).not.toHaveProperty("runs");
+
+      const deleteTool = registeredTool(server, "delete_heartbeat");
+      await expect(
+        invokeToolWithParsedInput(deleteTool, { id: foreignHeartbeat.id }),
+      ).rejects.toThrow(
+        `Heartbeat ${foreignHeartbeat.id} does not belong to caller ${callerAgentId}`,
+      );
+      expect(await scheduleService.inspect(foreignHeartbeat.id)).toEqual(foreignHeartbeat);
+      const deleted = await invokeToolWithParsedInput(deleteTool, { id: ownHeartbeat.id });
+      expect(deleted.structuredContent).toEqual({ success: true });
+      await expect(scheduleService.inspect(ownHeartbeat.id)).rejects.toThrow(
+        `Schedule not found: ${ownHeartbeat.id}`,
+      );
+      expect(await scheduleService.inspect(foreignHeartbeat.id)).toEqual(foreignHeartbeat);
+      const remaining = await invokeToolWithParsedInput(listTool, {});
+      expect(remaining.structuredContent.schedules).toEqual([
+        expect.objectContaining({ id: foreignHeartbeat.id, target: foreignHeartbeat.target }),
+      ]);
+    } finally {
+      await removeAgentStateDir(agentManager, storage, directory);
+    }
+  });
+
+  it("lists new-agent schedules and agent heartbeats without run history", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mcp-list-schedules-"));
+    const logger = createTestLogger();
+    const storage = new AgentStorage(join(directory, "agents"), logger);
+    const agentManager = new AgentManager({ clients: {}, registry: storage, logger });
+    const unexpected = async (): Promise<never> => {
+      throw new Error("Unexpected schedule execution");
+    };
+    const scheduleService = new ScheduleService({
+      paseoHome: directory,
+      logger,
+      agentManager,
+      agentStorage: storage,
+      createAgent: unexpected,
+      createDirectoryWorkspace: unexpected,
+      createPaseoWorktreeWorkspace: unexpected,
+      archiveWorkspace: unexpected,
+    });
+    try {
+      const scheduled = await scheduleService.createOrReplace({
+        prompt: "Review changes",
+        cadence: { type: "every", everyMs: 60_000 },
+        target: { type: "new-agent", config: { provider: "codex", cwd: directory } },
+      });
+      const heartbeat = await scheduleService.createOrReplace({
+        prompt: "Check progress",
+        cadence: { type: "every", everyMs: 60_000 },
+        target: { type: "agent", agentId: randomUUID() },
+      });
+      await scheduleService.pause(heartbeat.id);
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        scheduleService,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+      const result = await invokeToolWithParsedInput(registeredTool(server, "list_schedules"), {});
+      const schedules = z
+        .array(z.record(z.string(), z.unknown()))
+        .parse(result.structuredContent.schedules);
+      expect(schedules).toHaveLength(2);
+      expect(schedules).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: scheduled.id, target: scheduled.target, status: "active" }),
+          expect.objectContaining({ id: heartbeat.id, target: heartbeat.target, status: "paused" }),
+        ]),
+      );
+      for (const schedule of schedules) expect(schedule).not.toHaveProperty("runs");
+      await scheduleService.delete(scheduled.id);
+      await scheduleService.delete(heartbeat.id);
+      const empty = await invokeToolWithParsedInput(registeredTool(server, "list_schedules"), {});
+      expect(empty.structuredContent.schedules).toEqual([]);
+    } finally {
+      await removeAgentStateDir(agentManager, storage, directory);
     }
   });
 });

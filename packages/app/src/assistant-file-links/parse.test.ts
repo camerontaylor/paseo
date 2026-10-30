@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
+import { resolveFilePreviewReadTarget } from "@/file-explorer/preview-target";
 import {
   classifyAssistantFileLink,
   normalizeInlinePathTarget,
@@ -542,8 +543,33 @@ describe("parseAssistantFileLink", () => {
 });
 
 describe("normalizeInlinePathTarget", () => {
+  it("keeps a conversation's source file when the displayed checkout contains the same path", () => {
+    const sourceRoot = "/checkouts/source";
+    const destinationRoot = "/checkouts/displayed";
+    const target = parseAssistantFileLink("src/app.ts#L12-L20", { workspaceRoot: sourceRoot });
+    assert(target);
+    const normalized = normalizeInlinePathTarget(target.path, {
+      sourceCwd: sourceRoot,
+      workspaceRoot: destinationRoot,
+    });
+    assert(normalized && "file" in normalized && normalized.file);
+    expect(normalized.file).toBe("/checkouts/source/src/app.ts");
+    expect(target).toMatchObject({ lineStart: 12, lineEnd: 20 });
+    expect(
+      resolveFilePreviewReadTarget({
+        path: normalized.file,
+        workspaceRoot: destinationRoot,
+      }),
+    ).toEqual({ cwd: "/", path: "/checkouts/source/src/app.ts" });
+  });
+
   it("keeps relative file paths as file targets", () => {
-    expect(normalizeInlinePathTarget("packages/app/src/components/message.tsx")).toEqual({
+    expect(
+      normalizeInlinePathTarget("packages/app/src/components/message.tsx", {
+        sourceCwd: "/Users/test/project",
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
       directory: "packages/app/src/components",
       file: "packages/app/src/components/message.tsx",
     });
@@ -551,10 +577,10 @@ describe("normalizeInlinePathTarget", () => {
 
   it("resolves absolute paths under cwd back to workspace-relative paths", () => {
     expect(
-      normalizeInlinePathTarget(
-        "/Users/test/project/packages/app/src/components/message.tsx",
-        "/Users/test/project",
-      ),
+      normalizeInlinePathTarget("/Users/test/project/packages/app/src/components/message.tsx", {
+        sourceCwd: "/Users/test/project",
+        workspaceRoot: "/Users/test/project",
+      }),
     ).toEqual({
       directory: "packages/app/src/components",
       file: "packages/app/src/components/message.tsx",
@@ -562,7 +588,12 @@ describe("normalizeInlinePathTarget", () => {
   });
 
   it("keeps absolute paths outside cwd as absolute file targets", () => {
-    expect(normalizeInlinePathTarget("/tmp/message.tsx", "/Users/test/project")).toEqual({
+    expect(
+      normalizeInlinePathTarget("/tmp/message.tsx", {
+        sourceCwd: "/Users/test/project",
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
       directory: "/tmp",
       file: "/tmp/message.tsx",
     });
@@ -570,7 +601,10 @@ describe("normalizeInlinePathTarget", () => {
 
   it("keeps tilde paths as home-relative file targets", () => {
     expect(
-      normalizeInlinePathTarget("~/.paseo/plans/file-preview.md", "/Users/test/project"),
+      normalizeInlinePathTarget("~/.paseo/plans/file-preview.md", {
+        sourceCwd: "/Users/test/project",
+        workspaceRoot: "/Users/test/project",
+      }),
     ).toEqual({
       directory: "~/.paseo/plans",
       file: "~/.paseo/plans/file-preview.md",
@@ -578,17 +612,97 @@ describe("normalizeInlinePathTarget", () => {
   });
 
   it("treats cwd itself as the workspace root directory", () => {
-    expect(normalizeInlinePathTarget("/Users/test/project", "/Users/test/project")).toEqual({
+    expect(
+      normalizeInlinePathTarget("/Users/test/project", {
+        sourceCwd: "/Users/test/project",
+        workspaceRoot: "/Users/test/project",
+      }),
+    ).toEqual({
       directory: ".",
     });
   });
 
   it("keeps trailing-slash paths as directories", () => {
     expect(
-      normalizeInlinePathTarget("/Users/test/project/packages/app/", "/Users/test/project"),
+      normalizeInlinePathTarget("/Users/test/project/packages/app/", {
+        sourceCwd: "/Users/test/project",
+        workspaceRoot: "/Users/test/project",
+      }),
     ).toEqual({
       directory: "packages/app",
     });
+  });
+
+  it("anchors relative tool paths to the conversation before handing them to another workspace", () => {
+    expect(
+      normalizeInlinePathTarget("src/app.ts", {
+        sourceCwd: "/checkouts/source",
+        workspaceRoot: "/checkouts/displayed",
+      }),
+    ).toEqual({ directory: "/checkouts/source/src", file: "/checkouts/source/src/app.ts" });
+  });
+
+  it.each([
+    [
+      "file:///checkouts/source/src/app.ts#L12",
+      "/checkouts/source",
+      "/checkouts/displayed",
+      "/checkouts/source/src/app.ts",
+    ],
+    ["C:\\source\\src\\app.ts#L12", "C:/source", "C:/displayed", "C:/source/src/app.ts"],
+    ["src/app.ts#L12", "/project/packages/app", "/project", "packages/app/src/app.ts"],
+  ])("preserves file identity and line numbers from %s", (link, sourceCwd, workspaceRoot, file) => {
+    const target = parseAssistantFileLink(link, { workspaceRoot: sourceCwd });
+    assert(target);
+    expect(target.lineStart).toBe(12);
+    expect(normalizeInlinePathTarget(target.path, { sourceCwd, workspaceRoot })).toMatchObject({
+      file,
+    });
+  });
+
+  it.each([
+    ["./", "/project", "."],
+    ["src/", "/project/packages/app", "packages/app/src"],
+    ["/project/packages/app/", "/other", "packages/app"],
+  ])("keeps directory %s relative to the displayed workspace", (rawPath, sourceCwd, directory) => {
+    expect(normalizeInlinePathTarget(rawPath, { sourceCwd, workspaceRoot: "/project" })).toEqual({
+      directory,
+    });
+  });
+
+  it.each([
+    ["src/", "/other", "/other/src"],
+    ["/other/", "/other", "/other"],
+    ["/project-other/src/", "/project", "/project-other/src"],
+    ["/project/../other/", "/project", "/project/../other"],
+    ["~/plans/", "/project", "~/plans"],
+  ])("retains outside directory %s for its own Files panel", (rawPath, sourceCwd, directory) => {
+    expect(normalizeInlinePathTarget(rawPath, { sourceCwd, workspaceRoot: "/project" })).toEqual({
+      directory,
+    });
+  });
+
+  it("retains absolute paths when the displayed workspace is unavailable", () => {
+    expect(normalizeInlinePathTarget("src/app.ts", { sourceCwd: "/source" })).toEqual({
+      directory: "/source/src",
+      file: "/source/src/app.ts",
+    });
+    expect(normalizeInlinePathTarget("src/", { sourceCwd: "/source" })).toEqual({
+      directory: "/source/src",
+    });
+    expect(normalizeInlinePathTarget("/source/src/app.ts", {})).toMatchObject({
+      file: "/source/src/app.ts",
+    });
+  });
+
+  it("refuses to anchor unresolved relative paths to the displayed checkout", () => {
+    expect(normalizeInlinePathTarget("src/app.ts", { workspaceRoot: "/project" })).toBeNull();
+    expect(
+      normalizeInlinePathTarget("../app.ts", {
+        sourceCwd: "/source",
+        workspaceRoot: "/project",
+      }),
+    ).toBeNull();
   });
 });
 

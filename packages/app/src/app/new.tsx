@@ -1,5 +1,6 @@
 import { useLocalSearchParams } from "expo-router";
 import { useMemo } from "react";
+import { parseInitialChangeRequest } from "@/screens/project-pull-requests/model";
 import { HostRouteBootstrapBoundary } from "@/components/host-route-bootstrap-boundary";
 import {
   ComposerEditingScope,
@@ -18,18 +19,21 @@ export default function NewWorkspaceRoute() {
     name?: string;
     projectId?: string;
     draftId?: string;
+    changeRequest?: string;
   }>();
   const serverId = typeof params.serverId === "string" ? params.serverId : "";
   const sourceDirectory = typeof params.dir === "string" ? params.dir : undefined;
   const displayName = typeof params.name === "string" ? params.name : undefined;
   const projectId = typeof params.projectId === "string" ? params.projectId : undefined;
   const draftId = typeof params.draftId === "string" ? params.draftId : undefined;
+  const initialChangeRequest = parseInitialChangeRequest(params.changeRequest);
   const screenKey = JSON.stringify([
     serverId,
     sourceDirectory ?? null,
     displayName ?? null,
     projectId ?? null,
     draftId ?? null,
+    params.changeRequest ?? null,
   ]);
 
   // The shell remounts this route when the viewport crosses the compact breakpoint;
@@ -51,6 +55,7 @@ export default function NewWorkspaceRoute() {
             displayName={displayName}
             projectId={projectId}
             draftId={draftId}
+            initialChangeRequest={initialChangeRequest}
           />
         </ComposerEditingScope>
       </WorkspaceComposerEditingSessionsProvider>

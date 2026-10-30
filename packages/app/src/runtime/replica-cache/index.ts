@@ -6,6 +6,8 @@ import {
   WorkspaceGitHubRuntimePayloadSchema,
 } from "@getpaseo/protocol/messages";
 import { AgentProviderSchema } from "@getpaseo/protocol/provider-manifest";
+import { CompanionEntrySchema } from "@getpaseo/protocol/companion-stream";
+import { AgentArtifactSchema } from "@getpaseo/protocol/messages";
 import type { PluginTimelineData } from "@getpaseo/plugin";
 import {
   normalizeProjectDescriptor,
@@ -251,6 +253,8 @@ const StoredAgentSnapshotSchema = z.strictObject({
   attentionReason: z.enum(["finished", "error", "permission"]).nullable().optional(),
   attentionTimestamp: IsoDateSchema.nullable().optional(),
   archivedAt: IsoDateSchema.nullable().optional(),
+  artifacts: z.array(AgentArtifactSchema).optional(),
+  companionEntries: z.array(CompanionEntrySchema).optional(),
 });
 
 const StoredAgentSchema = z.strictObject({
@@ -271,6 +275,7 @@ const StoredAgentSchema = z.strictObject({
 
 const WorkspaceScriptSchema = z.strictObject({
   scriptName: z.string(),
+  packageJson: z.object({ path: z.string(), script: z.string() }).optional(),
   type: z.enum(["script", "service"]),
   hostname: z.string(),
   port: z.number().int().positive().nullable(),
@@ -612,6 +617,15 @@ function serializeAgentTurn(agent: Agent): NonNullable<StoredAgent["turn"]> {
   };
 }
 
+function serializeStreamStateFields(
+  agent: Agent,
+): Pick<StoredAgent["snapshot"], "artifacts" | "companionEntries"> {
+  return {
+    ...(agent.artifacts ? { artifacts: agent.artifacts } : {}),
+    ...(agent.companionEntries ? { companionEntries: agent.companionEntries } : {}),
+  };
+}
+
 function serializeAgent(agent: Agent): StoredAgent {
   const snapshot = {
     id: agent.id,
@@ -663,6 +677,7 @@ function serializeAgent(agent: Agent): StoredAgent {
     attentionReason: agent.attentionReason ?? null,
     attentionTimestamp: agent.attentionTimestamp?.toISOString() ?? null,
     archivedAt: agent.archivedAt?.toISOString() ?? null,
+    ...serializeStreamStateFields(agent),
   };
   return {
     snapshot,
@@ -722,6 +737,7 @@ function serializeWorkspace(workspace: WorkspaceDescriptor): StoredWorkspace {
     diffStat: workspace.diffStat,
     scripts: workspace.scripts.map((script) => ({
       scriptName: script.scriptName,
+      packageJson: script.packageJson,
       type: script.type,
       hostname: script.hostname,
       port: script.port,
