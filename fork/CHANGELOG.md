@@ -2,7 +2,7 @@
 
 Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
-[the archived release-channel plan](https://github.com/camerontaylor/agents/blob/c0826d394ae64c0768849a304734bd942ebbcf92/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
+[the archived release-channel plan](https://github.com/camerontaylor/agents/blob/43c872f513edc5e0d529199348dae6b74c5182b5/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
 
 ## 0.14.0 base decision — 2026-10-30
 
@@ -23,7 +23,7 @@ measurement and lifecycle fixes. The other upstream changes merge cleanly.
 
 Patch application, `build:server`, typecheck, lint and the seven authorization
 tests pass. Android device/instrumentation validation remains outstanding.
-The [difference audit](https://github.com/camerontaylor/agents/blob/c0826d394ae64c0768849a304734bd942ebbcf92/docs/paseo-fork/archive/fork/audit-0.13.2.md) assesses permanent work and the live
+The [difference audit](https://github.com/camerontaylor/agents/blob/43c872f513edc5e0d529199348dae6b74c5182b5/docs/paseo-fork/archive/fork/audit-0.13.2.md) assesses permanent work and the live
 external basket, including upstream replacements and plugin extraction options.
 The concurrent unified artifact-version change is retained; its 27 release-tool
 and eight native-version tests pass on this base. Neptune's Desvio base pin and
