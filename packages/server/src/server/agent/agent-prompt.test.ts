@@ -946,12 +946,14 @@ test("a human pasting an agent envelope stays a human message through provider r
       text: String(delivery.prompt),
       messageId: "provider-echo",
     }),
-  ).toEqual([{
-    type: "user_message",
-    text: pasted,
-    messageId: "provider-echo",
-    clientMessageId: "human-submission",
-  }]);
+  ).toEqual([
+    {
+      type: "user_message",
+      text: pasted,
+      messageId: "provider-echo",
+      clientMessageId: "human-submission",
+    },
+  ]);
 });
 
 test("schedule prompts remain visible as completed tool calls on replay", () => {
