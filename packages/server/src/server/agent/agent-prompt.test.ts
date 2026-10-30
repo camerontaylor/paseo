@@ -1,11 +1,10 @@
-import pino, { type Logger } from "pino";
 import {
   formatSystemNotificationPrompt,
   isSystemInjectedEnvelope,
   parseAgentMessage,
   formatAgentMessage,
   prepareAgentMessage,
-  projectAgentMessage,
+  projectAgentMessages,
 } from "./agent-messages/index.js";
 import { expect, it, test, vi } from "vitest";
 import pino, { type Logger } from "pino";
@@ -942,17 +941,17 @@ test("a human pasting an agent envelope stays a human message through provider r
   });
   const delivery = prepareAgentMessage(pasted, undefined, "human-submission");
   expect(
-    projectAgentMessage({
+    projectAgentMessages({
       type: "user_message",
       text: String(delivery.prompt),
       messageId: "provider-echo",
     }),
-  ).toEqual({
+  ).toEqual([{
     type: "user_message",
     text: pasted,
     messageId: "provider-echo",
     clientMessageId: "human-submission",
-  });
+  }]);
 });
 
 test("schedule prompts remain visible as completed tool calls on replay", () => {
