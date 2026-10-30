@@ -4395,12 +4395,25 @@ describe("send_agent_prompt MCP tool", () => {
         },
       ].map(({ event, body }) => ({
         id: expect.any(String),
-        source: { kind: "agent-notification", agentId: child.id, title: "Attention child", event },
-        text: `Agent ${child.id} (Attention child) ${event}.\n\n<agent-response>\n${body}\n</agent-response>`,
+        source: {
+          kind: "agent-notification",
+          agentId: child.id,
+          title: "Attention child",
+          serverId: "self",
+          event,
+        },
+        text: expect.stringContaining(
+          event === "finished"
+            ? "Attention recovery completed."
+            : body.slice(body.lastIndexOf("[System Error]")),
+        ),
       }));
       for (const cycle of [0, 1, 2]) {
         if (cycle > 0) {
-          childSession.startOwnTurn();
+          await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+            agentId: child.id,
+            prompt: "Retry attention recovery",
+          });
           await vi.waitFor(() =>
             expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"),
           );
@@ -4455,7 +4468,7 @@ describe("send_agent_prompt MCP tool", () => {
           expectedNotifications.slice(0, cycle + 1),
         );
       }
-      expect(childSession.prompts).toHaveLength(1);
+      expect(childSession.prompts).toHaveLength(3);
       expect(parseAgentMessage(childSession.prompts[0]!)).toEqual({
         id: expect.any(String),
         source: { kind: "agent-message", agentId: parent.id, title: "Attention parent" },
