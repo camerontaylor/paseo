@@ -38,6 +38,7 @@ class AudioEngine (context: Context) {
     private val executorServicePlayback = Executors.newFixedThreadPool(1)
     private enum class CaptureMode { CONVERSATION, DICTATION }
     private var captureMode = CaptureMode.CONVERSATION
+    private var focusPaused = false
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var captureSilenced = false
     private val recordingCallback = object : AudioManager.AudioRecordingCallback() {
@@ -256,6 +257,11 @@ class AudioEngine (context: Context) {
                     when (focusChange) {
                         AudioManager.AUDIOFOCUS_GAIN -> {
                             Log.d("AudioEngine", "Audio focus gained")
+                            if (focusPaused && audioFocusRequest === focusRequest) {
+                                focusPaused = false
+                                resumeRecordingAndPlayer()
+                                onAudioInterruptionCallback?.invoke("capture_resumed")
+                            }
                         }
                         AudioManager.AUDIOFOCUS_LOSS -> {
                             Log.d("AudioEngine", "Audio focus lost")
@@ -292,22 +298,15 @@ class AudioEngine (context: Context) {
             audioFocusRequest = null
             return
         }
-        if (isRecording) {
-            stopRecording()
-        }
-        audioFocusRequest?.let { request ->
-            audioManager.abandonAudioFocusRequest(request)
-            audioFocusRequest = null
-        }
-        if (::audioTrack.isInitialized) {
-            audioTrack.pause()
-        }
-        releaseCommunicationRoute()
-        audioSampleQueue.clear()
-        isPlaying = false
-        isRecordingBeforePause = false
-        onOutputVolumeCallback?.invoke(0.0F)
-        onAudioInterruptionCallback?.let { it("blocked") }
+        // A conversation pauses like backgrounding instead of ending: Android
+        // delivers AUDIOFOCUS_GAIN when the foreign owner releases, and the
+        // recorder restart through resumeRecordingAndPlayer keeps the session
+        // alive. Device QA 2026-10-25: spurious mid-playback focus churn on a
+        // real phone fired this on every spoken turn and killed voice each time.
+        if (focusPaused) return
+        focusPaused = true
+        pauseRecordingAndPlayer()
+        onAudioInterruptionCallback?.invoke("capture_paused")
     }
 
     @RequiresApi(Build.VERSION_CODES.Q)
@@ -351,6 +350,10 @@ class AudioEngine (context: Context) {
         audioRecord.startRecording()
         isRecording = true
         setCaptureSilenced(audioRecord.activeRecordingConfiguration?.isClientSilenced ?: false)
+        if (focusPaused) {
+            focusPaused = false
+            onAudioInterruptionCallback?.invoke("capture_resumed")
+        }
         startMicSampleTap(audioRecord)
         return true
     }

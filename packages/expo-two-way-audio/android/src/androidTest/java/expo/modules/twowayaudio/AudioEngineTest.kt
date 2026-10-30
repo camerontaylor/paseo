@@ -70,12 +70,17 @@ class AudioEngineTest {
         assertDictationSurvives(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
     }
 
-    @Test fun conversationStillStopsOnFocusLoss() {
+    @Test fun conversationFocusLossPausesAndResumes() {
         main { assertTrue(engine.toggleRecording(true)) }
         await("conversation microphone data") { packets.get() > 2 }
-        takeFocus(AudioManager.AUDIOFOCUS_GAIN)
-        await("terminal conversation interruption") { events.contains("blocked") }
+        val request = takeFocus(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+        await("conversation input paused") { events.contains("capture_paused") }
+        assertFalse(events.contains("blocked"))
         assertFalse(engine.isRecording)
+        main { audio.abandonAudioFocusRequest(request) }
+        await("conversation input resumed") { events.contains("capture_resumed") }
+        await("conversation microphone data after recovery") { packets.get() > 2 }
+        assertFalse(events.contains("blocked"))
     }
 
     @Test fun dictationStartsWhileMusicOwnsFocusAndCanBeStartedAgain() {
