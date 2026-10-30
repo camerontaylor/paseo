@@ -1,8 +1,8 @@
 # Fork source integration
 
-Fleet maintenance lives in the [agents repository](https://github.com/camerontaylor/agents/blob/c0826d394ae64c0768849a304734bd942ebbcf92/docs/paseo-fork/README.md): worktree
+Fleet maintenance lives in the [agents repository](https://github.com/camerontaylor/agents/blob/43c872f513edc5e0d529199348dae6b74c5182b5/docs/paseo-fork/README.md): worktree
 acceleration, release observation, versioned Desvio inputs, carry decisions and
-plans. The [archive](https://github.com/camerontaylor/agents/blob/c0826d394ae64c0768849a304734bd942ebbcf92/docs/paseo-fork/archive/provenance.json) preserves the original
+plans. The [archive](https://github.com/camerontaylor/agents/blob/43c872f513edc5e0d529199348dae6b74c5182b5/docs/paseo-fork/archive/provenance.json) preserves the original
 research and plans with source SHA and file hashes. Use the agents fleet runbook
 for release operations; no host configuration is installed by this checkout.
 Historical `fork/plans/...` references resolve under `archive/fork/plans/` there.
@@ -27,3 +27,7 @@ This directory retains tooling that must travel with the assembled source:
 Upstream has no `fork/` directory. Keep source-coupled fork files here so they
 have a separate namespace during upstream merges. Store future plans and
 operational evidence in agents instead.
+
+Permanent product changes belong to `custom`. Keep external carries on separate
+branches and as separate Desvio manifest inputs. Assemble them only into a
+disposable build branch; never merge the assembled result back into `custom`.

@@ -17,7 +17,12 @@ const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const result = spawnSync(
   external ? process.execPath : npmCommand,
   external ? [helper, ...process.argv.slice(2)] : ["ci"],
-  { cwd: process.env.PASEO_WORKTREE_PATH || process.cwd(), stdio: "inherit", env: process.env },
+  {
+    cwd: process.env.PASEO_WORKTREE_PATH || process.cwd(),
+    stdio: "inherit",
+    env: process.env,
+    shell: !external && process.platform === "win32",
+  },
 );
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);
