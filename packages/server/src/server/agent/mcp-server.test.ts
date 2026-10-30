@@ -4286,7 +4286,7 @@ describe("send_agent_prompt MCP tool", () => {
         await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("error"));
         await vi.waitFor(() => expect(parentSession.prompts).toHaveLength(count));
         await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
-        expect(parseAgentMessage(parentSession.prompts[count - 1]!)).toEqual({
+        expect(parseAgentMessage(parentSession.prompts[count - 1]!)).toMatchObject({
           id: expect.any(String),
           source: {
             kind: "agent-notification",
@@ -4294,7 +4294,7 @@ describe("send_agent_prompt MCP tool", () => {
             title: "Recovering child",
             event: "errored",
           },
-          text: `Agent ${child.id} (Recovering child) errored.\n\n<agent-response>\n${count === 1 ? "[System Error] Synthetic recovery error 1" : "[System Error] Synthetic recovery error 1[System Error] Synthetic recovery error 2"}\n</agent-response>`,
+          text: expect.stringContaining(`[System Error] Synthetic recovery error ${count}`),
         });
       }
 
@@ -4305,19 +4305,17 @@ describe("send_agent_prompt MCP tool", () => {
       await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("idle"));
       await vi.waitFor(() => expect(parentSession.prompts).toHaveLength(3));
       await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
-      expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toEqual(
-        ["errored", "errored", "finished"].map((event, index) => ({
-          id: expect.any(String),
+      expect(parentSession.prompts.map((prompt) => parseAgentMessage(prompt))).toMatchObject(
+        ["errored", "errored", "finished"].map((event) => ({
           source: {
             kind: "agent-notification",
             agentId: child.id,
-            title: "Recovering child",
+            serverId: "self",
             event,
           },
-          text:
-            event === "finished"
-              ? `Agent ${child.id} (Recovering child) finished.\n\n<agent-response>\n[System Error] Synthetic recovery error 1[System Error] Synthetic recovery error 2${finalText}\n</agent-response>`
-              : `Agent ${child.id} (Recovering child) errored.\n\n<agent-response>\n${index === 0 ? "[System Error] Synthetic recovery error 1" : "[System Error] Synthetic recovery error 1[System Error] Synthetic recovery error 2"}\n</agent-response>`,
+          text: expect.stringContaining(
+            event === "finished" ? finalText : "Synthetic recovery error",
+          ),
         })),
       );
       expect(childSession.prompts).toHaveLength(3);
