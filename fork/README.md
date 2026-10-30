@@ -1,8 +1,8 @@
 # Fork source integration
 
-Fleet maintenance lives in the [agents repository](https://github.com/camerontaylor/agents/blob/43c872f513edc5e0d529199348dae6b74c5182b5/docs/paseo-fork/README.md): worktree
+Fleet maintenance lives in the [agents repository](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/README.md): worktree
 acceleration, release observation, versioned Desvio inputs, carry decisions and
-plans. The [archive](https://github.com/camerontaylor/agents/blob/43c872f513edc5e0d529199348dae6b74c5182b5/docs/paseo-fork/archive/provenance.json) preserves the original
+plans. The [archive](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/provenance.json) preserves the original
 research and plans with source SHA and file hashes. Use the agents fleet runbook
 for release operations; no host configuration is installed by this checkout.
 Historical `fork/plans/...` references resolve under `archive/fork/plans/` there.
@@ -21,7 +21,8 @@ This directory retains tooling that must travel with the assembled source:
 - `repros/` contains source regression assets.
 - `scripts/init-worktree.mjs` forwards to the optional agents initializer.
   Without it, public clones use `npm ci`. `paseo.json` keeps only this setup
-  glue and source build/seed commands. The accelerator recreates workspace
+  glue, source build/seed commands, and the daemon, app, desktop,
+  ios-simulator, and typecheck entries. The accelerator recreates workspace
   links locally; it never shares the entire root `node_modules` directory.
 
 Upstream has no `fork/` directory. Keep source-coupled fork files here so they
