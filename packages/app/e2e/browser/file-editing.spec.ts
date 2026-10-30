@@ -217,7 +217,7 @@ test.describe("CodeMirror workspace file editing", () => {
       document.execCommand = (command, ...args) => {
         if (command !== "copy") return exec(command, ...args);
         document.execCommand = exec;
-        return false;
+        throw new DOMException("Clipboard access denied", "NotAllowedError");
       };
       navigator.clipboard.writeText = async () => {
         navigator.clipboard.writeText = write;
