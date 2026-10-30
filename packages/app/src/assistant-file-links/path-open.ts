@@ -50,6 +50,8 @@ export async function resolveInlinePathOpen(input: PathOpenInput): Promise<PathO
 
 export function createInlinePathOpener(input: {
   workspaceRoot: string;
+  sourceCwd?: string;
+  onError?: (error: "pathUnavailable" | "outsideWorkspaceDirectory" | null) => void;
   client: PathOpenInput["client"];
   openFile: (location: WorkspaceFileLocation, disposition: OpenFileDisposition) => void;
   openDirectory: (path: string) => void;
@@ -59,8 +61,19 @@ export function createInlinePathOpener(input: {
   return {
     async open(target: InlinePathTarget, disposition: OpenFileDisposition) {
       const ownGeneration = ++generation;
-      const normalized = normalizeInlinePathTarget(target.path, input.workspaceRoot);
-      if (!normalized) return;
+      const normalized = normalizeInlinePathTarget(target.path, {
+        sourceCwd: input.sourceCwd ?? input.workspaceRoot,
+        workspaceRoot: input.workspaceRoot,
+      });
+      if (!normalized) {
+        input.onError?.("pathUnavailable");
+        return;
+      }
+      if ("error" in normalized) {
+        input.onError?.(normalized.error);
+        return;
+      }
+      input.onError?.(null);
       const destination = await resolveInlinePathOpen({
         ...normalized,
         lineStart: target.lineStart,

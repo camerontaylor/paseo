@@ -26,7 +26,9 @@ interface SegmentedControlProps<T extends string> {
   onValueChange: (value: T) => void;
   size?: SegmentedControlSize;
   hideLabels?: boolean;
+  textWrap?: boolean;
   style?: StyleProp<ViewStyle>;
+  segmentStyle?: StyleProp<ViewStyle>;
   testID?: string;
 }
 
@@ -51,7 +53,9 @@ export function SegmentedControl<T extends string>({
   onValueChange,
   size: sizeProp,
   hideLabels = false,
+  textWrap = false,
   style,
+  segmentStyle,
   testID,
 }: SegmentedControlProps<T>) {
   const containedSize = useContainedControlSize();
@@ -62,7 +66,10 @@ export function SegmentedControl<T extends string>({
     md: { container: styles.containerMd, segment: styles.segmentMd, label: styles.labelMd },
   }[size];
   const containerSizeStyle = sizeStyles.container;
-  const segmentSizeStyle = sizeStyles.segment;
+  const segmentSizeStyle = useMemo(
+    () => [sizeStyles.segment, segmentStyle],
+    [sizeStyles.segment, segmentStyle],
+  );
   const labelSizeStyle = sizeStyles.label;
   const iconSize = segmentedIconSize[size];
 
@@ -83,6 +90,7 @@ export function SegmentedControl<T extends string>({
             isSelected={isSelected}
             iconSize={iconSize}
             hideLabels={hideLabels}
+            textWrap={textWrap}
             segmentSizeStyle={segmentSizeStyle}
             labelSizeStyle={labelSizeStyle}
             currentValue={value}
@@ -99,6 +107,7 @@ function SegmentItem<T extends string>({
   isSelected,
   iconSize,
   hideLabels,
+  textWrap,
   segmentSizeStyle,
   labelSizeStyle,
   currentValue,
@@ -108,14 +117,20 @@ function SegmentItem<T extends string>({
   isSelected: boolean;
   iconSize: number;
   hideLabels: boolean;
+  textWrap: boolean;
   segmentSizeStyle: StyleProp<ViewStyle>;
   labelSizeStyle: StyleProp<TextStyle>;
   currentValue: T;
   onValueChange: (value: T) => void;
 }) {
   const labelStyle = useMemo(
-    () => [styles.label, labelSizeStyle, isSelected && styles.labelSelected],
-    [labelSizeStyle, isSelected],
+    () => [
+      styles.label,
+      labelSizeStyle,
+      isSelected && styles.labelSelected,
+      textWrap && styles.labelWrap,
+    ],
+    [labelSizeStyle, isSelected, textWrap],
   );
   const handlePress = useCallback(() => {
     if (!option.disabled && option.value !== currentValue) {
@@ -126,12 +141,13 @@ function SegmentItem<T extends string>({
     ({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.segment,
       segmentSizeStyle,
+      textWrap && styles.segmentWrap,
       isSelected && styles.segmentSelected,
       Boolean(hovered) && !isSelected && styles.segmentHover,
       pressed && !isSelected && styles.segmentPressed,
       option.disabled && styles.segmentDisabled,
     ],
-    [isSelected, option.disabled, segmentSizeStyle],
+    [isSelected, option.disabled, segmentSizeStyle, textWrap],
   );
   const accessibilityState = useMemo(
     () => ({ selected: isSelected, disabled: option.disabled }),
@@ -155,7 +171,7 @@ function SegmentItem<T extends string>({
         />
       ) : null}
       {hideLabels ? null : (
-        <Text style={labelStyle} numberOfLines={1}>
+        <Text style={labelStyle} numberOfLines={textWrap ? undefined : 1}>
           {option.label}
         </Text>
       )}
@@ -229,6 +245,14 @@ const styles = StyleSheet.create((theme) => {
     },
     labelSelected: {
       color: theme.colors.foreground,
+    },
+    labelWrap: {
+      flexShrink: 1,
+      textAlign: "center",
+    },
+    segmentWrap: {
+      height: "auto",
+      paddingVertical: theme.spacing[2],
     },
   };
 });

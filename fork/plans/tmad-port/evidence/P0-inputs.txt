@@ -1,0 +1,46 @@
+# P0 frozen inputs — recorded 2026-10-02 (workdir /tmp/tmad-port, source repo /Volumes/offload/neptune/repos/paseo)
+
+## Named anchors
+v0.11.0-beta.3^{commit}          6166a7aca5e3184e8ab505caad28f6a595816414
+v0.11.0-beta.3^{tag}             6dc2bb5a608923fa4723a4ceaa26d0722ad1bacc
+refs/tags/v0.11.0-beta.3         6dc2bb5a608923fa4723a4ceaa26d0722ad1bacc
+origin/custom                    cbd1210c7d15fbdaac02cab8375cdcf2dd6bd234
+refs/remotes/origin/custom       cbd1210c7d15fbdaac02cab8375cdcf2dd6bd234
+refs/research/tmad-main          f0d5507d21cf7f6d86c792d235f3c27156a27d7a
+51fb7693d                        51fb7693d39b0c888654c75fe596427e1e012872
+af247e4f4                        af247e4f4805e0de4736b07aebf2592d9c2e7b39
+dd8a111c3                        dd8a111c30dcc6457a7c4eddaddc5346967fa57f
+mine                             4cc94e07e870e1461640ce3256d1db2d0ab1bc2f
+
+## Manifest carries (order preserved, one line per manifest line)
+ 1  fork/multi-account-beta3-2026-10-02                                428858190ff4a087aa26acda6dc5ad2a01bc846c
+ 2  muzhi1991/fix/codex-toolsurface-screenshot                         c56829d513108c8312a4a20c218ee2daa473d41c
+ 3  dkribeiro/fix/2610-timeline-byte-bounded-hydration                 750c19dd99808ca94c54b7e338b4910038c0227a
+ 4  timigod/fix/one-shot-workspace-observer-fanout                     18ba14b7d6d1e90daf6a0fff0a9c65fa7672d141
+ 5  bwestlund17/fix/zcode-slash-commands                               cd55ef7b9bd7c4d83690571c9acc7d3c3b7135f8
+ 6  ngothanhthien/fix/coalesced-flush-crashes-daemon-for-torn-down-agent 439719d9b4ae556c80bdad9af7c034bb39777feb
+ 7  codebutler/claude-permission-reason                                e7d556ef808dd1be25b9a7551cd3c0cc8d0bfcbd
+ 8  fork/pinned-cjk-terminal-switch-spacing-2026-10-02                 c3707e6beebe19b8c6919f10f79b7c04702adbcd
+ 9  ThePharmer/fix/claude-thinking-display                             b61e3de5020d483f517a3b7afcf2a1d329b5ab89
+10  custom                                                             cbd1210c7d15fbdaac02cab8375cdcf2dd6bd234
+11  intake/infi-agent-file-links                                       cabbc692d912209bda55a85775e5e534e27cdc8f
+12  intake/infi-fork-pr-lookup                                         63736058421f4f017f0a24e22131964dca6b294f
+13  intake/infi-desktop-quit-confirmation                              0d4161b1cb017789ad6838d884a618e88aeb16bc
+14  intake/infi-package-scripts                                        1967db56b366f2284d0665ffb1b4fb91873d2dc8
+15  intake/infi-plan-copy                                              422996012a12bd95e59861c2bb10cc943dbae5fb
+16  intake/infi-plan-handoff                                           fbc6af59cf5d755aa2ab55711924503f9c23eda4
+17  intake/infi-base-branch-contract                                   06b79b7c94b5b47d4a07dfcc977eb1851cac6352
+18  intake/infi-branch-header                                          d2a06926093e16a1142280df06c22c38f0db2a0b
+19  intake/infi-recent-agents                                          6795dbffec023a779ff19f5e0019e0017055f561
+20  intake/infi-pinned-prompt                                          97753d7c90413b88fab66607a061db0248720d3e
+21  intake/infi-status-pulse                                           bc2f2558072d1aa7c0ea392d78362fd8efd5e822
+22  intake/infi-project-pr-facts                                       f3a66c4be32a9fa8bfc38ee061db0c876f037f17
+23  intake/infi-navigation-history                                     14b36be7c4cf5d975916f082939f237394411707
+24  intake/infi-project-pr-browser                                     739ec1c377e9b917528642376a17af65c1b6e11b
+
+## Frozen `mine` assembly verification (frozen mine = 4cc94e07e870e1461640ce3256d1db2d0ab1bc2f)
+Command: git log --first-parent --reverse --format='%H %P %s' 6166a7aca..4cc94e07
+Result: 24 first-parent commits, all merges, in exactly manifest order; each merged
+second parent equals the frozen manifest SHA for that line. Mismatches: 0.
+Non-merge commits on the first-parent chain: 0.
+Conclusion: frozen mine == v0.11.0-beta.3 + the 24 frozen carries, nothing else.

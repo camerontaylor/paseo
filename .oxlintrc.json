@@ -613,6 +613,18 @@
         "paseo/no-raw-pressable": "off"
       }
     },
+    // Fork raw-pressable burn-down: fork-only files predating the v0.12.0 rule. Migrate to components/ui press primitives (docs/design.md §2), then delete this block.
+    {
+      "files": [
+        "packages/app/src/components/provider-account-sheet.tsx",
+        "packages/app/src/artifacts/feed.tsx",
+        "packages/app/src/screens/project-pull-requests/view.tsx",
+        "packages/app/src/agent-stream/pinned-prompt/pinned-prompt.web.tsx"
+      ],
+      "rules": {
+        "paseo/no-raw-pressable": "off"
+      }
+    },
     {
       "files": ["**/e2e/**/fixtures.ts"],
       "rules": {

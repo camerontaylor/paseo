@@ -24,6 +24,7 @@ import {
   type ManagedAgent,
 } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
+import type { AgentStreamCoalescer } from "./agent-stream-coalescer.js";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
 import { toAgentPayload } from "./agent-projections.js";
 import { projectTimelineRows } from "./timeline-projection.js";
@@ -5976,6 +5977,40 @@ test("getAgent does not expose committed history internals once manager owns the
   expect(fetched.rows.map((row) => row.seq)).toEqual([1, 2]);
 });
 
+test("drops a deferred coalesced flush after timeline teardown", () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-flush-teardown-"));
+  vi.useFakeTimers();
+  try {
+    const manager = new AgentManager({
+      clients: {},
+      registry: new AgentStorage(join(workdir, "agents"), logger),
+      logger,
+    });
+    const internals = asInternals<{
+      timelineStore: InMemoryAgentTimelineStore;
+      agentStreamCoalescer: AgentStreamCoalescer;
+    }>(manager);
+    const agentId = "torn-down-agent";
+    internals.timelineStore.initialize(agentId);
+    const event: AgentStreamEvent = {
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text: "first" },
+    };
+    internals.agentStreamCoalescer.handle(agentId, event);
+    internals.agentStreamCoalescer.handle(agentId, {
+      ...event,
+      item: { type: "assistant_message", text: "trailing" },
+    });
+    internals.timelineStore.delete(agentId);
+    expect(() => vi.advanceTimersByTime(61)).not.toThrow();
+    expect(internals.timelineStore.has(agentId)).toBe(false);
+  } finally {
+    vi.useRealTimers();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("streams coalesced assistant chunks and retains the projected message", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-provisional-timeline-"));
   const storagePath = join(workdir, "agents");
@@ -8435,6 +8470,233 @@ test("clearAgentAttention on errored agent stays cleared until a new error trans
   expect(persistedAfterSecondFailure?.lastStatus).toBe("error");
   expect(persistedAfterSecondFailure?.requiresAttention).toBe(true);
   expect(persistedAfterSecondFailure?.attentionReason).toBe("error");
+});
+
+test("each finish or error re-stamps and broadcasts attention while an older flag is unread", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-attention-unread-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+
+  class ScriptedSession extends TestAgentSession {
+    private attempt = 0;
+
+    override async startTurn(prompt: AgentPromptInput): Promise<{ turnId: string }> {
+      this.attempt += 1;
+      const turnId = `scripted-turn-${this.attempt}`;
+      const fail = prompt === "fail";
+      setTimeout(() => {
+        this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
+        this.pushEvent(
+          fail
+            ? { type: "turn_failed", provider: this.provider, error: "provider error", turnId }
+            : { type: "turn_completed", provider: this.provider, turnId },
+        );
+      }, 0);
+      return { turnId };
+    }
+  }
+
+  class ScriptedClient implements AgentClient {
+    readonly provider = "codex" as const;
+    readonly capabilities = TEST_CAPABILITIES;
+
+    async isAvailable(): Promise<boolean> {
+      return true;
+    }
+
+    async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new ScriptedSession(config);
+    }
+
+    async resumeSession(config?: Partial<AgentSessionConfig>): Promise<AgentSession> {
+      return new ScriptedSession({ provider: "codex", cwd: config?.cwd ?? process.cwd() });
+    }
+  }
+
+  const attentionReasons: Array<"finished" | "error" | "permission"> = [];
+  const manager = new AgentManager({
+    clients: { codex: new ScriptedClient() },
+    registry: storage,
+    logger,
+    idFactory: () => "00000000-0000-4000-8000-000000000132",
+    onAgentAttention: ({ reason }) => {
+      attentionReasons.push(reason);
+    },
+  });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, title: "Unread attention test" },
+    undefined,
+    { workspaceId: undefined },
+  );
+  const readAttention = () => {
+    const attention = manager.getAgent(agent.id)!.attention;
+    if (!attention.requiresAttention) throw new Error("Expected unread attention");
+    return attention;
+  };
+
+  await manager.runAgent(agent.id, "plan");
+  await manager.flush();
+  const first = readAttention();
+  expect(first.attentionReason).toBe("finished");
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await expect(manager.runAgent(agent.id, "fail")).rejects.toThrow("provider error");
+  await manager.flush();
+  const second = readAttention();
+  expect(second.attentionReason).toBe("error");
+  expect(second.attentionTimestamp.getTime()).toBeGreaterThan(first.attentionTimestamp.getTime());
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await manager.runAgent(agent.id, "finish");
+  await manager.flush();
+  const third = readAttention();
+  expect(third.attentionReason).toBe("finished");
+  expect(third.attentionTimestamp.getTime()).toBeGreaterThan(second.attentionTimestamp.getTime());
+
+  expect(attentionReasons).toEqual(["finished", "error", "finished"]);
+  const persisted = await storage.get(agent.id);
+  expect(persisted?.attentionReason).toBe("finished");
+  expect(persisted?.attentionTimestamp).toBe(third.attentionTimestamp.toISOString());
+});
+
+test("same-reason attention refreshes only on a new edge and stays read after clearing", async () => {
+  const cleanup: Array<() => void | Promise<void>> = [
+    () => {
+      vi.useRealTimers();
+    },
+  ];
+  const cleanupFailures: unknown[] = [];
+  let primaryFailed = false;
+  try {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T01:00:00.000Z"));
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-attention-edges-"));
+    cleanup.push(() => rmSync(workdir, { recursive: true, force: true }));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    cleanup.push(() => storage.flush());
+    class FailingSession extends TestAgentSession {
+      private attempt = 0;
+      override async startTurn(): Promise<{ turnId: string }> {
+        const turnId = `edge-turn-${++this.attempt}`;
+        setTimeout(() => {
+          this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
+          this.pushEvent({
+            type: "turn_failed",
+            provider: this.provider,
+            turnId,
+            error: "edge failure",
+          });
+        }, 0);
+        return { turnId };
+      }
+    }
+    class FailingClient extends TestAgentClient {
+      override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+        return new FailingSession(config);
+      }
+    }
+    const callbacks: Array<{ agentId: string; provider: AgentProvider; reason: string }> = [];
+    const manager = new AgentManager({
+      clients: { codex: new FailingClient() },
+      registry: storage,
+      logger,
+      onAgentAttention: (event) => callbacks.push(event),
+    });
+    cleanup.push(() => manager.flushForShutdown());
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    cleanup.push(() => manager.closeAgent(agent.id));
+    const lifecycles: string[] = [];
+    cleanup.push(
+      manager.subscribe(
+        (event) => {
+          if (event.type === "agent_state") lifecycles.push(event.agent.lifecycle);
+        },
+        { agentId: agent.id, replayState: false },
+      ),
+    );
+    const expectedCallback = { agentId: agent.id, provider: "codex", reason: "error" };
+    const readAttention = () => {
+      const attention = manager.getAgent(agent.id)!.attention;
+      if (!attention.requiresAttention) throw new Error("Expected unread edge attention");
+      return attention;
+    };
+    await expect(manager.runAgent(agent.id, "first failure")).rejects.toThrow("edge failure");
+    await manager.flush();
+    await storage.flush();
+    const first = readAttention();
+    expect(first.attentionReason).toBe("error");
+    expect(lifecycles).toContain("running");
+    lifecycles.length = 0;
+    expect(callbacks).toEqual([expectedCallback]);
+    expect(await new AgentStorage(join(workdir, "agents"), logger).get(agent.id)).toMatchObject({
+      lastStatus: "error",
+      requiresAttention: true,
+      attentionReason: "error",
+      attentionTimestamp: first.attentionTimestamp.toISOString(),
+    });
+    vi.setSystemTime(new Date("2026-10-18T01:01:00.000Z"));
+    manager.notifyAgentState(agent.id);
+    manager.notifyAgentState(agent.id);
+    await manager.flush();
+    await storage.flush();
+    expect(readAttention()).toEqual(first);
+    expect(callbacks).toEqual([expectedCallback]);
+    expect(
+      (await new AgentStorage(join(workdir, "agents"), logger).get(agent.id))?.attentionTimestamp,
+    ).toBe(first.attentionTimestamp.toISOString());
+    await expect(manager.runAgent(agent.id, "second failure")).rejects.toThrow("edge failure");
+    await manager.flush();
+    await storage.flush();
+    const second = readAttention();
+    expect(second.attentionReason).toBe("error");
+    expect(second.attentionTimestamp.getTime()).toBeGreaterThan(first.attentionTimestamp.getTime());
+    expect(callbacks).toEqual([expectedCallback, expectedCallback]);
+    expect(lifecycles).toContain("running");
+    expect(await new AgentStorage(join(workdir, "agents"), logger).get(agent.id)).toMatchObject({
+      lastStatus: "error",
+      requiresAttention: true,
+      attentionReason: "error",
+      attentionTimestamp: second.attentionTimestamp.toISOString(),
+    });
+    vi.setSystemTime(new Date("2026-10-18T01:02:00.000Z"));
+    manager.notifyAgentState(agent.id);
+    await manager.flush();
+    expect(readAttention()).toEqual(second);
+    expect(callbacks).toEqual([expectedCallback, expectedCallback]);
+    await manager.clearAgentAttention(agent.id);
+    manager.notifyAgentState(agent.id);
+    manager.notifyAgentState(agent.id);
+    await manager.flush();
+    await storage.flush();
+    expect(manager.getAgent(agent.id)!.attention).toEqual({ requiresAttention: false });
+    expect(callbacks).toEqual([expectedCallback, expectedCallback]);
+    expect(await new AgentStorage(join(workdir, "agents"), logger).get(agent.id)).toMatchObject({
+      lastStatus: "error",
+      requiresAttention: false,
+      attentionReason: null,
+      attentionTimestamp: null,
+    });
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
+  } finally {
+    for (const release of cleanup.toReversed()) {
+      try {
+        await release();
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+    if (primaryFailed && cleanupFailures.length) {
+      logger.warn(
+        { err: new AggregateError(cleanupFailures) },
+        "Attention edge test cleanup failed",
+      );
+    }
+  }
+  if (cleanupFailures.length)
+    throw new AggregateError(cleanupFailures, "Attention edge test cleanup failed");
 });
 
 test("streamAgent clears pending run when startTurn fails before a turn id exists", async () => {
@@ -11178,9 +11440,40 @@ test("tryRunOutOfBand gives providers the command another agent sent, not its en
   });
 
   try {
-    const fromAgent = prepareAgentMessage("/handled", { kind: "agent-message", agentId: "sender" });
-    expect(await manager.tryRunOutOfBand(agent.id, fromAgent.prompt)).toBe(true);
+    const fromAgent = prepareAgentMessage(
+      "/handled",
+      { kind: "agent-message", agentId: "sender" },
+      "sourced-command",
+    );
+    expect(
+      await manager.tryRunOutOfBand(agent.id, fromAgent.prompt, {
+        clientMessageId: fromAgent.messageId,
+      }),
+    ).toBe(true);
     expect(seenPrompts).toEqual(["/handled"]);
+    expect(manager.getTimeline(agent.id)).toEqual([
+      {
+        type: "tool_call",
+        callId: "paseo-agent-message:sourced-command",
+        agentMessage: {
+          event: "message",
+          sender: { id: "sender" },
+          text: "/handled",
+        },
+        name: "agent_message",
+        status: "completed",
+        error: null,
+        detail: { type: "plain_text", text: "/handled", icon: "bot" },
+      },
+    ]);
+    expect(fromAgent.prompt).toBe(
+      '<paseo-system version="1" kind="agent-message" source-agent-id="sender" message-id="sourced-command">\n/handled\n</paseo-system>',
+    );
+
+    const structured: AgentPromptInput = [{ type: "text", text: String(fromAgent.prompt) }];
+    expect(manager.tryRunOutOfBand(agent.id, structured)).toBe(false);
+    expect(seenPrompts.at(-1)).toBe(structured);
+    expect(manager.getTimeline(agent.id)).toHaveLength(1);
 
     // A human who pastes an envelope gets it quoted, and it stays a plain prompt.
     const pasted = prepareAgentMessage(String(fromAgent.prompt));

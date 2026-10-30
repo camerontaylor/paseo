@@ -186,6 +186,8 @@ interface ProviderSummary {
   label: string;
   description: string;
   enabled: boolean;
+  source?: "builtin" | "custom";
+  baseProviderId?: string;
   modes: AgentMode[];
   status: string;
   error?: string;
@@ -311,6 +313,8 @@ function toProviderSummary(entry: {
   label?: string;
   description?: string;
   enabled: boolean;
+  source?: "builtin" | "custom";
+  baseProviderId?: string;
   modes?: AgentMode[];
   status: string;
   error?: string;
@@ -320,6 +324,8 @@ function toProviderSummary(entry: {
     label: entry.label ?? entry.provider,
     description: entry.description ?? "",
     enabled: entry.enabled,
+    ...(entry.source ? { source: entry.source } : {}),
+    ...(entry.baseProviderId ? { baseProviderId: entry.baseProviderId } : {}),
     modes: entry.modes ?? [],
     status: entry.status === "ready" ? "available" : entry.status,
     ...(entry.error ? { error: entry.error } : {}),
@@ -1315,7 +1321,12 @@ function createToolCatalog(
   type TopLevelCreateAgentArgs = z.infer<typeof canonicalTopLevelCreateAgentArgsSchema>;
   type LegacyTopLevelCreateAgentArgs = z.infer<typeof legacyTopLevelCreateAgentArgsSchema>;
 
-  if (options.voiceOnly || options.enableVoiceTools || callerContext?.enableVoiceTools) {
+  if (
+    options.voiceOnly ||
+    callerAgentId ||
+    options.enableVoiceTools ||
+    callerContext?.enableVoiceTools
+  ) {
     registerTool(
       "speak",
       {
@@ -1339,18 +1350,23 @@ function createToolCatalog(
         }
         const handler = resolveSpeakHandler?.(callerAgentId) ?? null;
         if (!handler) {
-          throw new PaseoToolInputError(
-            `No speak handler registered for your session '${callerAgentId}'`,
-          );
+          // Voice can detach while the agent works; the tool call settles
+          // instead of failing so the turn keeps its visible reply in chat.
+          return {
+            content: [{ type: "text", text: "Voice is not attached. Continue in the chat." }],
+            structuredContent: ensureValidJson({ ok: false }),
+          };
         }
-        await handler({
+        const outcome = await handler({
           text: args.text,
           callerAgentId,
           signal: context?.signal,
         });
         return {
-          content: [],
-          structuredContent: ensureValidJson({ ok: true }),
+          content: outcome
+            ? [{ type: "text", text: `Audio ${outcome.reason}. Continue in the chat.` }]
+            : [],
+          structuredContent: ensureValidJson({ ok: !outcome }),
         };
       },
     );
@@ -2802,9 +2818,9 @@ function createToolCatalog(
         throw new Error("Schedule service is not configured");
       }
 
-      const schedules = (await scheduleService.list())
-        .filter((schedule) => schedule.target.type === "new-agent")
-        .map((schedule) => toScheduleSummary(schedule));
+      const schedules = (await scheduleService.list()).map((schedule) =>
+        toScheduleSummary(schedule),
+      );
       return {
         content: [],
         structuredContent: ensureValidJson({ schedules }),
@@ -3036,7 +3052,8 @@ function createToolCatalog(
     "list_providers",
     {
       title: "List providers",
-      description: "List configured agent providers, availability, and their modes.",
+      description:
+        "List configured agent providers and accounts, including availability, modes, and each account's base provider.",
       inputSchema: {},
       outputSchema: {
         providers: z.array(ProviderSummarySchema),
@@ -3117,6 +3134,8 @@ function createToolCatalog(
         label: z.string().nullable().optional(),
         description: z.string().nullable().optional(),
         enabled: z.boolean(),
+        source: z.enum(["builtin", "custom"]).optional(),
+        baseProviderId: z.string().optional(),
         status: z.string(),
         modes: z.array(ProviderModeSchema).nullish(),
         selectedModel: z.string().nullable(),
@@ -3158,6 +3177,8 @@ function createToolCatalog(
           label: summary.label,
           description: summary.description,
           enabled: summary.enabled,
+          ...(summary.source ? { source: summary.source } : {}),
+          ...(summary.baseProviderId ? { baseProviderId: summary.baseProviderId } : {}),
           status: summary.status,
           modes: summary.modes,
           selectedModel: selectedModel ?? null,

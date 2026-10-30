@@ -1,4 +1,5 @@
 import { type WorkspaceRuntimeStore } from "../../workspace-runtime-store/index.js";
+import { discoverPackageScripts } from "../../workspace-scripts/package-scripts.js";
 import type pino from "pino";
 import type {
   ScriptStatusUpdateMessage,
@@ -164,8 +165,12 @@ export function createWorkspaceScriptsService(deps: {
   }
 
   async function list(workspaceId: string): Promise<WorkspaceScriptPayload[]> {
-    requireAvailable();
+    const { runtimeStore } = requireAvailable();
     const workspace = await getWorkspace(workspaceId);
+    runtimeStore.setPackageScripts(
+      workspaceId,
+      await discoverPackageScripts(workspace.cwd, deps.logger),
+    );
     const project = await projectRegistry.get(workspace.projectId);
     return buildSnapshot(workspace, project);
   }

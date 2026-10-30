@@ -1101,6 +1101,9 @@ test("advertises client capabilities in hello", async () => {
       reasoning_merge_enum: true,
       terminal_reflowable_snapshot: true,
       timeline_notifications: true,
+      companion_stream_port_v1: true,
+      durable_agent_queue: true,
+      durable_voice_input_v1: true,
       plugin_timeline_items: true,
       workspace_setup_blocked: true,
       workspace_setup_observation: true,
@@ -5251,6 +5254,73 @@ test("renames a branch via RPC", async () => {
   });
 });
 
+test("sets a checkout base ref via RPC", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen({ features: { checkoutBaseRefSet: true } });
+  await connectPromise;
+
+  const promise = client.setCheckoutBaseRef({
+    cwd: "/tmp/project",
+    baseRef: "origin/develop",
+    requestId: "req-base-ref",
+  });
+  const request = JSON.parse(assertStr(mock.sent[0])) as {
+    message: { type: string; cwd: string; baseRef: string; requestId: string };
+  };
+  expect(request.message).toEqual({
+    type: "checkout.base_ref.set.request",
+    cwd: "/tmp/project",
+    baseRef: "origin/develop",
+    requestId: "req-base-ref",
+  });
+
+  const payload = {
+    requestId: "req-base-ref",
+    success: true,
+    cwd: "/tmp/project",
+    baseRef: "develop",
+    error: null,
+  };
+  mock.triggerMessage(
+    JSON.stringify({
+      type: "session",
+      message: { type: "checkout.base_ref.set.response", payload },
+    }),
+  );
+  await expect(promise).resolves.toEqual(payload);
+});
+
+test("refuses to set a checkout base ref when the host lacks the feature", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen();
+  await connectPromise;
+
+  await expect(
+    client.setCheckoutBaseRef({ cwd: "/tmp/project", baseRef: "origin/develop" }),
+  ).rejects.toThrow("Update the host to change the comparison base.");
+  expect(mock.sent).toHaveLength(0);
+});
+
 test("returns renameBranch business failures", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();
@@ -8013,6 +8083,67 @@ test.each([false, true])(
     await send;
   },
 );
+
+test("the queue selector follows the host capability across one client's reconnects", async () => {
+  const capable = createMockTransport();
+  const incapable = createMockTransport();
+  const capableAgain = createMockTransport();
+  const transports = [capable, incapable, capableAgain];
+  let transportIndex = 0;
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "queue_selector_unit_test",
+    reconnect: { enabled: true, baseDelayMs: 1, maxDelayMs: 1 },
+    transportFactory: () => {
+      const transport = transports[transportIndex];
+      if (!transport) throw new Error("unexpected extra reconnect");
+      transportIndex += 1;
+      return transport.transport;
+    },
+  });
+  clients.push(client);
+
+  const subscriptionSelectors = (mock: ReturnType<typeof createMockTransport>) =>
+    mock.sent
+      .map((frame) => parseSentFrame(frame))
+      .filter((message) => message.type === "session.events.set_subscription.request")
+      .map((message) => message.events as string[]);
+
+  const initialConnect = client.connect();
+  capable.triggerOpen({ features: { ownedSubscriptions: true, durableAgentQueueV1: true } });
+  await initialConnect;
+
+  client.observeEvents(["agent.queue.update", "status.server_info"]);
+  expect(subscriptionSelectors(capable).at(-1)).toEqual([
+    "agent.queue.update",
+    "status.server_info",
+  ]);
+
+  // Downgrade: the same client reconnects to a host that never saw the fork flag.
+  capable.triggerClose({ code: 1001, reason: "daemon restarted" });
+  client.ensureConnected();
+  incapable.triggerOpen({ features: { ownedSubscriptions: true } });
+  await vi.waitFor(() =>
+    expect(subscriptionSelectors(incapable).at(-1)).toEqual(["status.server_info"]),
+  );
+  for (const selectors of subscriptionSelectors(incapable)) {
+    expect(selectors).not.toContain("agent.queue.update");
+  }
+
+  // Restore: the flag returns with the next handshake, so the selector comes back.
+  incapable.triggerClose({ code: 1001, reason: "daemon upgraded" });
+  client.ensureConnected();
+  capableAgain.triggerOpen({ features: { ownedSubscriptions: true, durableAgentQueueV1: true } });
+  await vi.waitFor(() =>
+    expect(subscriptionSelectors(capableAgain).at(-1)).toEqual([
+      "agent.queue.update",
+      "status.server_info",
+    ]),
+  );
+
+  // The mock daemon never answers a release, so teardown closes the client instead.
+  await client.close();
+});
 
 test("measures an outbound message in UTF-8 bytes against the daemon's message limit", async () => {
   const mock = createMockTransport();

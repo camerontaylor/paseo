@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentStorage } from "./agent-storage.js";
+import { buildStoredAgentPayload } from "./agent-projections.js";
 import { buildConfigOverrides, buildSessionConfig } from "../persistence-hooks.js";
 import type { ManagedAgent } from "./agent-manager.js";
 import type {
@@ -195,6 +196,73 @@ describe("AgentStorage", () => {
     expect(persisted.config?.providerOptions).toEqual({ allowedTools: ["Read"] });
   });
 
+  test("wire trimming preserves async resume logs across actual disk reloads", async () => {
+    const metadata = {
+      asyncQuestions: [
+        {
+          item: { id: "disk-question", questions: [{ title: "Synthetic question?" }] },
+          resolution: ["Synthetic answer"],
+        },
+      ],
+      mcpServers: { hub: { type: "http", url: "https://hub.test/mcp" } },
+      conversationId: "disk-conversation",
+    };
+    const agent = createManagedAgent({
+      id: "disk-resume",
+      provider: "codex",
+      config: { provider: "codex" },
+      persistence: {
+        provider: "codex",
+        sessionId: "disk-thread",
+        nativeHandle: "native-disk",
+        metadata,
+      },
+    });
+    agent.artifacts = [
+      {
+        path: "/tmp/report.md",
+        name: "report.md",
+        kind: "markdown",
+        mimeType: "text/markdown",
+        size: 12,
+        createdAt: "2025-01-01T00:00:00.000Z",
+        updatedAt: "2025-01-01T00:00:00.000Z",
+      },
+    ];
+    agent.companionEntries = [
+      {
+        id: "pin:disk",
+        kind: "pin",
+        text: "Retained context",
+        truncated: false,
+        timestamp: "2025-01-01T00:00:00.000Z",
+      },
+    ];
+    await storage.applySnapshot(agent);
+    const file = path.join(storagePath, "tmp-project", "disk-resume.json");
+    const originalBytes = await fs.readFile(file, "utf8");
+    expect(JSON.parse(originalBytes).persistence).toEqual(agent.persistence);
+
+    const reloaded = new AgentStorage(storagePath, logger);
+    const record = await reloaded.get(agent.id);
+    if (!record) throw new Error("Persisted async-question record missing");
+    expect(record.persistence).toEqual(agent.persistence);
+    const payload = buildStoredAgentPayload(record, ["codex"]);
+    expect(payload.persistence).toEqual({
+      provider: "codex",
+      sessionId: "disk-thread",
+      nativeHandle: "native-disk",
+      metadata: { conversationId: "disk-conversation" },
+    });
+    expect(payload.artifacts).toEqual(agent.artifacts);
+    expect(payload.companionEntries).toEqual(agent.companionEntries);
+    expect(record.persistence).toEqual(agent.persistence);
+
+    const secondReload = new AgentStorage(storagePath, logger);
+    expect(await secondReload.get(agent.id)).toEqual(record);
+    expect(await fs.readFile(file, "utf8")).toBe(originalBytes);
+  });
+
   test("applySnapshot stores and reloads featureValues when present", async () => {
     await storage.applySnapshot(
       createManagedAgent({
@@ -321,6 +389,39 @@ describe("AgentStorage", () => {
     await expect(storage.setTitle("missing-agent", "Impossible")).rejects.toThrow(
       "Agent missing-agent not found",
     );
+  });
+
+  test("renameProvider migrates every provider reference and survives reload", async () => {
+    await storage.applySnapshot(
+      createManagedAgent({
+        id: "agent-renamed",
+        provider: "claude-work",
+        persistence: { provider: "claude-work", sessionId: "session-abc" },
+      }),
+    );
+    await storage.applySnapshot(
+      createManagedAgent({ id: "agent-untouched", provider: "claude-personal" }),
+    );
+
+    const migrated = await storage.renameProvider("claude-work", "claude-job");
+    expect(migrated).toEqual(["agent-renamed"]);
+
+    const reloaded = new AgentStorage(storagePath, logger);
+    const record = await reloaded.get("agent-renamed");
+    expect(record?.provider).toBe("claude-job");
+    expect(record?.runtimeInfo?.provider).toBe("claude-job");
+    expect(record?.persistence?.provider).toBe("claude-job");
+
+    const untouched = await reloaded.get("agent-untouched");
+    expect(untouched?.provider).toBe("claude-personal");
+    expect(untouched?.runtimeInfo?.provider).toBe("claude-personal");
+  });
+
+  test("renameProvider is a no-op when no record references the old provider", async () => {
+    await storage.applySnapshot(createManagedAgent({ id: "agent-1", provider: "claude" }));
+
+    expect(await storage.renameProvider("claude-work", "claude-job")).toEqual([]);
+    expect((await storage.get("agent-1"))?.provider).toBe("claude");
   });
 
   test("applySnapshot accepts explicit title overrides", async () => {

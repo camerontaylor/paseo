@@ -109,15 +109,22 @@ function stripCanonicalSubmittedPrompts(
   message: string | Buffer,
   enabled: boolean,
   messageType: unknown,
+  additionalFeatures: readonly string[] = [],
 ): string | Buffer {
-  if (!enabled || messageType !== "status" || typeof message !== "string") return message;
+  if (
+    (!enabled && additionalFeatures.length === 0) ||
+    messageType !== "status" ||
+    typeof message !== "string"
+  )
+    return message;
   const envelope = JSON.parse(message) as {
     message?: { payload?: { status?: unknown; features?: Record<string, unknown> } };
     payload?: { status?: unknown; features?: Record<string, unknown> };
   };
   const payload = envelope.message?.payload ?? envelope.payload;
   if (payload?.status !== "server_info" || !payload.features) return message;
-  delete payload.features.canonicalSubmittedPrompts;
+  if (enabled) delete payload.features.canonicalSubmittedPrompts;
+  for (const feature of additionalFeatures) delete payload.features[feature];
   return JSON.stringify(envelope);
 }
 
@@ -301,6 +308,7 @@ export async function installDaemonWebSocketGate(page: Page) {
   let forceTimelineEpochReset = false;
   let stripAssistantMessageIds = false;
   let stripCanonicalSubmittedPromptsFeature = false;
+  let strippedServerFeatures: readonly string[] = [];
   let shellToolCommandOverride: string | null = null;
   let failingTimelineAgentId: string | null = null;
   let holdingTimelineAgentId: string | null = null;
@@ -329,6 +337,14 @@ export async function installDaemonWebSocketGate(page: Page) {
   const clientRequests = new Map<string, ClientRequest[]>();
   const timelineRequestCounts = new Map<string, number>();
   const serverMessageCounts = new Map<string, number>();
+  const deliveredServerMessages = new Map<string, ClientRequest[]>();
+  const recordDeliveredServerMessage = (message: string | Buffer): void => {
+    const delivered = readSessionMessage(message);
+    if (typeof delivered?.type !== "string") return;
+    const messages = deliveredServerMessages.get(delivered.type) ?? [];
+    messages.push(delivered);
+    deliveredServerMessages.set(delivered.type, messages);
+  };
   const agentStreamEventCounts = new Map<string, number>();
   const agentStreamItemCounts = new Map<string, number>();
   const serverMessageWaiters = new Set<() => void>();
@@ -514,6 +530,7 @@ export async function installDaemonWebSocketGate(page: Page) {
         outboundMessage,
         stripCanonicalSubmittedPromptsFeature,
         serverMessage?.type,
+        strippedServerFeatures,
       );
       const isTimelineResponse = serverMessage?.type === "fetch_agent_timeline_response";
       if (isTimelineResponse) {
@@ -539,6 +556,7 @@ export async function installDaemonWebSocketGate(page: Page) {
       if (holdReadyFileUpdate(ws, outboundMessage, fileMessage)) return;
       try {
         ws.send(outboundMessage);
+        recordDeliveredServerMessage(outboundMessage);
       } catch {
         activeSockets.delete(ws);
       }
@@ -845,6 +863,15 @@ export async function installDaemonWebSocketGate(page: Page) {
     },
     getClientRequestCount(type: string): number {
       return clientRequestCounts.get(type) ?? 0;
+    },
+    getClientRequestCounts(): Record<string, number> {
+      return Object.fromEntries(clientRequestCounts);
+    },
+    getDeliveredServerMessages(type: string): ReadonlyArray<ClientRequest> {
+      return [...(deliveredServerMessages.get(type) ?? [])];
+    },
+    setServerFeaturesStripped(features: readonly string[]): void {
+      strippedServerFeatures = [...features];
     },
     getClientRequests(type: string): ReadonlyArray<ClientRequest> {
       return [...(clientRequests.get(type) ?? [])];

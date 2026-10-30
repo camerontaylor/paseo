@@ -215,7 +215,7 @@ export function summarizeACPRequestError(error: unknown): {
     return { message: error.message };
   }
 
-  return { message: String(error) };
+  return { message: toDiagnosticErrorMessage(error) };
 }
 
 // Keeps the JSON-RPC code so callers can still tell invalid params from other failures.
@@ -231,7 +231,7 @@ class ACPRequestError extends Error {
 
 function toACPRequestError(error: unknown): Error {
   if (!isACPError(error)) {
-    return error instanceof Error ? error : new Error(String(error));
+    return error instanceof Error ? error : new Error(toDiagnosticErrorMessage(error));
   }
   return new ACPRequestError(error);
 }
@@ -2990,13 +2990,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
 
     if (selection.hasAvailableModels && !selection.availableModel) {
-      this.warnInvalidSelection(
-        modelId,
-        `is not a valid ${this.provider} model. Available options: ${this.availableModels
+      throw new Error(
+        `Model '${modelId}' is not a valid ${this.provider} model. Available options: ${this.availableModels
           ?.map((model) => model.modelId)
           .join(", ")}`,
       );
-      return;
     }
 
     if (
@@ -3004,10 +3002,8 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       typeof this.connection.unstable_setSessionModel === "function"
     ) {
       try {
-        await this.connection.unstable_setSessionModel({
-          sessionId: this.sessionId,
-          modelId,
-        });
+        const { connection, sessionId } = this;
+        await this.runACPRequest(() => connection.unstable_setSessionModel({ sessionId, modelId }));
         this.currentModel = modelId;
         this.pushEvent({
           type: "model_changed",
@@ -3015,8 +3011,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
           runtimeInfo: this.runtimeInfo(),
         });
         return;
-      } catch {
-        // Fall through to config option path.
+      } catch (error) {
+        if (!isACPError(error) || error.code !== -32601) {
+          throw error;
+        }
+        // Agents may expose model selection only through session config options.
       }
     }
 
@@ -3025,15 +3024,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       throw new Error(this.modelSelectionUnavailableMessage());
     }
     if (!selection.configChoice) {
-      this.warnInvalidSelection(
-        modelId,
-        `is not a valid ${this.provider} model config option. Available options: ${flattenSelectOptions(
+      throw new Error(
+        `Model '${modelId}' is not a valid ${this.provider} model config option. Available options: ${flattenSelectOptions(
           modelOption.options,
         )
           .map((option) => option.value)
           .join(", ")}`,
       );
-      return;
     }
 
     const { connection, sessionId } = this;
@@ -3776,21 +3773,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     const configuredModelId = this.config.model;
     let switchedModel = false;
     if (configuredModelId && configuredModelId !== this.currentModel) {
-      try {
-        await this.setModelWithSelection({
-          modelId: configuredModelId,
-          selection: this.resolveModelSelection(configuredModelId),
-        });
-        switchedModel = true;
-      } catch (error) {
-        if (!this.isModelSelectionUnavailableError(error)) {
-          throw error;
-        }
-        this.logger.warn(
-          { value: configuredModelId },
-          `${this.provider} does not expose ACP model selection; using provider default model`,
-        );
-      }
+      await this.setModelWithSelection({
+        modelId: configuredModelId,
+        selection: this.resolveModelSelection(configuredModelId),
+      });
+      switchedModel = true;
     }
     if (this.config.thinkingOptionId && this.config.thinkingOptionId !== this.thinkingOptionId) {
       await this.setThinkingOption(this.config.thinkingOptionId);
@@ -3839,10 +3826,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
   private modelSelectionUnavailableMessage(): string {
     return `${this.provider} does not expose ACP model selection`;
-  }
-
-  private isModelSelectionUnavailableError(error: unknown): boolean {
-    return error instanceof Error && error.message === this.modelSelectionUnavailableMessage();
   }
 
   private featureUnavailableMessage(featureId: string): string {
