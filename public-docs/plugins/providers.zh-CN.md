@@ -71,7 +71,7 @@ export function createProvider(): ProviderRegistration {
 
 ## 系统指令 {#system-instructions}
 
-如果原生 API 无法携带额外的系统指令，请将 `ProviderRegistration.supportsSystemPrompt` 设为 `false`。当 Agent 的 `systemPrompt` 或 `daemon.appendSystemPrompt` 非空时，Paseo 会在打开或恢复该 Provider 会话前拒绝请求，不会丢弃这些指令或将其转换为对话消息。对于已经实现系统提示词约定的现有 Provider，请省略此字段。
+如果原生 API 无法携带额外的系统指令，请将 `ProviderRegistration.supportsSystemPrompt` 设为 `false`。当 Agent 的 `systemPrompt` 非空时，Paseo 会在打开或恢复该 Provider 会话前拒绝请求。非空的 `daemon.appendSystemPrompt` 也会导致拒绝，但列入 `daemon.appendSystemPromptExcludedProviders` 的 Provider 除外；这些 Provider 不会收到 daemon 提示词。Paseo 不会将系统指令转换为对话消息。对于已经实现系统提示词约定的现有 Provider，请省略此字段。
 
 `ProviderSessionConfig.systemPrompt` 包含合并后的 Agent 和 daemon 指令。请在 Provider 默认系统提示词之外应用这些指令。仅替换默认提示词，或将工作区规则作为用户上下文插入的原生 API，不符合此约定。
 
