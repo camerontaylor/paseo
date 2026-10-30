@@ -5,9 +5,10 @@ import {
   parseAgentMessage,
   formatAgentMessage,
   prepareAgentMessage,
-  projectAgentMessages,
+  projectAgentMessage,
 } from "./agent-messages/index.js";
-import { expect, test, vi } from "vitest";
+import { expect, it, test, vi } from "vitest";
+import pino, { type Logger } from "pino";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -117,6 +118,7 @@ function createFinishNotificationScenario(
     return options?.childLastAssistantMessage ?? null;
   });
   Reflect.set(agentManager, "tryRunOutOfBand", () => false);
+  Reflect.set(agentManager, "reloadStalePluginSession", async () => {});
   Reflect.set(agentManager, "hasInFlightRun", () => Boolean(options?.parentPromptError));
   Reflect.set(agentManager, "steerOrReplaceActiveTurn", async () => {
     steerAttemptCount += 1;
@@ -899,36 +901,6 @@ test("agent envelopes round-trip opaque sender IDs and XML-sensitive messages", 
   expect(parseAgentMessage(encoded.replace('version="1"', 'version="1" version="1"'))).toBeNull();
 });
 
-test("a delivered batch projects each message and completion separately in order", () => {
-  const entries = [
-    {
-      id: "report",
-      source: { kind: "agent-message" as const, agentId: "remote::worker", title: "Worker" },
-      text: "Result <ready>",
-    },
-    {
-      id: "finished",
-      source: {
-        kind: "agent-notification" as const,
-        agentId: "remote::worker",
-        event: "finished" as const,
-      },
-      text: "Finished & ready",
-    },
-  ];
-  const text = entries.map(formatAgentMessage).join("\n\n");
-  expect(projectAgentMessages({ type: "user_message", text })).toEqual(
-    entries.flatMap((entry) =>
-      projectAgentMessages({ type: "user_message", text: formatAgentMessage(entry) }),
-    ),
-  );
-  // Human submissions containing the same envelopes must survive replay as human text.
-  const pasted = prepareAgentMessage(text, undefined, "human-batch");
-  expect(projectAgentMessages({ type: "user_message", text: String(pasted.prompt) })).toEqual([
-    { type: "user_message", text, clientMessageId: "human-batch" },
-  ]);
-});
-
 test("agent envelope includes rendered attachment context and preserves images", () => {
   const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
   const attachment = {
@@ -970,11 +942,11 @@ test("a human pasting an agent envelope stays a human message through provider r
   });
   const delivery = prepareAgentMessage(pasted, undefined, "human-submission");
   expect(
-    projectAgentMessages({
+    projectAgentMessage({
       type: "user_message",
       text: String(delivery.prompt),
       messageId: "provider-echo",
-    })[0],
+    }),
   ).toEqual({
     type: "user_message",
     text: pasted,

@@ -8948,6 +8948,39 @@ export class Session {
     );
   }
 
+  /** Answer a wait with the settled record, or a not-found error. */
+  private async emitUnavailableFinishResponse(agentId: string, requestId: string): Promise<void> {
+    const settled = await this.readSettledAgent(agentId);
+    if (!settled) {
+      this.emit({
+        type: "wait_for_finish_response",
+        payload: {
+          requestId,
+          status: "error",
+          final: null,
+          error: `Agent not found: ${agentId}`,
+          lastMessage: null,
+        },
+      });
+      return;
+    }
+    const { record, lastMessage } = settled;
+    const final = this.buildStoredAgentPayload(record);
+    let status: "permission" | "error" | "idle";
+    if (record.attentionReason === "permission") {
+      status = "permission";
+    } else if (record.lastStatus === "error") {
+      status = "error";
+    } else {
+      status = "idle";
+    }
+    const error = resolveWaitForFinishError({ status, final });
+    this.emit({
+      type: "wait_for_finish_response",
+      payload: { requestId, status, final, error, lastMessage },
+    });
+  }
+
   private async handleWaitForFinish(
     agentIdOrIdentifier: string,
     requestId: string,
@@ -8981,43 +9014,13 @@ export class Session {
 
     try {
       const signal = AbortSignal.any([abortController.signal, sourceSignal]);
-      // Admission can precede run reservation, so an idle provider alone does
-      // not mean accepted input finished. A waiter's timeout or disconnect
-      // stops only this observation; it cannot cancel delivery.
-      await this.agentQueueService?.waitForPendingDispatch(agentId, signal);
+      // Wait for both accepted message delivery and durable queue admission before observing the run.
       await this.agentMessages.waitForDispatch(agentId, signal);
+      await this.agentQueueService?.waitForPendingDispatch(agentId, signal);
 
       const live = this.agentManager.getAgent(agentId);
       if (!live && !(await this.hasLiveOrQueuedAgent(agentId))) {
-        const settled = await this.readSettledAgent(agentId);
-        if (!settled) {
-          this.emit({
-            type: "wait_for_finish_response",
-            payload: {
-              requestId,
-              status: "error",
-              final: null,
-              error: `Agent not found: ${agentId}`,
-              lastMessage: null,
-            },
-          });
-          return;
-        }
-        const { record, lastMessage } = settled;
-        const final = this.buildStoredAgentPayload(record);
-        let status: "permission" | "error" | "idle";
-        if (record.attentionReason === "permission") {
-          status = "permission";
-        } else if (record.lastStatus === "error") {
-          status = "error";
-        } else {
-          status = "idle";
-        }
-        const error = resolveWaitForFinishError({ status, final });
-        this.emit({
-          type: "wait_for_finish_response",
-          payload: { requestId, status, final, error, lastMessage },
-        });
+        await this.emitUnavailableFinishResponse(agentId, requestId);
         return;
       }
 
