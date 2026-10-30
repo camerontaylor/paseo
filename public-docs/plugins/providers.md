@@ -76,10 +76,12 @@ to `ProviderEvent` objects before publishing it.
 ## System instructions
 
 Set `ProviderRegistration.supportsSystemPrompt` to `false` when your native API cannot
-carry additional system instructions. Paseo rejects a nonempty agent `systemPrompt` or
-`daemon.appendSystemPrompt` before opening or resuming that provider session. It never
-drops those instructions or converts them into a conversation message. Omit the field
-for existing providers that already implement the system prompt contract.
+carry additional system instructions. Paseo rejects a nonempty agent `systemPrompt`
+before opening or resuming that provider session. A nonempty `daemon.appendSystemPrompt`
+also causes rejection unless the provider is listed in `daemon.appendSystemPromptExcludedProviders`;
+excluded providers do not receive the daemon prompt. Paseo never converts system instructions
+into a conversation message. Omit the field for existing providers that already implement
+the system prompt contract.
 
 `ProviderSessionConfig.systemPrompt` contains the combined agent and daemon instructions.
 Apply them in addition to your provider's default system prompt. A native API that only

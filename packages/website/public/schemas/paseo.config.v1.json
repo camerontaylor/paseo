@@ -104,6 +104,13 @@
         "appendSystemPrompt": {
           "type": "string"
         },
+        "appendSystemPromptExcludedProviders": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "terminalProfiles": {
           "type": "array",
           "items": {
