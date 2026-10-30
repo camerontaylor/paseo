@@ -13,9 +13,10 @@ import {
   type ArchiveFinishedStatus,
   useArchiveSubagent,
   useDetachSubagent,
-  useSubagentOpensInSheet,
+  useSubagentSheetTab,
   type SubagentRow,
 } from "@/subagents";
+import { ParentAgentPill } from "@/subagents/parent";
 import { SubagentsTrack } from "@/subagents/track";
 import type { TodoEntry } from "@/types/stream";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
@@ -34,6 +35,7 @@ export const AgentTracks = memo(function AgentTracks({
   serverId,
   workspaceId,
   agentId,
+  parentAgentId,
   subagentRows,
   tasks,
   archiveFinishedStatus,
@@ -43,6 +45,7 @@ export const AgentTracks = memo(function AgentTracks({
   serverId: string;
   workspaceId: string;
   agentId: string;
+  parentAgentId: string | null;
   subagentRows: SubagentRow[];
   tasks: TodoEntry[] | undefined;
   archiveFinishedStatus: ArchiveFinishedStatus;
@@ -88,18 +91,22 @@ export const AgentTracks = memo(function AgentTracks({
     [openSubagentTarget, serverId, workspaceId],
   );
   const handleOpenProviderSubagent = useCallback(
-    (parentAgentId: string, subagentId: string) => {
-      openSubagentTarget({ kind: "provider_subagent", parentAgentId, subagentId });
+    (ownerAgentId: string, subagentId: string) => {
+      openSubagentTarget({
+        kind: "provider_subagent",
+        parentAgentId: ownerAgentId,
+        subagentId,
+      });
     },
     [openSubagentTarget],
   );
   const handleOpenSideConversation = useCallback(
-    (parentAgentId: string, threadId: string) => {
-      openSubagentTarget({ kind: "side_conversation", parentAgentId, threadId });
+    (sideParentAgentId: string, threadId: string) => {
+      openSubagentTarget({ kind: "side_conversation", parentAgentId: sideParentAgentId, threadId });
     },
     [openSubagentTarget],
   );
-  const opensInSheet = useSubagentOpensInSheet(workspaceKey);
+  const sheetTabFor = useSubagentSheetTab(workspaceKey, tabId);
   const handleOpenChanges = useCallback(() => {
     if (!workspaceKey) {
       return;
@@ -114,6 +121,7 @@ export const AgentTracks = memo(function AgentTracks({
   if (
     !hasWorkspaceDiffStat &&
     !hasAgentTracks({
+      parentAgentId,
       subagentRows,
       tasks,
       archiveFinishedStatus,
@@ -125,6 +133,7 @@ export const AgentTracks = memo(function AgentTracks({
 
   return (
     <ComposerTrackBar>
+      {parentAgentId ? <ParentAgentPill serverId={serverId} parentAgentId={parentAgentId} /> : null}
       <AgentTaskList tasks={tasks} />
       <SubagentsTrack
         serverId={serverId}
@@ -132,7 +141,7 @@ export const AgentTracks = memo(function AgentTracks({
         onOpenSubagent={handleOpenSubagent}
         onOpenProviderSubagent={handleOpenProviderSubagent}
         onOpenSideConversation={handleOpenSideConversation}
-        opensInSheet={opensInSheet}
+        sheetTabFor={sheetTabFor}
         onArchiveSubagent={archiveSubagent}
         onArchiveFinished={onArchiveFinished}
         archiveFinishedStatus={archiveFinishedStatus}
@@ -154,17 +163,20 @@ export const AgentTracks = memo(function AgentTracks({
 });
 
 export function hasAgentTracks({
+  parentAgentId,
   subagentRows,
   tasks,
   archiveFinishedStatus,
   hasPluginComposerPills = false,
 }: {
+  parentAgentId: string | null;
   subagentRows: readonly SubagentRow[];
   tasks: readonly TodoEntry[] | undefined;
   archiveFinishedStatus: ArchiveFinishedStatus;
   hasPluginComposerPills?: boolean;
 }): boolean {
   return (
+    parentAgentId !== null ||
     subagentRows.length > 0 ||
     Boolean(tasks?.length) ||
     archiveFinishedStatus.kind !== "idle" ||

@@ -649,6 +649,7 @@ interface TerminalExit {
 }
 
 interface TerminalEntry {
+  running: boolean;
   id: string;
   child: ChildProcess;
   output: string;
@@ -3276,6 +3277,15 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     await this.stopForegroundTurn({ reason: "interrupt" });
   }
 
+  async canStopRuntime(): Promise<boolean> {
+    return (
+      this.activeForegroundTurnId === null &&
+      this.pendingPermissions.size === 0 &&
+      this.pendingUserMessage === null &&
+      !Array.from(this.terminalEntries.values()).some((terminal) => terminal.running)
+    );
+  }
+
   async close(): Promise<void> {
     if (this.closed) {
       return;
@@ -3324,12 +3334,14 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       }
     }
 
-    const terminalTerminations = Array.from(this.terminalEntries.values(), (terminal) =>
-      this.terminateProcess(terminal.child, {
-        gracefulTimeoutMs: 2_000,
-        forceTimeoutMs: 2_000,
-      }),
-    );
+    const terminalTerminations = Array.from(this.terminalEntries.values())
+      .filter((terminal) => terminal.running)
+      .map((terminal) =>
+        this.terminateProcess(terminal.child, {
+          gracefulTimeoutMs: 2_000,
+          forceTimeoutMs: 2_000,
+        }),
+      );
     await Promise.all(terminalTerminations);
     this.terminalEntries.clear();
 
@@ -3531,6 +3543,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     waitForExit.catch(() => undefined);
 
     const entry: TerminalEntry = {
+      running: true,
       id: terminalId,
       child,
       output: "",
@@ -3551,10 +3564,13 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     child.once("error", (error) => {
       const spawnError = error instanceof Error ? error : new Error(String(error));
       appendTerminalOutput(entry, `${spawnError.message}\n`);
+      // A failed spawn has no exit event. Other process errors do not prove exit.
+      if (child.pid === undefined) entry.running = false;
       rejectExit(spawnError);
     });
     child.once("exit", (code, signal) => {
       const exit = { exitCode: code, signal };
+      entry.running = false;
       entry.exit = exit;
       resolveExit(exit);
     });
@@ -3579,7 +3595,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
   async releaseTerminal(params: { sessionId: string; terminalId: string }): Promise<void> {
     const entry = this.getTerminalEntry(params.terminalId);
-    if (!entry.exit) {
+    if (entry.running) {
       await this.terminateProcess(entry.child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 });
     }
     this.terminalEntries.delete(params.terminalId);
@@ -3587,7 +3603,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
   async killTerminal(params: KillTerminalRequest): Promise<Record<string, never>> {
     const entry = this.getTerminalEntry(params.terminalId);
-    if (!entry.exit) {
+    if (entry.running) {
       await this.terminateProcess(entry.child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 });
     }
     return {};
@@ -4902,10 +4918,16 @@ function appendTerminalOutput(entry: TerminalEntry, chunk: string): void {
   if (!limit) {
     return;
   }
-  while (Buffer.byteLength(entry.output, "utf8") > limit && entry.output.length > 0) {
-    entry.output = entry.output.slice(1);
-    entry.truncated = true;
+  const output = Buffer.from(entry.output, "utf8");
+  if (output.length <= limit) {
+    return;
   }
+  let start = output.length - limit;
+  while (start < output.length && (output[start] & 0xc0) === 0x80) {
+    start += 1;
+  }
+  entry.output = output.subarray(start).toString("utf8");
+  entry.truncated = true;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

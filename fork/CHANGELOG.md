@@ -4,6 +4,16 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.14.0 base decision — 2026-10-30
+
+Advance `custom` from `v0.13.2` to upstream stable `v0.14.0`.
+Preserve version overrides, side conversations, closed-session fences and
+provider policy exclusions. Move the plugin SDK alias checks into upstream's
+worker-side compiler and side-conversation targets into the new in-place
+subagent target helper, retaining compact side-conversation tabs. Guard idle
+runtime cleanup while a side question is pending. Regenerate the enriched-markdown patch from merged
+dependency sources, retaining Android selection and table copy.
+
 ## 0.13.2 base decision — 2026-10-27
 
 Advance `custom` to upstream stable `v0.13.2` (`d2941157a`). Regenerate the

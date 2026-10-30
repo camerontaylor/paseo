@@ -25,8 +25,54 @@ Reload releases the old runtime before resuming its durable session: an idle pro
 still own an exclusive writer. A close failure retains that runtime for cleanup and blocks the
 replacement. Once closure succeeds, a failed resume leaves the durable agent closed and retryable.
 
-Idle agents remain resident indefinitely. Runtime closure happens only through an explicit lifecycle
-action such as archive, replacement, reload, workspace teardown, or daemon shutdown.
+Idle resumable runtimes are collected after one hour without activity, checked once a minute.
+Collection releases the process and preserves the agent record, conversation, relationships, and
+provider session. The next prompt resumes that session. Set `agents.idleRuntimeCleanup: false` in
+host config to disable automatic collection. The host setting applies immediately; config-file edits
+apply on reload. Disabling invalidates pending safety checks and close admission. A close already
+started finishes. Re-enabling keeps the existing idle timestamps.
+
+Foreground runs, permissions and responses, queued deliveries, lifecycle operations, and working
+managed or native descendants prevent collection. Outstanding local or remote finish subscriptions
+also protect their caller, including registration, recovery and notification dispatch acknowledgment.
+An idle managed child can still own background work.
+
+The daemon baseline always applies. An optional provider `canStopRuntime()` adds a veto: false,
+errors and timeouts retain ownership, while true cannot override daemon blockers. Without a provider
+check, the baseline decides collection after the same one-hour idle period. Once protected work
+finishes, a fresh idle hour starts. There is no deadline that overrides a veto.
+
+The `idle-runtime-cleanup/` module owns the clocks, eligibility policy and sweep lifetime.
+AgentManager supplies captured runtime capabilities and owns atomic revalidation and shutdown.
+Finish subscriptions expose caller protection through their public capability; the collector never
+reads their watches or durable records.
+
+The collector rechecks daemon state after asynchronous probes and event draining, in the existing
+close/load lifecycle lane. A prompt admitted before closure prevents collection. A prompt arriving
+after closure starts waits for release and resumes the saved session.
+
+Provider checks follow the signals their runtimes expose:
+
+- Claude uses its process-local background roster and pending completion notifications. A fresh
+  process starts empty. CLI 2.1.292 or newer is known to support the roster; older binaries must
+  demonstrate support by emitting one. Unknown versions stay resident until then.
+- Codex queries background terminals for loaded threads, including native children, and protects
+  pending provider requests. App servers without the terminal-list RPC stay resident.
+- OpenCode checks active executions and descendants. V1 checks PTYs; v2 also checks shell and
+  inbox inventories. The shared server remains leased while a session vetoes collection.
+- Pi checks streaming, compaction, pending replies, and adapter-owned operations. Known native
+  subagent signals also protect their parent through the daemon's subagent store.
+- OMP additionally requires `get_state.isSettled: true` and `hasPendingAsyncWork: false`.
+  These protect jobs with unsuppressed completion delivery, pending deliveries, queued result
+  injection, and admitted or scheduled continuations that can re-wake the session. Older OMP
+  runtimes without either field stay resident. These signals are not an inventory of arbitrary
+  processes.
+- ACP checks adapter-owned foreground turns, permissions, buffered user messages, and running
+  ACP terminals, including quiet terminals. Exited or failed-to-spawn terminal records do not
+  prevent collection. This does not inspect processes launched internally by the provider.
+
+These checks do not discover arbitrary detached processes or work hidden by third-party
+extensions. A provider plugin adds its own veto through the [runtime safety contract](../public-docs/plugins/providers.md#permit-idle-runtime-cleanup).
 
 A provider runtime can still die on its own — crash, OOM kill, host suspend. Work the agent parked
 inside that process dies with it: Claude Code's background Bash shells, `Monitor` watches, and
@@ -260,7 +306,7 @@ parentAgentId === thisAgent.id  AND  !archivedAt
 
 A modern client receives updates and removals through a `session.events.set_subscription` entry for `agent.side_conversation.update` and `agent.side_conversation.removed`, which the daemon proofs like any other owned observation. Hosts that predate `features.sideConversationEvents` keep the capability-gated broadcast, so the same client drops the two selectors against them instead of sending a selector an older daemon cannot parse.
 
-Clicking any row opens a workspace tab. On compact layouts it opens in a [sheet](explorer-sidebar.md#sheets) over the subagents list instead; the sheet hides the composer and shows the agent's model and thinking as one line in its place (`PaneSubtitle`, the row provider subagents already use), and a Paseo subagent's sheet offers **Open as tab** (the full-screen glyph in the header) to get the composer back. A Paseo subagent tab is a normal interactive agent pane. A provider subagent tab is a read-only timeline pane with no composer, archive, detach, rewind, or fork actions. It shows its own direct children in a subagents track. Both subagent panes use `AgentStreamView`, so message, reasoning, tool-call, and layout rendering stay identical. A side conversation tab is a light pane of its own — a composer and the thread's messages — with no agent lifecycle actions.
+Clicking a side conversation opens a workspace tab on every layout. Clicking either kind of subagent opens a workspace tab; on compact layouts it opens in a [sheet](explorer-sidebar.md#sheets) instead, replacing the subagents list in place (Back returns to the list); the sheet hides the composer and shows the agent's model and thinking as one line in its place (`PaneSubtitle`, the row provider subagents already use), and a Paseo subagent's sheet offers **Open as tab** (the full-screen glyph in the header) to get the composer back. A Paseo subagent tab is a normal interactive agent pane. A provider subagent tab is a read-only timeline pane with no composer, archive, detach, rewind, or fork actions. It shows its own direct children in a subagents track. Both subagent panes use `AgentStreamView`, so message, reasoning, tool-call, and layout rendering stay identical. A side conversation tab is a light pane of its own — a composer and the thread's messages — with no agent lifecycle actions.
 
 A parent gets its **New side conversation** entry point in the agent tab menu (`packages/app/src/screens/workspace/workspace-tab-menu.ts`), not in the track: the track renders nothing when it has no rows, so a control in its header would be invisible for exactly the agent that has no side conversations yet. The menu drops the entry when the host has no side conversations rather than greying it out. The compact header's tab switcher (`packages/app/src/screens/workspace/compact-workspace-header/tab-switcher.tsx`) and the desktop tab row build their menus through the same module.
 
