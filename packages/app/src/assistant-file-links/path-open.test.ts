@@ -160,6 +160,6 @@ it("resolves relative links from the agent cwd into the workspace before probing
   expect(opened).toEqual(["directory:project/docs"]);
   expect(errors).toEqual([null]);
   await opener.open({ raw: "/outside/", path: "/outside/" }, "preferred");
-  expect(errors).toEqual([null, "outsideWorkspaceDirectory"]);
+  expect(errors).toEqual([null, null]);
   expect(opened).toEqual(["directory:project/docs"]);
 });

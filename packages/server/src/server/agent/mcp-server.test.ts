@@ -4182,7 +4182,7 @@ describe("send_agent_prompt MCP tool", () => {
     },
   );
 
-  it("notifies the finish of a turn the child starts on its own after an error", async () => {
+  it("completes its durable subscription at an error before autonomous recovery", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-error-recovery-notification-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
     const parentClient = new HeldTurnAgentClient("claude", false);
@@ -4226,13 +4226,8 @@ describe("send_agent_prompt MCP tool", () => {
       childClient.sessions[0]!.startOwnTurn();
       await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
       childClient.sessions[0]!.finishTurn("Opened the PR");
-      await vi.waitFor(() => {
-        expect(parentClient.sessions[0]!.prompts).toHaveLength(2);
-        expect(parentClient.sessions[0]!.prompts[1]).toContain(
-          `Agent ${child.id} (Recovering child) finished.`,
-        );
-        expect(parentClient.sessions[0]!.prompts[1]).toContain("Opened the PR");
-      });
+      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("idle"));
+      expect(parentClient.sessions[0]!.prompts).toHaveLength(1);
       await vi.waitFor(() => expect(agentManager.getAgent(parent.id)?.lifecycle).toBe("idle"));
 
       childClient.sessions[0]!.startOwnTurn();
@@ -4240,13 +4235,13 @@ describe("send_agent_prompt MCP tool", () => {
       childClient.sessions[0]!.finishTurn("Later turn");
       await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("idle"));
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(parentClient.sessions[0]!.prompts).toHaveLength(2);
+      expect(parentClient.sessions[0]!.prompts).toHaveLength(1);
     } finally {
       await removeAgentStateDir(agentManager, storage, workdir);
     }
   });
 
-  it("notifies every autonomous recovery error before the child finally finishes", async () => {
+  it("requires a new subscription for each recovered child turn", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-repeated-recovery-notification-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
     const parentClient = new HeldTurnAgentClient("claude", false);
@@ -4282,7 +4277,7 @@ describe("send_agent_prompt MCP tool", () => {
 
       for (const count of [1, 2]) {
         if (count === 2) {
-          childSession.startOwnTurn();
+          await invokeToolWithParsedInput(tool, { agentId: child.id, prompt: "Retry the task" });
           await vi.waitFor(() =>
             expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"),
           );
@@ -4303,7 +4298,7 @@ describe("send_agent_prompt MCP tool", () => {
         });
       }
 
-      childSession.startOwnTurn();
+      await invokeToolWithParsedInput(tool, { agentId: child.id, prompt: "Finish the task" });
       await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("running"));
       const finalText = "Completed the autonomous recovery task.";
       childSession.finishTurn(finalText);
@@ -4325,7 +4320,7 @@ describe("send_agent_prompt MCP tool", () => {
               : `Agent ${child.id} (Recovering child) errored.\n\n<agent-response>\n${index === 0 ? "[System Error] Synthetic recovery error 1" : "[System Error] Synthetic recovery error 1[System Error] Synthetic recovery error 2"}\n</agent-response>`,
         })),
       );
-      expect(childSession.prompts).toHaveLength(1);
+      expect(childSession.prompts).toHaveLength(3);
       expect(parseAgentMessage(childSession.prompts[0]!)).toEqual({
         id: expect.any(String),
         source: { kind: "agent-message", agentId: parent.id, title: "Recovery parent" },

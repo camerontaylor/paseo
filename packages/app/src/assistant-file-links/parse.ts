@@ -522,7 +522,7 @@ export function normalizeInlinePathTarget(
       workspaceRelative !== null &&
       resolveRelativePathUnderRoot(directory, workspaceRoot) !== null;
     if (!belongsToWorkspace) {
-      return { error: "outsideWorkspaceDirectory" };
+      return { directory: sourcePath.replace(/\/+$/, "") || "/" };
     }
     return { directory };
   }

@@ -671,24 +671,24 @@ describe("normalizeInlinePathTarget", () => {
   });
 
   it.each([
-    ["src/", "/other"],
-    ["/other/", "/other"],
-    ["/project-other/src/", "/project"],
-    ["/project/../other/", "/project"],
-    ["~/plans/", "/project"],
-  ])("rejects directory %s before it can be used by the current Explorer", (rawPath, sourceCwd) => {
+    ["src/", "/other", "/other/src"],
+    ["/other/", "/other", "/other"],
+    ["/project-other/src/", "/project", "/project-other/src"],
+    ["/project/../other/", "/project", "/project/../other"],
+    ["~/plans/", "/project", "~/plans"],
+  ])("retains outside directory %s for its own Files panel", (rawPath, sourceCwd, directory) => {
     expect(normalizeInlinePathTarget(rawPath, { sourceCwd, workspaceRoot: "/project" })).toEqual({
-      error: "outsideWorkspaceDirectory",
+      directory,
     });
   });
 
-  it("retains resolvable files when the displayed workspace is unavailable, but rejects directories", () => {
+  it("retains absolute paths when the displayed workspace is unavailable", () => {
     expect(normalizeInlinePathTarget("src/app.ts", { sourceCwd: "/source" })).toEqual({
       directory: "/source/src",
       file: "/source/src/app.ts",
     });
     expect(normalizeInlinePathTarget("src/", { sourceCwd: "/source" })).toEqual({
-      error: "outsideWorkspaceDirectory",
+      directory: "/source/src",
     });
     expect(normalizeInlinePathTarget("/source/src/app.ts", {})).toMatchObject({
       file: "/source/src/app.ts",
