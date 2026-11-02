@@ -6798,6 +6798,7 @@ test("a legacy send_agent_message_request never reaches the queue service", asyn
         streamAgent: vi.fn(() => (async function* () {})()),
         waitForAgentRunStart: vi.fn(async () => {}),
         waitForAgentClose: vi.fn(async () => {}),
+        reloadStalePluginSession: vi.fn(async () => {}),
       },
       agentStorage: {
         get: vi.fn().mockResolvedValue({ id: agentId, provider: "codex", cwd: "/tmp/x" }),
