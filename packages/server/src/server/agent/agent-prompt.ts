@@ -716,6 +716,11 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         return;
       }
 
+      // Only stream events carry the turn payload the rest of this handler reads.
+      if (event.type !== "agent_stream") {
+        return;
+      }
+
       if (event.event.type === "turn_started") {
         hasSeenTurn = true;
         hasSeenRunning = true;
