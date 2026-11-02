@@ -2076,20 +2076,7 @@ export class Session {
         }
 
         if (event.type === "agent_removed") {
-          if (event.internal) return;
-          void this.agentUpdates
-            .removeAgent(event.agentId)
-            .then(() => {
-              if (event.workspaceId)
-                return this.emitWorkspaceUpdateForWorkspaceId(event.workspaceId);
-              return undefined;
-            })
-            .catch((error) => {
-              this.sessionLogger.error(
-                { err: error, agentId: event.agentId },
-                "Failed to emit agent removal",
-              );
-            });
+          this.handleAgentRemovedEvent(event);
           return;
         }
 
@@ -2194,6 +2181,23 @@ export class Session {
       // listings see them; everything else above filters them out.
       { replayState: false, includeInternal: true },
     );
+  }
+
+  private handleAgentRemovedEvent(event: Extract<AgentManagerEvent, { type: "agent_removed" }>): void {
+    if (event.internal) return;
+    void this.agentUpdates
+      .removeAgent(event.agentId)
+      .then(() => {
+        if (event.workspaceId)
+          return this.emitWorkspaceUpdateForWorkspaceId(event.workspaceId);
+        return undefined;
+      })
+      .catch((error) => {
+        this.sessionLogger.error(
+          { err: error, agentId: event.agentId },
+          "Failed to emit agent removal",
+        );
+      });
   }
 
   private emitProviderSubagentWorkspaceUpdate(event: ProviderSubagentManagerEvent): void {
