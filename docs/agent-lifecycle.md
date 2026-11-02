@@ -12,6 +12,26 @@ initializing → idle → running → idle (or error → closed)
 
 Each live agent in `AgentManager` carries a `lastStatus` of `initializing`, `idle`, `running`, or `error`. `closed` is the persisted, resumable state for an agent record that has no live provider runtime. State transitions persist to disk and stream to subscribed clients via WebSocket.
 
+## Daemon restart recovery
+
+Hosts resume interrupted agents by default after graceful shutdown or a crash. The daemon
+reopens the saved provider conversation and settings, then sends `Resume working.`. Change
+`agents.resumePrompt` or disable `agents.resumeOnStartup` in host config or Host settings → Agents.
+Disabling recovery consumes pending intent; enabling it later does not revive old work.
+
+Only agents recorded as running qualify. Idle and initializing agents stay inactive. Archived
+agents or workspaces, private helpers and Hub-owned executions retain their own lifecycle.
+Explicit creation environment overrides are saved with the agent and reapplied when reopening.
+
+Startup chooses candidates before anything else reads or repairs persisted running state, then
+opens connections and resumes every candidate in the background. A provider that is slow to reopen
+holds back only its own agent; a failed reopen is logged. Graceful shutdown records intent before
+closing runtimes.
+
+This is best-effort continuation. A crash between saving intent and dispatching a prompt can lose
+or repeat a continuation. Provider resume owns conversation restoration; there is no recovery retry
+loop or exactly-once turn guarantee.
+
 ## Runtime residency
 
 An unarchived agent may be `closed` without being deleted or archived. Closing releases its provider
@@ -153,8 +173,10 @@ caller, child, and host into one watch.
 
 Bootstrap restores these watches after repairing stale running records to `closed` and before opening
 ingress. Reading a closed child's result does not load its provider. A finish notification reports that
-the child's run has settled; the parent decides whether its task is complete. Recovery never resumes
-child work. Archived or deleted parents suppress delivery; parent-owned creation watches also stop
+the child's run has settled; the parent decides whether its task is complete. A child chosen for restart
+recovery is observed only after its resume was sent, so the parent never hears that it was closed
+in between. Archived or deleted parents suppress delivery;
+parent-owned creation watches also stop
 reporting after detachment.
 
 Intent remains stored until the parent's notification dispatch is acknowledged. Dispatch failure
@@ -306,7 +328,7 @@ parentAgentId === thisAgent.id  AND  !archivedAt
 
 A modern client receives updates and removals through a `session.events.set_subscription` entry for `agent.side_conversation.update` and `agent.side_conversation.removed`, which the daemon proofs like any other owned observation. Hosts that predate `features.sideConversationEvents` keep the capability-gated broadcast, so the same client drops the two selectors against them instead of sending a selector an older daemon cannot parse.
 
-Clicking a side conversation opens a workspace tab on every layout. Clicking either kind of subagent opens a workspace tab; on compact layouts it opens in a [sheet](explorer-sidebar.md#sheets) instead, replacing the subagents list in place (Back returns to the list); the sheet hides the composer and shows the agent's model and thinking as one line in its place (`PaneSubtitle`, the row provider subagents already use), and a Paseo subagent's sheet offers **Open as tab** (the full-screen glyph in the header) to get the composer back. A Paseo subagent tab is a normal interactive agent pane. A provider subagent tab is a read-only timeline pane with no composer, archive, detach, rewind, or fork actions. It shows its own direct children in a subagents track. Both subagent panes use `AgentStreamView`, so message, reasoning, tool-call, and layout rendering stay identical. A side conversation tab is a light pane of its own — a composer and the thread's messages — with no agent lifecycle actions.
+Clicking a side conversation opens a workspace tab on every layout. Clicking either kind of subagent opens a workspace tab; on compact layouts it opens in a [sheet](explorer-sidebar.md#sheets) instead, replacing the subagents list in place (Back returns to the list); the sheet hides the composer and shows the agent's model and thinking as one line in its place (`PaneSubtitle`, the row provider subagents already use), and a Paseo subagent's sheet offers **Open as tab** (the full-screen glyph in the header) to get the composer back. A Paseo subagent tab is a normal interactive agent pane. A provider subagent tab is a read-only timeline pane with no composer, archive, detach, rewind, or fork actions. It shows its own direct children in a subagents track. Every subagent pane links back to its parent (`packages/app/src/subagents/parent/`): a pill above the composer when there is one, a parent box in the composer's place when there is not. Both subagent panes use `AgentStreamView`, so message, reasoning, tool-call, and layout rendering stay identical. A side conversation tab is a light pane of its own — a composer and the thread's messages — with no agent lifecycle actions.
 
 A parent gets its **New side conversation** entry point in the agent tab menu (`packages/app/src/screens/workspace/workspace-tab-menu.ts`), not in the track: the track renders nothing when it has no rows, so a control in its header would be invisible for exactly the agent that has no side conversations yet. The menu drops the entry when the host has no side conversations rather than greying it out. The compact header's tab switcher (`packages/app/src/screens/workspace/compact-workspace-header/tab-switcher.tsx`) and the desktop tab row build their menus through the same module.
 
