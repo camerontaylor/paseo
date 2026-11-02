@@ -101,7 +101,7 @@ export function createInlinePathOpener(input: {
           sourceCwd: input.sourceCwd ?? input.workspaceRoot,
           workspaceRoot: input.workspaceRoot,
         });
-        if (!resolved?.file) return;
+        if (!resolved || "error" in resolved || !resolved.file) return;
         const location = normalizeWorkspaceFileLocation({
           path: resolved.file,
           lineStart: resolvedTarget.lineStart,
