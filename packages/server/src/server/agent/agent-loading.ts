@@ -135,6 +135,7 @@ export async function ensureAgentLoaded(
         labels: record.labels,
         workspaceId: record.workspaceId,
         owner: record.owner,
+        env: record.launchEnv,
         artifacts: record.artifacts,
         companionEntries: record.companionEntries,
       });

@@ -4,6 +4,21 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.15.0-beta.1 base decision — 2026-11-03
+
+Advance `custom` from `v0.14.0` to upstream `v0.15.0-beta.1` (`8bd38fb23`),
+the newest published release including betas; `v0.15.0-beta.1` continues from
+mainline, which diverged from the `v0.14.0` release branch at `8419c2122`, so
+both sides carried version-field changes. Thirty-one conflicts: version
+fields, the lockfile and the store-screenshot staging take upstream; the fork
+keeps side-conversation rows, sheet targets, event-selector gating, the
+`pkg.version` app version source and the system-prompt policy picker.
+Upstream's terminal-keep capability, agent-resume settings and the
+`./internal/lifecycle` plugin export land beside the fork's seams. The fork's
+enriched-markdown patch is already a content superset of upstream's — the
+file-level conflict was textual only, and the fork's patch applies to the
+pristine package unchanged.
+
 ## 0.14.0 base decision — 2026-10-30
 
 Advance `custom` from `v0.13.2` to upstream stable `v0.14.0`.

@@ -5,6 +5,7 @@ import {
   type OpenFileDisposition,
 } from "@/workspace/file-open";
 import { isAbsolutePath } from "@/utils/path";
+import { resolveMissingNestedRelativeFile, type GetDirectorySuggestions } from "./resolver";
 
 interface PathOpenInput {
   file?: string;
@@ -52,7 +53,8 @@ export function createInlinePathOpener(input: {
   workspaceRoot: string;
   sourceCwd?: string;
   onError?: (error: "pathUnavailable" | "outsideWorkspaceDirectory" | null) => void;
-  client: PathOpenInput["client"];
+  client: (PathOpenInput["client"] & { getDirectorySuggestions?: GetDirectorySuggestions }) | null;
+  resolveRelativeFiles?: boolean;
   openFile: (location: WorkspaceFileLocation, disposition: OpenFileDisposition) => void;
   openDirectory: (path: string) => void;
   openOutsideDirectory: (path: string) => void;
@@ -86,10 +88,24 @@ export function createInlinePathOpener(input: {
       } else if (destination.kind === "outsideDirectory") {
         input.openOutsideDirectory(destination.directoryPath);
       } else if (normalized.file) {
+        const resolvedTarget =
+          input.resolveRelativeFiles && input.client?.getDirectorySuggestions
+            ? await resolveMissingNestedRelativeFile({
+                target,
+                workspaceRoot: input.workspaceRoot,
+                getDirectorySuggestions: input.client.getDirectorySuggestions.bind(input.client),
+              })
+            : target;
+        if (ownGeneration !== generation) return;
+        const resolved = normalizeInlinePathTarget(resolvedTarget.path, {
+          sourceCwd: input.sourceCwd ?? input.workspaceRoot,
+          workspaceRoot: input.workspaceRoot,
+        });
+        if (!resolved?.file) return;
         const location = normalizeWorkspaceFileLocation({
-          path: normalized.file,
-          lineStart: target.lineStart,
-          lineEnd: target.lineEnd,
+          path: resolved.file,
+          lineStart: resolvedTarget.lineStart,
+          lineEnd: resolvedTarget.lineEnd,
         });
         if (location) input.openFile(location, disposition);
       }

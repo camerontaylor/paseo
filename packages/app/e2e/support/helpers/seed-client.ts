@@ -29,6 +29,10 @@ interface SeedProjectDescriptor {
  * prefer those wrappers over reaching for this client directly.
  */
 export interface SeedDaemonClient {
+  patchDaemonConfig(
+    config: import("@getpaseo/protocol/messages").MutableDaemonConfigPatch,
+  ): Promise<{ config: import("@getpaseo/protocol/messages").MutableDaemonConfig }>;
+  getDaemonConfig(): Promise<{ config: import("@getpaseo/protocol/messages").MutableDaemonConfig }>;
   listQueuedAgentMessages(agentId: string): Promise<AgentQueueSnapshot>;
   scanAgentArtifacts(agentId: string): Promise<{ addedOrUpdated: number; total: number }>;
   connect(): Promise<void>;

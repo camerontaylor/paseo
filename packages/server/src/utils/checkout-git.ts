@@ -45,6 +45,8 @@ import { unquoteGitPath } from "./git-quoted-path.js";
 import { isPaseoOwnedWorktreeCwd, resolvePaseoWorktreesBaseRoot } from "./worktree.js";
 import {
   branchNameFromRef,
+  findPaseoWorktreeRootForCwd,
+  hasPaseoWorktreeMetadata,
   getPaseoWorktreeChangeRequestHintForBranch,
   type PaseoWorktreeMetadata,
   normalizeBaseRefName,
@@ -1148,9 +1150,17 @@ async function getMainRepoRootFromCommonDir(
     },
   );
   const worktrees = parseWorktreeList(worktreeOut);
+  const paseoPaths = new Set(
+    (
+      await Promise.all(
+        worktrees.map(async (wt) => ((await hasPaseoWorktreeMetadata(wt.path)) ? wt.path : null)),
+      )
+    ).filter((p) => p !== null),
+  );
   const nonBareNonPaseo = worktrees.filter(
     (wt) =>
       !wt.isBare &&
+      !paseoPaths.has(wt.path) &&
       !isPaseoWorktreePath(wt.path, {
         paseoHome: context?.paseoHome,
         worktreesRoot: context?.worktreesRoot,
@@ -1336,7 +1346,7 @@ async function getPaseoWorktreeForCwd(
   options: PaseoWorktreeLookupOptions = {},
 ): Promise<PaseoWorktreeForCwd> {
   // Fast-path reject: non-worktree paths do not need expensive ownership checks.
-  if (!/[\\/]worktrees[\\/]/.test(cwd)) {
+  if (!/[\\/]worktrees[\\/]/.test(cwd) && (await findPaseoWorktreeRootForCwd(cwd)) === null) {
     return { isPaseoOwnedWorktree: false };
   }
 

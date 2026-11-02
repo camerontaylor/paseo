@@ -515,6 +515,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         createInlinePathOpener({
           workspaceRoot: destinationRoot ?? "",
           sourceCwd: workspaceRoot,
+          resolveRelativeFiles: true,
           onError: setInlinePathError,
           client,
           openFile: openInlineFile,
