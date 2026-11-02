@@ -4360,7 +4360,7 @@ export class AgentManager {
         }
       | undefined;
   }): ActiveManagedAgent {
-    const { resolvedAgentId, session, config, now, durableTimelineHasRows, options } = params;
+    const { resolvedAgentId, session, config, options } = params;
     return {
       id: resolvedAgentId,
       provider: config.provider,
