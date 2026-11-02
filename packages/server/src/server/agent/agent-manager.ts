@@ -4297,6 +4297,44 @@ export class AgentManager {
     return { durableTimelineHasRows };
   }
 
+  private static initialRecordFields(params: {
+    session: AgentSession;
+    config: AgentSessionConfig;
+    now: Date;
+    durableTimelineHasRows: boolean;
+    options?:
+      | {
+          createdAt?: Date;
+          lastUserMessageAt?: Date | null;
+          historyPrimed?: boolean;
+          lastUsage?: AgentUsage;
+          lastError?: string;
+          attention?: AttentionState;
+          persistence?: AgentPersistenceHandle;
+          labels?: Record<string, string>;
+          artifacts?: AgentArtifact[];
+          companionEntries?: CompanionEntry[];
+        }
+      | undefined;
+  }) {
+    const { session, config, now, durableTimelineHasRows, options } = params;
+    return {
+      persistence: normalizePersistenceForConfig(
+        options?.persistence ?? session.describePersistence(),
+        config,
+      ),
+      historyPrimed: options?.historyPrimed ?? durableTimelineHasRows,
+      lastUserMessageAt: options?.lastUserMessageAt ?? null,
+      lastUsage: options?.lastUsage,
+      lastError: options?.lastError,
+      attention: resolveInitialAttention(options?.attention),
+      internal: config.internal ?? false,
+      labels: options?.labels ?? {},
+      artifacts: resolveInitialArtifacts(options?.artifacts),
+      companionEntries: restoreCompanionEntries(options),
+    };
+  }
+
   private buildManagedAgentForRegister(params: {
     resolvedAgentId: string;
     session: AgentSession;
@@ -4349,19 +4387,7 @@ export class AgentManager {
       foregroundTurnWaiters: new Set<ForegroundTurnWaiter>(),
       finalizedForegroundTurnIds: new Set<string>(),
       unsubscribeSession: null,
-      persistence: normalizePersistenceForConfig(
-        options?.persistence ?? session.describePersistence(),
-        config,
-      ),
-      historyPrimed: options?.historyPrimed ?? durableTimelineHasRows,
-      lastUserMessageAt: options?.lastUserMessageAt ?? null,
-      lastUsage: options?.lastUsage,
-      lastError: options?.lastError,
-      attention: resolveInitialAttention(options?.attention),
-      internal: config.internal ?? false,
-      labels: options?.labels ?? {},
-      artifacts: resolveInitialArtifacts(options?.artifacts),
-      companionEntries: restoreCompanionEntries(options),
+      ...AgentManager.initialRecordFields(params),
     } as ActiveManagedAgent;
   }
 

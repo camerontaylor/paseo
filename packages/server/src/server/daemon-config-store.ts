@@ -281,6 +281,18 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
   return Array.from(compacted).sort();
 }
 
+function pickProviderPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
+  return {
+    ...(patch.providers !== undefined ? { providers: patch.providers } : {}),
+    ...(patch.removeProviders !== undefined ? { removeProviders: patch.removeProviders } : {}),
+    ...(patch.replaceProviders !== undefined ? { replaceProviders: patch.replaceProviders } : {}),
+    ...(patch.renameProviders !== undefined ? { renameProviders: patch.renameProviders } : {}),
+    ...(patch.metadataGeneration?.providers !== undefined
+      ? { metadataGeneration: { providers: patch.metadataGeneration.providers } }
+      : {}),
+  };
+}
+
 function pickPolicyPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
   return {
     ...(patch.appendSystemPromptExcludedProviders !== undefined
@@ -314,13 +326,7 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.browserTools?.enabled !== undefined
       ? { browserTools: { enabled: patch.browserTools.enabled } }
       : {}),
-    ...(patch.providers !== undefined ? { providers: patch.providers } : {}),
-    ...(patch.removeProviders !== undefined ? { removeProviders: patch.removeProviders } : {}),
-    ...(patch.replaceProviders !== undefined ? { replaceProviders: patch.replaceProviders } : {}),
-    ...(patch.renameProviders !== undefined ? { renameProviders: patch.renameProviders } : {}),
-    ...(patch.metadataGeneration?.providers !== undefined
-      ? { metadataGeneration: { providers: patch.metadataGeneration.providers } }
-      : {}),
+    ...pickProviderPatchFields(patch),
     ...(patch.autoArchiveAfterMerge !== undefined
       ? { autoArchiveAfterMerge: patch.autoArchiveAfterMerge }
       : {}),
