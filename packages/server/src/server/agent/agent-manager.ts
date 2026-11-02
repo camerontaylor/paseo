@@ -4317,7 +4317,7 @@ export class AgentManager {
         }
       | undefined;
   }) {
-    const { session, config, now, durableTimelineHasRows, options } = params;
+    const { session, config, durableTimelineHasRows, options } = params;
     return {
       persistence: normalizePersistenceForConfig(
         options?.persistence ?? session.describePersistence(),
@@ -4360,7 +4360,7 @@ export class AgentManager {
         }
       | undefined;
   }): ActiveManagedAgent {
-    const { resolvedAgentId, session, config, options } = params;
+    const { resolvedAgentId, session, config, now, options } = params;
     return {
       id: resolvedAgentId,
       provider: config.provider,
