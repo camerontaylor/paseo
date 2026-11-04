@@ -18,7 +18,7 @@ Everything downstream of the plugin ACP connection already supports turns Paseo
 didn't start:
 
 - `ProviderEvent` has `session.turn` with `started | completed | failed |
-  canceled` (`packages/plugin/src/server/provider.ts`).
+canceled` (`packages/plugin/src/server/provider.ts`).
 - `plugin-provider.ts` `translateTurn` (:1530) keeps the provider's `turnId` and
   sets `currentTurnId`, and `translateTimeline` (:1557) attaches it to timeline
   items.
@@ -31,7 +31,7 @@ is the gap:
 
 1. **No way to report a turn.** Turns are emitted only from `admitPrompt`
    (:583). A transformer's `notification()` can return `commands | config |
-   timeline | notice` (`AcpVendorUpdate`, `packages/plugin/src/server/acp.ts:87`),
+timeline | notice` (`AcpVendorUpdate`, `packages/plugin/src/server/acp.ts:87`),
    and none of these is a turn.
 2. **Vendor notifications are handled out of order.** `routeVendorNotifications`
    (:1217) runs vendor transforms synchronously inside the inbound
@@ -179,3 +179,46 @@ jcode plugin then doesn't have to rebuild user messages from vendor payloads.
    close. Is a cap needed (for example a configurable
    `vendorTurnAdmissionTimeoutMs` that ends the turn as `failed`)? Proposed: no
    cap at first, since the agent reports cancels.
+
+## Deviations
+
+Recorded while implementing this spec on `ct/acp-turn-lifecycle-hook`. Citations re-checked
+against the base (`origin/custom` @ `0ed8cdfa5`): `plugin-provider.ts:1530`, `:1557`,
+`agent-manager.ts:531`, `:5129`, `connection.ts:583`, `:1176`, `:1217`, `acp.ts:87` and
+`provider.ts:594` all match. `reduceUpdate` is at `connection.ts:926` (not `:925`) and the dropped
+`user_message_chunk` at `:933` (not `:932`); the described behaviour is as written.
+
+### 1. The vendor operation joins the lane after its slots resolve
+
+"Add an operation to the notification lane that first awaits every slot that existed when the
+vendor message arrived" deadlocks. The SDK's receive loop awaits `Client.sessionUpdate`, and that
+promise resolves only once the operation queued on `notificationLane` runs. An operation that
+awaits a slot therefore holds the lane while the update that would resolve the slot is queued
+behind it. Implemented instead: the barrier resolves first, then the vendor operation joins the
+lane (`vendorNotification`). Order is unchanged, because every update admitted before the vendor
+message is applied before the barrier resolves, and updates that arrive later join the lane after
+the operation. A transport close resolves outstanding slots so nothing leaks.
+
+### 2. A skipped update
+
+Verified in the installed `@agentclientprotocol/sdk@0.17.1`: `Connection.#receive` awaits
+`#processMessage` for every message, and `#processMessage` awaits the notification handler, so
+`Client.sessionUpdate` is called once per inbound `session/update`, in arrival order, before the
+next message is read. The one path that skips it is validation: `zSessionNotification.parse`
+throws inside the handler, so the client is never called and the slot would stay open. Slots are
+therefore resolved by delivery position (`UpdateSlots.settleDelivered`): the n-th delivery resolves
+every slot up to index n-1, so a skipped update is caught up by the next one. Slots are also
+flushed when a prompt settles (`drainNotifications`) and when the transport closes, which covers a
+skip with no later delivery.
+
+### 3. Test 2 shape
+
+The literal scenario — three `agent_message_chunk`s and the terminal in one write — does not fail
+without change B on this SDK. Measured with the vendor updates applied synchronously: `transform
+c1, transform c2, apply c1, transform c3, apply c2, apply c3, transform terminal`. The transform
+stream delivers one update at a time, and the SDK applies each one before pulling the next message,
+so the terminal cannot overtake a queued chunk. The race needs the update to be enqueued while the
+SDK is already waiting in `read()`, which is the state at the start of a write (test 1 fails
+without change B for exactly that reason). Test 2 therefore applies the first two updates, waits
+for them, then writes the third update together with the terminal in one write. That fails without
+change B and passes with it.
