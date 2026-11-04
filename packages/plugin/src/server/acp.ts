@@ -3,6 +3,7 @@ import type {
   ProviderCatalog,
   ProviderCommand,
   ProviderConfigState,
+  ProviderError,
   ProviderNotice,
   ProviderRegistration,
   ProviderTimelineItem,
@@ -88,7 +89,14 @@ export type AcpVendorUpdate =
   | { type: "commands"; commands: readonly ProviderCommand[] }
   | { type: "config"; config: ProviderConfigState }
   | { type: "timeline"; item: ProviderTimelineItem }
-  | { type: "notice"; notice: ProviderNotice };
+  | { type: "notice"; notice: ProviderNotice }
+  | {
+      type: "turn";
+      /** Agent-scoped id; the shim namespaces it. */
+      turnId: string;
+      state: "started" | "completed" | "failed" | "canceled";
+      error?: ProviderError;
+    };
 
 export interface AcpTransformer {
   discover?(
