@@ -34,23 +34,26 @@ minus one field: a leftover `extends` takes precedence over the plugin, so it mu
 
 All three of `command`, `env`, and `models` apply as overrides.
 
-- `command` and `env`: `packages/server/src/server/agent/provider-registry.ts:745` merges the
-  entry's runtime settings into the plugin registration, and
-  `packages/server/src/server/agent/plugin-provider.ts:160` resolves the launch from them. The
-  config `command` array becomes a `replace` command (`provider-registry.ts:253`), so it replaces
-  `jcode acp` entirely; there is no `append` form in the config schema. Env is overlaid on the
-  daemon's environment (`packages/server/src/server/agent/provider-launch-config.ts:250`).
-- `models`: `provider-registry.ts:749` sets `profileModels` from the entry with
-  `profileModelsAreAdditive: false`, and `mergeModels` (`provider-registry.ts:380`) then returns
-  that list in place of the ACP-discovered catalog. So a curated `models` list still curates; if
-  you delete it, jcode's own `configOptions` model selector provides the catalog.
+- `command` and `env`: `resolveRegisteredProvider`
+  (`packages/server/src/server/agent/provider-registry.ts:745`) merges the entry's runtime settings
+  into the plugin registration, and `ProviderRuntime.resolveLaunch`
+  (`packages/server/src/server/agent/plugin-provider.ts:157`) resolves the launch from them. The
+  config `command` array becomes a `replace` command (`toRuntimeSettings`, `provider-registry.ts:253`),
+  so it replaces `jcode acp` entirely; there is no `append` form in the config schema. Env is
+  overlaid on the daemon's environment (`createProviderEnv`,
+  `packages/server/src/server/agent/provider-launch-config.ts:250`).
+- `models`: `resolveRegisteredProvider` (`provider-registry.ts:749`) sets `profileModels` from the
+  entry with `profileModelsAreAdditive: false`, and `mergeModels` (`provider-registry.ts:380`)
+  then returns that list in place of the ACP-discovered catalog. So a curated `models` list still
+  curates; if you delete it, jcode's own `configOptions` model selector provides the catalog.
 
 A leftover `extends` does take precedence, by skipping the plugin instead of merging with it.
-`packages/server/src/server/agent/provider-registry.ts:939` logs `Plugin provider shadowed by
-configured provider` and continues past registration. `addDerivedProviders` then builds `jcode`
-from `extends: "acp"` (`provider-registry.ts:814`) around the server's generic ACP client
-(`provider-registry.ts:865`): today's path, which has no transformer seam and receives no turn
-lifecycle. `docs/plugins.md:129` documents the same rule for `muse-provider`.
+`buildProviderRegistry` (`packages/server/src/server/agent/provider-registry.ts:940`) logs
+`Plugin provider shadowed by configured provider` and continues past registration.
+`addDerivedProviders` (`provider-registry.ts:814`) then builds `jcode` from `extends: "acp"`
+around the server's generic ACP client (`provider-registry.ts:865`): today's path, which has no
+transformer seam and receives no turn lifecycle. `docs/plugins.md:129` documents the same rule for
+`muse-provider`.
 
 ### Before
 
