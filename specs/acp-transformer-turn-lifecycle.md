@@ -225,19 +225,41 @@ notification (`containsUpdate`). Zod strips unknown keys and fills defaults, so 
 slots before it as dropped. A delivery that matches no slot resolves the oldest one so the queue
 keeps moving.
 
-Residual: a schema-invalid update that is the last message before a vendor notification stalls
-that one vendor batch until the transport closes, because nothing else ever reports that slot. It
-cannot stall the notification lane, the prompt lane, or later updates.
+Residual: a schema-invalid update that no later delivery follows leaves its slot unclaimed, and
+nothing else ever reports it. The wait for such a slot is bounded (see 4), so the vendor batch is
+applied after the bound rather than never; until then the vendor turn stays open, which holds the
+prompt lane behind it.
 
-### 4. No flush at prompt settle
+### 4. A bounded wait, and no flush at prompt settle
 
 An earlier revision flushed every open slot in `drainNotifications`. That can release a vendor
 update ahead of an update that was admitted but not yet dispatched, which is the ordering this
 change exists to guarantee, so the flush is gone. The full flush now happens only when the
-transport closes. The residual above is the price; it is a stalled vendor batch, not a stalled
-session.
+transport closes.
 
-### 5. Test 2 shape
+The wait itself is bounded instead: `UpdateSlots.settled()` resolves when the last admitted slot
+resolves or after `SLOT_SETTLE_TIMEOUT_MS` (250 ms), whichever comes first. The SDK dispatches a
+notification in the same read iteration that reads it, so a slot is claimed within microtasks
+whenever its update arrives at all; 250 ms is orders of magnitude above that and far below a
+noticeable hang. Ordering stays acceptable because the timer only fires for a slot whose update
+never arrived, or arrived later than the bound — in both cases the wire order the barrier was
+protecting is already broken by the transport, and a late update is applied after the vendor
+update instead of before it. A stalled vendor turn holds the prompt lane, so bounding the wait is
+also what bounds `admitPrompt`.
+
+### 5. No exported validator
+
+Pre-validating each `session/update` in the transform was the preferred fix: slot only what the
+SDK will deliver, and pairing becomes plain FIFO. It is not possible here.
+`@agentclientprotocol/sdk@1.4.0` exports only `schema/schema.json` (plus the v2 schema), not
+`zSessionNotification`; its `exports` map has no path to `dist/schema/zod.gen.js`, and deep
+importing it is rejected by the map. The JSON schema is also not equivalent: the SDK parses with
+`defaultOnError`/`vecSkipError`, so payloads the JSON schema calls invalid are still delivered with
+the bad field defaulted or the bad element skipped. A validator derived from the JSON schema would
+disagree with the SDK in both directions, which is worse than pairing. Pairing plus the bound
+stays.
+
+### 6. Test 2 shape
 
 The literal scenario — three `agent_message_chunk`s and the terminal in one write — does not fail
 without change B on this SDK. Measured with the vendor updates applied synchronously: `transform

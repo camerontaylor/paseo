@@ -1352,6 +1352,15 @@ function routeVendorNotifications(
 }
 
 /**
+ * Bound on how long a vendor update waits for the `session/update`s that preceded it on the wire.
+ * The SDK dispatches a notification in the same read iteration that reads it, so a slot is
+ * normally claimed within microtasks; one still unclaimed this long belongs to an update the SDK
+ * dropped for failing validation. The value only bounds a pathological stall, so it sits far above
+ * any real dispatch delay and far below a user noticing.
+ */
+const SLOT_SETTLE_TIMEOUT_MS = 250;
+
+/**
  * One slot per inbound session/update, in wire order. The SDK dispatches notifications in
  * arrival order, but it can read an update from the stream before dispatching the one before it,
  * so a vendor notification that follows an update on the wire must wait for that update's slot.
@@ -1363,7 +1372,6 @@ function routeVendorNotifications(
  */
 class UpdateSlots {
   private readonly open: Array<{ promise: Promise<void>; raw: unknown; resolve(): void }> = [];
-
   admit(raw: unknown): void {
     let resolve!: () => void;
     const promise = new Promise<void>((next) => {
@@ -1380,9 +1388,29 @@ class UpdateSlots {
     this.settleThrough(delivered === -1 ? 0 : delivered);
   }
 
-  /** Resolves once every update admitted so far has been applied. */
+  /**
+   * Resolves once every update admitted so far has been applied, or after
+   * `SLOT_SETTLE_TIMEOUT_MS`. A slot the SDK never claims belongs to an update it dropped for
+   * failing validation, and nothing else will ever report it; without the bound, a vendor
+   * terminal would wait forever and every later prompt would wait behind that vendor turn.
+   */
   settled(): Promise<void> {
-    return this.open.at(-1)?.promise ?? Promise.resolve();
+    const last = this.open.at(-1);
+    if (!last) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        resolve();
+      };
+      const timer = setTimeout(finish, SLOT_SETTLE_TIMEOUT_MS);
+      void last.promise.then(() => {
+        clearTimeout(timer);
+        finish();
+        return undefined;
+      });
+    });
   }
 
   /** Nothing will be dispatched again: release every waiter. */

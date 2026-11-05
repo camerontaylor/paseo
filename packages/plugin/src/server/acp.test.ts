@@ -2355,4 +2355,124 @@ describe("ACP transformer turn lifecycle", () => {
       await connection.close();
     }
   });
+
+  it("releases a vendor terminal whose last update the SDK dropped and admits the next prompt", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-13", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-13" &&
+          event.state === "started",
+      );
+
+      // The SDK drops this before it reaches the client: toolCallId must be a string.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: 7,
+          title: "Dropped row",
+          status: "completed",
+        },
+      });
+      agent().notify("vendor/turn", { turnId: "peer-13", state: "completed" });
+
+      // The prompt is admitted behind the open vendor turn, which is behind the dropped slot.
+      await connection.send(promptInput("after-drop"));
+
+      const terminal = await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-13" &&
+          event.state === "completed",
+      );
+      const admission = await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "after-drop",
+      );
+      expect(events.indexOf(terminal)).toBeLessThan(events.indexOf(admission));
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:after-drop" &&
+          event.state === "completed",
+      );
+      expect(countRequests(agent(), "session/prompt")).toBe(1);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("bounds a dropped update that a later valid one cannot be told apart from", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-14", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-14" &&
+          event.state === "started",
+      );
+
+      // Same ids and status as the update below, but `title` must be a string, so the SDK drops
+      // this one and its slot is never claimed by a delivery.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "row-14",
+          title: 42,
+          status: "completed",
+        },
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "row-14",
+          title: "Row 14",
+          status: "completed",
+        },
+      });
+      agent().notify("vendor/turn", { turnId: "peer-14", state: "completed" });
+      await connection.send(promptInput("after-pair"));
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-14" &&
+          event.state === "completed",
+      );
+      const item = events.findIndex(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "row-14",
+      );
+      const terminal = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-14" &&
+          event.state === "completed",
+      );
+      expect(item).toBeGreaterThan(-1);
+      expect(item).toBeLessThan(terminal);
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:after-pair" &&
+          event.state === "completed",
+      );
+    } finally {
+      await connection.close();
+    }
+  });
 });
