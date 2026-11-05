@@ -126,71 +126,127 @@ async function waitForEvent(
   return events.find(predicate)!;
 }
 
+type TerminalState = "completed" | "failed" | "canceled";
+
+// Runs one peer turn through the real ACP connection: the transformer sees the lifecycle, and the
+// shim publishes the turn events around the timeline items the peer's chunks produced.
+async function runPeerTurn(terminal: {
+  state: TerminalState;
+  error?: { message: string };
+}): Promise<{ sequence: string[]; ended: ProviderEvent }> {
+  const scripted = scriptedConnector();
+  const registration = runAcpProvider({
+    id: "jcode",
+    label: "Jcode",
+    connector: scripted.connector,
+    transformers: [jcodePeerTurns],
+  });
+  const connection = await registration.connect({
+    versions: [1],
+    capabilities: ["prompt.message"],
+  });
+  const events: ProviderEvent[] = [];
+  connection.onEvent((event) => events.push(event));
+  try {
+    await connection.send(openInput());
+    await waitForEvent(events, (event) => event.type === "session.ready");
+    // The catalog probe opens the first connection; the session lives on the last one.
+    const agent = scripted.agents.at(-1);
+    if (!agent) throw new Error("ACP connector did not start");
+
+    agent.notify("_jcode/turn", peerTurn({ state: "started" }).params);
+    agent.notify("session/update", {
+      sessionId: "jcode-native-session",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "started in the TUI" },
+      },
+    });
+    agent.notify("session/update", {
+      sessionId: "jcode-native-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "peer output" },
+        messageId: "m-peer",
+      },
+    });
+    const terminalParams = peerTurn(terminal).params;
+    agent.notify("_jcode/turn", terminalParams);
+
+    const ended = await waitForEvent(
+      events,
+      (event) =>
+        event.type === "session.turn" &&
+        event.turnId === "acp-vendor:peer-1" &&
+        event.state === terminal.state,
+    );
+    const sequence = events.flatMap((event) => {
+      if (event.type === "session.turn" && event.turnId === "acp-vendor:peer-1") {
+        return [`turn:${event.state}`];
+      }
+      if (event.type !== "timeline.item") return [];
+      if (event.item.type === "user_message") return [`user:${event.item.text}`];
+      if (event.item.type === "assistant_message") return [`item:${event.item.text}`];
+      return [];
+    });
+    return { sequence, ended };
+  } finally {
+    await connection.close();
+  }
+}
+
 describe("jcodePeerTurns through an ACP connection", () => {
-  it("turns a peer lifecycle into session.turn events around the peer's timeline items", async () => {
-    const scripted = scriptedConnector();
-    const registration = runAcpProvider({
-      id: "jcode",
-      label: "Jcode",
-      connector: scripted.connector,
-      transformers: [jcodePeerTurns],
+  it("completes a peer turn after its timeline items", async () => {
+    const { sequence, ended } = await runPeerTurn({ state: "completed" });
+
+    expect(sequence).toEqual([
+      "turn:started",
+      "user:started in the TUI",
+      "item:peer output",
+      "turn:completed",
+    ]);
+    expect(ended).toMatchObject({
+      type: "session.turn",
+      turnId: "acp-vendor:peer-1",
+      state: "completed",
     });
-    const connection = await registration.connect({
-      versions: [1],
-      capabilities: ["prompt.message"],
+    expect(ended).not.toHaveProperty("error");
+  });
+
+  it("fails a peer turn with the agent's error", async () => {
+    const { sequence, ended } = await runPeerTurn({
+      state: "failed",
+      error: { message: "tool crashed" },
     });
-    const events: ProviderEvent[] = [];
-    connection.onEvent((event) => events.push(event));
-    try {
-      await connection.send(openInput());
-      await waitForEvent(events, (event) => event.type === "session.ready");
-      // The catalog probe opens the first connection; the session lives on the last one.
-      const agent = scripted.agents.at(-1);
-      if (!agent) throw new Error("ACP connector did not start");
 
-      agent.notify("_jcode/turn", peerTurn({ state: "started" }).params);
-      agent.notify("session/update", {
-        sessionId: "jcode-native-session",
-        update: {
-          sessionUpdate: "user_message_chunk",
-          content: { type: "text", text: "started in the TUI" },
-        },
-      });
-      agent.notify("session/update", {
-        sessionId: "jcode-native-session",
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "peer output" },
-          messageId: "m-peer",
-        },
-      });
-      agent.notify("_jcode/turn", peerTurn({ state: "completed" }).params);
+    expect(sequence).toEqual([
+      "turn:started",
+      "user:started in the TUI",
+      "item:peer output",
+      "turn:failed",
+    ]);
+    expect(ended).toMatchObject({
+      type: "session.turn",
+      turnId: "acp-vendor:peer-1",
+      state: "failed",
+      error: { message: "tool crashed" },
+    });
+  });
 
-      await waitForEvent(
-        events,
-        (event) =>
-          event.type === "session.turn" &&
-          event.turnId === "acp-vendor:peer-1" &&
-          event.state === "completed",
-      );
+  it("cancels a peer turn", async () => {
+    const { sequence, ended } = await runPeerTurn({ state: "canceled" });
 
-      const sequence = events.flatMap((event) => {
-        if (event.type === "session.turn" && event.turnId === "acp-vendor:peer-1") {
-          return [`turn:${event.state}`];
-        }
-        if (event.type !== "timeline.item") return [];
-        if (event.item.type === "user_message") return [`user:${event.item.text}`];
-        if (event.item.type === "assistant_message") return [`item:${event.item.text}`];
-        return [];
-      });
-      expect(sequence).toEqual([
-        "turn:started",
-        "user:started in the TUI",
-        "item:peer output",
-        "turn:completed",
-      ]);
-    } finally {
-      await connection.close();
-    }
+    expect(sequence).toEqual([
+      "turn:started",
+      "user:started in the TUI",
+      "item:peer output",
+      "turn:canceled",
+    ]);
+    expect(ended).toMatchObject({
+      type: "session.turn",
+      turnId: "acp-vendor:peer-1",
+      state: "canceled",
+    });
+    expect(ended).not.toHaveProperty("error");
   });
 });
