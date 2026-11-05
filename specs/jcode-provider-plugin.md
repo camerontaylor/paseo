@@ -168,3 +168,46 @@ core hook:
 2. Should Paseo indicate where a background run came from (for example "from
    jcode TUI")? `_jcode/turn.origin` carries it; see the core spec's open
    question 1.
+
+## Deviations
+
+Recorded while implementing this spec on `ct/jcode-provider-plugin`, on top of
+`ct/acp-turn-lifecycle-hook`.
+
+### 1. Built-in registration
+
+The layout section names the directory but not how it loads. A directory under
+`plugins/` is inert unless its id is in `builtinPlugins`
+(`packages/server/src/server/plugins/builtin/index.ts`, per `docs/plugins.md:97`), so
+`jcode-provider` is added to that list. The provider is then registered on every fork
+install, the way `muse` is, and reports availability from its `status()` probe. The
+registration omits `requiresConfiguration` as written in this spec's `index.server.ts`
+sample: the config entry exists to carry `command` and `env`, not to opt the provider in.
+
+### 2. Models stay curated, so there is no `discover` transformer
+
+The config `models` list still replaces the ACP catalog for a plugin provider:
+`packages/server/src/server/agent/provider-registry.ts:749` takes `override.models` with
+`profileModelsAreAdditive: false`, and `mergeModels` (`:380`) then skips the discovered
+models. The allow-list transformer offered as the alternative is unnecessary. Deleting
+`models` from the entry falls back to jcode's `configOptions` catalog.
+
+### 3. The payload `sessionId` is validated but not used
+
+`AcpContext` carries the boundary session id (`acp-internal/connection.ts:1155`), not
+jcode's native id, so there is nothing to compare the payload field against. The schema
+still requires `sessionId`, because a payload missing it should not be trusted as a turn.
+One connection serves one boundary session, which is the fallback this spec allows.
+
+### 4. Requirement range
+
+`paseo-plugin.json` declares `>=0.15.0`. The hook ships in 0.15.0, and the compatibility
+check compares the stable core of a prerelease daemon version, so `0.15.0-beta.1`
+satisfies it (`packages/protocol/src/plugin-requirements.ts:33`).
+
+### 5. The second Tests bullet is pending
+
+The scripted-daemon smoke test with a second raw client needs a jcode build with shared
+sessions, which is being implemented in parallel. `server/peer-turns.test.ts` instead
+covers the transformer and its wire order through `runAcpProvider`'s ACP connection. The
+acceptance criteria are untested for the same reason.
