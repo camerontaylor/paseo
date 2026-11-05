@@ -4,6 +4,19 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 `fork/plans/ralplan-fork-release-channel.md` for the plan of record.
 
+## 0.15.1 base decision — 2026-11-05
+
+Advance `custom` from `v0.15.0-beta.1` to upstream stable `v0.15.1`
+(`c4dc36272`), a direct descendant of the previous base. Nine commits, no
+conflicts. Interrupted-agent recovery becomes opt-in (#8619): `bootstrap.ts`
+and `config.ts` flip the `resumeOnStartup` default beside the fork's
+system-prompt policy fields, and no fork code relies on the old default.
+Native chats keep reconnect and update status visible (#8568), and the daemon
+starts when the terminal worker cannot (#8810).
+
+`npm ci`, `build:server`, typecheck, lint and the seven authorization tests
+pass on atlas.
+
 ## 0.15.0-beta.1 base decision — 2026-11-03
 
 Advance `custom` from `v0.14.0` to upstream `v0.15.0-beta.1` (`8bd38fb23`),
