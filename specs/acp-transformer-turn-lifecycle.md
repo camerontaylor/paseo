@@ -191,34 +191,59 @@ against the base (`origin/custom` @ `0ed8cdfa5`): `plugin-provider.ts:1530`, `:1
 ### 1. The vendor operation joins the lane after its slots resolve
 
 "Add an operation to the notification lane that first awaits every slot that existed when the
-vendor message arrived" deadlocks. The SDK's receive loop awaits `Client.sessionUpdate`, and that
-promise resolves only once the operation queued on `notificationLane` runs. An operation that
-awaits a slot therefore holds the lane while the update that would resolve the slot is queued
-behind it. Implemented instead: the barrier resolves first, then the vendor operation joins the
-lane (`vendorNotification`). Order is unchanged, because every update admitted before the vendor
-message is applied before the barrier resolves, and updates that arrive later join the lane after
-the operation. A transport close resolves outstanding slots so nothing leaks.
+vendor message arrived" deadlocks. The SDK dispatches each notification without awaiting the
+previous one, and the operation queued on `notificationLane` is what the SDK's promise settles on,
+so an operation that awaits a slot holds the lane while the update that would resolve the slot is
+queued behind it. Implemented instead: the barrier resolves first, then the vendor operation joins
+the lane (`vendorNotification`). Order is unchanged, because every update admitted before the
+vendor message is applied before the barrier resolves, and updates that arrive later join the lane
+after the operation.
 
-### 2. A skipped update
+### 2. The SDK in use, and what it guarantees
 
-Verified in the installed `@agentclientprotocol/sdk@0.17.1`: `Connection.#receive` awaits
-`#processMessage` for every message, and `#processMessage` awaits the notification handler, so
-`Client.sessionUpdate` is called once per inbound `session/update`, in arrival order, before the
-next message is read. The one path that skips it is validation: `zSessionNotification.parse`
-throws inside the handler, so the client is never called and the slot would stay open. Slots are
-therefore resolved by delivery position (`UpdateSlots.settleDelivered`): the n-th delivery resolves
-every slot up to index n-1, so a skipped update is caught up by the next one. Slots are also
-flushed when a prompt settles (`drainNotifications`) and when the transport closes, which covers a
-skip with no later delivery.
+The plugin resolves `@agentclientprotocol/sdk@1.4.0` from `packages/plugin/node_modules`, not the
+0.17.1 copy at the workspace root that the spec was written against. In 1.4.0 a notification is
+dispatched fire-and-forget: `Connection.receiveMessage` starts `processIncomingMessage` for each
+message and does not await it, so notifications read in order interleave at their handler awaits.
+Two consequences:
 
-### 3. Test 2 shape
+- A vendor update cannot be ordered by handing it to the SDK as an extension notification.
+  Measured: an extension notification and the `session/update` that preceded it on the wire
+  dispatch through different handler depths, and the update is applied first. The slot barrier is
+  the mechanism that works.
+- `sessionUpdate` is still invoked in arrival order, because consecutive updates run through the
+  same handler chain, so a slot per update is well defined.
+
+### 3. A skipped update
+
+`session_update` params are validated before `Client.sessionUpdate` is called, so a notification
+that fails validation never reaches the client and its slot would stay open. Slots are therefore
+paired with deliveries rather than counted: each slot records the raw params it admitted, and a
+delivery resolves every slot up to and including the one whose payload contains the validated
+notification (`containsUpdate`). Zod strips unknown keys and fills defaults, so containment
+(validated values are a subset of the raw payload) identifies the delivered slot and treats the
+slots before it as dropped. A delivery that matches no slot resolves the oldest one so the queue
+keeps moving.
+
+Residual: a schema-invalid update that is the last message before a vendor notification stalls
+that one vendor batch until the transport closes, because nothing else ever reports that slot. It
+cannot stall the notification lane, the prompt lane, or later updates.
+
+### 4. No flush at prompt settle
+
+An earlier revision flushed every open slot in `drainNotifications`. That can release a vendor
+update ahead of an update that was admitted but not yet dispatched, which is the ordering this
+change exists to guarantee, so the flush is gone. The full flush now happens only when the
+transport closes. The residual above is the price; it is a stalled vendor batch, not a stalled
+session.
+
+### 5. Test 2 shape
 
 The literal scenario — three `agent_message_chunk`s and the terminal in one write — does not fail
 without change B on this SDK. Measured with the vendor updates applied synchronously: `transform
 c1, transform c2, apply c1, transform c3, apply c2, apply c3, transform terminal`. The transform
-stream delivers one update at a time, and the SDK applies each one before pulling the next message,
-so the terminal cannot overtake a queued chunk. The race needs the update to be enqueued while the
-SDK is already waiting in `read()`, which is the state at the start of a write (test 1 fails
-without change B for exactly that reason). Test 2 therefore applies the first two updates, waits
-for them, then writes the third update together with the terminal in one write. That fails without
-change B and passes with it.
+stream delivers one update at a time, so the terminal cannot overtake a queued chunk; the race
+needs the update to be enqueued while the SDK is already waiting in `read()`, which is the state at
+the start of a write. Test 2 therefore applies the first two updates, waits for them, then writes
+the third update together with the terminal in one write. That fails without change B and passes
+with it.

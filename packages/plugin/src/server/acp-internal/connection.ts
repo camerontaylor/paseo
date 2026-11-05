@@ -472,7 +472,7 @@ class AcpRuntime {
           try {
             this.sessionUpdate(notification);
           } finally {
-            this.updateSlots.settleDelivered();
+            this.updateSlots.settleDelivered(notification);
           }
         }),
     };
@@ -608,9 +608,12 @@ class AcpRuntime {
     }
     // A vendor turn belongs to another client attached to the same agent session; the agent
     // queues this prompt behind it anyway. Waiting keeps the user's message after the peer
-    // output and stops peer chunks from being attributed to the foreground turn.
-    const vendor = this.vendorTurn;
-    if (vendor) await vendor.settled;
+    // output and stops peer chunks from being attributed to the foreground turn. A new vendor
+    // turn can open while the previous one closes, so wait for the chain to drain.
+    while (this.vendorTurn) {
+      const open = this.vendorTurn;
+      await open.settled;
+    }
     const prompt = toAcpPrompt(input.prompt);
     const turnId = `acp:${input.prompt.clientMessageId}`;
     this.fallbackChunkIds.clear();
@@ -687,9 +690,6 @@ class AcpRuntime {
 
   async drainNotifications(): Promise<void> {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    // The turn is over here, so nothing will dispatch a slot the SDK rejected before it
-    // reached the client. Release the vendor updates waiting behind it.
-    this.updateSlots.flush();
     await this.notificationLane;
   }
 
@@ -1340,7 +1340,9 @@ function routeVendorNotifications(
             }
             // Reserve the update's place before it can reach the client, so a vendor notification
             // that follows it on the wire can wait for it to be applied.
-            if (message.method === CLIENT_METHODS.session_update) updateSlots.admit();
+            if (message.method === CLIENT_METHODS.session_update) {
+              updateSlots.admit(message.params);
+            }
           }
           controller.enqueue(message);
         },
@@ -1351,28 +1353,31 @@ function routeVendorNotifications(
 
 /**
  * One slot per inbound session/update, in wire order. The SDK dispatches notifications in
- * arrival order and awaits each handler, but it can read an update from the stream before
- * dispatching the one before it, so a vendor notification that follows an update on the wire
- * must wait for that update's slot.
+ * arrival order, but it can read an update from the stream before dispatching the one before it,
+ * so a vendor notification that follows an update on the wire must wait for that update's slot.
+ *
+ * The SDK validates a notification before it reaches the client and drops it when validation
+ * fails, so a delivery is paired with its slot by containment rather than by delivery count: the
+ * validated notification is built from the raw params by stripping unknown keys and filling
+ * defaults, so every value it carries is already present in the payload the slot recorded.
  */
 class UpdateSlots {
-  private readonly open: Array<{ index: number; promise: Promise<void>; resolve(): void }> = [];
-  private nextIndex = 0;
-  private deliveries = 0;
+  private readonly open: Array<{ promise: Promise<void>; raw: unknown; resolve(): void }> = [];
 
-  admit(): void {
+  admit(raw: unknown): void {
     let resolve!: () => void;
     const promise = new Promise<void>((next) => {
       resolve = next;
     });
-    this.open.push({ index: this.nextIndex, promise, resolve });
-    this.nextIndex += 1;
+    this.open.push({ promise, raw, resolve });
   }
 
   /** Called after the delivered update has been applied. */
-  settleDelivered(): void {
-    this.deliveries += 1;
-    this.settleThrough(this.deliveries - 1);
+  settleDelivered(notification: SessionNotification): void {
+    const delivered = this.open.findIndex((slot) => containsUpdate(slot.raw, notification));
+    // Resolve the delivered slot and every slot before it: those were dropped by validation, so
+    // they will never be delivered and cannot hold the vendor lane.
+    this.settleThrough(delivered === -1 ? 0 : delivered);
   }
 
   /** Resolves once every update admitted so far has been applied. */
@@ -1385,15 +1390,31 @@ class UpdateSlots {
     while (this.open.length > 0) this.open.shift()!.resolve();
   }
 
-  /**
-   * The SDK validates a notification before it reaches the client and drops it when
-   * validation fails, so its slot would never resolve. Resolving through the delivery
-   * position lets the next delivery catch the queue up, so one lost update cannot stall
-   * the vendor lane.
-   */
   private settleThrough(index: number): void {
-    while (this.open.length > 0 && this.open[0]!.index <= index) this.open.shift()!.resolve();
+    for (let settled = 0; settled <= index; settled += 1) this.open.shift()?.resolve();
   }
+}
+
+/**
+ * True when `validated` can be the SDK's parsed form of `raw`: zod strips keys it does not know
+ * and fills defaults, so every value the validated object carries must already be in the raw
+ * payload. A missing key is accepted only for a value zod could have filled in (`undefined`, or
+ * an empty array for the collection defaults).
+ */
+function containsUpdate(raw: unknown, validated: unknown): boolean {
+  if (validated === undefined) return true;
+  if (Array.isArray(validated)) {
+    if (!Array.isArray(raw)) return validated.length === 0;
+    return validated.every((value, index) => containsUpdate(raw[index], value));
+  }
+  if (validated !== null && typeof validated === "object") {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const source = raw as Record<string, unknown>;
+    return Object.entries(validated).every(([key, value]) =>
+      key in source ? containsUpdate(source[key], value) : value === undefined,
+    );
+  }
+  return Object.is(raw, validated);
 }
 
 function selectPermissionOption(
