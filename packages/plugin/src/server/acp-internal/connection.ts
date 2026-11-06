@@ -397,6 +397,8 @@ class AcpRuntime {
   private notificationLane: Promise<void> = Promise.resolve();
   private promptLane: Promise<void> = Promise.resolve();
   private activePrompt: { turnId: string; settled: Promise<void> } | null = null;
+  /** A prompt admitted but not sent yet, waiting for an open vendor turn to end. */
+  private parkedAdmission: { cancel(): void } | null = null;
   /**
    * The vendor turn a transformer reported and Paseo did not prompt. Only one can be
    * open: the agent runs one turn at a time, so a new start means the old turn is over.
@@ -616,9 +618,35 @@ class AcpRuntime {
     // queues this prompt behind it anyway. Waiting keeps the user's message after the peer
     // output and stops peer chunks from being attributed to the foreground turn. A new vendor
     // turn can open while the previous one closes, so wait for the chain to drain.
-    while (this.vendorTurn) {
-      const open = this.vendorTurn;
-      await open.settled;
+    let cancelled = false;
+    let wakeParked!: () => void;
+    const parked = new Promise<void>((resolve) => {
+      wakeParked = resolve;
+    });
+    this.parkedAdmission = {
+      cancel: () => {
+        cancelled = true;
+        wakeParked();
+      },
+    };
+    try {
+      while (this.vendorTurn) {
+        const open = this.vendorTurn;
+        await Promise.race([open.settled, parked]);
+        if (cancelled) break;
+      }
+    } finally {
+      this.parkedAdmission = null;
+    }
+    if (cancelled) {
+      // Stop arrived before this prompt was sent: report the admission as failed and drop it.
+      this.emit({
+        type: "session.prompt_result",
+        sessionId: this.options.boundarySessionId,
+        clientMessageId: input.prompt.clientMessageId,
+        result: { type: "failed", error: { message: "Canceled before the prompt was sent" } },
+      });
+      return;
     }
     const prompt = toAcpPrompt(input.prompt);
     const turnId = `acp:${input.prompt.clientMessageId}`;
@@ -687,6 +715,9 @@ class AcpRuntime {
   }
 
   interrupt(): Promise<void> {
+    // A prompt parked behind a vendor turn has not reached the agent, so a session-wide cancel
+    // would not stop it: drop the admission here instead.
+    this.parkedAdmission?.cancel();
     return this.call(this.connection.cancel({ sessionId: this.nativeSessionId }));
   }
 

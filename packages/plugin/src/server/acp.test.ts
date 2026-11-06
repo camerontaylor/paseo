@@ -2662,4 +2662,53 @@ describe("ACP transformer turn lifecycle", () => {
       await connection.close();
     }
   });
+
+  it("cancels a prompt parked behind a vendor turn when the user stops", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-17", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-17" &&
+          event.state === "started",
+      );
+
+      await connection.send(promptInput("stopped"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-1",
+        sessionId: "session-1",
+      });
+      const result = await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "stopped",
+      );
+      expect(result.type === "session.prompt_result" ? result.result : null).toEqual({
+        type: "failed",
+        error: { message: "Canceled before the prompt was sent" },
+      });
+
+      // Even after the peer turn ends, the stopped prompt is never sent.
+      agent().notify("vendor/turn", { turnId: "peer-17", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-17" &&
+          event.state === "completed",
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+      expect(
+        events.filter((event) => event.type === "session.turn" && event.turnId === "acp:stopped"),
+      ).toEqual([]);
+    } finally {
+      await connection.close();
+    }
+  });
 });
