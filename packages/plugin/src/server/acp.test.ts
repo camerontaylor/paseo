@@ -2967,4 +2967,28 @@ describe("ACP transformer turn lifecycle", () => {
       }
     },
   );
+
+  it("ends an open vendor turn as canceled when the session is closed", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    agent().notify("vendor/turn", { turnId: "peer-20", state: "started" });
+    await waitForEvent(
+      events,
+      (event) =>
+        event.type === "session.turn" &&
+        event.turnId === "acp-vendor:peer-20" &&
+        event.state === "started",
+    );
+    await connection.close();
+    const terminal = events.find(
+      (event) =>
+        event.type === "session.turn" &&
+        event.turnId === "acp-vendor:peer-20" &&
+        event.state !== "started",
+    );
+    // The peer turn keeps running on the agent's side: Paseo stopped watching, it did not fail.
+    expect(terminal).toMatchObject({
+      state: "canceled",
+      error: { message: "Session closed by Paseo" },
+    });
+  });
 });

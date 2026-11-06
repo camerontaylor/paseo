@@ -139,6 +139,9 @@ export async function createAcpProviderConnection(
     },
     async close() {
       if (closePromise) return closePromise;
+      // The boundary stops delivering events once it closes, so report the turn this close ends
+      // while listeners still receive them.
+      for (const session of sessions.values()) session.runtime.closeVendorTurn();
       closed = true;
       closePromise = (async () => {
         await Promise.all(inFlight);
@@ -827,6 +830,11 @@ class AcpRuntime {
     this.emitConfigSnapshot(committedConfig);
   }
 
+  /** Ends an open vendor turn before the boundary connection stops delivering events. */
+  closeVendorTurn(): void {
+    this.endVendorTurn("canceled", { message: "Session closed by Paseo" });
+  }
+
   async closeSession(): Promise<void> {
     if (this.nativeSessionId) {
       await withTimeout(
@@ -1369,7 +1377,12 @@ class AcpRuntime {
   }
 
   private settlePendingWork(): void {
-    this.endVendorTurn("failed", { message: "ACP transport closed" });
+    // A user-initiated close leaves the peer turn running on the agent's side, so it was
+    // canceled rather than failed; only a broken transport fails it.
+    this.endVendorTurn(
+      this.closing ? "canceled" : "failed",
+      this.closing ? { message: "Session closed by Paseo" } : { message: "ACP transport closed" },
+    );
     this.updateSlots.flush();
     for (const permission of this.permissions.values()) {
       permission.resolve({ outcome: { outcome: "cancelled" } });
