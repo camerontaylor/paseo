@@ -2183,13 +2183,14 @@ export class Session {
     );
   }
 
-  private handleAgentRemovedEvent(event: Extract<AgentManagerEvent, { type: "agent_removed" }>): void {
+  private handleAgentRemovedEvent(
+    event: Extract<AgentManagerEvent, { type: "agent_removed" }>,
+  ): void {
     if (event.internal) return;
     void this.agentUpdates
       .removeAgent(event.agentId)
       .then(() => {
-        if (event.workspaceId)
-          return this.emitWorkspaceUpdateForWorkspaceId(event.workspaceId);
+        if (event.workspaceId) return this.emitWorkspaceUpdateForWorkspaceId(event.workspaceId);
         return undefined;
       })
       .catch((error) => {

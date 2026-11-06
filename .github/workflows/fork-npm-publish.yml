@@ -20,9 +20,8 @@
 # Provenance attestations come for free on the same path.
 #
 # Two constraints dictate the shape of this file:
-#   - Trusted publishing works only on GitHub-hosted runners, so this cannot
-#     run on makemake like fork-ci.yml does. If the account's Actions billing
-#     lock (fork/ci.md) is back, publishes stop until it clears.
+#   - Trusted publishing works only on GitHub-hosted runners. An Actions
+#     billing lock on the account (fork/ci.md) stops publishes until it clears.
 #   - A package must already exist on npm before a trusted publisher can be
 #     attached to it (npm/cli#8544, still open). The first release of each of
 #     the 7 packages therefore goes out with a token: see the bootstrap
