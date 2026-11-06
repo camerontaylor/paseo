@@ -9,7 +9,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { ProviderConnection, ProviderEvent, ProviderInput } from "./provider.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runAcpProvider, type AcpStreamMessage } from "./acp.js";
+import { runAcpProvider, type AcpOptions, type AcpStreamMessage } from "./acp.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -1777,12 +1777,14 @@ describe("ACP transformer turn lifecycle", () => {
   async function connectVendorTurns(options?: {
     harness?: ConnectorHarnessOptions;
     transformers?: readonly AcpTransformer[];
+    acpOptions?: AcpOptions;
   }) {
     const harness = connectorHarness(options?.harness);
     const registration = runAcpProvider({
       id: "vendor-turn-acp",
       label: "Vendor turn ACP",
       connector: harness.connector,
+      ...(options?.acpOptions === undefined ? {} : { acpOptions: options.acpOptions }),
       transformers: [vendorTurnTransformer, ...(options?.transformers ?? [])],
     });
     const connection = await registration.connect({
@@ -2807,7 +2809,9 @@ describe("ACP transformer turn lifecycle", () => {
   });
 
   it("ends a cancelled vendor turn locally when the agent reports no terminal", async () => {
-    const { connection, events, agent } = await connectVendorTurns();
+    const { connection, events, agent } = await connectVendorTurns({
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+    });
     try {
       agent().notify("vendor/turn", { turnId: "peer-18", state: "started" });
       await waitForEvent(
@@ -2849,7 +2853,9 @@ describe("ACP transformer turn lifecycle", () => {
   });
 
   it("keeps the agent's own terminal when it arrives before the cancel grace period", async () => {
-    const { connection, events, agent } = await connectVendorTurns();
+    const { connection, events, agent } = await connectVendorTurns({
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+    });
     try {
       agent().notify("vendor/turn", { turnId: "peer-19", state: "started" });
       await waitForEvent(
@@ -3040,6 +3046,48 @@ describe("ACP transformer turn lifecycle", () => {
       ).toEqual(["One", "Two", "Three"]);
       // The requested limit was reached on the second page, so the third is never fetched.
       expect(cursors).toEqual([undefined, "page-2"]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("does not end a cancelled vendor turn locally unless the provider reports peer turns", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-21", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-21" &&
+          event.state === "started",
+      );
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-4",
+        sessionId: "session-1",
+      });
+
+      // Past the grace period the turn is still open: for this agent a cancel may not stop the
+      // peer turn, so Paseo must not pretend it did.
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp-vendor:peer-21" &&
+            event.state !== "started",
+        ),
+      ).toEqual([]);
+
+      agent().notify("vendor/turn", { turnId: "peer-21", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-21" &&
+          event.state === "completed",
+      );
     } finally {
       await connection.close();
     }

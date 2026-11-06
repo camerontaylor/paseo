@@ -730,7 +730,11 @@ class AcpRuntime {
     // would not stop it: drop the admission here instead.
     this.parkedAdmission?.cancel();
     const cancelled = this.vendorTurn;
-    if (cancelled && !this.activePrompt) this.scheduleVendorTurnCancel(cancelled.turnId);
+    // Only an agent that reports peer turns as vendor turns is known to stop the peer turn when
+    // it is cancelled; for any other agent the turn may keep running, so do not end it locally.
+    if (cancelled && !this.activePrompt && this.vendorTurnsAreNeverForeground) {
+      this.scheduleVendorTurnCancel(cancelled.turnId);
+    }
     return this.call(this.connection.cancel({ sessionId: this.nativeSessionId }));
   }
 
