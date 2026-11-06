@@ -540,6 +540,9 @@ class AcpRuntime {
       } finally {
         this.replayWindow = null;
       }
+      // Replayed chunks leave their fallback ids behind; the live stream that follows starts
+      // its own items even when the agent replays without message ids.
+      this.fallbackChunkIds.clear();
     } else {
       const newSession = await this.call(
         this.connection.newSession({
@@ -1214,6 +1217,9 @@ class AcpRuntime {
   private reduceVendorTurn(update: Extract<AcpVendorUpdate, { type: "turn" }>): void {
     const turnId = `acp-vendor:${update.turnId}`;
     if (update.state === "started") {
+      // A turn boundary ends the previous turn's open chunk, and a peer turn without user
+      // content would otherwise append its first chunk to the last replayed message.
+      this.fallbackChunkIds.clear();
       // The agent should not report Paseo's own prompt as a vendor turn.
       if (this.activePrompt) {
         console.debug(`Ignoring vendor turn ${turnId}: a foreground prompt is active`);

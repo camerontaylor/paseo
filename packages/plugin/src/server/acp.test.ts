@@ -1539,7 +1539,11 @@ function userChunk(text: string, messageId?: string): SessionUpdate {
 async function openReplaySession(
   replay: SessionUpdate[],
   history: "replay" | "skip",
-): Promise<{ connection: ProviderConnection; events: ProviderEvent[] }> {
+): Promise<{
+  connection: ProviderConnection;
+  events: ProviderEvent[];
+  harness: ReturnType<typeof connectorHarness>;
+}> {
   const harness = connectorHarness({
     capabilities: { loadSession: true },
     handleRequest(instance, request) {
@@ -1571,7 +1575,7 @@ async function openReplaySession(
   input.history = history;
   await connection.send(input);
   await waitForEvent(events, (event) => event.type === "session.ready");
-  return { connection, events };
+  return { connection, events, harness };
 }
 
 function timelineProjection(events: ProviderEvent[]): Array<Record<string, string>> {
@@ -2471,6 +2475,79 @@ describe("ACP transformer turn lifecycle", () => {
           event.turnId === "acp:after-pair" &&
           event.state === "completed",
       );
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("starts a new chunk item after session/load instead of continuing the replay", async () => {
+    const { connection, events, harness } = await openReplaySession(
+      [textChunk("replayed")],
+      "replay",
+    );
+    try {
+      const live = harness.instances.at(-1);
+      if (!live) throw new Error("ACP connector did not start");
+      live.notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("live"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "live",
+      );
+      const chunks = timelineProjection(events).filter((item) => item.type === "assistant_message");
+      expect(chunks).toEqual([
+        { type: "assistant_message", id: "agent_message_chunk:1", text: "replayed" },
+        { type: "assistant_message", id: "agent_message_chunk:2", text: "live" },
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("clears the fallback chunk ids when a vendor turn starts", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("replayed"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "replayed",
+      );
+      agent().notify("vendor/turn", { turnId: "peer-15", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-15" &&
+          event.state === "started",
+      );
+      // A peer turn without user content: its first chunk must not continue the previous item.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("peer output"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "peer output",
+      );
+      const chunks = timelineProjection(events).filter((item) => item.type === "assistant_message");
+      expect(chunks).toEqual([
+        { type: "assistant_message", id: "agent_message_chunk:1", text: "replayed" },
+        { type: "assistant_message", id: "agent_message_chunk:2", text: "peer output" },
+      ]);
     } finally {
       await connection.close();
     }
