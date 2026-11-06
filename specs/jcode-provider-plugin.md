@@ -211,9 +211,9 @@ compatibility check compares the stable core of a prerelease daemon version, so
 
 The scripted-daemon smoke test with a second raw client needs a jcode build with shared
 sessions, so it is not in CI. `server/peer-turns.test.ts` covers the transformer and its
-wire order through `runAcpProvider`'s ACP connection. The acceptance criteria were checked
-by hand against a jcode build from camerontaylor/jcode#1; the run is recorded in the QA
-section of camerontaylor/paseo#7.
+wire order through `runAcpProvider`'s ACP connection. All 7 acceptance criteria passed on
+2026-11-05 against an isolated jcode daemon built from `ct/acp-shared-sessions` and Paseo
+`0.15.0-beta.1`; the run is recorded in the QA section of camerontaylor/paseo#7.
 
 ### 6. Existing agents do not carry over
 

@@ -99,5 +99,6 @@ npx vitest run plugins/jcode-provider/server/peer-turns.test.ts
 
 The end-to-end criteria in `specs/jcode-provider-plugin.md` need a jcode build with shared sessions
 (`docs/ACP_SHARED_SESSIONS.md` in the jcode repo), a jcode TUI and a Paseo daemon from this
-branch, so they are checked by hand rather than in CI. The QA section of camerontaylor/paseo#7
-records the manual run.
+branch, so they are checked by hand rather than in CI. All 7 passed on 2026-11-05 against an
+isolated jcode daemon built from `ct/acp-shared-sessions` and Paseo `0.15.0-beta.1`; the run is
+recorded in the QA section of camerontaylor/paseo#7.
