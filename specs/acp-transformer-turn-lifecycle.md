@@ -287,15 +287,21 @@ misreported prompts and a session that never attaches mid-turn.
   active opens the vendor turn instead of being dropped, and a live `user_message_chunk` while a
   vendor turn is open is shown instead of being treated as the prompt's echo. A provider that only
   reports peer turns as vendor turns sets it; the default keeps the rule above.
-- **Stop cancels a parked admission.** A prompt waiting behind an open vendor turn has not reached
-  the agent, so a session-wide cancel cannot stop it. `interrupt()` now cancels that admission: the
-  prompt result is reported as failed with `Canceled before the prompt was sent`, and the prompt is
-  never sent. The spec's "`interrupt()` is unchanged" holds only when no admission is parked.
-- **A cancelled vendor turn ends locally after a grace period.** The spec's Open question 2 decided
-  against a cap. A cancel with no foreground prompt now ends the turn as `canceled` after
-  `VENDOR_TURN_CANCEL_GRACE_MS` (1 s) if the agent reports no terminal, so a lost terminal cannot
-  block prompts forever. The agent's own terminal, if it arrives first, is kept and the timer
-  cleared.
+- **Stop cancels every admission waiting behind the vendor turn.** A prompt waiting behind an open
+  vendor turn has not reached the agent, so a session-wide cancel cannot stop it. `interrupt()`
+  bumps a stop generation, and every prompt submitted before it — the parked one and any still
+  queued in the prompt lane — is admitted and ended canceled instead of sent: the user message, a
+  `turn` prompt result, a started turn and a canceled terminal, the same shape an interrupted
+  prompt produces. A replacement interrupt, which `admitPrompt` issues for an active foreground
+  prompt, does not count as a stop. The spec's "`interrupt()` is unchanged" holds only when no
+  admission is waiting.
+- **A cancelled vendor turn ends locally after a grace period, for peer-turn providers only.** The
+  spec's Open question 2 decided against a cap. With `vendorTurnsAreNeverForeground` set, a cancel
+  with no foreground prompt ends the turn as `canceled` after `VENDOR_TURN_CANCEL_GRACE_MS` (1 s)
+  if the agent reports no terminal, so a lost terminal cannot block prompts forever. For any other
+  agent a cancel may not stop the peer turn, so ending it locally would let the next prompt start
+  during it; those agents keep waiting for the turn's own terminal. The agent's own terminal, if it
+  arrives first, is kept and the timer cleared.
 - **Held peer updates survive a `skip` load.** On attach the agent flushes the running turn's
   `started` and its held peer chunks before it answers `session/load`. Once a vendor turn is open,
   those updates are applied even in the `skip` window; replayed history that precedes the turn is
