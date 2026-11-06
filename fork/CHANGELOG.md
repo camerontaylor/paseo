@@ -4,6 +4,19 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 [the archived release-channel plan](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
 
+## 0.15.1 build-level release cycle — 2026-11-06
+
+Automatic cycle for `v0.15.1` at level `build`, run on neptune. The tag
+merge in the 0.15.1 base decision below was already on `origin/custom`
+(`0623d2ab1`), so the sync merged nothing. On that commit, `npm ci`,
+`build:server`, typecheck, lint and the seven authorization tests pass on neptune.
+Desvio builds `mine` on `v0.15.1` from the gated custom branch plus
+`upgrade/basket-0.15.0-beta.1`. The fleet manifest still names
+`basket-0.14.0`, but the beta.1 cycle had already adapted the basket to
+0.15: that branch descends from `basket-0.14.0` and adds six fixes on top.
+Neither `custom` nor `mine` is pushed at this level.
+Upstream also published `v0.15.2`, which a later cycle should adopt.
+
 ## 0.15.1 base decision — 2026-11-05
 
 Advance `custom` from `v0.15.0-beta.1` to upstream stable `v0.15.1`
