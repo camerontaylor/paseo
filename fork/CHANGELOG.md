@@ -4,6 +4,37 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 [the archived release-channel plan](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
 
+## 0.15.2 build and deploy — 2026-11-06
+
+Built `0.15.2-fork.261106-2234.gae9279071e78` from
+`ae9279071e783898b5180a917805e8aa3c325e60` and published it: all seven
+packages resolve from npm and `mine` pushed cleanly through
+`fork-npm-publish.yml`. The basket carry needed one adaptation commit
+(`upgrade/basket-0.15.2`): 0.15.2 removed `buttonControlHeight`,
+`FieldControlSize` and the `xs` control size, and the merge applied the
+carried UI hunks cleanly beside custom's new-API code, so only typecheck
+saw it.
+
+Deployed to pluto (canary), ceres, makemake and triton, each verified on
+the stamp with real Claude and Codex turns on pluto. Pluto needed a manual
+step: its unit is a read-only nix-store symlink and the fork pin lives in
+`/etc/systemd/system.control/paseo-daemon.service.d/90-fork-release.conf`,
+which `setup-paseo.sh` does not rewrite, so the first run restarted the
+old 0.14.0 pin and reported success.
+
+Saturn failed. Its one-shot deploy installed the arm64 bundle and reached
+`canonical-daemon-start`, but the launchd-started daemon stalled after
+`Workspace registries bootstrapped` with the main thread blocked in
+`open()`; it never listened, and the starter gave up with `not ready`
+after 600s. Reproduced on a second kickstart. The same bundle started from
+an ssh shell (`daemon start`, identical argv) served health 200 in
+seconds, and a copy of the state dir without `models`/`runtime`/
+`opencode-worktrees` also started under ssh, so the trigger is the launchd
+job context and not the state or the bundle alone. The preserved 0.14.0
+bundle in the same job started in 10s, so saturn was rolled back to
+`0.14.0-fork.261030-0840.g64487f6805ee` and left healthy on it. Neptune was
+not deployed: the cycle stopped at the failed host.
+
 ## 0.15.2 base decision — 2026-11-06
 
 Advance `custom` from `v0.15.1` to upstream stable `v0.15.2` (`e896c05b0`),
