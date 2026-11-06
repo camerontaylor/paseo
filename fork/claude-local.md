@@ -15,14 +15,13 @@ file never conflicts on rebase and is never committed.
 
 ## Read `fork/` before fork-related work
 
-[fork/README.md](fork/README.md) is the index. It covers the fork-local
-namespace convention, the `upstream` remote, the `.git/info/exclude` entry for
-`.omc/`, and the PR grab basket at `~/.paseo-fork`.
+[fork/README.md](fork/README.md) lists what stays with the source. Fork maintenance (upstream
+sync, carry decisions, release operations, plans) lives in the agents repository under
+`docs/paseo-fork/`, checked out at `~/.local/agents/docs/paseo-fork/`.
 
-[fork/upstream-research-2026-08-22.md](fork/upstream-research-2026-08-22.md) is
-research into upstream's features, its community forks and PRs, and the pain
-points people report. Point-in-time as of 2026-08-22 — verify anything you are
-about to act on, since upstream merges ~30 community PRs a week.
+The 2026-08-22 research into upstream's features, forks, PRs and pain points is archived there as
+[`archive/fork/upstream-research-2026-08-22.md`](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/fork/upstream-research-2026-08-22.md).
+It is point-in-time; verify anything you are about to act on.
 
 ## Fork-local files go in `fork/`
 
