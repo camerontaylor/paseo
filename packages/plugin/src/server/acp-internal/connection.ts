@@ -651,16 +651,6 @@ class AcpRuntime {
     } finally {
       this.parkedAdmission = null;
     }
-    if (stopped()) {
-      // Stop arrived before this prompt was sent: report the admission as failed and drop it.
-      this.emit({
-        type: "session.prompt_result",
-        sessionId: this.options.boundarySessionId,
-        clientMessageId: input.prompt.clientMessageId,
-        result: { type: "failed", error: { message: "Canceled before the prompt was sent" } },
-      });
-      return;
-    }
     const prompt = toAcpPrompt(input.prompt);
     const turnId = `acp:${input.prompt.clientMessageId}`;
     this.fallbackChunkIds.clear();
@@ -689,6 +679,17 @@ class AcpRuntime {
       turnId,
       state: "started",
     });
+    if (stopped()) {
+      // A stop the user asked for: the prompt was admitted but never sent, so it ends the way an
+      // interrupted prompt ends instead of as a failure.
+      this.emit({
+        type: "session.turn",
+        sessionId: this.options.boundarySessionId,
+        turnId,
+        state: "canceled",
+      });
+      return;
+    }
     // The SDK dispatches notifications without awaiting them, so the prompt response can resolve
     // while earlier session updates are still queued. Apply them before the turn ends.
     const settled = this.call(

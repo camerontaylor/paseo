@@ -2784,10 +2784,17 @@ describe("ACP transformer turn lifecycle", () => {
         events,
         (event) => event.type === "session.prompt_result" && event.clientMessageId === "stopped",
       );
+      // The same shape an interrupted prompt uses, not a failure.
       expect(result.type === "session.prompt_result" ? result.result : null).toEqual({
-        type: "failed",
-        error: { message: "Canceled before the prompt was sent" },
+        type: "turn",
+        turnId: "acp:stopped",
       });
+      expect(
+        events.filter((event) => event.type === "session.turn" && event.turnId === "acp:stopped"),
+      ).toEqual([
+        expect.objectContaining({ state: "started" }),
+        expect.objectContaining({ state: "canceled" }),
+      ]);
 
       // Even after the peer turn ends, the stopped prompt is never sent.
       agent().notify("vendor/turn", { turnId: "peer-17", state: "completed" });
@@ -2802,7 +2809,7 @@ describe("ACP transformer turn lifecycle", () => {
       expect(countRequests(agent(), "session/prompt")).toBe(0);
       expect(
         events.filter((event) => event.type === "session.turn" && event.turnId === "acp:stopped"),
-      ).toEqual([]);
+      ).toHaveLength(2);
     } finally {
       await connection.close();
     }
@@ -3115,13 +3122,26 @@ describe("ACP transformer turn lifecycle", () => {
         requestId: "stop-5",
         sessionId: "session-1",
       });
-      // Both prompts were admitted before the stop, so both are dropped, not only the parked one.
+      // Both prompts were admitted before the stop, so both are dropped, not only the parked one,
+      // and each reports the cancelled shape an interrupted prompt uses.
       for (const clientMessageId of ["queued-1", "queued-2"]) {
-        await waitForEvent(
+        const result = await waitForEvent(
           events,
           (event) =>
             event.type === "session.prompt_result" && event.clientMessageId === clientMessageId,
         );
+        expect(result.type === "session.prompt_result" ? result.result : null).toEqual({
+          type: "turn",
+          turnId: `acp:${clientMessageId}`,
+        });
+        expect(
+          events.filter(
+            (event) => event.type === "session.turn" && event.turnId === `acp:${clientMessageId}`,
+          ),
+        ).toEqual([
+          expect.objectContaining({ state: "started" }),
+          expect.objectContaining({ state: "canceled" }),
+        ]);
       }
 
       agent().notify("vendor/turn", { turnId: "peer-22", state: "completed" });
