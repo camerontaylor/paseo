@@ -96,8 +96,9 @@ describe("jcodePeerTurns", () => {
 });
 
 // A scripted ACP agent: it answers the client's requests and lets the test push notifications in
-// the order a real `jcode acp` would send them.
+// the order a real `jcode acp` would send them. Like jcode, it sends no `messageId` on its chunks.
 interface ScriptedAgent {
+  readonly requests: string[];
   notify(method: string, params: unknown): void;
 }
 
@@ -106,6 +107,7 @@ function scriptedConnector() {
   const connector = () => {
     let sink!: ReadableStreamDefaultController<AcpStreamMessage>;
     const agent: ScriptedAgent = {
+      requests: [],
       notify: (method, params) => sink.enqueue({ jsonrpc: "2.0", method, params }),
     };
     agents.push(agent);
@@ -114,15 +116,22 @@ function scriptedConnector() {
         sink = controller;
       },
     });
+    const notify = (method: string, params: unknown) =>
+      sink.enqueue({ jsonrpc: "2.0", method, params });
     const writable = new WritableStream<AcpStreamMessage>({
       write(message) {
-        if (!("method" in message) || !("id" in message)) return;
+        if (!("method" in message)) return;
+        agent.requests.push(message.method);
+        if (!("id" in message)) return;
         const reply = (result: unknown) => sink.enqueue({ jsonrpc: "2.0", id: message.id, result });
         if (message.method === "initialize") {
           const params = message.params as { protocolVersion: number };
           reply({ protocolVersion: params.protocolVersion, agentCapabilities: {} });
         } else if (message.method === "session/new") {
           reply({ sessionId: "jcode-native-session", modes: null, configOptions: [] });
+        } else if (message.method === "session/prompt") {
+          notify("session/update", sessionUpdate("agent_message_chunk", "paseo output"));
+          reply({ stopReason: "end_turn" });
         } else if (message.method === "session/close") {
           reply({});
         }
@@ -131,6 +140,13 @@ function scriptedConnector() {
     return { readable, writable };
   };
   return { connector, agents };
+}
+
+function sessionUpdate(kind: string, text: string) {
+  return {
+    sessionId: "jcode-native-session",
+    update: { sessionUpdate: kind, content: { type: "text", text } },
+  };
 }
 
 function openInput(): Extract<ProviderInput, { type: "session.open" }> {
@@ -143,6 +159,18 @@ function openInput(): Extract<ProviderInput, { type: "session.open" }> {
   };
 }
 
+function promptInput(clientMessageId: string): Extract<ProviderInput, { type: "session.prompt" }> {
+  return {
+    type: "session.prompt",
+    sessionId: "session-1",
+    prompt: {
+      clientMessageId,
+      delivery: "auto",
+      input: { type: "message", content: [{ type: "text", text: "paseo ask" }] },
+    },
+  };
+}
+
 async function waitForEvent(
   events: ProviderEvent[],
   predicate: (event: ProviderEvent) => boolean,
@@ -151,19 +179,27 @@ async function waitForEvent(
   return events.find(predicate)!;
 }
 
-type TerminalState = "completed" | "failed" | "canceled";
+// The timeline as text, in publish order. Turn events are left out except for the peer turn, so a
+// test can state where a turn starts and ends relative to the items.
+function timeline(events: readonly ProviderEvent[], peerTurnId = "acp-vendor:peer-1"): string[] {
+  return events.flatMap((event) => {
+    if (event.type === "session.turn" && event.turnId === peerTurnId) {
+      return [`turn:${event.state}`];
+    }
+    if (event.type !== "timeline.item") return [];
+    if (event.item.type === "user_message") return [`user:${event.item.text}`];
+    if (event.item.type === "assistant_message") return [`item:${event.item.text}`];
+    return [];
+  });
+}
 
-// Runs one peer turn through the real ACP connection: the transformer sees the lifecycle, and the
-// shim publishes the turn events around the timeline items the peer's chunks produced.
-async function runPeerTurn(terminal: {
-  state: TerminalState;
-  error?: unknown;
-}): Promise<{ sequence: string[]; ended: ProviderEvent }> {
+async function connect(acpOptions?: { vendorTurnsAreNeverForeground?: boolean }) {
   const scripted = scriptedConnector();
   const registration = runAcpProvider({
     id: "jcode",
     label: "Jcode",
     connector: scripted.connector,
+    acpOptions,
     transformers: [jcodePeerTurns],
   });
   const connection = await registration.connect({
@@ -172,31 +208,28 @@ async function runPeerTurn(terminal: {
   });
   const events: ProviderEvent[] = [];
   connection.onEvent((event) => events.push(event));
-  try {
-    await connection.send(openInput());
-    await waitForEvent(events, (event) => event.type === "session.ready");
-    // The capability probe opens the first connection; the session lives on the last one.
-    const agent = scripted.agents.at(-1);
-    if (!agent) throw new Error("ACP connector did not start");
+  await connection.send(openInput());
+  await waitForEvent(events, (event) => event.type === "session.ready");
+  // The capability probe opens the first connection; the session lives on the last one.
+  const agent = scripted.agents.at(-1);
+  if (!agent) throw new Error("ACP connector did not start");
+  return { connection, events, agent };
+}
 
+type TerminalState = "completed" | "failed" | "canceled";
+
+// One peer turn in jcode's wire order: `started`, the peer's user message chunk with no
+// `messageId`, the peer's agent chunks, then the terminal.
+async function runPeerTurn(terminal: {
+  state: TerminalState;
+  error?: unknown;
+}): Promise<{ sequence: string[]; ended: ProviderEvent }> {
+  const { connection, events, agent } = await connect();
+  try {
     agent.notify("_jcode/turn", peerTurn({ state: "started" }).params);
-    agent.notify("session/update", {
-      sessionId: "jcode-native-session",
-      update: {
-        sessionUpdate: "user_message_chunk",
-        content: { type: "text", text: "started in the TUI" },
-      },
-    });
-    agent.notify("session/update", {
-      sessionId: "jcode-native-session",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "peer output" },
-        messageId: "m-peer",
-      },
-    });
-    const terminalParams = peerTurn(terminal).params;
-    agent.notify("_jcode/turn", terminalParams);
+    agent.notify("session/update", sessionUpdate("user_message_chunk", "ask from the TUI"));
+    agent.notify("session/update", sessionUpdate("agent_message_chunk", "peer output"));
+    agent.notify("_jcode/turn", peerTurn(terminal).params);
 
     const ended = await waitForEvent(
       events,
@@ -205,16 +238,14 @@ async function runPeerTurn(terminal: {
         event.turnId === "acp-vendor:peer-1" &&
         event.state === terminal.state,
     );
-    const sequence = events.flatMap((event) => {
-      if (event.type === "session.turn" && event.turnId === "acp-vendor:peer-1") {
-        return [`turn:${event.state}`];
-      }
-      if (event.type !== "timeline.item") return [];
-      if (event.item.type === "user_message") return [`user:${event.item.text}`];
-      if (event.item.type === "assistant_message") return [`item:${event.item.text}`];
-      return [];
-    });
-    return { sequence, ended };
+
+    const items = events.flatMap((event) => (event.type === "timeline.item" ? [event.item] : []));
+    // The peer's message arrives once, as a live user chunk, and is not duplicated.
+    expect(items.filter((item) => item.type === "user_message")).toHaveLength(1);
+    expect(items.findIndex((item) => item.type === "user_message")).toBeLessThan(
+      items.findIndex((item) => item.type === "assistant_message"),
+    );
+    return { sequence: timeline(events), ended };
   } finally {
     await connection.close();
   }
@@ -226,7 +257,7 @@ describe("jcodePeerTurns through an ACP connection", () => {
 
     expect(sequence).toEqual([
       "turn:started",
-      "user:started in the TUI",
+      "user:ask from the TUI",
       "item:peer output",
       "turn:completed",
     ]);
@@ -246,7 +277,7 @@ describe("jcodePeerTurns through an ACP connection", () => {
 
     expect(sequence).toEqual([
       "turn:started",
-      "user:started in the TUI",
+      "user:ask from the TUI",
       "item:peer output",
       "turn:failed",
     ]);
@@ -263,7 +294,7 @@ describe("jcodePeerTurns through an ACP connection", () => {
 
     expect(sequence).toEqual([
       "turn:started",
-      "user:started in the TUI",
+      "user:ask from the TUI",
       "item:peer output",
       "turn:failed",
     ]);
@@ -275,7 +306,7 @@ describe("jcodePeerTurns through an ACP connection", () => {
 
     expect(sequence).toEqual([
       "turn:started",
-      "user:started in the TUI",
+      "user:ask from the TUI",
       "item:peer output",
       "turn:canceled",
     ]);
@@ -285,5 +316,46 @@ describe("jcodePeerTurns through an ACP connection", () => {
       state: "canceled",
     });
     expect(ended).not.toHaveProperty("error");
+  });
+
+  it("keeps a peer turn's output out of a Paseo prompt sent while it runs", async () => {
+    const { connection, events, agent } = await connect({ vendorTurnsAreNeverForeground: true });
+    try {
+      agent.notify("_jcode/turn", peerTurn({ state: "started" }).params);
+      agent.notify("session/update", sessionUpdate("user_message_chunk", "ask from the TUI"));
+      agent.notify("session/update", sessionUpdate("agent_message_chunk", "peer output"));
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "peer output",
+      );
+
+      const promptSent = connection.send(promptInput("paseo-1"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The prompt waits behind the peer turn instead of reaching jcode now.
+      expect(agent.requests).not.toContain("session/prompt");
+
+      agent.notify("_jcode/turn", peerTurn({ state: "completed" }).params);
+      await promptSent;
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:paseo-1" &&
+          event.state === "completed",
+      );
+
+      const items = timeline(events).filter((entry) => !entry.startsWith("turn:"));
+      expect(items).toEqual([
+        "user:ask from the TUI",
+        "item:peer output",
+        "user:paseo ask",
+        "item:paseo output",
+      ]);
+    } finally {
+      await connection.close();
+    }
   });
 });
