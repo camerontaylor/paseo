@@ -76,6 +76,8 @@ export function createProvider(): ProviderRegistration {
 `daemon.appendSystemPrompt`。它从不丢弃这些指令，也不会把它们转成一条对话消息。已经实现系统提示词约定的现有
 Provider 不要设置这个字段。
 
+列在 `daemon.appendSystemPromptExcludedProviders` 中的 Provider 不会收到 `daemon.appendSystemPrompt`，因此对它只检查非空的 Agent `systemPrompt`。
+
 `ProviderSessionConfig.systemPrompt` 包含合并后的 Agent 指令和 daemon 指令。把它们追加在 Provider
 默认的系统提示词之外。只能替换默认提示词，或者把工作区规则作为用户上下文插入的原生 API，都不满足这个约定。
 

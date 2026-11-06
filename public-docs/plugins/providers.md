@@ -81,6 +81,9 @@ carry additional system instructions. Paseo rejects a nonempty agent `systemProm
 drops those instructions or converts them into a conversation message. Omit the field
 for existing providers that already implement the system prompt contract.
 
+A provider listed in `daemon.appendSystemPromptExcludedProviders` never receives
+`daemon.appendSystemPrompt`, so only a nonempty agent `systemPrompt` is checked for it.
+
 `ProviderSessionConfig.systemPrompt` contains the combined agent and daemon instructions.
 Apply them in addition to your provider's default system prompt. A native API that only
 replaces the default prompt, or inserts workspace rules as user context, does not satisfy
