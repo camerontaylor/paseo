@@ -1485,6 +1485,11 @@ class UpdateSlots {
     const delivered = this.open.findIndex((slot) => containsUpdate(slot.raw, notification));
     // Resolve the delivered slot and every slot before it: those were dropped by validation, so
     // they will never be delivered and cannot hold the vendor lane.
+    //
+    // When nothing matches, release the oldest slot instead. The SDK can replace a field it
+    // could not parse (`defaultOnError`), which makes containment miss the real slot; falling
+    // back keeps the lane moving at the cost of possibly releasing a vendor update before the
+    // update it was waiting on. A stall is the worse failure, and the wait is bounded anyway.
     this.settleThrough(delivered === -1 ? 0 : delivered);
   }
 
