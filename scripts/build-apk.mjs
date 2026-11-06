@@ -14,9 +14,25 @@ if (!architectures) {
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const app = path.join(root, "packages/app");
+if (process.env.PASEO_BUILD_VERSION_STAMPED !== "1") {
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(root, "fork/scripts/build-version.mjs"),
+      "--",
+      process.execPath,
+      fileURLToPath(import.meta.url),
+      ...process.argv.slice(2),
+    ],
+    { cwd: root, env: process.env, stdio: "inherit" },
+  );
+  if (result.error) throw result.error;
+  process.exit(result.status ?? 1);
+}
+
 const env = {
   ...process.env,
-  APP_VARIANT: "production",
+  APP_VARIANT: process.env.APP_VARIANT ?? "production",
   PASEO_WATCHDOG_BUILD: "1",
   PASEO_DIAGNOSTIC_BUILD_TIME: new Date().toISOString(),
   PASEO_DIAGNOSTIC_REVISION:
@@ -46,7 +62,10 @@ run(
   ],
   path.join(app, "android"),
 );
-const destination = path.join(root, `artifacts/paseo-dogfood-${target}.apk`);
+const destination = path.join(
+  root,
+  `artifacts/paseo-${process.env.PASEO_PACKAGE_VERSION}-${target}.apk`,
+);
 mkdirSync(path.dirname(destination), { recursive: true });
 copyFileSync(path.join(app, "android/app/build/outputs/apk/release/app-release.apk"), destination);
 console.log(`\nDiagnostic release APK: ${destination}\nLogs: Downloads/Paseo diagnostics\n`);

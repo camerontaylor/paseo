@@ -3,6 +3,7 @@ import type {
   ProviderCatalog,
   ProviderCommand,
   ProviderConfigState,
+  ProviderError,
   ProviderNotice,
   ProviderRegistration,
   ProviderTimelineItem,
@@ -46,6 +47,13 @@ export interface AcpOptions {
   startupTimeoutMs?: number;
   /** Global discovery initializes ACP but returns an empty catalog without opening a session. */
   workspaceOnlyCatalog?: boolean;
+  /**
+   * The agent only reports turns another client started as vendor turns, never Paseo's own
+   * prompts, so a vendor `started` during an active prompt is a real peer turn. With this set the
+   * shim opens that turn instead of dropping it, and shows a live `user_message_chunk` while a
+   * vendor turn is open instead of treating it as the prompt's echo.
+   */
+  vendorTurnsAreNeverForeground?: boolean;
   waitForInitialCommands?: boolean;
   initialCommandsTimeoutMs?: number;
 }
@@ -88,7 +96,14 @@ export type AcpVendorUpdate =
   | { type: "commands"; commands: readonly ProviderCommand[] }
   | { type: "config"; config: ProviderConfigState }
   | { type: "timeline"; item: ProviderTimelineItem }
-  | { type: "notice"; notice: ProviderNotice };
+  | { type: "notice"; notice: ProviderNotice }
+  | {
+      type: "turn";
+      /** Agent-scoped id; the shim namespaces it. */
+      turnId: string;
+      state: "started" | "completed" | "failed" | "canceled";
+      error?: ProviderError;
+    };
 
 export interface AcpTransformer {
   discover?(
