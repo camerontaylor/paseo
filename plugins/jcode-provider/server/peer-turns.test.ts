@@ -74,9 +74,23 @@ describe("jcodePeerTurns", () => {
     });
   });
 
-  it("ignores the origin field, malformed or not", () => {
+  it.each([
+    ["a string", "tui"],
+    ["a number", 42],
+    ["null", null],
+    ["an array", ["tui"]],
+    ["an object without a kind", { clientInstanceId: "client-2" }],
+    ["an object with a non-string kind", { kind: 1 }],
+  ])("keeps a turn whose origin is %s", (_label, origin) => {
+    // `origin` is not parsed, so no shape of it can reject the notification. A dropped terminal
+    // would leave the vendor turn open and park every later Paseo prompt behind it.
+    expect(jcodePeerTurns.notification?.(peerTurn({ state: "started", origin }), context)).toEqual({
+      type: "turn",
+      turnId: "peer-1",
+      state: "started",
+    });
     expect(
-      jcodePeerTurns.notification?.(peerTurn({ state: "completed", origin: "tui" }), context),
+      jcodePeerTurns.notification?.(peerTurn({ state: "completed", origin }), context),
     ).toEqual({ type: "turn", turnId: "peer-1", state: "completed" });
   });
 
