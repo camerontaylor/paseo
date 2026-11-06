@@ -276,3 +276,34 @@ needs the update to be enqueued while the SDK is already waiting in `read()`, wh
 the start of a write. Test 2 therefore applies the first two updates, waits for them, then writes
 the third update together with the terminal in one write. That fails without change B and passes
 with it.
+
+### 7. Review fixes after the Opus pass on #6
+
+These depart from the text above, which assumed a provider whose vendor turns could only be
+misreported prompts and a session that never attaches mid-turn.
+
+- **A vendor turn during a prompt can be a peer turn.** With
+  `acpOptions.vendorTurnsAreNeverForeground`, a vendor `started` that arrives while a prompt is
+  active opens the vendor turn instead of being dropped, and a live `user_message_chunk` while a
+  vendor turn is open is shown instead of being treated as the prompt's echo. A provider that only
+  reports peer turns as vendor turns sets it; the default keeps the rule above.
+- **Stop cancels a parked admission.** A prompt waiting behind an open vendor turn has not reached
+  the agent, so a session-wide cancel cannot stop it. `interrupt()` now cancels that admission: the
+  prompt result is reported as failed with `Canceled before the prompt was sent`, and the prompt is
+  never sent. The spec's "`interrupt()` is unchanged" holds only when no admission is parked.
+- **A cancelled vendor turn ends locally after a grace period.** The spec's Open question 2 decided
+  against a cap. A cancel with no foreground prompt now ends the turn as `canceled` after
+  `VENDOR_TURN_CANCEL_GRACE_MS` (1 s) if the agent reports no terminal, so a lost terminal cannot
+  block prompts forever. The agent's own terminal, if it arrives first, is kept and the timer
+  cleared.
+- **Held peer updates survive a `skip` load.** On attach the agent flushes the running turn's
+  `started` and its held peer chunks before it answers `session/load`. Once a vendor turn is open,
+  those updates are applied even in the `skip` window; replayed history that precedes the turn is
+  still dropped. A `session/load` replay also clears the fallback chunk ids, and so does a vendor
+  `started`, so a peer turn without user content starts its own items.
+- **A close reports `canceled`, not `failed`.** A user-initiated close leaves the peer turn running
+  on the agent's side; only an unexpected transport close fails it. The boundary ends the open turn
+  before it stops delivering events, so the terminal reaches the server.
+- **`session/list` follows `nextCursor`.** The shim used to read one page, so an import saw at most
+  the agent's newest page of sessions for the cwd. It now pages until the requested limit or the end
+  of the cursor chain.
