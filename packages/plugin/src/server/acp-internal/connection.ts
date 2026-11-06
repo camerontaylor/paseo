@@ -368,6 +368,7 @@ class AcpRuntime {
     { request: RequestPermissionRequest; resolve(response: RequestPermissionResponse): void }
   >();
   private readonly transformers: readonly AcpTransformer[];
+  private readonly vendorTurnsAreNeverForeground: boolean;
   private configOptions: SessionConfigOption[] = [];
   private modes: NewSessionResponse["modes"] = null;
   private commandWaiter: (() => void) | null = null;
@@ -465,6 +466,8 @@ class AcpRuntime {
     this.closeConnector = closeConnector;
     this.emit = options.emit;
     this.transformers = options.options.transformers ?? [];
+    this.vendorTurnsAreNeverForeground =
+      options.options.acpOptions?.vendorTurnsAreNeverForeground === true;
     const client: Client = {
       requestPermission: (request) => this.requestPermission(request),
       sessionUpdate: (notification) =>
@@ -960,9 +963,11 @@ class AcpRuntime {
     ) {
       if (update.sessionUpdate === "user_message_chunk") {
         // A prompt echoes its own user message, so a live chunk while one is active is that
-        // echo. With no prompt active the chunk came from another client sharing the session.
-        if (this.activePrompt === null) this.reduceUserMessageChunk(update);
-        else this.fallbackChunkIds.clear();
+        // echo. With no prompt active the chunk came from another client sharing the session,
+        // and a provider whose vendor turns are always peer turns can say so during a prompt.
+        if (this.activePrompt === null || (this.vendorTurnsAreNeverForeground && this.vendorTurn)) {
+          this.reduceUserMessageChunk(update);
+        } else this.fallbackChunkIds.clear();
         return;
       }
       // A chunk of one kind ends every other kind's open item, whatever its
@@ -1220,8 +1225,9 @@ class AcpRuntime {
       // A turn boundary ends the previous turn's open chunk, and a peer turn without user
       // content would otherwise append its first chunk to the last replayed message.
       this.fallbackChunkIds.clear();
-      // The agent should not report Paseo's own prompt as a vendor turn.
-      if (this.activePrompt) {
+      // Unless the provider says every vendor turn is a peer turn, the agent should not report
+      // Paseo's own prompt as one.
+      if (this.activePrompt && !this.vendorTurnsAreNeverForeground) {
         console.debug(`Ignoring vendor turn ${turnId}: a foreground prompt is active`);
         return;
       }

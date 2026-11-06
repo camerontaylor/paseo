@@ -2552,4 +2552,114 @@ describe("ACP transformer turn lifecycle", () => {
       await connection.close();
     }
   });
+
+  it("keeps a peer turn that starts during a prompt when the provider opts in", async () => {
+    let promptRequest: AcpRequestMessage | null = null;
+    const harness = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/prompt") return false;
+        promptRequest = request;
+        return true;
+      },
+    });
+    const registration = runAcpProvider({
+      id: "peer-turn-acp",
+      label: "Peer turn ACP",
+      connector: harness.connector,
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [vendorTurnTransformer],
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    await connection.send(openInput());
+    await waitForEvent(events, (event) => event.type === "session.ready");
+    const agent = () => {
+      const instance = harness.instances.at(-1);
+      if (!instance) throw new Error("ACP connector did not start");
+      return instance;
+    };
+    try {
+      // Paseo's prompt B is active and its request has been sent.
+      await connection.send(promptInput("B"));
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+
+      // The peer turn starts while B is active: the agent queues B behind it.
+      agent().notify("vendor/turn", { turnId: "turn-7", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:turn-7" &&
+          event.state === "started",
+      );
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("A"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "user_message" &&
+          event.item.text === "A",
+      );
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("A output"),
+      });
+      agent().notify("vendor/turn", { turnId: "turn-7", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:turn-7" &&
+          event.state === "completed",
+      );
+
+      // B's own output follows the peer turn.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("B output"),
+      });
+      agent().respond(promptRequest!, { stopReason: "end_turn" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" && event.turnId === "acp:B" && event.state === "completed",
+      );
+
+      // The peer user message is shown rather than dropped as B's echo.
+      const userMessages = events.flatMap((event) =>
+        event.type === "timeline.item" && event.item.type === "user_message"
+          ? [event.item.text]
+          : [],
+      );
+      expect(userMessages).toEqual(["B", "A"]);
+
+      // Peer output and B's output stay separate items, and the peer's lands inside its turn.
+      const assistant = events.flatMap((event, index) =>
+        event.type === "timeline.item" &&
+        event.item.type === "assistant_message" &&
+        event.item.text !== undefined
+          ? [{ id: event.item.id, text: event.item.text, index }]
+          : [],
+      );
+      expect(assistant.map((item) => item.text)).toEqual(["A output", "B output"]);
+      expect(new Set(assistant.map((item) => item.id)).size).toBe(2);
+      const vendorTerminal = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:turn-7" &&
+          event.state === "completed",
+      );
+      expect(assistant[0]!.index).toBeLessThan(vendorTerminal);
+      expect(assistant[1]!.index).toBeGreaterThan(vendorTerminal);
+    } finally {
+      await connection.close();
+    }
+  });
 });
