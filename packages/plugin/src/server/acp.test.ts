@@ -2885,4 +2885,86 @@ describe("ACP transformer turn lifecycle", () => {
       await connection.close();
     }
   });
+
+  it.each(["skip", "replay"] as const)(
+    "surfaces a turn that is running when the session attaches with history %s",
+    async (history) => {
+      const harness = connectorHarness({
+        capabilities: { loadSession: true },
+        handleRequest(instance, request) {
+          if (request.method !== "session/load") return false;
+          // jcode replays history, then flushes the held peer turn, then answers session/load.
+          instance.notify("session/update", {
+            sessionId: "connector-session",
+            update: textChunk("history"),
+          });
+          instance.notify("vendor/turn", { turnId: "turn-9", state: "started" });
+          instance.notify("session/update", {
+            sessionId: "connector-session",
+            update: userChunk("peer message"),
+          });
+          instance.notify("session/update", {
+            sessionId: "connector-session",
+            update: textChunk("peer reply"),
+          });
+          instance.respond(request, {
+            sessionId: "connector-session",
+            modes: null,
+            configOptions: [],
+          });
+          return true;
+        },
+      });
+      const registration = runAcpProvider({
+        id: "attach-acp",
+        label: "Attach ACP",
+        connector: harness.connector,
+        transformers: [vendorTurnTransformer],
+      });
+      const connection = await registration.connect({
+        versions: [1],
+        capabilities: ["prompt.message", "session.persistence"],
+      });
+      const events: ProviderEvent[] = [];
+      connection.onEvent((event) => events.push(event));
+      const input = openInput();
+      input.persistence = { version: 1, data: { sessionId: "connector-session" } };
+      input.history = history;
+      try {
+        await connection.send(input);
+        await waitForEvent(events, (event) => event.type === "session.ready");
+
+        // The running turn is surfaced before the session opens, so the server sees it as running.
+        const turnStarted = events.findIndex(
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp-vendor:turn-9" &&
+            event.state === "started",
+        );
+        const opened = events.findIndex((event) => event.type === "session.opened");
+        expect(turnStarted).toBeGreaterThan(-1);
+        expect(turnStarted).toBeLessThan(opened);
+
+        // The peer's user message is kept once, and its output is not lost.
+        const userMessages = events.flatMap((event) =>
+          event.type === "timeline.item" && event.item.type === "user_message"
+            ? [event.item.text]
+            : [],
+        );
+        expect(userMessages).toEqual(["peer message"]);
+        const assistant = events.flatMap((event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text !== undefined
+            ? [event.item.text]
+            : [],
+        );
+        expect(assistant).toEqual(
+          history === "replay" ? ["history", "peer reply"] : ["peer reply"],
+        );
+      } finally {
+        await connection.close();
+      }
+    },
+  );
 });

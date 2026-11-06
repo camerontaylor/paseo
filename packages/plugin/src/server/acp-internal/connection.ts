@@ -999,7 +999,9 @@ class AcpRuntime {
 
   private sessionUpdate(notification: SessionNotification): void {
     if (notification.sessionId !== this.nativeSessionId) return;
-    if (this.replayWindow === "skip") return;
+    // A held peer update that follows the vendor turn's `started` is live, not replayed history:
+    // keep it even when the caller asked to skip the loaded history.
+    if (this.replayWindow === "skip" && !this.vendorTurn) return;
     if (
       this.replayWindow === "replay" &&
       notification.update.sessionUpdate === "user_message_chunk"
