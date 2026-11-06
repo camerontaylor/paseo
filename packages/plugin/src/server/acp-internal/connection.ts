@@ -50,6 +50,13 @@ import {
   type ProviderTimelineItem,
 } from "../provider.js";
 
+/**
+ * How long a cancelled vendor turn may take to report its own terminal before Paseo ends it
+ * locally. The agent aborts the turn and answers `session/cancel` promptly; this only bounds a
+ * daemon that acknowledges the cancel and never reports the end.
+ */
+const VENDOR_TURN_CANCEL_GRACE_MS = 1_000;
+
 const ADAPTER_CAPABILITIES = [
   "prompt.message",
   "prompt.command",
@@ -399,6 +406,7 @@ class AcpRuntime {
   private activePrompt: { turnId: string; settled: Promise<void> } | null = null;
   /** A prompt admitted but not sent yet, waiting for an open vendor turn to end. */
   private parkedAdmission: { cancel(): void } | null = null;
+  private vendorTurnCancelTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * The vendor turn a transformer reported and Paseo did not prompt. Only one can be
    * open: the agent runs one turn at a time, so a new start means the old turn is over.
@@ -718,7 +726,23 @@ class AcpRuntime {
     // A prompt parked behind a vendor turn has not reached the agent, so a session-wide cancel
     // would not stop it: drop the admission here instead.
     this.parkedAdmission?.cancel();
+    const cancelled = this.vendorTurn;
+    if (cancelled && !this.activePrompt) this.scheduleVendorTurnCancel(cancelled.turnId);
     return this.call(this.connection.cancel({ sessionId: this.nativeSessionId }));
+  }
+
+  /**
+   * A cancel the agent acknowledges but never reports a terminal for would hold the vendor turn,
+   * and every prompt behind it, forever. End it locally once the grace period passes.
+   */
+  private scheduleVendorTurnCancel(turnId: string): void {
+    if (this.vendorTurnCancelTimer) clearTimeout(this.vendorTurnCancelTimer);
+    this.vendorTurnCancelTimer = setTimeout(() => {
+      this.vendorTurnCancelTimer = null;
+      if (this.vendorTurn?.turnId !== turnId) return;
+      console.warn(`Vendor turn ${turnId} reported no terminal after cancel; ending it locally`);
+      this.endVendorTurn("canceled", { message: "Canceled by Paseo" });
+    }, VENDOR_TURN_CANCEL_GRACE_MS);
   }
 
   listSessions(cwd?: string) {
@@ -1291,6 +1315,10 @@ class AcpRuntime {
     const open = this.vendorTurn;
     if (!open) return;
     this.vendorTurn = null;
+    if (this.vendorTurnCancelTimer) {
+      clearTimeout(this.vendorTurnCancelTimer);
+      this.vendorTurnCancelTimer = null;
+    }
     this.fallbackChunkIds.clear();
     this.terminalizeTransientItems(state);
     this.emit({

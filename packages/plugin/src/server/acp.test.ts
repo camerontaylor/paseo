@@ -2711,4 +2711,84 @@ describe("ACP transformer turn lifecycle", () => {
       await connection.close();
     }
   });
+
+  it("ends a cancelled vendor turn locally when the agent reports no terminal", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-18", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-18" &&
+          event.state === "started",
+      );
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-2",
+        sessionId: "session-1",
+      });
+
+      // The agent acknowledges nothing and sends no terminal: the grace period ends the turn.
+      const ended = await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-18" &&
+          event.state === "canceled",
+      );
+      expect(ended).toMatchObject({ error: { message: "Canceled by Paseo" } });
+
+      // Prompts are admitted again instead of waiting on the abandoned turn.
+      await connection.send(promptInput("after-cancel"));
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:after-cancel" &&
+          event.state === "completed",
+      );
+      expect(countRequests(agent(), "session/prompt")).toBe(1);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("keeps the agent's own terminal when it arrives before the cancel grace period", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-19", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-19" &&
+          event.state === "started",
+      );
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-3",
+        sessionId: "session-1",
+      });
+      agent().notify("vendor/turn", { turnId: "peer-19", state: "canceled" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-19" &&
+          event.state === "canceled",
+      );
+      // Give the grace period time to fire; the timer must not emit a second terminal.
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
+      const terminals = events.filter(
+        (event) => event.type === "session.turn" && event.turnId === "acp-vendor:peer-19",
+      );
+      expect(terminals.map((event) => event.type === "session.turn" && event.state)).toEqual([
+        "started",
+        "canceled",
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
 });
