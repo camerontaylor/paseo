@@ -2360,6 +2360,100 @@ describe("ACP transformer turn lifecycle", () => {
     }
   });
 
+  const vendorNoteTransformer = {
+    notification(notification: { method: string; params: unknown }) {
+      if (notification.method !== "vendor/note") return null;
+      const params = notification.params as { id: string; text: string };
+      return {
+        type: "timeline" as const,
+        item: { type: "assistant_message" as const, id: params.id, text: params.text },
+      };
+    },
+  };
+
+  function assistantTexts(events: ProviderEvent[]): string[] {
+    return events.flatMap((event) =>
+      event.type === "timeline.item" &&
+      event.item.type === "assistant_message" &&
+      event.item.text !== undefined
+        ? [event.item.text]
+        : [],
+    );
+  }
+
+  it("holds later wire messages back while a vendor update waits on a dropped update", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      transformers: [vendorNoteTransformer],
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-15", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-15" &&
+          event.state === "started",
+      );
+
+      // One write: a dropped update, a vendor note waiting on its slot, then a valid update. The
+      // valid update must not reach the client while the note is still waiting.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: { sessionUpdate: "not_a_real_update" },
+      });
+      agent().notify("vendor/note", { id: "vendor-note-15", text: "peer note" });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("after the note", "agent_message_chunk", "m-after-15"),
+      });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "after the note",
+      );
+      expect(assistantTexts(events)).toEqual(["peer note", "after the note"]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("does not make later vendor updates wait on a dropped update that already timed out", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      transformers: [vendorNoteTransformer],
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-16", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-16" &&
+          event.state === "started",
+      );
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: { sessionUpdate: "not_a_real_update" },
+      });
+      agent().notify("vendor/note", { id: "vendor-note-16a", text: "first note" });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(assistantTexts(events)).toEqual(["first note"]);
+
+      // Nothing claimed the dropped slot, but its wait already expired: the next note goes
+      // straight to the lane instead of waiting out the bound again.
+      agent().notify("vendor/note", { id: "vendor-note-16b", text: "second note" });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(assistantTexts(events)).toEqual(["first note", "second note"]);
+    } finally {
+      vi.useRealTimers();
+      await connection.close();
+    }
+  });
+
   it("releases a vendor terminal whose last update the SDK dropped and admits the next prompt", async () => {
     const { connection, events, agent } = await connectVendorTurns();
     try {

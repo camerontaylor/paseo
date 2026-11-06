@@ -1213,7 +1213,11 @@ class AcpRuntime {
     });
   }
 
-  private vendorNotification(method: string, params: unknown): void {
+  /**
+   * Resolves once the notification's deferred updates are applied. The inbound stream awaits it,
+   * so no later wire message reaches the SDK while this notification waits for earlier updates.
+   */
+  private vendorNotification(method: string, params: unknown): Promise<void> {
     const notification = { method, params: jsonValue(params) };
     const context = { sessionId: this.options.boundarySessionId };
     const deferred: AcpVendorUpdate[] = [];
@@ -1227,10 +1231,10 @@ class AcpRuntime {
         else deferred.push(update);
       }
     }
-    if (deferred.length === 0) return;
+    if (deferred.length === 0) return Promise.resolve();
     // The SDK may have read a session/update from the stream without dispatching it yet, so
     // join the lane only once every update that arrived before this notification is applied.
-    void this.updateSlots
+    return this.updateSlots
       .settled()
       .then(() => {
         if (this.closing || this.processFailed) return undefined;
@@ -1389,7 +1393,7 @@ class AcpRuntime {
 
 function routeVendorNotifications(
   stream: Stream,
-  receive: (method: string, params: unknown) => void,
+  receive: (method: string, params: unknown) => Promise<void>,
   updateSlots: UpdateSlots,
 ): Stream {
   const clientMethods = new Set<string>(Object.values(CLIENT_METHODS));
@@ -1397,13 +1401,15 @@ function routeVendorNotifications(
     writable: stream.writable,
     readable: stream.readable.pipeThrough(
       new TransformStream({
-        transform(message, controller) {
+        async transform(message, controller) {
           if ("method" in message && !("id" in message)) {
             if (!clientMethods.has(message.method)) {
               // The SDK dispatches extensions asynchronously and can resolve a later response first.
               // Run synchronous vendor transforms in wire order, inside the configuration transaction.
+              // Awaiting holds every later message back until this one's updates are applied, so a
+              // session/update that follows it on the wire cannot reach the lane ahead of it.
               try {
-                receive(message.method, message.params);
+                await receive(message.method, message.params);
               } catch (error) {
                 console.error("Error handling ACP vendor notification", error);
               }
@@ -1441,14 +1447,22 @@ const SLOT_SETTLE_TIMEOUT_MS = 250;
  * validated notification is built from the raw params by stripping unknown keys and filling
  * defaults, so every value it carries is already present in the payload the slot recorded.
  */
+interface UpdateSlot {
+  promise: Promise<void>;
+  raw: unknown;
+  resolve(): void;
+  /** A waiter already gave up on this slot; later waiters skip it. */
+  expired: boolean;
+}
+
 class UpdateSlots {
-  private readonly open: Array<{ promise: Promise<void>; raw: unknown; resolve(): void }> = [];
+  private readonly open: UpdateSlot[] = [];
   admit(raw: unknown): void {
     let resolve!: () => void;
     const promise = new Promise<void>((next) => {
       resolve = next;
     });
-    this.open.push({ promise, raw, resolve });
+    this.open.push({ promise, raw, resolve, expired: false });
   }
 
   /** Called after the delivered update has been applied. */
@@ -1464,9 +1478,13 @@ class UpdateSlots {
    * `SLOT_SETTLE_TIMEOUT_MS`. A slot the SDK never claims belongs to an update it dropped for
    * failing validation, and nothing else will ever report it; without the bound, a vendor
    * terminal would wait forever and every later prompt would wait behind that vendor turn.
+   *
+   * When the bound fires, the slots it covered expire, so the next waiter does not pay the bound
+   * again for the same dropped update. Expired slots stay open: a late delivery still pairs with
+   * its own slot by containment instead of falling back to the oldest open one.
    */
   settled(): Promise<void> {
-    const last = this.open.at(-1);
+    const last = this.open.findLast((slot) => !slot.expired);
     if (!last) return Promise.resolve();
     return new Promise<void>((resolve) => {
       let finished = false;
@@ -1475,7 +1493,13 @@ class UpdateSlots {
         finished = true;
         resolve();
       };
-      const timer = setTimeout(finish, SLOT_SETTLE_TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        for (const slot of this.open) {
+          slot.expired = true;
+          if (slot === last) break;
+        }
+        finish();
+      }, SLOT_SETTLE_TIMEOUT_MS);
       void last.promise.then(() => {
         clearTimeout(timer);
         finish();

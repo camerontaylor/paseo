@@ -195,9 +195,11 @@ vendor message arrived" deadlocks. The SDK dispatches each notification without 
 previous one, and the operation queued on `notificationLane` is what the SDK's promise settles on,
 so an operation that awaits a slot holds the lane while the update that would resolve the slot is
 queued behind it. Implemented instead: the barrier resolves first, then the vendor operation joins
-the lane (`vendorNotification`). Order is unchanged, because every update admitted before the
-vendor message is applied before the barrier resolves, and updates that arrive later join the lane
-after the operation.
+the lane (`vendorNotification`). Every update admitted before the vendor message is applied before
+the barrier resolves. The inbound transform awaits the vendor operation before it passes on the
+next message, so an update that arrives later cannot reach the SDK, and so the lane, until the
+vendor operation has been applied. Without that await, a later update could overtake a vendor
+operation still waiting on a dropped update's slot.
 
 ### 2. The SDK in use, and what it guarantees
 
@@ -246,6 +248,11 @@ never arrived, or arrived later than the bound — in both cases the wire order 
 protecting is already broken by the transport, and a late update is applied after the vendor
 update instead of before it. A stalled vendor turn holds the prompt lane, so bounding the wait is
 also what bounds `admitPrompt`.
+
+When the bound fires, every slot up to the one it waited on expires, and later waits skip expired
+slots. Otherwise each later vendor notification would wait out the bound again on the same dropped
+update, and with the transform awaiting it, stall the whole inbound stream for that long. Expired
+slots stay in the queue so a late delivery still pairs with its own slot.
 
 ### 5. No exported validator
 
