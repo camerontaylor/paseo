@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentAttachment, ForgeSearchItem } from "@getpaseo/protocol/messages";
+import type {
+  AgentAttachment,
+  AgentQueueSnapshot,
+  ForgeSearchItem,
+} from "@getpaseo/protocol/messages";
 import type {
   AttachmentMetadata,
   ComposerAttachment,
@@ -20,20 +24,27 @@ import {
 import {
   uploadFileAttachments,
   cancelComposerAgent,
+  deleteQueuedComposerMessage,
   dispatchComposerAgentMessage,
   editQueuedComposerMessage,
   findForgeItemByOption,
   isAttachmentSelectedForForgeItem,
+  isQueueRevisionConflictError,
   openComposerAttachment,
   pickAndPersistImages,
   queueComposerMessage,
+  queueComposerMessageOnServer,
   removeComposerAttachmentAtIndex,
+  reorderQueuedComposerMessages,
+  retryQueuedComposerMessage,
   sendQueuedComposerMessageNow,
+  takeQueuedComposerMessage,
   toggleForgeAttachment,
   toggleForgeAttachmentFromPicker,
   type MessageSubmissionWriter,
   type AttachmentPersister,
   type ComposerCancelClient,
+  type ComposerQueueClient,
   type ComposerSendClient,
   type QueueWriter,
   type QueuedComposerMessage,
@@ -1038,6 +1049,460 @@ describe("findForgeItemByOption / isAttachmentSelectedForForgeItem", () => {
     ];
     expect(isAttachmentSelectedForForgeItem(attachments, issueItem)).toBe(true);
     expect(isAttachmentSelectedForForgeItem(attachments, prItem)).toBe(false);
+  });
+});
+
+function createFakeQueueClient(
+  overrides: Partial<ComposerQueueClient> = {},
+): ComposerQueueClient & {
+  enqueued: Array<Parameters<ComposerQueueClient["enqueueAgentMessage"]>[0]>;
+  removed: Array<[string, string, number]>;
+} {
+  const enqueued: Array<Parameters<ComposerQueueClient["enqueueAgentMessage"]>[0]> = [];
+  const removed: Array<[string, string, number]> = [];
+  return {
+    enqueued,
+    removed,
+    enqueueAgentMessage: async (input) => {
+      enqueued.push(input);
+      return {
+        agentId: input.agentId,
+        revision: 1,
+        items: [
+          {
+            id: input.itemId,
+            text: input.text,
+            intent: input.intent,
+            deliveryState: "pending",
+            attempts: 0,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      };
+    },
+    updateQueuedAgentMessage: async () => {
+      throw new Error("not expected in this test");
+    },
+    reorderQueuedAgentMessages: async () => {
+      throw new Error("not expected in this test");
+    },
+    deleteQueuedAgentMessage: async (agentId, itemId, expectedRevision) => {
+      removed.push([agentId, itemId, expectedRevision]);
+      return { agentId, revision: 2, items: [] };
+    },
+    retryQueuedAgentMessage: async () => {
+      throw new Error("not expected in this test");
+    },
+    getQueuedAgentMessageImages: async () => [],
+    ...overrides,
+  };
+}
+
+describe("queueComposerMessageOnServer", () => {
+  it("shows the message locally before the daemon answers, then applies the snapshot", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient();
+    const snapshots: AgentQueueSnapshot[] = [];
+
+    const result = await queueComposerMessageOnServer({
+      client,
+      agentId: "agent",
+      text: "  queued from the phone  ",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      queue,
+      applySnapshot: (snapshot) => snapshots.push(snapshot),
+    });
+
+    expect(result.queued?.text).toBe("queued from the phone");
+    expect(client.enqueued).toHaveLength(1);
+    expect(client.enqueued[0]?.itemId).toBe(result.queued?.id);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.items[0]?.id).toBe(result.queued?.id);
+  });
+
+  it("admits with the explicit queue intent and never touches a submission writer", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient();
+
+    await queueComposerMessageOnServer({
+      client,
+      agentId: "agent",
+      text: "queued, not sent",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      queue,
+      applySnapshot: () => {},
+    });
+
+    // Admission is a queue write only: the input takes no submission writer and
+    // the row it creates is a queued composer row, not a submitted timeline
+    // message. The daemon's accepted delivery creates the canonical user row.
+    expect(client.enqueued[0]?.intent).toBe("queue");
+    expect(queue.state.get("agent")?.[0]).toMatchObject({
+      id: client.enqueued[0]?.itemId,
+      text: "queued, not sent",
+    });
+    expect(queue.state.get("agent")?.[0]).not.toHaveProperty("clientMessageId");
+    expect(queue.state.get("agent")?.[0]).not.toHaveProperty("deliveryState");
+  });
+
+  it("sends image bytes and keeps the composer-side attachments for other devices", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient();
+
+    await queueComposerMessageOnServer({
+      client,
+      agentId: "agent",
+      text: "look",
+      attachments: [
+        { kind: "image", metadata: imageMetadata },
+        { kind: "forge_issue", item: issueItem },
+      ],
+      encodeImages: passthroughEncodeImages,
+      queue,
+      applySnapshot: () => {},
+    });
+
+    expect(client.enqueued[0]?.images).toEqual([{ data: "img-1", mimeType: "image/png" }]);
+    expect(client.enqueued[0]?.composerAttachments).toEqual([
+      { kind: "forge_issue", item: issueItem },
+    ]);
+  });
+
+  it("rolls the local row back when the daemon rejects the write", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient({
+      enqueueAgentMessage: async () => {
+        throw new Error("daemon said no");
+      },
+    });
+
+    const result = await queueComposerMessageOnServer({
+      client,
+      agentId: "agent",
+      text: "doomed",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      queue,
+      applySnapshot: () => {},
+    });
+
+    expect(result.queued).toBeNull();
+    expect(result.error).toBe("daemon said no");
+    expect(queue.state.get("agent")).toEqual([]);
+  });
+
+  it("writes the outbox entry before sending and clears it on ack", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient();
+    const added: string[] = [];
+    const removed: string[] = [];
+
+    const result = await queueComposerMessageOnServer({
+      client,
+      agentId: "agent",
+      text: "durable",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      queue,
+      applySnapshot: () => {},
+      outbox: {
+        add: (entry) => added.push(entry.itemId),
+        remove: (itemId) => removed.push(itemId),
+      },
+    });
+
+    expect(added).toEqual([result.queued?.id]);
+    expect(removed).toEqual([result.queued?.id]);
+  });
+
+  it("keeps the row and the outbox entry when the send never gets an ack", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient({
+      enqueueAgentMessage: async () => {
+        throw new Error("Transport not connected");
+      },
+    });
+    const added: string[] = [];
+    const removed: string[] = [];
+
+    const result = await queueComposerMessageOnServer({
+      client,
+      agentId: "agent",
+      text: "survives the relay stall",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      queue,
+      applySnapshot: () => {},
+      outbox: {
+        add: (entry) => added.push(entry.itemId),
+        remove: (itemId) => removed.push(itemId),
+      },
+    });
+
+    expect(result.queued).not.toBeNull();
+    expect(result.error).toBeUndefined();
+    expect(added).toEqual([result.queued?.id]);
+    expect(removed).toEqual([]);
+    expect(queue.state.get("agent")?.map((row) => row.id)).toEqual([result.queued?.id]);
+  });
+
+  it("does not reach the daemon for an empty message", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient();
+
+    const result = await queueComposerMessageOnServer({
+      client,
+      agentId: "agent",
+      text: "   ",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      queue,
+      applySnapshot: () => {},
+    });
+
+    expect(result.queued).toBeNull();
+    expect(client.enqueued).toEqual([]);
+  });
+});
+
+describe("takeQueuedComposerMessage", () => {
+  it("removes the message on the daemon and hands its content back", async () => {
+    const queue = createFakeQueue(
+      new Map([["agent", [{ id: "item-1", text: "draft", attachments: [] }]]]),
+    );
+    const client = createFakeQueueClient();
+    const snapshots: AgentQueueSnapshot[] = [];
+
+    const result = await takeQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "item-1",
+      expectedRevision: 3,
+      queue,
+      persistImage: async () => imageMetadata,
+      applySnapshot: (snapshot) => snapshots.push(snapshot),
+    });
+
+    expect(result).toEqual({ status: "taken", text: "draft", attachments: [] });
+    expect(client.removed).toEqual([["agent", "item-1", 3]]);
+    expect(snapshots).toHaveLength(1);
+  });
+
+  it("rehydrates images from the daemon so a second device keeps them", async () => {
+    const queue = createFakeQueue(
+      new Map([["agent", [{ id: "item-1", text: "look", attachments: [] }]]]),
+    );
+    const client = createFakeQueueClient({
+      getQueuedAgentMessageImages: async () => [
+        { id: "srv-1", mimeType: "image/png", fileName: "shot.png", data: "AAAA" },
+      ],
+    });
+    const persisted: string[] = [];
+
+    const result = await takeQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "item-1",
+      expectedRevision: 0,
+      queue,
+      persistImage: async (input) => {
+        persisted.push(input.dataUrl);
+        return imageMetadata;
+      },
+      applySnapshot: () => {},
+    });
+
+    expect(persisted).toEqual(["data:image/png;base64,AAAA"]);
+    expect(result).toEqual({
+      status: "taken",
+      text: "look",
+      attachments: [{ kind: "image", metadata: imageMetadata }],
+    });
+  });
+
+  it("reports missing when the message already drained", async () => {
+    const queue = createFakeQueue();
+    const client = createFakeQueueClient();
+
+    const result = await takeQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "gone",
+      expectedRevision: 0,
+      queue,
+      persistImage: async () => imageMetadata,
+      applySnapshot: () => {},
+    });
+
+    expect(result).toEqual({ status: "missing" });
+    expect(client.removed).toEqual([]);
+  });
+
+  it("leaves the message queued when the daemon rejects the removal", async () => {
+    const queue = createFakeQueue(
+      new Map([["agent", [{ id: "item-1", text: "draft", attachments: [] }]]]),
+    );
+    const client = createFakeQueueClient({
+      deleteQueuedAgentMessage: async () => {
+        throw new Error("offline");
+      },
+    });
+
+    const result = await takeQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "item-1",
+      expectedRevision: 0,
+      queue,
+      persistImage: async () => imageMetadata,
+      applySnapshot: () => {},
+    });
+
+    expect(result).toEqual({ status: "failed", errorMessage: "offline" });
+    expect(queue.state.get("agent")).toHaveLength(1);
+  });
+
+  it("reports a stale revision as a conflict instead of removing the row", async () => {
+    const queue = createFakeQueue(
+      new Map([["agent", [{ id: "item-1", text: "draft", attachments: [] }]]]),
+    );
+    const client = createFakeQueueClient({
+      deleteQueuedAgentMessage: async () => {
+        throw new Error("queue_revision_conflict");
+      },
+    });
+
+    const result = await takeQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "item-1",
+      expectedRevision: 1,
+      queue,
+      persistImage: async () => imageMetadata,
+      applySnapshot: () => {},
+    });
+
+    expect(result).toEqual({ status: "conflict" });
+    expect(queue.state.get("agent")).toHaveLength(1);
+  });
+});
+
+describe("durable queue mutations", () => {
+  const snapshots: AgentQueueSnapshot[] = [];
+  const applySnapshot = (snapshot: AgentQueueSnapshot) => snapshots.push(snapshot);
+
+  it("deletes with the revision the caller saw", async () => {
+    const client = createFakeQueueClient();
+
+    const result = await deleteQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "item-1",
+      expectedRevision: 4,
+      applySnapshot,
+    });
+
+    expect(result).toEqual({ status: "applied" });
+    expect(client.removed).toEqual([["agent", "item-1", 4]]);
+  });
+
+  it("surfaces a stale revision as a conflict, not a failure", async () => {
+    const client = createFakeQueueClient({
+      deleteQueuedAgentMessage: async () => {
+        throw new Error("queue_revision_conflict");
+      },
+    });
+
+    const result = await deleteQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "item-1",
+      expectedRevision: 1,
+      applySnapshot,
+    });
+
+    expect(result).toEqual({ status: "conflict" });
+  });
+
+  it("reorders with the full id list and the caller's revision", async () => {
+    const ordered: Array<{ agentId: string; itemIds: string[]; expectedRevision: number }> = [];
+    const client = createFakeQueueClient({
+      reorderQueuedAgentMessages: async (agentId, itemIds, expectedRevision) => {
+        ordered.push({ agentId, itemIds, expectedRevision });
+        return { agentId, revision: 5, items: [] };
+      },
+    });
+
+    const result = await reorderQueuedComposerMessages({
+      client,
+      agentId: "agent",
+      itemIds: ["b", "a"],
+      expectedRevision: 4,
+      applySnapshot,
+    });
+
+    expect(result).toEqual({ status: "applied" });
+    expect(ordered).toEqual([{ agentId: "agent", itemIds: ["b", "a"], expectedRevision: 4 }]);
+  });
+
+  it("retries an uncertain or failed item through the explicit retry path", async () => {
+    const retried: Array<{ agentId: string; itemId: string; expectedRevision: number }> = [];
+    const client = createFakeQueueClient({
+      retryQueuedAgentMessage: async (agentId, itemId, expectedRevision) => {
+        retried.push({ agentId, itemId, expectedRevision });
+        return {
+          agentId,
+          revision: 6,
+          items: [
+            {
+              id: itemId,
+              text: "hello",
+              intent: "queue",
+              deliveryState: "pending",
+              attempts: 0,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        };
+      },
+    });
+
+    const result = await retryQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "item-1",
+      expectedRevision: 5,
+      applySnapshot,
+    });
+
+    expect(result).toEqual({ status: "applied" });
+    expect(retried).toEqual([{ agentId: "agent", itemId: "item-1", expectedRevision: 5 }]);
+  });
+
+  it("reports other mutation failures with the daemon's message", async () => {
+    const client = createFakeQueueClient({
+      retryQueuedAgentMessage: async () => {
+        throw new Error("queue_item_dispatching");
+      },
+    });
+
+    const result = await retryQueuedComposerMessage({
+      client,
+      agentId: "agent",
+      messageId: "item-1",
+      expectedRevision: 5,
+      applySnapshot,
+    });
+
+    expect(result).toEqual({ status: "failed", errorMessage: "queue_item_dispatching" });
+  });
+
+  it("recognizes the revision-conflict code the daemon puts on the error field", () => {
+    expect(isQueueRevisionConflictError(new Error("queue_revision_conflict"))).toBe(true);
+    expect(isQueueRevisionConflictError(new Error("queue_item_dispatching"))).toBe(false);
+    expect(isQueueRevisionConflictError("queue_revision_conflict")).toBe(false);
   });
 });
 

@@ -455,6 +455,7 @@ function NativeTerminalEmulator({
         schedulePaint();
       },
       claimSize: claimActiveTerminalSize,
+      restoreSurface: claimActiveTerminalSize,
       showKeyboard: () => {
         inputRef.current?.showKeyboard();
         claimActiveTerminalSizeForAction("showKeyboard");
