@@ -6,7 +6,7 @@ import { Plus, X } from "lucide-react-native";
 import type { MutableDaemonConfig, MutableDaemonConfigPatch } from "@getpaseo/protocol/messages";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
-import type { FieldControlSize } from "@/components/ui/control-geometry";
+import type { ControlSize } from "@/components/ui/control-geometry";
 import { Field, FormTextInput } from "@/components/ui/form-field";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useProviderAccountFormModel } from "@/provider-accounts/use-provider-account-form-model";
@@ -60,7 +60,7 @@ function OpenProviderAccountSheet({
   onSave,
 }: ProviderAccountSheetProps): ReactElement {
   const { t } = useTranslation();
-  const controlSize: FieldControlSize = useIsCompactFormFactor() ? "md" : "sm";
+  const controlSize: ControlSize = useIsCompactFormFactor() ? "md" : "sm";
   const snapshot = useMemo(
     () => ({ baseProviderId, baseProviderLabel, existingProviderIds, account }),
     [account, baseProviderId, baseProviderLabel, existingProviderIds],
@@ -278,7 +278,7 @@ interface EnvVarRowProps {
   row: ProviderAccountEnvRow;
   index: number;
   model: ProviderAccountFormModel;
-  controlSize: FieldControlSize;
+  controlSize: ControlSize;
   disabled: boolean;
   error: string | null;
 }

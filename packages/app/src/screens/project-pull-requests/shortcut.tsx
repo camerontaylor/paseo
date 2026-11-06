@@ -31,7 +31,7 @@ export function ProjectPullRequestsShortcut({
           <TooltipTrigger asChild>
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               leftIcon={GitPullRequest}
               onPress={show}
               disabled={!visible}

@@ -88,7 +88,7 @@ function CheckStatusButton({
       <TooltipTrigger asChild>
         <Button
           variant="ghost"
-          size="xs"
+          size="sm"
           leftIcon={icon}
           onPress={onPress}
           accessibilityLabel={label}
