@@ -4,6 +4,31 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 [the archived release-channel plan](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
 
+## 0.15.2 base decision — 2026-11-06
+
+Advance `custom` from `v0.15.1` to upstream stable `v0.15.2` (`e896c05b0`),
+a direct descendant of the previous base. 190 files, no conflicts. The
+release is the first-run setup flow (#8363, #8824): `packages/app/src/onboarding/`
+and `packages/app/src/project-suggestions/` are new, first launch goes from the
+loading screen into setup, the theme picker becomes a tile grid, and controls
+collapse to two sizes.
+
+It touches six files the fork also edits, and every one auto-merged: the nine
+i18n resource files (fork strings beside upstream's new setup keys),
+`protocol/src/messages.ts` with `authorization/operation-permissions.ts` (both
+exhaustive over message types, so a missed fork entry fails closed),
+`server/src/server/session.ts`, `websocket-server.ts`,
+`client/src/daemon-client.ts` and the theme-driven
+`screens/workspace/workspace-desktop-tabs-row.tsx`. Typecheck is the gate that
+catches that class; lint does not.
+
+`npm ci`, `build:server`, typecheck, lint and the seven authorization tests
+pass on neptune, plus the node suites for the seam features: app 232 (side
+conversations, subagents track, workspace tabs, panel manifest, i18n
+resources, native release version), server 348 (session, side conversations,
+provider registry wrap, plugin compiler and process), protocol 23, client 256.
+Android device validation remains outstanding.
+
 ## 0.15.1 base decision — 2026-11-05
 
 Advance `custom` from `v0.15.0-beta.1` to upstream stable `v0.15.1`
