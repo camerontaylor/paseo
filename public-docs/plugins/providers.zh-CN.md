@@ -400,6 +400,28 @@ export const vendorEdits: AcpTransformer = {
 };
 ```
 
+`notification()` 接收 Agent 的厂商通知，返回一个 `AcpVendorUpdate`、一组 `AcpVendorUpdate`，或 `null`。变体包括 `commands`、`config`、`timeline`、`notice` 和 `turn`。
+
+当 Agent 执行了一段并非由 Paseo 发起的对话轮次（例如另一个客户端连接到同一 Agent 会话后启动的轮次）时，返回 `{ type: "turn", turnId, state }`。Paseo 会把它显示为运行中、随后结束的运行：
+
+```ts
+export const peerTurns: AcpTransformer = {
+  notification(notification) {
+    if (notification.method !== "vendor/turn") return null;
+    const turn = turnSchema.safeParse(notification.params);
+    if (!turn.success) return null;
+    return { type: "turn", turnId: turn.data.turnId, state: turn.data.state };
+  },
+};
+```
+
+- `state` 为 `started`、`completed`、`failed` 或 `canceled`；`error` 可选。
+- `turnId` 在 Agent 范围内唯一。Paseo 会为它加上命名空间，因此不会与提示词的轮次冲突。
+- 同一时间只能有一个厂商轮次处于打开状态。Paseo 自己的提示词进行中时，收到的 `started` 会被忽略；新的 `started` 会把已打开的轮次以 completed 结束。
+- 厂商轮次打开期间，Paseo 发出的提示词会等待该轮次结束，而不是取消它。
+- ACP 传输关闭时，处于打开状态的厂商轮次以 failed 结束。
+- 厂商更新会在其之前到达的每一个 `session/update` 应用之后再应用，因此结束事件不会早于该轮次的最后一段内容。
+
 ## 测试与发布 {#test-and-publish}
 
 用真实的 Agent 测试 Provider，而不只是模拟的数据帧：

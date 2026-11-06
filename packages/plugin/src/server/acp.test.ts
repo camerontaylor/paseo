@@ -8,8 +8,8 @@ import {
   type SessionUpdate,
 } from "@agentclientprotocol/sdk";
 import type { ProviderConnection, ProviderEvent, ProviderInput } from "./provider.js";
-import { afterEach, describe, expect, it } from "vitest";
-import { runAcpProvider, type AcpStreamMessage } from "./acp.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { runAcpProvider, type AcpOptions, type AcpStreamMessage } from "./acp.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -1539,7 +1539,11 @@ function userChunk(text: string, messageId?: string): SessionUpdate {
 async function openReplaySession(
   replay: SessionUpdate[],
   history: "replay" | "skip",
-): Promise<{ connection: ProviderConnection; events: ProviderEvent[] }> {
+): Promise<{
+  connection: ProviderConnection;
+  events: ProviderEvent[];
+  harness: ReturnType<typeof connectorHarness>;
+}> {
   const harness = connectorHarness({
     capabilities: { loadSession: true },
     handleRequest(instance, request) {
@@ -1571,7 +1575,7 @@ async function openReplaySession(
   input.history = history;
   await connection.send(input);
   await waitForEvent(events, (event) => event.type === "session.ready");
-  return { connection, events };
+  return { connection, events, harness };
 }
 
 function timelineProjection(events: ProviderEvent[]): Array<Record<string, string>> {
@@ -1752,6 +1756,1404 @@ describe("ACP session history replay", () => {
     );
     try {
       expect(timelineProjection(events)).toEqual([]);
+    } finally {
+      await connection.close();
+    }
+  });
+});
+
+describe("ACP transformer turn lifecycle", () => {
+  const vendorTurnTransformer = {
+    notification(notification: { method: string; params: unknown }) {
+      if (notification.method !== "vendor/turn") return null;
+      const params = notification.params as {
+        turnId: string;
+        state: "started" | "completed" | "failed" | "canceled";
+      };
+      return { type: "turn" as const, turnId: params.turnId, state: params.state };
+    },
+  };
+
+  async function connectVendorTurns(options?: {
+    harness?: ConnectorHarnessOptions;
+    transformers?: readonly AcpTransformer[];
+    acpOptions?: AcpOptions;
+  }) {
+    const harness = connectorHarness(options?.harness);
+    const registration = runAcpProvider({
+      id: "vendor-turn-acp",
+      label: "Vendor turn ACP",
+      connector: harness.connector,
+      ...(options?.acpOptions === undefined ? {} : { acpOptions: options.acpOptions }),
+      transformers: [vendorTurnTransformer, ...(options?.transformers ?? [])],
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    await connection.send(openInput());
+    await waitForEvent(events, (event) => event.type === "session.ready");
+    // The probe connection starts first; the live session is the last one.
+    const agent = () => {
+      const instance = harness.instances.at(-1);
+      if (!instance) throw new Error("ACP connector did not start");
+      return instance;
+    };
+    return { connection, events, agent };
+  }
+
+  function promptInput(clientMessageId: string) {
+    return {
+      type: "session.prompt" as const,
+      sessionId: "session-1",
+      prompt: {
+        clientMessageId,
+        delivery: "auto" as const,
+        input: {
+          type: "message" as const,
+          content: [{ type: "text" as const, text: clientMessageId }],
+        },
+      },
+    };
+  }
+
+  it("reports a vendor turn as a namespaced started, timeline, completed sequence", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-1", state: "started" });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("peer output"),
+      });
+      agent().notify("vendor/turn", { turnId: "peer-1", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-1" &&
+          event.state === "completed",
+      );
+
+      const sequence = events.flatMap((event) => {
+        if (event.type === "session.turn" && event.turnId === "acp-vendor:peer-1") {
+          return [`turn:${event.state}`];
+        }
+        if (event.type === "timeline.item" && event.item.type === "assistant_message") {
+          return [`item:${event.item.text}`];
+        }
+        return [];
+      });
+      expect(sequence).toEqual(["turn:started", "item:peer output", "turn:completed"]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("applies a vendor terminal after the session updates that preceded it on the wire", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-2", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-2" &&
+          event.state === "started",
+      );
+
+      for (const text of ["one", "two"]) {
+        agent().notify("session/update", {
+          sessionId: "connector-session",
+          update: textChunk(text, "agent_message_chunk", `m-${text}`),
+        });
+        await waitForEvent(
+          events,
+          (event) =>
+            event.type === "timeline.item" &&
+            event.item.type === "assistant_message" &&
+            event.item.text === text,
+        );
+        // Let the client settle, so the write below starts from an idle connection.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+
+      // One write: the last update and the terminal that follows it. The terminal must wait for
+      // the update even though the client is idle when the batch arrives.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("three", "agent_message_chunk", "m-three"),
+      });
+      agent().notify("vendor/turn", { turnId: "peer-2", state: "completed" });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-2" &&
+          event.state === "completed",
+      );
+      const terminal = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-2" &&
+          event.state === "completed",
+      );
+      const applied = events.flatMap((event, index) =>
+        event.type === "timeline.item" &&
+        event.item.type === "assistant_message" &&
+        event.item.text !== undefined
+          ? [{ text: event.item.text, index }]
+          : [],
+      );
+      expect(applied.map((item) => item.text)).toEqual(["one", "two", "three"]);
+      expect(applied.every((item) => item.index < terminal)).toBe(true);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("drops a vendor turn that starts while a foreground prompt is active", async () => {
+    let promptRequest: AcpRequestMessage | null = null;
+    const { connection, events, agent } = await connectVendorTurns({
+      harness: {
+        handleRequest(instance, request) {
+          if (request.method !== "session/prompt") return false;
+          promptRequest = request;
+          return true;
+        },
+      },
+    });
+    try {
+      await connection.send(promptInput("foreground"));
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+
+      agent().notify("vendor/turn", { turnId: "peer-3", state: "started" });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      agent().respond(promptRequest!, { stopReason: "end_turn" });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:foreground" &&
+          event.state === "completed",
+      );
+      expect(
+        events.filter(
+          (event) => event.type === "session.turn" && event.turnId.startsWith("acp-vendor:"),
+        ),
+      ).toEqual([]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("admits a prompt after an open vendor turn completes without cancelling it", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-4", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-4" &&
+          event.state === "started",
+      );
+
+      await connection.send(promptInput("queued"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+
+      agent().notify("vendor/turn", { turnId: "peer-4", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:queued" &&
+          event.state === "completed",
+      );
+
+      expect(countRequests(agent(), "session/cancel")).toBe(0);
+      expect(countRequests(agent(), "session/prompt")).toBe(1);
+      const vendorTerminal = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-4" &&
+          event.state === "completed",
+      );
+      const admission = events.findIndex(
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "queued",
+      );
+      expect(vendorTerminal).toBeGreaterThan(-1);
+      expect(vendorTerminal).toBeLessThan(admission);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("shows a live user message that arrives outside a prompt and drops the prompt echo", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      harness: {
+        promptUpdates: (promptText) => [
+          { sessionUpdate: "user_message_chunk", content: { type: "text", text: promptText } },
+          { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } },
+        ],
+      },
+    });
+    try {
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "user_message_chunk",
+          content: { type: "text", text: "from peer" },
+        },
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "user_message" &&
+          event.item.text === "from peer",
+      );
+
+      await connection.send(promptInput("hello"));
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:hello" &&
+          event.state === "completed",
+      );
+      const userMessages = events.flatMap((event) =>
+        event.type === "timeline.item" && event.item.type === "user_message"
+          ? [event.item.text]
+          : [],
+      );
+      expect(userMessages).toEqual(["from peer", "hello"]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("fails an open vendor turn when the transport closes and unblocks a waiting prompt", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-5", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-5" &&
+          event.state === "started",
+      );
+
+      await connection.send(promptInput("after-peer"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      agent().closeFromAgent();
+
+      const failed = await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-5" &&
+          event.state === "failed",
+      );
+      expect(failed).toMatchObject({ error: { message: "ACP transport closed" } });
+      // The waiting prompt proceeds and fails with the closed transport.
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "after-peer",
+      );
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("keeps the vendor lane moving when the SDK drops a schema-invalid update", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-6", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-6" &&
+          event.state === "started",
+      );
+
+      // The SDK rejects this before it reaches the client, so its slot is never delivered.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: { sessionUpdate: "not_a_real_update" },
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("after the skip", "agent_message_chunk", "m-after-skip"),
+      });
+      agent().notify("vendor/turn", { turnId: "peer-6", state: "completed" });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-6" &&
+          event.state === "completed",
+      );
+      const item = events.findIndex(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "after the skip",
+      );
+      const terminal = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-6" &&
+          event.state === "completed",
+      );
+      expect(item).toBeGreaterThan(-1);
+      expect(item).toBeLessThan(terminal);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("waits for a vendor turn that opens while the previous one closes", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-7", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-7" &&
+          event.state === "started",
+      );
+
+      await connection.send(promptInput("after-chain"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+
+      // Ending the open turn admits the next one in the same step, so a single await would
+      // release the prompt while the second turn is still running.
+      agent().notify("vendor/turn", { turnId: "peer-8", state: "started" });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+
+      agent().notify("vendor/turn", { turnId: "peer-8", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:after-chain" &&
+          event.state === "completed",
+      );
+      expect(countRequests(agent(), "session/prompt")).toBe(1);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("applies a vendor update between the updates that surround it on the wire", async () => {
+    const vendorNote = {
+      notification(notification: { method: string; params: unknown }) {
+        if (notification.method !== "vendor/note") return null;
+        const params = notification.params as { id: string; text: string };
+        return {
+          type: "timeline" as const,
+          item: { type: "assistant_message" as const, id: params.id, text: params.text },
+        };
+      },
+    };
+    const { connection, events, agent } = await connectVendorTurns({
+      transformers: [vendorNote],
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-9", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-9" &&
+          event.state === "started",
+      );
+
+      // One write: an update, a vendor note, then another update.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("before the note", "agent_message_chunk", "m-before"),
+      });
+      agent().notify("vendor/note", { id: "vendor-note", text: "peer note" });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("after the note", "agent_message_chunk", "m-after"),
+      });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "after the note",
+      );
+      const order = events.flatMap((event) =>
+        event.type === "timeline.item" &&
+        event.item.type === "assistant_message" &&
+        event.item.text !== undefined
+          ? [event.item.text]
+          : [],
+      );
+      expect(order).toEqual(["before the note", "peer note", "after the note"]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("ends an open vendor turn as completed when a second one starts", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-10", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-10" &&
+          event.state === "started",
+      );
+      agent().notify("vendor/turn", { turnId: "peer-11", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-11" &&
+          event.state === "started",
+      );
+
+      const turns = events.flatMap((event) =>
+        event.type === "session.turn" && event.turnId.startsWith("acp-vendor:")
+          ? [`${event.state}:${event.turnId}`]
+          : [],
+      );
+      expect(turns).toEqual([
+        "started:acp-vendor:peer-10",
+        "completed:acp-vendor:peer-10",
+        "started:acp-vendor:peer-11",
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("acp-vendor:peer-11 started while acp-vendor:peer-10 was open"),
+      );
+    } finally {
+      warn.mockRestore();
+      await connection.close();
+    }
+  });
+
+  it("closes running vendor tool rows and clears fallback chunks when a vendor turn ends", async () => {
+    const vendorPhase = {
+      notification(notification: { method: string; params: unknown }) {
+        if (notification.method !== "vendor/phase") return null;
+        const params = notification.params as { id: string; label: string };
+        return {
+          type: "timeline" as const,
+          item: {
+            type: "tool_call" as const,
+            id: params.id,
+            callId: params.id,
+            name: "Vendor phase",
+            detail: { type: "plain_text" as const, label: params.label },
+            status: "running" as const,
+            error: null,
+          },
+        };
+      },
+    };
+    const { connection, events, agent } = await connectVendorTurns({
+      transformers: [vendorPhase],
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-12", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-12" &&
+          event.state === "started",
+      );
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("streamed"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "streamed",
+      );
+      agent().notify("vendor/phase", { id: "phase-1", label: "Preparing" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "phase-1",
+      );
+      agent().notify("vendor/turn", { turnId: "peer-12", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-12" &&
+          event.state === "completed",
+      );
+
+      const rowStatuses = events.flatMap((event) =>
+        event.type === "timeline.item" &&
+        event.item.type === "tool_call" &&
+        event.item.id === "phase-1"
+          ? [event.item.status]
+          : [],
+      );
+      expect(rowStatuses).toEqual(["running", "completed"]);
+      const closed = events.findIndex(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "phase-1" &&
+          event.item.status === "completed",
+      );
+      const terminal = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-12" &&
+          event.state === "completed",
+      );
+      expect(closed).toBeGreaterThan(-1);
+      expect(closed).toBeLessThan(terminal);
+
+      // The turn cleared the anonymous chunk, so the next chunk starts a new timeline item.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("after the turn"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "after the turn",
+      );
+      const chunkIds = events.flatMap((event) =>
+        event.type === "timeline.item" &&
+        event.item.type === "assistant_message" &&
+        event.item.text !== undefined
+          ? [{ id: event.item.id, text: event.item.text }]
+          : [],
+      );
+      expect(chunkIds).toEqual([
+        { id: "agent_message_chunk:1", text: "streamed" },
+        { id: "agent_message_chunk:2", text: "after the turn" },
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  const vendorNoteTransformer = {
+    notification(notification: { method: string; params: unknown }) {
+      if (notification.method !== "vendor/note") return null;
+      const params = notification.params as { id: string; text: string };
+      return {
+        type: "timeline" as const,
+        item: { type: "assistant_message" as const, id: params.id, text: params.text },
+      };
+    },
+  };
+
+  function assistantTexts(events: ProviderEvent[]): string[] {
+    return events.flatMap((event) =>
+      event.type === "timeline.item" &&
+      event.item.type === "assistant_message" &&
+      event.item.text !== undefined
+        ? [event.item.text]
+        : [],
+    );
+  }
+
+  it("holds later wire messages back while a vendor update waits on a dropped update", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      transformers: [vendorNoteTransformer],
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-15", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-15" &&
+          event.state === "started",
+      );
+
+      // One write: a dropped update, a vendor note waiting on its slot, then a valid update. The
+      // valid update must not reach the client while the note is still waiting.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: { sessionUpdate: "not_a_real_update" },
+      });
+      agent().notify("vendor/note", { id: "vendor-note-15", text: "peer note" });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("after the note", "agent_message_chunk", "m-after-15"),
+      });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "after the note",
+      );
+      expect(assistantTexts(events)).toEqual(["peer note", "after the note"]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("does not make later vendor updates wait on a dropped update that already timed out", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      transformers: [vendorNoteTransformer],
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-16", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-16" &&
+          event.state === "started",
+      );
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: { sessionUpdate: "not_a_real_update" },
+      });
+      agent().notify("vendor/note", { id: "vendor-note-16a", text: "first note" });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(assistantTexts(events)).toEqual(["first note"]);
+
+      // Nothing claimed the dropped slot, but its wait already expired: the next note goes
+      // straight to the lane instead of waiting out the bound again.
+      agent().notify("vendor/note", { id: "vendor-note-16b", text: "second note" });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(assistantTexts(events)).toEqual(["first note", "second note"]);
+    } finally {
+      vi.useRealTimers();
+      await connection.close();
+    }
+  });
+
+  it("releases a vendor terminal whose last update the SDK dropped and admits the next prompt", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-13", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-13" &&
+          event.state === "started",
+      );
+
+      // The SDK drops this before it reaches the client: toolCallId must be a string.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: 7,
+          title: "Dropped row",
+          status: "completed",
+        },
+      });
+      agent().notify("vendor/turn", { turnId: "peer-13", state: "completed" });
+
+      // The prompt is admitted behind the open vendor turn, which is behind the dropped slot.
+      await connection.send(promptInput("after-drop"));
+
+      const terminal = await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-13" &&
+          event.state === "completed",
+      );
+      const admission = await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "after-drop",
+      );
+      expect(events.indexOf(terminal)).toBeLessThan(events.indexOf(admission));
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:after-drop" &&
+          event.state === "completed",
+      );
+      expect(countRequests(agent(), "session/prompt")).toBe(1);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("bounds a dropped update that a later valid one cannot be told apart from", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-14", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-14" &&
+          event.state === "started",
+      );
+
+      // Same ids and status as the update below, but `title` must be a string, so the SDK drops
+      // this one and its slot is never claimed by a delivery.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "row-14",
+          title: 42,
+          status: "completed",
+        },
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "row-14",
+          title: "Row 14",
+          status: "completed",
+        },
+      });
+      agent().notify("vendor/turn", { turnId: "peer-14", state: "completed" });
+      await connection.send(promptInput("after-pair"));
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-14" &&
+          event.state === "completed",
+      );
+      const item = events.findIndex(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "row-14",
+      );
+      const terminal = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-14" &&
+          event.state === "completed",
+      );
+      expect(item).toBeGreaterThan(-1);
+      expect(item).toBeLessThan(terminal);
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:after-pair" &&
+          event.state === "completed",
+      );
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("starts a new chunk item after session/load instead of continuing the replay", async () => {
+    const { connection, events, harness } = await openReplaySession(
+      [textChunk("replayed")],
+      "replay",
+    );
+    try {
+      const live = harness.instances.at(-1);
+      if (!live) throw new Error("ACP connector did not start");
+      live.notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("live"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "live",
+      );
+      const chunks = timelineProjection(events).filter((item) => item.type === "assistant_message");
+      expect(chunks).toEqual([
+        { type: "assistant_message", id: "agent_message_chunk:1", text: "replayed" },
+        { type: "assistant_message", id: "agent_message_chunk:2", text: "live" },
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("clears the fallback chunk ids when a vendor turn starts", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("replayed"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "replayed",
+      );
+      agent().notify("vendor/turn", { turnId: "peer-15", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-15" &&
+          event.state === "started",
+      );
+      // A peer turn without user content: its first chunk must not continue the previous item.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("peer output"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "peer output",
+      );
+      const chunks = timelineProjection(events).filter((item) => item.type === "assistant_message");
+      expect(chunks).toEqual([
+        { type: "assistant_message", id: "agent_message_chunk:1", text: "replayed" },
+        { type: "assistant_message", id: "agent_message_chunk:2", text: "peer output" },
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("keeps a peer turn that starts during a prompt when the provider opts in", async () => {
+    let promptRequest: AcpRequestMessage | null = null;
+    const harness = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/prompt") return false;
+        promptRequest = request;
+        return true;
+      },
+    });
+    const registration = runAcpProvider({
+      id: "peer-turn-acp",
+      label: "Peer turn ACP",
+      connector: harness.connector,
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [vendorTurnTransformer],
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    await connection.send(openInput());
+    await waitForEvent(events, (event) => event.type === "session.ready");
+    const agent = () => {
+      const instance = harness.instances.at(-1);
+      if (!instance) throw new Error("ACP connector did not start");
+      return instance;
+    };
+    try {
+      // Paseo's prompt B is active and its request has been sent.
+      await connection.send(promptInput("B"));
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+
+      // The peer turn starts while B is active: the agent queues B behind it.
+      agent().notify("vendor/turn", { turnId: "turn-7", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:turn-7" &&
+          event.state === "started",
+      );
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("A"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "user_message" &&
+          event.item.text === "A",
+      );
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("A output"),
+      });
+      agent().notify("vendor/turn", { turnId: "turn-7", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:turn-7" &&
+          event.state === "completed",
+      );
+
+      // B's own output follows the peer turn.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("B output"),
+      });
+      agent().respond(promptRequest!, { stopReason: "end_turn" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" && event.turnId === "acp:B" && event.state === "completed",
+      );
+
+      // The peer user message is shown rather than dropped as B's echo.
+      const userMessages = events.flatMap((event) =>
+        event.type === "timeline.item" && event.item.type === "user_message"
+          ? [event.item.text]
+          : [],
+      );
+      expect(userMessages).toEqual(["B", "A"]);
+
+      // Peer output and B's output stay separate items, and the peer's lands inside its turn.
+      const assistant = events.flatMap((event, index) =>
+        event.type === "timeline.item" &&
+        event.item.type === "assistant_message" &&
+        event.item.text !== undefined
+          ? [{ id: event.item.id, text: event.item.text, index }]
+          : [],
+      );
+      expect(assistant.map((item) => item.text)).toEqual(["A output", "B output"]);
+      expect(new Set(assistant.map((item) => item.id)).size).toBe(2);
+      const vendorTerminal = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:turn-7" &&
+          event.state === "completed",
+      );
+      expect(assistant[0]!.index).toBeLessThan(vendorTerminal);
+      expect(assistant[1]!.index).toBeGreaterThan(vendorTerminal);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("cancels a prompt parked behind a vendor turn when the user stops", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-17", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-17" &&
+          event.state === "started",
+      );
+
+      await connection.send(promptInput("stopped"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-1",
+        sessionId: "session-1",
+      });
+      const result = await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "stopped",
+      );
+      // The same shape an interrupted prompt uses, not a failure.
+      expect(result.type === "session.prompt_result" ? result.result : null).toEqual({
+        type: "turn",
+        turnId: "acp:stopped",
+      });
+      expect(
+        events.filter((event) => event.type === "session.turn" && event.turnId === "acp:stopped"),
+      ).toEqual([
+        expect.objectContaining({ state: "started" }),
+        expect.objectContaining({ state: "canceled" }),
+      ]);
+
+      // Even after the peer turn ends, the stopped prompt is never sent.
+      agent().notify("vendor/turn", { turnId: "peer-17", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-17" &&
+          event.state === "completed",
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+      expect(
+        events.filter((event) => event.type === "session.turn" && event.turnId === "acp:stopped"),
+      ).toHaveLength(2);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("ends a cancelled vendor turn locally when the agent reports no terminal", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-18", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-18" &&
+          event.state === "started",
+      );
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-2",
+        sessionId: "session-1",
+      });
+
+      // The agent acknowledges nothing and sends no terminal: the grace period ends the turn.
+      const ended = await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-18" &&
+          event.state === "canceled",
+      );
+      expect(ended).toMatchObject({ error: { message: "Canceled by Paseo" } });
+
+      // Prompts are admitted again instead of waiting on the abandoned turn.
+      await connection.send(promptInput("after-cancel"));
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:after-cancel" &&
+          event.state === "completed",
+      );
+      expect(countRequests(agent(), "session/prompt")).toBe(1);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("keeps the agent's own terminal when it arrives before the cancel grace period", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-19", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-19" &&
+          event.state === "started",
+      );
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-3",
+        sessionId: "session-1",
+      });
+      agent().notify("vendor/turn", { turnId: "peer-19", state: "canceled" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-19" &&
+          event.state === "canceled",
+      );
+      // Give the grace period time to fire; the timer must not emit a second terminal.
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
+      const terminals = events.filter(
+        (event) => event.type === "session.turn" && event.turnId === "acp-vendor:peer-19",
+      );
+      expect(terminals.map((event) => event.type === "session.turn" && event.state)).toEqual([
+        "started",
+        "canceled",
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it.each(["skip", "replay"] as const)(
+    "surfaces a turn that is running when the session attaches with history %s",
+    async (history) => {
+      const harness = connectorHarness({
+        capabilities: { loadSession: true },
+        handleRequest(instance, request) {
+          if (request.method !== "session/load") return false;
+          // jcode replays history, then flushes the held peer turn, then answers session/load.
+          instance.notify("session/update", {
+            sessionId: "connector-session",
+            update: textChunk("history"),
+          });
+          instance.notify("vendor/turn", { turnId: "turn-9", state: "started" });
+          instance.notify("session/update", {
+            sessionId: "connector-session",
+            update: userChunk("peer message"),
+          });
+          instance.notify("session/update", {
+            sessionId: "connector-session",
+            update: textChunk("peer reply"),
+          });
+          instance.respond(request, {
+            sessionId: "connector-session",
+            modes: null,
+            configOptions: [],
+          });
+          return true;
+        },
+      });
+      const registration = runAcpProvider({
+        id: "attach-acp",
+        label: "Attach ACP",
+        connector: harness.connector,
+        transformers: [vendorTurnTransformer],
+      });
+      const connection = await registration.connect({
+        versions: [1],
+        capabilities: ["prompt.message", "session.persistence"],
+      });
+      const events: ProviderEvent[] = [];
+      connection.onEvent((event) => events.push(event));
+      const input = openInput();
+      input.persistence = { version: 1, data: { sessionId: "connector-session" } };
+      input.history = history;
+      try {
+        await connection.send(input);
+        await waitForEvent(events, (event) => event.type === "session.ready");
+
+        // The running turn is surfaced before the session opens, so the server sees it as running.
+        const turnStarted = events.findIndex(
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp-vendor:turn-9" &&
+            event.state === "started",
+        );
+        const opened = events.findIndex((event) => event.type === "session.opened");
+        expect(turnStarted).toBeGreaterThan(-1);
+        expect(turnStarted).toBeLessThan(opened);
+
+        // The peer's user message is kept once, and its output is not lost.
+        const userMessages = events.flatMap((event) =>
+          event.type === "timeline.item" && event.item.type === "user_message"
+            ? [event.item.text]
+            : [],
+        );
+        expect(userMessages).toEqual(["peer message"]);
+        const assistant = events.flatMap((event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text !== undefined
+            ? [event.item.text]
+            : [],
+        );
+        expect(assistant).toEqual(
+          history === "replay" ? ["history", "peer reply"] : ["peer reply"],
+        );
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
+  it("ends an open vendor turn as canceled when the session is closed", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    agent().notify("vendor/turn", { turnId: "peer-20", state: "started" });
+    await waitForEvent(
+      events,
+      (event) =>
+        event.type === "session.turn" &&
+        event.turnId === "acp-vendor:peer-20" &&
+        event.state === "started",
+    );
+    await connection.close();
+    const terminal = events.find(
+      (event) =>
+        event.type === "session.turn" &&
+        event.turnId === "acp-vendor:peer-20" &&
+        event.state !== "started",
+    );
+    // The peer turn keeps running on the agent's side: Paseo stopped watching, it did not fail.
+    expect(terminal).toMatchObject({
+      state: "canceled",
+      error: { message: "Session closed by Paseo" },
+    });
+  });
+
+  it("follows session/list cursors up to the requested limit", async () => {
+    const pages: Record<string, unknown> = {
+      "": {
+        sessions: [
+          { sessionId: "s1", cwd: "/repo", title: "One" },
+          { sessionId: "s2", cwd: "/repo", title: "Two" },
+        ],
+        nextCursor: "page-2",
+      },
+      "page-2": {
+        sessions: [
+          { sessionId: "s3", cwd: "/repo", title: "Three" },
+          { sessionId: "s4", cwd: "/repo", title: "Four" },
+        ],
+        nextCursor: "page-3",
+      },
+      "page-3": { sessions: [{ sessionId: "s5", cwd: "/repo", title: "Five" }] },
+    };
+    const cursors: Array<string | null | undefined> = [];
+    const harness = connectorHarness({
+      capabilities: { sessionCapabilities: { list: true } },
+      handleRequest(instance, request) {
+        if (request.method !== "session/list") return false;
+        const cursor = (request.params as { cursor?: string | null } | undefined)?.cursor;
+        cursors.push(cursor);
+        instance.respond(request, pages[cursor ?? ""] ?? { sessions: [] });
+        return true;
+      },
+    });
+    const registration = runAcpProvider({
+      id: "list-acp",
+      label: "List ACP",
+      connector: harness.connector,
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["session.list"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send({ type: "sessions", requestId: "list-1", cwd: "/repo", limit: 3 });
+      const listed = await waitForEvent(events, (event) => event.type === "sessions");
+      expect(
+        listed.type === "sessions" ? listed.sessions.map((session) => session.title) : [],
+      ).toEqual(["One", "Two", "Three"]);
+      // The requested limit was reached on the second page, so the third is never fetched.
+      expect(cursors).toEqual([undefined, "page-2"]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("does not end a cancelled vendor turn locally unless the provider reports peer turns", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-21", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-21" &&
+          event.state === "started",
+      );
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-4",
+        sessionId: "session-1",
+      });
+
+      // Past the grace period the turn is still open: for this agent a cancel may not stop the
+      // peer turn, so Paseo must not pretend it did.
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp-vendor:peer-21" &&
+            event.state !== "started",
+        ),
+      ).toEqual([]);
+
+      agent().notify("vendor/turn", { turnId: "peer-21", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-21" &&
+          event.state === "completed",
+      );
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("cancels every prompt waiting behind a vendor turn when the user stops", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-22", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-22" &&
+          event.state === "started",
+      );
+
+      await connection.send(promptInput("queued-1"));
+      await connection.send(promptInput("queued-2"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-5",
+        sessionId: "session-1",
+      });
+      // Both prompts were admitted before the stop, so both are dropped, not only the parked one,
+      // and each reports the cancelled shape an interrupted prompt uses.
+      for (const clientMessageId of ["queued-1", "queued-2"]) {
+        const result = await waitForEvent(
+          events,
+          (event) =>
+            event.type === "session.prompt_result" && event.clientMessageId === clientMessageId,
+        );
+        expect(result.type === "session.prompt_result" ? result.result : null).toEqual({
+          type: "turn",
+          turnId: `acp:${clientMessageId}`,
+        });
+        expect(
+          events.filter(
+            (event) => event.type === "session.turn" && event.turnId === `acp:${clientMessageId}`,
+          ),
+        ).toEqual([
+          expect.objectContaining({ state: "started" }),
+          expect.objectContaining({ state: "canceled" }),
+        ]);
+      }
+
+      agent().notify("vendor/turn", { turnId: "peer-22", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-22" &&
+          event.state === "completed",
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
     } finally {
       await connection.close();
     }
