@@ -1,6 +1,6 @@
 # Jcode provider plugin
 
-Status: Proposed (2026-11-04). Fork plugin (`plugins/jcode-provider/`).
+Status: Implemented with deviations (2026-11-06). Fork plugin (`plugins/jcode-provider/`).
 
 Run jcode in Paseo as a plugin ACP provider. It replaces the config-defined
 `extends: "acp"` entry and maps jcode's peer-turn notifications to the core
@@ -54,7 +54,7 @@ export default function contribute(server: PluginServerContext) {
 ```
 
 - Keep the provider id `jcode`, so existing agents and persisted sessions keep
-  their provider.
+  their provider. Existing agents still need re-importing (Deviation 6).
 - The default command is `jcode acp`. The daemon resolves overrides from config
   (`ProviderRegistration.command`, `ProviderLaunch`), so the current
   `--tool-profile full` argument and env keys stay in `config.json`, not in the
@@ -201,13 +201,24 @@ One connection serves one boundary session, which is the fallback this spec allo
 
 ### 4. Requirement range
 
-`paseo-plugin.json` declares `>=0.15.0`. The hook ships in 0.15.0, and the compatibility
-check compares the stable core of a prerelease daemon version, so `0.15.0-beta.1`
-satisfies it (`packages/protocol/src/plugin-requirements.ts:33`).
+`paseo-plugin.json` declares `>=0.15.0`. The hook is fork-only (camerontaylor/paseo#6) and
+in no upstream release, so the range cannot express "has the hook"; it only keeps older
+daemons out. As a built-in, the plugin ships only with fork builds that carry the hook. The
+compatibility check compares the stable core of a prerelease daemon version, so
+`0.15.0-beta.1` satisfies it (`packages/protocol/src/plugin-requirements.ts:33`).
 
-### 5. The second Tests bullet is pending
+### 5. The second Tests bullet is manual
 
 The scripted-daemon smoke test with a second raw client needs a jcode build with shared
-sessions, which is being implemented in parallel. `server/peer-turns.test.ts` instead
-covers the transformer and its wire order through `runAcpProvider`'s ACP connection. The
-acceptance criteria are untested for the same reason.
+sessions, so it is not in CI. `server/peer-turns.test.ts` covers the transformer and its
+wire order through `runAcpProvider`'s ACP connection. The acceptance criteria were checked
+by hand against a jcode build from camerontaylor/jcode#1; the run is recorded in the QA
+section of camerontaylor/paseo#7.
+
+### 6. Existing agents do not carry over
+
+Agents created under the `extends: "acp"` entry were persisted by the generic ACP client,
+whose handle the plugin provider cannot decode (`decodePersistence` in
+`packages/server/src/server/agent/plugin-provider.ts`). They have to be re-imported; the
+README says so. A tagged compatibility shim in the core would avoid that but is out of
+scope for this plugin.

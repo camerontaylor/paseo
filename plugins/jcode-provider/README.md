@@ -5,55 +5,43 @@ share one live jcode session. The plugin's transformer maps jcode's `_jcode/turn
 notification to Paseo's `turn` vendor update (`specs/acp-transformer-turn-lifecycle.md`), so a turn
 started in the TUI shows in Paseo as a running, then finished, run.
 
-This is a built-in plugin in this fork. It requires Paseo `>=0.15.0`, the first release with the
-transformer `turn` update.
+This is a built-in plugin in this fork. The transformer `turn` update it relies on is fork-only
+(camerontaylor/paseo#6) and is in no upstream release, so the plugin ships only with fork builds.
+The `>=0.15.0` requirement in `paseo-plugin.json` only keeps older daemons from loading it.
 
 ## Files
 
 - `index.server.ts` registers `runAcpProvider({ id: "jcode", command: ["jcode", "acp"] })` with
   `server/peer-turns.ts` as its only transformer.
 - `server/peer-turns.ts` validates `_jcode/turn` with Zod and returns `{ type: "turn", turnId, state }`,
-  passing `error` through. Turn content is not translated: the user message and output arrive as
+  passing `error` through when it has a `message`. A malformed `error` is left off rather than
+  dropping the notification, because a dropped terminal leaves the turn open and blocks later
+  prompts. Turn content is not translated: the user message and output arrive as
   ordinary `session/update` notifications, and emitting them again would duplicate the peer's
   messages.
 - `server/peer-turns.test.ts` covers the mapping and runs the transformer through a scripted ACP
   stream.
 
-The provider id stays `jcode`, so agents and persisted sessions keep their provider. The default
-command is `jcode acp`; the daemon applies the config override, so `--tool-profile full` and env
+The provider id stays `jcode`, so config keyed on it keeps working. The default command is
+`jcode acp`; the daemon applies the config override, so `--tool-profile full` and env
 keys stay in `config.json`. A payload `sessionId` is jcode's native session id, which the ACP
 context does not expose; the connection already serves one boundary session, so the transformer does
 not filter by session.
 
 ## Config migration
 
-The provider used to be a config-defined `extends: "acp"` entry. With this plugin the entry stays,
-minus one field: a leftover `extends` takes precedence over the plugin, so it must be deleted.
+The provider used to be a config-defined `extends: "acp"` entry. Delete `extends` and keep the rest
+of the entry: an entry with `extends` shadows the plugin with a custom provider that has no turn
+lifecycle (see [built-in provider plugins](../../docs/plugins.md), the `muse-provider` paragraph).
+Without `extends`, the entry overrides the plugin's defaults:
 
-### What the daemon does with an entry whose id matches a plugin provider
+- `command` replaces `jcode acp` entirely, and `env` is overlaid on the daemon's environment.
+- `models` replaces the catalog jcode reports. Delete it to use jcode's own model selector.
 
-All three of `command`, `env`, and `models` apply as overrides.
-
-- `command` and `env`: `resolveRegisteredProvider`
-  (`packages/server/src/server/agent/provider-registry.ts:745`) merges the entry's runtime settings
-  into the plugin registration, and `ProviderRuntime.resolveLaunch`
-  (`packages/server/src/server/agent/plugin-provider.ts:157`) resolves the launch from them. The
-  config `command` array becomes a `replace` command (`toRuntimeSettings`, `provider-registry.ts:253`),
-  so it replaces `jcode acp` entirely; there is no `append` form in the config schema. Env is
-  overlaid on the daemon's environment (`createProviderEnv`,
-  `packages/server/src/server/agent/provider-launch-config.ts:250`).
-- `models`: `resolveRegisteredProvider` (`provider-registry.ts:749`) sets `profileModels` from the
-  entry with `profileModelsAreAdditive: false`, and `mergeModels` (`provider-registry.ts:380`)
-  then returns that list in place of the ACP-discovered catalog. So a curated `models` list still
-  curates; if you delete it, jcode's own `configOptions` model selector provides the catalog.
-
-A leftover `extends` does take precedence, by skipping the plugin instead of merging with it.
-`buildProviderRegistry` (`packages/server/src/server/agent/provider-registry.ts:940`) logs
-`Plugin provider shadowed by configured provider` and continues past registration.
-`addDerivedProviders` (`provider-registry.ts:814`) then builds `jcode` from `extends: "acp"`
-around the server's generic ACP client (`provider-registry.ts:865`): today's path, which has no
-transformer seam and receives no turn lifecycle. `docs/plugins.md:129` documents the same rule for
-`muse-provider`.
+Agents created under the old `extends: "acp"` entry do not resume after the migration: their saved
+handle is the generic ACP client's, which the plugin provider cannot decode. The jcode sessions
+themselves are untouched. Bring each one back with Import (step 2 under
+[Attaching to a TUI session](#attaching-to-a-tui-session)).
 
 ### Before
 
@@ -90,8 +78,7 @@ transformer seam and receives no turn lifecycle. `docs/plugins.md:129` documents
 }
 ```
 
-Delete `extends`; keep everything else. Keep provider keys in `config.json` `env`, never in this
-directory.
+Keep provider keys in `config.json` `env`, never in this directory.
 
 ## Attaching to a TUI session
 
@@ -111,4 +98,6 @@ npx vitest run plugins/jcode-provider/server/peer-turns.test.ts
 ```
 
 The end-to-end criteria in `specs/jcode-provider-plugin.md` need a jcode build with shared sessions
-(`docs/ACP_SHARED_SESSIONS.md` in the jcode repo) and are not covered here.
+(`docs/ACP_SHARED_SESSIONS.md` in the jcode repo), a jcode TUI and a Paseo daemon from this
+branch, so they are checked by hand rather than in CI. The QA section of camerontaylor/paseo#7
+records the manual run.
