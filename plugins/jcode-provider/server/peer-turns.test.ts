@@ -37,22 +37,47 @@ describe("jcodePeerTurns", () => {
     ).toBeNull();
   });
 
-  it("returns null for malformed params", () => {
-    const malformed = [
+  it("returns null when a field that identifies the transition is malformed", () => {
+    // Each case starts from a valid payload and breaks one field, so it is rejected for that field.
+    const valid = peerTurn({ state: "started" }).params;
+    const { sessionId: _sessionId, ...withoutSessionId } = valid;
+    const { turnId: _turnId, ...withoutTurnId } = valid;
+    const { state: _state, ...withoutState } = valid;
+    const malformed: unknown[] = [
       null,
       "started",
-      { state: "started" },
-      { turnId: "", state: "started" },
-      { turnId: "peer-1" },
-      { turnId: "peer-1", state: "finished" },
-      { turnId: "peer-1", state: "started", error: "boom" },
+      withoutSessionId,
+      { ...valid, sessionId: 7 },
+      withoutTurnId,
+      { ...valid, turnId: "" },
+      withoutState,
+      { ...valid, state: "finished" },
     ];
+    expect(jcodePeerTurns.notification?.(peerTurn({ state: "started" }), context)).not.toBeNull();
     for (const params of malformed) {
       expect(
         jcodePeerTurns.notification?.({ method: "_jcode/turn", params }, context),
         JSON.stringify(params),
       ).toBeNull();
     }
+  });
+
+  it.each([
+    ["a string", "boom"],
+    ["null", null],
+    ["an object without a message", { code: 3 }],
+  ])("keeps a terminal whose error is %s and leaves the error off", (_label, error) => {
+    expect(jcodePeerTurns.notification?.(peerTurn({ state: "failed", error }), context)).toEqual({
+      type: "turn",
+      turnId: "peer-1",
+      state: "failed",
+    });
+  });
+
+  it("ignores the origin field, malformed or not", () => {
+    expect(
+      jcodePeerTurns.notification?.(peerTurn({ state: "completed", origin: "tui" }), context),
+    ).toEqual({ type: "turn", turnId: "peer-1", state: "completed" });
   });
 
   it("passes the agent's error through on a terminal state", () => {
@@ -132,7 +157,7 @@ type TerminalState = "completed" | "failed" | "canceled";
 // shim publishes the turn events around the timeline items the peer's chunks produced.
 async function runPeerTurn(terminal: {
   state: TerminalState;
-  error?: { message: string };
+  error?: unknown;
 }): Promise<{ sequence: string[]; ended: ProviderEvent }> {
   const scripted = scriptedConnector();
   const registration = runAcpProvider({
@@ -150,7 +175,7 @@ async function runPeerTurn(terminal: {
   try {
     await connection.send(openInput());
     await waitForEvent(events, (event) => event.type === "session.ready");
-    // The catalog probe opens the first connection; the session lives on the last one.
+    // The capability probe opens the first connection; the session lives on the last one.
     const agent = scripted.agents.at(-1);
     if (!agent) throw new Error("ACP connector did not start");
 
@@ -231,6 +256,18 @@ describe("jcodePeerTurns through an ACP connection", () => {
       state: "failed",
       error: { message: "tool crashed" },
     });
+  });
+
+  it("closes a failed peer turn whose error is malformed", async () => {
+    const { sequence, ended } = await runPeerTurn({ state: "failed", error: "tool crashed" });
+
+    expect(sequence).toEqual([
+      "turn:started",
+      "user:started in the TUI",
+      "item:peer output",
+      "turn:failed",
+    ]);
+    expect(ended).not.toHaveProperty("error");
   });
 
   it("cancels a peer turn", async () => {
