@@ -410,6 +410,8 @@ class AcpRuntime {
   /** A prompt admitted but not sent yet, waiting for an open vendor turn to end. */
   private parkedAdmission: { cancel(): void } | null = null;
   private vendorTurnCancelTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Bumped by a user stop; a prompt admitted before it is dropped instead of sent. */
+  private stopGeneration = 0;
   /**
    * The vendor turn a transformer reported and Paseo did not prompt. Only one can be
    * open: the agent runs one turn at a time, so a new start means the old turn is over.
@@ -612,44 +614,44 @@ class AcpRuntime {
   }
 
   prompt(input: Extract<ProviderInput, { type: "session.prompt" }>): Promise<void> {
-    const admission = this.promptLane.then(() => this.admitPrompt(input));
+    // A stop cancels the prompts waiting when it is pressed, not prompts admitted after it.
+    const stopGeneration = this.stopGeneration;
+    const admission = this.promptLane.then(() => this.admitPrompt(input, stopGeneration));
     this.promptLane = admission.catch(() => undefined);
     return admission;
   }
 
   private async admitPrompt(
     input: Extract<ProviderInput, { type: "session.prompt" }>,
+    stopGeneration: number,
   ): Promise<void> {
     const active = this.activePrompt;
     if (active) {
-      await this.interrupt();
+      // Replacing a foreground prompt is not a user stop of the prompts queued behind it.
+      await this.interruptTurn();
       await active.settled;
     }
     // A vendor turn belongs to another client attached to the same agent session; the agent
     // queues this prompt behind it anyway. Waiting keeps the user's message after the peer
     // output and stops peer chunks from being attributed to the foreground turn. A new vendor
     // turn can open while the previous one closes, so wait for the chain to drain.
-    let cancelled = false;
     let wakeParked!: () => void;
     const parked = new Promise<void>((resolve) => {
       wakeParked = resolve;
     });
-    this.parkedAdmission = {
-      cancel: () => {
-        cancelled = true;
-        wakeParked();
-      },
-    };
+    this.parkedAdmission = { cancel: wakeParked };
+    const stopped = () => stopGeneration < this.stopGeneration;
     try {
       while (this.vendorTurn) {
+        if (stopped()) break;
         const open = this.vendorTurn;
         await Promise.race([open.settled, parked]);
-        if (cancelled) break;
+        if (stopped()) break;
       }
     } finally {
       this.parkedAdmission = null;
     }
-    if (cancelled) {
+    if (stopped()) {
       // Stop arrived before this prompt was sent: report the admission as failed and drop it.
       this.emit({
         type: "session.prompt_result",
@@ -727,7 +729,8 @@ class AcpRuntime {
 
   interrupt(): Promise<void> {
     // A prompt parked behind a vendor turn has not reached the agent, so a session-wide cancel
-    // would not stop it: drop the admission here instead.
+    // would not stop it: drop every prompt admitted before the stop here instead.
+    this.stopGeneration += 1;
     this.parkedAdmission?.cancel();
     const cancelled = this.vendorTurn;
     // Only an agent that reports peer turns as vendor turns is known to stop the peer turn when
@@ -735,6 +738,10 @@ class AcpRuntime {
     if (cancelled && !this.activePrompt && this.vendorTurnsAreNeverForeground) {
       this.scheduleVendorTurnCancel(cancelled.turnId);
     }
+    return this.interruptTurn();
+  }
+
+  private interruptTurn(): Promise<void> {
     return this.call(this.connection.cancel({ sessionId: this.nativeSessionId }));
   }
 

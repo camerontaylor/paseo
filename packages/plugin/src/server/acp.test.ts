@@ -3092,4 +3092,50 @@ describe("ACP transformer turn lifecycle", () => {
       await connection.close();
     }
   });
+
+  it("cancels every prompt waiting behind a vendor turn when the user stops", async () => {
+    const { connection, events, agent } = await connectVendorTurns();
+    try {
+      agent().notify("vendor/turn", { turnId: "peer-22", state: "started" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-22" &&
+          event.state === "started",
+      );
+
+      await connection.send(promptInput("queued-1"));
+      await connection.send(promptInput("queued-2"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-5",
+        sessionId: "session-1",
+      });
+      // Both prompts were admitted before the stop, so both are dropped, not only the parked one.
+      for (const clientMessageId of ["queued-1", "queued-2"]) {
+        await waitForEvent(
+          events,
+          (event) =>
+            event.type === "session.prompt_result" && event.clientMessageId === clientMessageId,
+        );
+      }
+
+      agent().notify("vendor/turn", { turnId: "peer-22", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp-vendor:peer-22" &&
+          event.state === "completed",
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(countRequests(agent(), "session/prompt")).toBe(0);
+    } finally {
+      await connection.close();
+    }
+  });
 });
