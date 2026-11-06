@@ -9,6 +9,7 @@ import {
   type Client,
   type AgentCapabilities,
   type ContentBlock,
+  type ListSessionsResponse,
   type NewSessionResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
@@ -292,8 +293,7 @@ async function listSessions(
     emit: state.emit,
   });
   try {
-    const response = await runtime.listSessions(input.cwd);
-    const selected = input.limit ? response.sessions.slice(0, input.limit) : response.sessions;
+    const selected = await runtime.listSessions(input.cwd, input.limit);
     state.emit({
       type: "sessions",
       requestId: input.requestId,
@@ -748,8 +748,22 @@ class AcpRuntime {
     }, VENDOR_TURN_CANCEL_GRACE_MS);
   }
 
-  listSessions(cwd?: string) {
-    return this.call(this.connection.listSessions({ cwd }));
+  /** Follows `nextCursor` until the requested limit is reached or the agent has no more pages. */
+  async listSessions(cwd?: string, limit?: number): Promise<ListSessionsResponse["sessions"]> {
+    const sessions: ListSessionsResponse["sessions"] = [];
+    const seen = new Set<string>();
+    let cursor: string | null | undefined;
+    for (;;) {
+      const response = await this.call(this.connection.listSessions({ cwd, cursor }));
+      sessions.push(...response.sessions);
+      cursor = response.nextCursor;
+      if (!cursor) break;
+      // An agent that repeats a cursor would otherwise page forever.
+      if (seen.has(cursor)) break;
+      seen.add(cursor);
+      if (limit !== undefined && sessions.length >= limit) break;
+    }
+    return limit === undefined ? sessions : sessions.slice(0, limit);
   }
 
   async drainNotifications(): Promise<void> {

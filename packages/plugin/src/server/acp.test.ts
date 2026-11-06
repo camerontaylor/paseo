@@ -2991,4 +2991,57 @@ describe("ACP transformer turn lifecycle", () => {
       error: { message: "Session closed by Paseo" },
     });
   });
+
+  it("follows session/list cursors up to the requested limit", async () => {
+    const pages: Record<string, unknown> = {
+      "": {
+        sessions: [
+          { sessionId: "s1", cwd: "/repo", title: "One" },
+          { sessionId: "s2", cwd: "/repo", title: "Two" },
+        ],
+        nextCursor: "page-2",
+      },
+      "page-2": {
+        sessions: [
+          { sessionId: "s3", cwd: "/repo", title: "Three" },
+          { sessionId: "s4", cwd: "/repo", title: "Four" },
+        ],
+        nextCursor: "page-3",
+      },
+      "page-3": { sessions: [{ sessionId: "s5", cwd: "/repo", title: "Five" }] },
+    };
+    const cursors: Array<string | null | undefined> = [];
+    const harness = connectorHarness({
+      capabilities: { sessionCapabilities: { list: true } },
+      handleRequest(instance, request) {
+        if (request.method !== "session/list") return false;
+        const cursor = (request.params as { cursor?: string | null } | undefined)?.cursor;
+        cursors.push(cursor);
+        instance.respond(request, pages[cursor ?? ""] ?? { sessions: [] });
+        return true;
+      },
+    });
+    const registration = runAcpProvider({
+      id: "list-acp",
+      label: "List ACP",
+      connector: harness.connector,
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["session.list"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send({ type: "sessions", requestId: "list-1", cwd: "/repo", limit: 3 });
+      const listed = await waitForEvent(events, (event) => event.type === "sessions");
+      expect(
+        listed.type === "sessions" ? listed.sessions.map((session) => session.title) : [],
+      ).toEqual(["One", "Two", "Three"]);
+      // The requested limit was reached on the second page, so the third is never fetched.
+      expect(cursors).toEqual([undefined, "page-2"]);
+    } finally {
+      await connection.close();
+    }
+  });
 });
