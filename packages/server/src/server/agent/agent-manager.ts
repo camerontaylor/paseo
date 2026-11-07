@@ -1608,7 +1608,7 @@ export class AgentManager {
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       mergedConfig,
       resolvedAgentId,
-      { purpose, env: launchEnv },
+      { purpose, env: launchEnv, resolveDefaultModel: false },
     );
     const client = this.requireClient(handle.provider);
     const available = await client.isAvailable();
@@ -1632,7 +1632,10 @@ export class AgentManager {
         labels: record?.labels ?? options?.labels ?? {},
       },
     );
-    const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    const providerLaunchConfig = this.resolveProviderLaunchConfig(
+      this.loadedSessionLaunchConfig(launchConfig, overrides),
+      launchContext,
+    );
     const session = await client.resumeSession(
       handle,
       providerLaunchConfig,
@@ -1640,12 +1643,17 @@ export class AgentManager {
       currentResumeOptions,
     );
     await this.requireExternalMcpSupport(session, providerLaunchConfig, launchContext);
-    return this.registerSession(session, storedConfig, resolvedAgentId, {
-      ...options,
-      launchEnv,
-      persistence: handle,
-      restoring: true,
-    });
+    return this.registerSession(
+      session,
+      await this.resolveLoadedSessionConfig(session, storedConfig, purpose),
+      resolvedAgentId,
+      {
+        ...options,
+        launchEnv,
+        persistence: handle,
+        restoring: true,
+      },
+    );
   }
 
   importProviderSession(input: {
@@ -1680,6 +1688,7 @@ export class AgentManager {
         cwd: input.cwd,
       },
       resolvedAgentId,
+      { resolveDefaultModel: false },
     );
     this.paseoToolPolicies.set(resolvedAgentId, paseoToolPolicy);
     const launchContext = await this.buildLaunchContext(
@@ -1706,7 +1715,8 @@ export class AgentManager {
     await this.requireExternalMcpSupport(imported.session, providerLaunchConfig, launchContext);
     let handedToRegistration = false;
     try {
-      const importedConfig = await this.normalizeConfig(
+      const importedConfig = await this.resolveLoadedSessionConfig(
+        imported.session,
         stripInternalPaseoMcpServer(imported.config),
       );
       const timelineRows = buildImportedTimelineRows(imported.timeline);
@@ -1780,7 +1790,7 @@ export class AgentManager {
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       refreshConfig,
       agentId,
-      { env: existing.launchEnv },
+      { env: existing.launchEnv, resolveDefaultModel: false },
     );
     const hadPreviousPaseoToolPolicy = this.paseoToolPolicies.has(agentId);
     const previousPaseoToolPolicy = this.paseoToolPolicies.get(agentId);
@@ -1798,7 +1808,10 @@ export class AgentManager {
         labels: existing.labels,
       },
     );
-    const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    const providerLaunchConfig = this.resolveProviderLaunchConfig(
+      handle ? this.loadedSessionLaunchConfig(launchConfig, overrides) : launchConfig,
+      launchContext,
+    );
     if (
       Object.keys(stripInternalPaseoMcpServer(providerLaunchConfig).mcpServers ?? {}).length > 0 &&
       existing.session.capabilities.supportsMcpServers !== true
@@ -1832,9 +1845,10 @@ export class AgentManager {
         this.discardReloadedChildren(agentId);
       }
 
+      const loadedConfig = await this.resolveLoadedSessionConfig(session, storedConfig);
       // Preserve existing labels and timeline during reload.
       handedToRegistration = true;
-      return this.registerSession(session, storedConfig, agentId, {
+      return this.registerSession(session, loadedConfig, agentId, {
         labels: existing.labels,
         workspaceId: existing.workspaceId,
         owner: existing.owner,
@@ -4488,6 +4502,14 @@ export class AgentManager {
     await this.refreshRuntimeInfo(agent, options);
   }
 
+  private applyObservedRuntimeInfo(agent: ActiveManagedAgent, runtimeInfo: AgentRuntimeInfo): void {
+    agent.runtimeInfo = runtimeInfo;
+    if (runtimeInfo.model) agent.config.model = runtimeInfo.model;
+    if (runtimeInfo.thinkingOptionId !== undefined) {
+      agent.config.thinkingOptionId = runtimeInfo.thinkingOptionId ?? undefined;
+    }
+  }
+
   private async refreshRuntimeInfo(
     agent: ActiveManagedAgent,
     options?: { emit?: boolean },
@@ -4499,7 +4521,7 @@ export class AgentManager {
         newInfo.thinkingOptionId !== agent.runtimeInfo?.thinkingOptionId ||
         newInfo.sessionId !== agent.runtimeInfo?.sessionId ||
         newInfo.modeId !== agent.runtimeInfo?.modeId;
-      agent.runtimeInfo = newInfo;
+      this.applyObservedRuntimeInfo(agent, newInfo);
       if (!agent.persistence && newInfo.sessionId) {
         agent.persistence = normalizePersistenceForConfig(
           { provider: agent.provider, sessionId: newInfo.sessionId },
@@ -4864,7 +4886,7 @@ export class AgentManager {
         this.emitState(agent);
         return undefined;
       case "model_changed":
-        agent.runtimeInfo = event.runtimeInfo;
+        this.applyObservedRuntimeInfo(agent, event.runtimeInfo);
         if (!agent.persistence && event.runtimeInfo.sessionId) {
           agent.persistence = normalizePersistenceForConfig(
             { provider: agent.provider, sessionId: event.runtimeInfo.sessionId },
@@ -5718,14 +5740,49 @@ export class AgentManager {
     }
   }
 
+  private loadedSessionLaunchConfig(
+    config: AgentSessionConfig,
+    overrides: Partial<AgentSessionConfig> = {},
+  ): AgentSessionConfig {
+    // Saved selections are snapshots; only a caller's overrides are instructions
+    // to change a native session while opening it.
+    return { ...config, model: overrides.model, thinkingOptionId: overrides.thinkingOptionId };
+  }
+
+  private async resolveLoadedSessionConfig(
+    session: AgentSession,
+    config: AgentSessionConfig,
+    purpose?: AgentResumePurpose,
+  ): Promise<AgentSessionConfig> {
+    // A native session may have changed since our last snapshot. Read it before
+    // choosing a default so opening it never replaces its model or thinking level.
+    const runtime = await session.getRuntimeInfo().catch(() => null);
+    return this.normalizeConfig(
+      {
+        ...config,
+        model: runtime?.model ?? config.model,
+        thinkingOptionId:
+          runtime?.thinkingOptionId !== undefined
+            ? (runtime.thinkingOptionId ?? undefined)
+            : config.thinkingOptionId,
+      },
+      { purpose },
+    );
+  }
+
   private async prepareSessionConfig(
     config: AgentSessionConfig,
     agentId: string,
-    options: { env?: Record<string, string>; purpose?: AgentResumePurpose } = {},
+    options: {
+      env?: Record<string, string>;
+      purpose?: AgentResumePurpose;
+      resolveDefaultModel?: boolean;
+    } = {},
   ): Promise<PreparedSessionConfig> {
     const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), {
       env: options.env,
       purpose: options.purpose,
+      resolveDefaultModel: options.resolveDefaultModel,
     });
     const paseoToolPolicy = this.paseoToolsEnabled
       ? this.resolvePaseoToolPolicy(storedConfig.provider)

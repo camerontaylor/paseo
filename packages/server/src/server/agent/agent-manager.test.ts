@@ -4618,7 +4618,7 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
     },
   });
   expect(client.lastResumeOverrides).toMatchObject({
-    model: "gpt-5.4",
+    model: undefined,
     systemPrompt: "new prompt",
     mcpServers: {
       paseo: {
@@ -4637,6 +4637,55 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
     },
   });
 });
+
+test.each(["native-model", null])(
+  "import uses reported model %s before resolving a default",
+  async (model) => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-import-model-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    class NativeSession extends TestAgentSession {
+      override async getRuntimeInfo() {
+        return { ...(await super.getRuntimeInfo()), model, thinkingOptionId: "high" };
+      }
+    }
+    class ImportClient extends TestAgentClient {
+      async importSession(
+        _input: ImportProviderSessionInput,
+        context: ImportProviderSessionContext,
+      ) {
+        expect(context.config.model).toBeUndefined();
+        expect(context.storedConfig.model).toBeUndefined();
+        return {
+          session: new NativeSession(context.config),
+          config: context.storedConfig,
+          persistence: { provider: "codex", sessionId: "native-session" },
+          timeline: [],
+        };
+      }
+    }
+    const manager = new AgentManager({
+      clients: { codex: new ImportClient() },
+      registry: storage,
+      logger,
+    });
+    try {
+      const imported = await manager.importProviderSession({
+        provider: "codex",
+        providerHandleId: "native-session",
+        cwd: workdir,
+        workspaceId: "workspace",
+      });
+      expect(imported.config.model).toBe(model ?? "gpt-5.4");
+      expect(imported.config.thinkingOptionId).toBe("high");
+      await manager.flush();
+      expect((await storage.get(imported.id))?.config?.model).toBe(model ?? "gpt-5.4");
+    } finally {
+      await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+      await storage.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("importProviderSession imports the selected session without listing and publishes ready state", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-import-session-"));
@@ -5549,6 +5598,7 @@ test("session config drift events update state through the stream channel", asyn
   expect(agent?.currentModeId).toBe("build");
   expect(agent?.config.modeId).toBe("build");
   expect(agent?.config.thinkingOptionId).toBe("high");
+  expect(agent?.config.model).toBe("gpt-5.4");
   expect(agent?.availableModes).toEqual([
     { id: "plan", label: "Plan" },
     { id: "build", label: "Build" },
@@ -5563,6 +5613,8 @@ test("session config drift events update state through the stream channel", asyn
   const persisted = await storage.get(snapshot.id);
   expect(persisted?.lastModeId).toBe("build");
   expect(persisted?.config?.modeId).toBe("build");
+  expect(persisted?.config?.model).toBe("gpt-5.4");
+  expect(persisted?.config?.thinkingOptionId).toBe("high");
 });
 
 test("setLabels merges and persists labels", async () => {

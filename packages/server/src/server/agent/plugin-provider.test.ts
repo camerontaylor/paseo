@@ -20,6 +20,7 @@ import { createTestLogger } from "../../test-utils/test-logger.js";
 import type { AgentClient, AgentStreamEvent } from "./agent-sdk-types.js";
 import { toStoredAgentRecord } from "./agent-projections.js";
 import { AgentManager } from "./agent-manager.js";
+import { ensureAgentLoaded } from "./agent-loading.js";
 import { AgentRunState } from "./agent-run-state.js";
 import { buildProviderRegistry } from "./provider-registry.js";
 import { ProviderOverrideSchema } from "@getpaseo/protocol/provider-config";
@@ -2310,5 +2311,125 @@ test("a vendor turn with no foreground turn becomes an autonomous run", async ()
     trackAutonomousRun.mockRestore();
     await manager.closeAgent(agent.id);
     await registry.shutdown();
+  }
+});
+
+test("ACP imports and loads preserve native model and thinking while explicit reload overrides apply", async () => {
+  const home = await mkdtemp(join(tmpdir(), "acp-native-selection-"));
+  const logger = createTestLogger();
+  const storage = new AgentStorage(join(home, "agents"), logger);
+  let model = "native-model";
+  let thinking = "high";
+  const writes: unknown[] = [];
+  const configOptions = (currentModel: string) => [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: currentModel,
+      options: ["default-model", "native-model", "external-model", "explicit-model"].map(
+        (value) => ({ value, name: value }),
+      ),
+    },
+    {
+      id: "thinking",
+      name: "Thinking",
+      category: "thought_level",
+      type: "select",
+      currentValue: thinking,
+      options: ["low", "high"].map((value) => ({ value, name: value })),
+    },
+  ];
+  const registration = runAcpProvider({
+    id: "acp-native-selection",
+    label: "ACP native selection",
+    connector() {
+      let controller!: ReadableStreamDefaultController<AcpStreamMessage>;
+      return {
+        readable: new ReadableStream<AcpStreamMessage>({
+          start(value) {
+            controller = value;
+          },
+        }),
+        writable: new WritableStream<AcpStreamMessage>({
+          write(message) {
+            if (!("method" in message) || !("id" in message)) return;
+            const respond = (result: unknown) =>
+              controller.enqueue({ jsonrpc: "2.0", id: message.id, result } as AcpStreamMessage);
+            if (message.method === "initialize")
+              respond({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
+            else if (message.method === "session/new")
+              respond({
+                sessionId: "probe",
+                modes: null,
+                configOptions: configOptions("default-model"),
+              });
+            else if (message.method === "session/load")
+              respond({ modes: null, configOptions: configOptions(model) });
+            else if (message.method === "session/set_config_option") {
+              writes.push(message.params);
+              const params = message.params as { configId: string; value: string };
+              if (params.configId === "model") model = params.value;
+              else if (params.configId === "thinking") thinking = params.value;
+              respond({ configOptions: configOptions(model) });
+            } else respond({});
+          },
+        }),
+      };
+    },
+  });
+  const plugins = new PluginAgentClientRegistry(logger);
+  plugins.replace([registration]);
+  const manager = new AgentManager({
+    clients: plugins.clients(),
+    providerDefinitions: plugins.definitions(),
+    registry: storage,
+    logger,
+  });
+  try {
+    const imported = await manager.importProviderSession({
+      provider: registration.id,
+      providerHandleId: 'plugin:{"version":1,"data":{"sessionId":"native"}}',
+      cwd: home,
+      workspaceId: "workspace",
+    });
+    expect(imported.config).toMatchObject({ model: "native-model", thinkingOptionId: "high" });
+    expect(imported.runtimeInfo).toMatchObject({ model: "native-model", thinkingOptionId: "high" });
+    expect(writes).toEqual([]);
+
+    model = "external-model";
+    thinking = "low";
+    const reloaded = await manager.reloadAgentSession(imported.id);
+    expect(reloaded.config).toMatchObject({ model: "external-model", thinkingOptionId: "low" });
+    expect(writes).toEqual([]);
+
+    const explicit = await manager.reloadAgentSession(imported.id, {
+      model: "explicit-model",
+      thinkingOptionId: "high",
+    });
+    expect(explicit.config).toMatchObject({ model: "explicit-model", thinkingOptionId: "high" });
+    expect(writes).toHaveLength(2);
+
+    await manager.closeAgent(imported.id);
+    model = "native-model";
+    thinking = "low";
+    const loaded = await ensureAgentLoaded(imported.id, {
+      agentManager: manager,
+      agentStorage: storage,
+      logger,
+    });
+    expect(loaded.config).toMatchObject({ model: "native-model", thinkingOptionId: "low" });
+    expect(writes).toHaveLength(2);
+    await manager.flush();
+    expect((await storage.get(imported.id))?.config).toMatchObject({
+      model: "native-model",
+      thinkingOptionId: "low",
+    });
+  } finally {
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    await plugins.shutdown();
+    await storage.flush();
+    await rm(home, { recursive: true, force: true });
   }
 });
