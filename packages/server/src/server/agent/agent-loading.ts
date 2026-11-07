@@ -113,9 +113,10 @@ export async function ensureAgentLoaded(
 
     let snapshot: ManagedAgent;
     if (handle) {
+      // A storage snapshot is not an instruction to change the native session.
       snapshot = await deps.agentManager.resumeAgentFromPersistence(
         handle,
-        buildConfigOverrides(record),
+        { ...buildConfigOverrides(record), model: undefined, thinkingOptionId: undefined },
         agentId,
         { ...extractTimestamps(record), attention: extractAttention(record) },
         record.archivedAt ? { purpose: "history" } : undefined,
