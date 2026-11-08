@@ -52,6 +52,12 @@ const NO_COLLAPSED_TURNS: StreamPresentation["turns"] = collapseTurns({
   getGroupedCalls: () => undefined,
 });
 
+/** Find and scrolling address a plugin row by the source it replaces. */
+export function getStreamItemMessageId(item: StreamItem): string {
+  if (item.kind === "plugin") return item.sourceId ?? item.id;
+  return item.id;
+}
+
 /** Source messages reach plugins before display projection. */
 export function createStreamPresentation() {
   const userMessageCache = new WeakMap<UserMessageItem, UserMessageItem>();

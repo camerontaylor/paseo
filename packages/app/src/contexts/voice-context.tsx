@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
+import { useTranslation } from "react-i18next";
+import { useToast } from "@/contexts/toast-context";
 import { useSessionStore } from "@/stores/session-store";
 import { createAudioEngine } from "@/audio";
 import type { AudioEngine } from "@/audio";
@@ -30,6 +32,8 @@ const EMPTY_SNAPSHOT: VoiceRuntimeSnapshot = {
   isVoiceMode: false,
   isVoiceSwitching: false,
   isMuted: false,
+  failure: null,
+  lastInputStatus: null,
   activeServerId: null,
   activeAgentId: null,
 };
@@ -115,6 +119,14 @@ interface VoiceProviderProps {
 export function VoiceProvider({ children }: VoiceProviderProps) {
   const engineRef = useRef<AudioEngine | null>(null);
   const runtimeRef = useRef<VoiceRuntime | null>(null);
+  const { t } = useTranslation();
+  const toast = useToast();
+  // Voice stops after the microphone is lost, taking the voice panel with it, so the
+  // visible notice for that case is a toast.
+  const notifyMicrophoneLostRef = useRef(() => {});
+  notifyMicrophoneLostRef.current = () => {
+    toast.error(t("realtimeVoice.failure.microphone-lost"));
+  };
 
   if (!engineRef.current) {
     let runtime: VoiceRuntime | null = null;
@@ -126,7 +138,9 @@ export function VoiceProvider({ children }: VoiceProviderProps) {
         runtime?.handleCaptureVolume(level);
       },
       onInterruption: () => {
-        void runtime?.stopVoice().catch((error) => {
+        if (!runtime?.getSnapshot().isVoiceMode) return;
+        notifyMicrophoneLostRef.current();
+        void runtime.handleMicrophoneLost().catch((error) => {
           console.error("[VoiceEngine] Failed to stop after audio interruption:", error);
         });
       },
