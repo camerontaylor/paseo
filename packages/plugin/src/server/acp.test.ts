@@ -2547,6 +2547,64 @@ describe("ACP transformer turn lifecycle", () => {
     }
   });
 
+  it("keeps anonymous assistant messages separate across a suppressed foreground steer echo", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer"],
+      transformers: [
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+      ],
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    try {
+      await connection.send(promptInput("origin"));
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("before"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "before",
+      );
+      await connection.send({
+        ...promptInput("steer"),
+        prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("steer"),
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("after"),
+      });
+      for (const promptRequest of agent().requests.filter(
+        (request) => request.method === "session/prompt",
+      )) {
+        agent().respond(promptRequest, { stopReason: "end_turn" });
+      }
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:origin" &&
+          event.state === "completed",
+      );
+      expect(timelineProjection(events)).toEqual([
+        { type: "user_message", id: "origin", text: "origin" },
+        { type: "assistant_message", id: "agent_message_chunk:1", text: "before" },
+        { type: "user_message", id: "steer", text: "steer" },
+        { type: "assistant_message", id: "agent_message_chunk:2", text: "after" },
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("shows peer steering during a foreground prompt while suppressing its own echo", async () => {
     const { connection, events } = await connectVendorTurns({
       acpOptions: { vendorTurnsAreNeverForeground: true },

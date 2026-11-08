@@ -286,8 +286,13 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
-      - *server_checkout
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - *server_node
       - *server_install
       - *server_build
@@ -299,6 +304,7 @@ jobs:
           ref: 39fb7620589835d0c7f1a47653ab74f594b56eaa
           path: .jcode-e2e-source
           submodules: recursive
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

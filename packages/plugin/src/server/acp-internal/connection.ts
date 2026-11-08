@@ -1342,6 +1342,7 @@ class AcpRuntime {
       : [...this.steerEchoes];
     const exact = echoes.find(([, echo]) => echo === text);
     if (exact) {
+      this.fallbackChunkIds.clear();
       this.steerEchoes.delete(exact[0]);
       this.bufferedUserChunk = null;
     } else if (!echoes.some(([, echo]) => echo.startsWith(text))) {
