@@ -141,6 +141,13 @@ export class AgentManagerShuttingDownError extends Error {
   }
 }
 
+export class PeerTurnActiveError extends Error {
+  constructor(readonly agentId: string) {
+    super("A turn from another client is running. Wait for it or press Stop.");
+    this.name = "PeerTurnActiveError";
+  }
+}
+
 export class AgentRunCancellationError extends Error {
   constructor(agentId: string, action: "reload" | "replace" | "rewind" | "stop") {
     super(
@@ -1048,6 +1055,15 @@ export class AgentManager {
     const nowMs = Date.now();
     const nextMs = nowMs > previousMs ? nowMs : previousMs + 1;
     return new Date(nextMs).toISOString();
+  }
+
+  isPeerRun(agentId: string): boolean {
+    const agent = this.agents.get(agentId);
+    return (
+      agent?.capabilities.supportsSharedTurns === true &&
+      agent.activeForegroundTurnId === null &&
+      this.runs.getRun(agentId)?.kind === "autonomous"
+    );
   }
 
   hasInFlightRun(agentId: string): boolean {
@@ -3131,12 +3147,29 @@ export class AgentManager {
     return "closed_current";
   }
 
+  private assertPromptCanReplacePeerRun(
+    agentId: string,
+    prompt: AgentPromptInput,
+    options?: AgentRunOptions,
+  ): void {
+    if (!this.isPeerRun(agentId)) return;
+    if (options?.clientMessageId) {
+      const agent = this.requireSessionAgent(agentId);
+      this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "rejected", {
+        messageId: options.clientMessageId,
+      });
+      this.emitState(agent);
+    }
+    throw new PeerTurnActiveError(agentId);
+  }
+
   async replaceAgentRun(
     agentId: string,
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<AsyncGenerator<AgentStreamEvent>> {
     const snapshot = this.requireAgent(agentId);
+    this.assertPromptCanReplacePeerRun(agentId, prompt, options);
     if (
       snapshot.lifecycle !== "running" &&
       !snapshot.activeForegroundTurnId &&
@@ -3232,6 +3265,8 @@ export class AgentManager {
     if (result.status === "accepted") {
       return { status: "steered" };
     }
+
+    this.assertPromptCanReplacePeerRun(agentId, prompt, options);
 
     // Providers without autonomous steering keep their existing dispatch behavior. The shared
     // admission may recognize the turn, but only an accepted steer can own it without replacement.
@@ -3578,6 +3613,17 @@ export class AgentManager {
     agentId: string,
     action: "reload" | "replace" | "rewind",
   ): Promise<void> {
+    if (this.isPeerRun(agentId)) {
+      if (action !== "reload") throw new PeerTurnActiveError(agentId);
+      const agent = this.requireSessionAgent(agentId);
+      await this.dispatchSessionEvent(agent, {
+        type: "turn_canceled",
+        provider: agent.provider,
+        turnId: agent.activeTurnId ?? undefined,
+        reason: "Session reloaded",
+      });
+      return;
+    }
     const result = await this.cancelAgentRun(agentId);
     if (result.status === "refused") {
       throw new AgentRunCancellationError(agentId, action);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runAcpProvider, type AcpStreamMessage } from "@getpaseo/plugin/server/acp";
 import type { ProviderEvent, ProviderInput } from "@getpaseo/plugin/server/provider";
+import { jcodeCapabilities } from "./capabilities.js";
 import { jcodePeerTurns } from "./peer-turns.js";
 
 const context = { sessionId: "session-1" };
@@ -113,15 +114,42 @@ describe("jcodePeerTurns", () => {
 // the order a real `jcode acp` would send them. Like jcode, it sends no `messageId` on its chunks.
 interface ScriptedAgent {
   readonly requests: string[];
+  readonly configurations: Array<{ configId: string; value: string }>;
   notify(method: string, params: unknown): void;
 }
 
-function scriptedConnector() {
+const jcodeConfigOptions = [
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: "model-a",
+    options: [
+      { value: "model-a", name: "Model A" },
+      { value: "model-b", name: "Model B" },
+    ],
+  },
+  {
+    id: "reasoning_effort",
+    name: "Reasoning effort",
+    category: "thought_level",
+    type: "select",
+    currentValue: "medium",
+    options: [
+      { value: "medium", name: "Medium" },
+      { value: "high", name: "High" },
+    ],
+  },
+];
+
+function scriptedConnector(configOptions = [] as typeof jcodeConfigOptions) {
   const agents: ScriptedAgent[] = [];
   const connector = () => {
     let sink!: ReadableStreamDefaultController<AcpStreamMessage>;
     const agent: ScriptedAgent = {
       requests: [],
+      configurations: [],
       notify: (method, params) => sink.enqueue({ jsonrpc: "2.0", method, params }),
     };
     agents.push(agent);
@@ -142,7 +170,16 @@ function scriptedConnector() {
           const params = message.params as { protocolVersion: number };
           reply({ protocolVersion: params.protocolVersion, agentCapabilities: {} });
         } else if (message.method === "session/new") {
-          reply({ sessionId: "jcode-native-session", modes: null, configOptions: [] });
+          reply({ sessionId: "jcode-native-session", modes: null, configOptions });
+        } else if (message.method === "session/set_config_option") {
+          const params = message.params as { configId: string; value: string };
+          agent.configurations.push({ configId: params.configId, value: params.value });
+          reply({
+            configOptions: configOptions.map((option) => ({
+              ...option,
+              currentValue: option.id === params.configId ? params.value : option.currentValue,
+            })),
+          });
         } else if (message.method === "session/prompt") {
           notify("session/update", sessionUpdate("agent_message_chunk", "paseo output"));
           reply({ stopReason: "end_turn" });
@@ -207,18 +244,21 @@ function timeline(events: readonly ProviderEvent[], peerTurnId = "acp-vendor:pee
   });
 }
 
-async function connect(acpOptions?: { vendorTurnsAreNeverForeground?: boolean }) {
-  const scripted = scriptedConnector();
+async function connect(
+  acpOptions?: { vendorTurnsAreNeverForeground?: boolean },
+  configOptions?: typeof jcodeConfigOptions,
+) {
+  const scripted = scriptedConnector(configOptions);
   const registration = runAcpProvider({
     id: "jcode",
     label: "Jcode",
     connector: scripted.connector,
     acpOptions,
-    transformers: [jcodePeerTurns],
+    transformers: [jcodePeerTurns, jcodeCapabilities],
   });
   const connection = await registration.connect({
     versions: [1],
-    capabilities: ["prompt.message"],
+    capabilities: ["prompt.message", "session.configure", "session.shared_turns"],
   });
   const events: ProviderEvent[] = [];
   connection.onEvent((event) => events.push(event));
@@ -266,6 +306,69 @@ async function runPeerTurn(terminal: {
 }
 
 describe("jcodePeerTurns through an ACP connection", () => {
+  it("maps jcode model and effort categories without interface metadata", async () => {
+    const { connection, events, agent } = await connect(undefined, jcodeConfigOptions);
+    try {
+      expect(await waitForEvent(events, (event) => event.type === "session.config")).toMatchObject({
+        config: {
+          model: "model-a",
+          thinkingOption: "medium",
+          models: [
+            { id: "model-a", label: "Model A" },
+            { id: "model-b", label: "Model B" },
+          ],
+          thinkingOptions: [
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+          settings: [],
+        },
+      });
+
+      await connection.send({
+        type: "session.configure",
+        requestId: "configure-model",
+        sessionId: "session-1",
+        changes: { model: "model-b" },
+      });
+      await connection.send({
+        type: "session.configure",
+        requestId: "configure-effort",
+        sessionId: "session-1",
+        changes: { thinkingOption: "high" },
+      });
+      await expect
+        .poll(() => agent.configurations)
+        .toEqual([
+          { configId: "model", value: "model-b" },
+          { configId: "reasoning_effort", value: "high" },
+        ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("keeps shared peer-turn behavior enabled without interface metadata", async () => {
+    const { connection, events, agent } = await connect({ vendorTurnsAreNeverForeground: true });
+    try {
+      expect(connection.capabilities).toContain("session.shared_turns");
+      expect(connection.capabilities).not.toContain("prompt.steer");
+      agent.notify("_jcode/turn", peerTurn({ state: "started" }).params);
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "started",
+      );
+      agent.notify("_jcode/turn", peerTurn({ state: "completed" }).params);
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "completed",
+      );
+      expect(agent.requests).not.toContain("session/cancel");
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("completes a peer turn after its timeline items", async () => {
     const { sequence, ended } = await runPeerTurn({ state: "completed" });
 

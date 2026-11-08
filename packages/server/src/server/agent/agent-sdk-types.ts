@@ -168,6 +168,7 @@ export interface AgentCreateConfigUnattendedInput {
 
 export interface AgentCapabilityFlags {
   [capability: string]: boolean | undefined;
+  supportsSharedTurns?: boolean;
   supportsStreaming: boolean;
   supportsSessionPersistence: boolean;
   supportsSessionListing?: boolean;

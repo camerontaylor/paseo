@@ -24,6 +24,8 @@ import { z } from "zod";
 import type {
   AcpConfigAccess,
   AcpConfigChange,
+  AcpConnectionPolicy,
+  AcpSessionPolicy,
   AcpToolCallSnapshot,
   AcpTransformer,
   AcpVendorUpdate,
@@ -58,6 +60,15 @@ import {
  */
 const VENDOR_TURN_CANCEL_GRACE_MS = 1_000;
 
+function mergePolicy<T extends object>(current: T, next: T | null | undefined): T {
+  if (!next) return current;
+  const merged = { ...current };
+  for (const key of Object.keys(next) as (keyof T)[]) {
+    if (next[key] !== undefined && current[key] !== false) merged[key] = next[key];
+  }
+  return merged;
+}
+
 const ADAPTER_CAPABILITIES = [
   "prompt.message",
   "prompt.command",
@@ -86,6 +97,9 @@ export async function createAcpProviderConnection(
     emit: () => undefined,
   });
   const supportedCapabilities: ProviderCapability[] = [...ADAPTER_CAPABILITIES];
+  if (options.acpOptions?.vendorTurnsAreNeverForeground)
+    supportedCapabilities.push("session.shared_turns");
+  if (probe.connectionPolicy.steering === true) supportedCapabilities.push("prompt.steer");
   if (probe.agentCapabilities.promptCapabilities?.image) {
     supportedCapabilities.push("prompt.image");
   }
@@ -145,10 +159,12 @@ export async function createAcpProviderConnection(
       for (const session of sessions.values()) session.runtime.closeVendorTurn();
       closed = true;
       closePromise = (async () => {
-        await Promise.all(inFlight);
         const active = [...sessions.values()];
         sessions.clear();
         await Promise.all(active.map(({ runtime }) => runtime.closeSession()));
+        // Closing the transports releases admissions waiting on active prompts. Operations that
+        // were still opening a session observe closed and close their own runtime.
+        await Promise.all(inFlight);
         listeners.clear();
       })();
       return closePromise;
@@ -365,6 +381,9 @@ interface StartRuntimeOptions {
 class AcpRuntime {
   readonly connection: ClientSideConnection;
   agentCapabilities: AgentCapabilities = {};
+  connectionPolicy: AcpConnectionPolicy = {};
+  private sessionPolicy: AcpSessionPolicy = {};
+  private sharedTurns = false;
   nativeSessionId = "";
   private readonly child: ChildProcessWithoutNullStreams | null;
   private emit: (event: ProviderEvent) => void;
@@ -407,6 +426,10 @@ class AcpRuntime {
   private notificationLane: Promise<void> = Promise.resolve();
   private promptLane: Promise<void> = Promise.resolve();
   private activePrompt: { turnId: string; settled: Promise<void> } | null = null;
+  private readonly outstandingSteers = new Map<
+    string,
+    { attachedTurnId: string; settled: Promise<void> }
+  >();
   /** A prompt admitted but not sent yet, waiting for an open vendor turn to end. */
   private parkedAdmission: { cancel(): void } | null = null;
   private vendorTurnCancelTimer: ReturnType<typeof setTimeout> | null = null;
@@ -464,6 +487,14 @@ class AcpRuntime {
         ? await Promise.race([initialize, spawnFailure])
         : await initialize;
       runtime.agentCapabilities = initialized.agentCapabilities ?? {};
+      for (const transformer of runtime.transformers) {
+        runtime.connectionPolicy = mergePolicy(
+          runtime.connectionPolicy,
+          transformer.initialize?.({
+            agentCapabilities: jsonValue(runtime.agentCapabilities),
+          }),
+        );
+      }
       return runtime;
     } catch (error) {
       await runtime.close();
@@ -529,7 +560,8 @@ class AcpRuntime {
     input: Extract<ProviderInput, { type: "session.open" }>,
     connectionCapabilities: readonly ProviderCapability[],
   ): Promise<readonly ProviderCapability[]> {
-    const mcpServers = toAcpMcpServers(input.config);
+    const mcpServers =
+      this.connectionPolicy.sendSessionMcpServers === false ? [] : toAcpMcpServers(input.config);
     const nativeSessionId = readNativeSessionId(input.persistence);
     const metadata = {
       _paseo: {
@@ -574,13 +606,25 @@ class AcpRuntime {
     }
     this.modes = response.modes;
     this.configOptions = response.configOptions ?? [];
+    for (const transformer of this.transformers) {
+      this.sessionPolicy = mergePolicy(
+        this.sessionPolicy,
+        transformer.attach?.(
+          { response: jsonValue(response) },
+          { sessionId: input.sessionId, agentCapabilities: jsonValue(this.agentCapabilities) },
+        ),
+      );
+    }
+    this.sharedTurns = connectionCapabilities.includes("session.shared_turns");
     await this.applyInitialConfig(input.config);
     const sessionCapabilities = connectionCapabilities.filter(
       (capability) =>
-        capability !== "session.configure" ||
-        this.modes !== null ||
-        this.configOptions.length > 0 ||
-        this.transformers.some((transformer) => transformer.configure !== undefined),
+        (capability !== "prompt.steer" ||
+          (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true)) &&
+        (capability !== "session.configure" ||
+          this.modes !== null ||
+          this.configOptions.length > 0 ||
+          this.transformers.some((transformer) => transformer.configure !== undefined)),
     );
     this.emit({
       type: "session.opened",
@@ -592,6 +636,19 @@ class AcpRuntime {
       title: input.config.title,
       cwd: input.config.cwd,
     });
+    const omittedServers = Object.keys(input.config.mcpServers);
+    if (this.connectionPolicy.sendSessionMcpServers === false && omittedServers.length > 0) {
+      this.emit({
+        type: "session.notice",
+        sessionId: input.sessionId,
+        notice: {
+          id: "acp-session-mcp-omitted",
+          severity: "info",
+          title: "Session MCP servers were not sent",
+          description: `${omittedServers.join(", ")}. Configure these servers in the agent's own MCP configuration.`,
+        },
+      });
+    }
     this.emitConfig();
     if (this.options.options.acpOptions?.waitForInitialCommands) {
       await this.waitForInitialCommands();
@@ -614,6 +671,7 @@ class AcpRuntime {
   }
 
   prompt(input: Extract<ProviderInput, { type: "session.prompt" }>): Promise<void> {
+    if (input.prompt.delivery === "steer") return this.steer(input);
     // A stop cancels the prompts waiting when it is pressed, not prompts admitted after it.
     const stopGeneration = this.stopGeneration;
     const admission = this.promptLane.then(() => this.admitPrompt(input, stopGeneration));
@@ -621,14 +679,96 @@ class AcpRuntime {
     return admission;
   }
 
+  private async steer(input: Extract<ProviderInput, { type: "session.prompt" }>): Promise<void> {
+    const turnId = this.activePrompt?.turnId ?? this.vendorTurn?.turnId;
+    const clientMessageId = input.prompt.clientMessageId;
+    if (!turnId) {
+      this.emit({
+        type: "session.prompt_result",
+        sessionId: this.options.boundarySessionId,
+        clientMessageId,
+        result: { type: "failed", error: { message: "No active turn to steer" } },
+      });
+      return;
+    }
+    const prompt = toAcpPrompt(input.prompt);
+    this.emit({
+      type: "timeline.item",
+      sessionId: this.options.boundarySessionId,
+      item: {
+        type: "user_message",
+        id: clientMessageId,
+        clientMessageId,
+        text: prompt
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n"),
+      },
+    });
+    const rolloverId = `acp:${clientMessageId}`;
+    const settled = this.call(
+      this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
+    ).then(
+      async (response) => {
+        await this.drainNotifications();
+        if (this.activePrompt?.turnId === rolloverId) {
+          this.activePrompt = null;
+          const state = response.stopReason === "cancelled" ? "canceled" : "completed";
+          this.fallbackChunkIds.clear();
+          this.terminalizeTransientItems(state);
+          this.emit({
+            type: "session.turn",
+            sessionId: this.options.boundarySessionId,
+            turnId: rolloverId,
+            state,
+          });
+        }
+        return undefined;
+      },
+      async (error) => {
+        await this.drainNotifications();
+        if (this.closing || this.processFailed) return;
+        if (this.activePrompt?.turnId === rolloverId) {
+          this.activePrompt = null;
+          this.terminalizeTransientItems("failed");
+          this.emit({
+            type: "session.turn",
+            sessionId: this.options.boundarySessionId,
+            turnId: rolloverId,
+            state: "failed",
+            error: { message: describeError(error) },
+          });
+        }
+        this.emit({
+          type: "session.notice",
+          sessionId: this.options.boundarySessionId,
+          notice: {
+            id: `acp-steer-${clientMessageId}`,
+            severity: "warning",
+            title: "Steering failed",
+            description: describeError(error),
+          },
+        });
+      },
+    );
+    this.outstandingSteers.set(clientMessageId, { attachedTurnId: turnId, settled });
+    void settled.finally(() => this.outstandingSteers.delete(clientMessageId));
+    this.emit({
+      type: "session.prompt_result",
+      sessionId: this.options.boundarySessionId,
+      clientMessageId,
+      result: { type: "steer", turnId },
+    });
+  }
+
   private async admitPrompt(
     input: Extract<ProviderInput, { type: "session.prompt" }>,
     stopGeneration: number,
   ): Promise<void> {
-    const active = this.activePrompt;
-    if (active) {
+    while (this.activePrompt) {
+      const active = this.activePrompt;
       // Replacing a foreground prompt is not a user stop of the prompts queued behind it.
-      await this.interruptTurn();
+      if (!this.sharedTurns) await this.interruptTurn();
       await active.settled;
     }
     // A vendor turn belongs to another client attached to the same agent session; the agent
@@ -651,6 +791,7 @@ class AcpRuntime {
     } finally {
       this.parkedAdmission = null;
     }
+    if (this.closing) return;
     const prompt = toAcpPrompt(input.prompt);
     const turnId = `acp:${input.prompt.clientMessageId}`;
     this.fallbackChunkIds.clear();
@@ -697,6 +838,7 @@ class AcpRuntime {
     ).then(
       async (response): Promise<void> => {
         await this.drainNotifications();
+        if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
         const state = response.stopReason === "cancelled" ? "canceled" : "completed";
         this.fallbackChunkIds.clear();
         this.terminalizeTransientItems(state);
@@ -710,6 +852,7 @@ class AcpRuntime {
       },
       async (error): Promise<void> => {
         await this.drainNotifications();
+        if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
         this.fallbackChunkIds.clear();
         this.terminalizeTransientItems("failed");
         this.emit({
@@ -734,6 +877,19 @@ class AcpRuntime {
     this.stopGeneration += 1;
     this.parkedAdmission?.cancel();
     const cancelled = this.vendorTurn;
+    if (cancelled && !this.activePrompt && this.sessionPolicy.stopObservedTurns === false) {
+      this.emit({
+        type: "session.notice",
+        sessionId: this.options.boundarySessionId,
+        notice: {
+          id: "acp-stop-observed-turn",
+          severity: "warning",
+          title: "Cannot stop another client's turn",
+          description: "This attachment cannot stop another client's turn.",
+        },
+      });
+      return Promise.resolve();
+    }
     // Only an agent that reports peer turns as vendor turns is known to stop the peer turn when
     // it is cancelled; for any other agent the turn may keep running, so do not end it locally.
     if (cancelled && !this.activePrompt && this.vendorTurnsAreNeverForeground) {
@@ -1037,6 +1193,33 @@ class AcpRuntime {
     // keep it even when the caller asked to skip the loaded history.
     if (this.replayWindow === "skip" && !this.vendorTurn) return;
     if (
+      !this.replayWindow &&
+      !this.activePrompt &&
+      !this.vendorTurn &&
+      [
+        "agent_message_chunk",
+        "agent_thought_chunk",
+        "user_message_chunk",
+        "tool_call",
+        "tool_call_update",
+        "plan",
+      ].includes(notification.update.sessionUpdate)
+    ) {
+      const next = this.outstandingSteers.entries().next().value;
+      if (next) {
+        const [clientMessageId, steer] = next;
+        const turnId = `acp:${clientMessageId}`;
+        this.activePrompt = { turnId, settled: steer.settled };
+        this.fallbackChunkIds.clear();
+        this.emit({
+          type: "session.turn",
+          sessionId: this.options.boundarySessionId,
+          turnId,
+          state: "started",
+        });
+      }
+    }
+    if (
       this.replayWindow === "replay" &&
       notification.update.sessionUpdate === "user_message_chunk"
     ) {
@@ -1180,6 +1363,7 @@ class AcpRuntime {
       this.emit({
         type: "session.usage",
         sessionId: this.options.boundarySessionId,
+        turnId: this.vendorTurn?.turnId ?? this.activePrompt?.turnId,
         usage: {
           contextWindowUsedTokens: update.used,
           contextWindowMaxTokens: update.size,
@@ -1403,6 +1587,7 @@ class AcpRuntime {
   }
 
   private settlePendingWork(): void {
+    this.outstandingSteers.clear();
     // A user-initiated close leaves the peer turn running on the agent's side, so it was
     // canceled rather than failed; only a broken transport fails it.
     this.endVendorTurn(

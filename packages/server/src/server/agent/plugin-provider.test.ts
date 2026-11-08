@@ -1661,6 +1661,14 @@ describe("PluginAgentClientRegistry", () => {
     const client = registry.clients()[harness.registration.id]!;
     const session = await client.createSession({ provider: harness.registration.id, cwd: "/tmp" });
     try {
+      const opened = harness.inputs.find((input) => input.type === "session.open")!;
+      if (opened.type !== "session.open") throw new Error("Expected open");
+      harness.emit({
+        type: "session.turn",
+        sessionId: opened.sessionId,
+        turnId: "turn-1",
+        state: "started",
+      });
       await expect(
         session.steerActiveTurn!("follow up", {
           expectedTurnId: "turn-1",
@@ -2311,4 +2319,103 @@ test("a vendor turn with no foreground turn becomes an autonomous run", async ()
     await manager.closeAgent(agent.id);
     await registry.shutdown();
   }
+});
+
+test.each(["before", "after"])(
+  "steering turn mismatch %s dispatch never reports delivered work as unavailable",
+  async (mismatch) => {
+    const harness = createProviderHarness({
+      capabilities: [...CAPABILITIES, "prompt.steer"],
+      handleInput: async (input, emit) => {
+        if (input.type !== "session.prompt") return false;
+        emit({
+          type: "session.prompt_result",
+          sessionId: input.sessionId,
+          clientMessageId: input.prompt.clientMessageId,
+          result: { type: "steer", turnId: "successor" },
+        });
+        return true;
+      },
+    });
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const client = registry.clients()[harness.registration.id]!;
+    const session = await client.createSession({ provider: harness.registration.id, cwd: "/tmp" });
+    try {
+      const opened = harness.inputs.find((input) => input.type === "session.open")!;
+      if (opened.type !== "session.open") throw new Error("Expected open");
+      harness.emit({
+        type: "session.turn",
+        sessionId: opened.sessionId,
+        turnId: "current",
+        state: "started",
+      });
+      const result = await session.steerActiveTurn!("follow up", {
+        expectedTurnId: mismatch === "before" ? "previous" : "current",
+      });
+      expect(result).toEqual({ status: mismatch === "before" ? "unavailable" : "accepted" });
+      expect(harness.inputs.filter((input) => input.type === "session.prompt")).toHaveLength(
+        mismatch === "before" ? 0 : 1,
+      );
+    } finally {
+      await session.close();
+      registry.replace([]);
+    }
+  },
+);
+
+test("retains closing bridge events in history while suppressing UI delivery", async () => {
+  let releaseClose!: () => void;
+  let signalClosing!: () => void;
+  const closeAllowed = new Promise<void>((resolve) => {
+    releaseClose = resolve;
+  });
+  const closing = new Promise<void>((resolve) => {
+    signalClosing = resolve;
+  });
+  const harness = createProviderHarness({
+    handleInput: async (input, emit) => {
+      if (input.type !== "session.close") return false;
+      emit({
+        type: "timeline.item",
+        sessionId: input.sessionId,
+        item: { type: "assistant_message", id: "final-close", text: "Final output" },
+      });
+      emit({
+        type: "session.turn",
+        sessionId: input.sessionId,
+        turnId: "closing-turn",
+        state: "completed",
+      });
+      signalClosing();
+      await closeAllowed;
+      emit({ type: "session.closed", sessionId: input.sessionId });
+      emit({ type: "request.completed", requestId: input.requestId });
+      return true;
+    },
+  });
+  const registry = new PluginAgentClientRegistry(createTestLogger());
+  registry.replace([harness.registration]);
+  const client = registry.clients()[harness.registration.id]!;
+  const session = await client.createSession({ provider: harness.registration.id, cwd: "/tmp" });
+  const listener = vi.fn();
+  session.subscribe(listener);
+  const closed = session.close();
+  await closing;
+  const history: AgentStreamEvent[] = [];
+  for await (const event of session.streamHistory()) history.push(event);
+  expect(history).toContainEqual(
+    expect.objectContaining({ type: "turn_completed", turnId: "closing-turn" }),
+  );
+  expect(history).toContainEqual(
+    expect.objectContaining({
+      type: "timeline",
+      item: expect.objectContaining({ text: "Final output" }),
+    }),
+  );
+  expect(listener).not.toHaveBeenCalled();
+  expect(harness.inputs.filter((input) => input.type === "session.interrupt")).toHaveLength(0);
+  releaseClose();
+  await closed;
+  registry.replace([]);
 });
