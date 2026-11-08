@@ -18,6 +18,7 @@ const desktopPackagePath = new URL("packages/desktop/package.json", repoRoot);
 const gatedCiJobs = new Map([
   ["quality", { name: "quality", contracts: ["format", "quality", "relay", "sdk"] }],
   ["typecheck", { name: "typecheck", contract: "quality" }],
+  ["jcode-shared-session", { name: "jcode shared-session integration", contract: "server" }],
   ["server-tests-ubuntu", { name: "server-tests (ubuntu-latest)", contracts: ["server", "hub"] }],
   ["server-tests-windows", { name: "server-tests (windows-latest)", contracts: ["server", "hub"] }],
   [
@@ -373,7 +374,7 @@ test("stable iOS releases upload once and distribute to external testers before 
 test("eight Playwright shards share two-worker coverage", () => {
   const source = readFileSync(ciWorkflowPath, "utf8");
   const jobs = jobBlocks(source);
-  assert.equal(jobs.size, 21);
+  assert.equal(jobs.size, 22);
   for (let shard = 1; shard <= 8; shard++) {
     const job = jobs.get(`playwright-${shard}`).join("\n");
     assert.match(job, new RegExp(`PLAYWRIGHT_SHARD: "${shard}/8"`));
