@@ -442,6 +442,12 @@ class AcpRuntime {
   private vendorTurn: { turnId: string; settled: Promise<void>; resolve(): void } | null = null;
   /** One FIFO slot per inbound session/update, so vendor updates can follow them. */
   private readonly updateSlots = new UpdateSlots();
+  private readonly promptResponses = new PromptResponseOrder();
+  private readonly steerEchoes = new Map<string, string>();
+  private bufferedUserChunk: Extract<
+    SessionUpdate,
+    { sessionUpdate: "user_message_chunk" }
+  > | null = null;
 
   static async start(options: StartRuntimeOptions): Promise<AcpRuntime> {
     let child: ChildProcessWithoutNullStreams | null = null;
@@ -531,6 +537,7 @@ class AcpRuntime {
         stream,
         (method, params) => this.vendorNotification(method, params),
         this.updateSlots,
+        this.promptResponses,
       ),
     );
     if (!child) void this.connection.closed.then(() => this.handleUnexpectedTransportClose());
@@ -692,6 +699,11 @@ class AcpRuntime {
       return;
     }
     const prompt = toAcpPrompt(input.prompt);
+    const text = prompt
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    if (this.vendorTurn && text) this.steerEchoes.set(clientMessageId, text);
     this.emit({
       type: "timeline.item",
       sessionId: this.options.boundarySessionId,
@@ -699,18 +711,17 @@ class AcpRuntime {
         type: "user_message",
         id: clientMessageId,
         clientMessageId,
-        text: prompt
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("\n"),
+        text,
       },
     });
     const rolloverId = `acp:${clientMessageId}`;
+    const releaseResponse = this.promptResponses.register();
     const settled = this.call(
       this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
     ).then(
       async (response) => {
         await this.drainNotifications();
+        this.expireSteerEcho(clientMessageId);
         if (this.activePrompt?.turnId === rolloverId) {
           this.activePrompt = null;
           const state = response.stopReason === "cancelled" ? "canceled" : "completed";
@@ -723,13 +734,19 @@ class AcpRuntime {
             state,
           });
         }
+        releaseResponse();
         return undefined;
       },
       async (error) => {
         await this.drainNotifications();
-        if (this.closing || this.processFailed) return;
-        if (this.activePrompt?.turnId === rolloverId) {
-          this.activePrompt = null;
+        this.expireSteerEcho(clientMessageId);
+        const isRollover = this.activePrompt?.turnId === rolloverId;
+        if (isRollover) this.activePrompt = null;
+        if (this.closing || this.processFailed) {
+          releaseResponse();
+          return;
+        }
+        if (isRollover) {
           this.terminalizeTransientItems("failed");
           this.emit({
             type: "session.turn",
@@ -749,6 +766,7 @@ class AcpRuntime {
             description: describeError(error),
           },
         });
+        releaseResponse();
       },
     );
     this.outstandingSteers.set(clientMessageId, { attachedTurnId: turnId, settled });
@@ -833,6 +851,7 @@ class AcpRuntime {
     }
     // The SDK dispatches notifications without awaiting them, so the prompt response can resolve
     // while earlier session updates are still queued. Apply them before the turn ends.
+    const releaseResponse = this.promptResponses.register();
     const settled = this.call(
       this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
     ).then(
@@ -848,6 +867,7 @@ class AcpRuntime {
           turnId,
           state,
         });
+        releaseResponse();
         return undefined;
       },
       async (error): Promise<void> => {
@@ -862,6 +882,7 @@ class AcpRuntime {
           state: "failed",
           error: { message: describeError(error) },
         });
+        releaseResponse();
         return undefined;
       },
     );
@@ -888,7 +909,7 @@ class AcpRuntime {
           description: "This attachment cannot stop another client's turn.",
         },
       });
-      return Promise.resolve();
+      return Promise.reject(new Error("This attachment cannot stop another client's turn"));
     }
     // Only an agent that reports peer turns as vendor turns is known to stop the peer turn when
     // it is cancelled; for any other agent the turn may keep running, so do not end it locally.
@@ -1230,18 +1251,14 @@ class AcpRuntime {
   }
 
   private reduceUpdate(update: SessionUpdate): void {
+    if (update.sessionUpdate !== "user_message_chunk") this.flushBufferedUserChunk();
     if (
       update.sessionUpdate === "agent_message_chunk" ||
       update.sessionUpdate === "agent_thought_chunk" ||
       update.sessionUpdate === "user_message_chunk"
     ) {
       if (update.sessionUpdate === "user_message_chunk") {
-        // A prompt echoes its own user message, so a live chunk while one is active is that
-        // echo. With no prompt active the chunk came from another client sharing the session,
-        // and a provider whose vendor turns are always peer turns can say so during a prompt.
-        if (this.activePrompt === null || (this.vendorTurnsAreNeverForeground && this.vendorTurn)) {
-          this.reduceUserMessageChunk(update);
-        } else this.fallbackChunkIds.clear();
+        this.reduceLiveUserChunk(update);
         return;
       }
       // A chunk of one kind ends every other kind's open item, whatever its
@@ -1277,6 +1294,57 @@ class AcpRuntime {
     }
     if (update.sessionUpdate === "plan") this.fallbackChunkIds.clear();
     this.reduceStateUpdate(update);
+  }
+
+  private reduceLiveUserChunk(
+    update: Extract<SessionUpdate, { sessionUpdate: "user_message_chunk" }>,
+  ): void {
+    // Foreground prompts already publish their own message; peer turns can also echo steers.
+    if (this.activePrompt === null || (this.vendorTurnsAreNeverForeground && this.vendorTurn)) {
+      if (this.vendorTurn && this.steerEchoes.size > 0) this.reconcileSteerEcho(update);
+      else this.reduceUserMessageChunk(update);
+    } else this.fallbackChunkIds.clear();
+  }
+
+  private reconcileSteerEcho(
+    update: Extract<SessionUpdate, { sessionUpdate: "user_message_chunk" }>,
+  ): void {
+    if (update.content.type !== "text") {
+      this.flushBufferedUserChunk();
+      this.reduceUserMessageChunk(update);
+      return;
+    }
+    if (this.bufferedUserChunk && this.bufferedUserChunk.messageId !== update.messageId) {
+      this.flushBufferedUserChunk();
+    }
+    const previous = this.bufferedUserChunk;
+    const text =
+      (previous?.content.type === "text" ? previous.content.text : "") + update.content.text;
+    this.bufferedUserChunk = { ...update, content: { type: "text", text } };
+    const exact = [...this.steerEchoes].find(([, echo]) => echo === text);
+    if (exact) {
+      this.steerEchoes.delete(exact[0]);
+      this.bufferedUserChunk = null;
+    } else if (![...this.steerEchoes.values()].some((echo) => echo.startsWith(text))) {
+      this.flushBufferedUserChunk();
+    }
+  }
+
+  private flushBufferedUserChunk(): void {
+    const chunk = this.bufferedUserChunk;
+    this.bufferedUserChunk = null;
+    if (chunk) this.reduceUserMessageChunk(chunk);
+  }
+
+  private expireSteerEcho(clientMessageId: string): void {
+    this.steerEchoes.delete(clientMessageId);
+    const content = this.bufferedUserChunk?.content;
+    if (
+      content?.type === "text" &&
+      ![...this.steerEchoes.values()].some((echo) => echo.startsWith(content.text))
+    ) {
+      this.flushBufferedUserChunk();
+    }
   }
 
   // Historical user messages arrive only as replayed chunks; a live prompt
@@ -1538,6 +1606,8 @@ class AcpRuntime {
   private endVendorTurn(state: "completed" | "failed" | "canceled", error?: ProviderError): void {
     const open = this.vendorTurn;
     if (!open) return;
+    this.flushBufferedUserChunk();
+    this.steerEchoes.clear();
     this.vendorTurn = null;
     if (this.vendorTurnCancelTimer) {
       clearTimeout(this.vendorTurnCancelTimer);
@@ -1587,6 +1657,7 @@ class AcpRuntime {
   }
 
   private settlePendingWork(): void {
+    this.promptResponses.flush();
     this.outstandingSteers.clear();
     // A user-initiated close leaves the peer turn running on the agent's side, so it was
     // canceled rather than failed; only a broken transport fails it.
@@ -1621,10 +1692,21 @@ function routeVendorNotifications(
   stream: Stream,
   receive: (method: string, params: unknown) => Promise<void>,
   updateSlots: UpdateSlots,
+  promptResponses: PromptResponseOrder,
 ): Stream {
   const clientMethods = new Set<string>(Object.values(CLIENT_METHODS));
+  const writer = stream.writable.getWriter();
   return {
-    writable: stream.writable,
+    writable: new WritableStream({
+      write(message) {
+        if ("method" in message && message.method === "session/prompt" && "id" in message) {
+          promptResponses.sent(message.id);
+        }
+        return writer.write(message);
+      },
+      close: () => writer.close(),
+      abort: (reason) => writer.abort(reason),
+    }),
     readable: stream.readable.pipeThrough(
       new TransformStream({
         async transform(message, controller) {
@@ -1647,11 +1729,66 @@ function routeVendorNotifications(
               updateSlots.admit(message.params);
             }
           }
+          if (!("method" in message) && "id" in message) {
+            const boundary = promptResponses.response(message.id);
+            if (boundary) {
+              await updateSlots.settled();
+              controller.enqueue(message);
+              await boundary;
+              return;
+            }
+          }
           controller.enqueue(message);
         },
       }),
     ),
   };
+}
+
+class PromptResponseOrder {
+  private readonly pending: Array<{ done: Promise<void>; release(): void }> = [];
+  private readonly sentRequests = new Map<
+    string | number,
+    { done: Promise<void>; release(): void }
+  >();
+
+  register(): () => void {
+    let resolve!: () => void;
+    const done = new Promise<void>((next) => {
+      resolve = next;
+    });
+    const entry = {
+      done,
+      release: () => {
+        const index = this.pending.indexOf(entry);
+        if (index !== -1) this.pending.splice(index, 1);
+        for (const [id, sent] of this.sentRequests) {
+          if (sent === entry) this.sentRequests.delete(id);
+        }
+        resolve();
+      },
+    };
+    this.pending.push(entry);
+    return entry.release;
+  }
+
+  sent(id: string | number | null): void {
+    const entry = this.pending.shift();
+    if (entry && id !== null) this.sentRequests.set(id, entry);
+  }
+
+  response(id: string | number | null): Promise<void> | undefined {
+    if (id === null) return undefined;
+    const entry = this.sentRequests.get(id);
+    this.sentRequests.delete(id);
+    return entry?.done;
+  }
+
+  flush(): void {
+    for (const entry of this.pending.splice(0)) entry.release();
+    for (const entry of this.sentRequests.values()) entry.release();
+    this.sentRequests.clear();
+  }
 }
 
 /**

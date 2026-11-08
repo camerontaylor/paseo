@@ -1852,17 +1852,11 @@ describe("ACP transformer turn lifecycle", () => {
       await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
       const requests = agent().requests.filter((request) => request.method === "session/prompt");
       agent().respond(requests[0], { stopReason: "end_turn" });
-      await waitForEvent(
-        events,
-        (event) =>
-          event.type === "session.turn" &&
-          event.turnId === "acp:first" &&
-          event.state === "completed",
-      );
       agent().notify("session/update", {
         sessionId: "connector-session",
         update: textChunk("rollover"),
       });
+      agent().respond(requests[1], { stopReason: "end_turn" });
       await waitForEvent(
         events,
         (event) =>
@@ -1870,7 +1864,6 @@ describe("ACP transformer turn lifecycle", () => {
           event.turnId === "acp:steer" &&
           event.state === "started",
       );
-      agent().respond(requests[1], { stopReason: "end_turn" });
       await waitForEvent(
         events,
         (event) =>
@@ -1966,9 +1959,31 @@ describe("ACP transformer turn lifecycle", () => {
         turnId: "acp-vendor:peer",
       });
       await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      await connection.send({
+        ...promptInput("steering"),
+        prompt: { ...promptInput("steering").prompt, delivery: "steer" },
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("ste", "echo"),
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("er", "echo"),
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("someone else", "peer-message"),
+      });
       agent().notify("session/update", {
         sessionId: "connector-session",
         update: textChunk("peer output"),
+      });
+      // A peer message can be a prefix of a pending echo; flush it on the turn boundary.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("st", "peer-prefix"),
       });
       agent().notify("vendor/turn", { turnId: "peer", state: "completed" });
       await waitForEvent(
@@ -1980,7 +1995,65 @@ describe("ACP transformer turn lifecycle", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(events.filter((event) => event.type === "session.turn")).toHaveLength(2);
+      const userMessages = events.filter(
+        (event) => event.type === "timeline.item" && event.item.type === "user_message",
+      );
+      expect(userMessages).toHaveLength(4);
+      expect(
+        userMessages.some(
+          (event) =>
+            event.type === "timeline.item" &&
+            event.item.type === "user_message" &&
+            event.item.text === "someone else",
+        ),
+      ).toBe(true);
+      expect(
+        userMessages.some(
+          (event) =>
+            event.type === "timeline.item" &&
+            event.item.type === "user_message" &&
+            event.item.text === "st",
+        ),
+      ).toBe(true);
       expect(countRequests(agent(), "session/cancel")).toBe(0);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("does not suppress a peer message after the steer response", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer"],
+      transformers: [
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+      ],
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer", state: "started" });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "started",
+      );
+      await connection.send({
+        ...promptInput("steer"),
+        prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      agent().respond(agent().requests.find((request) => request.method === "session/prompt")!, {
+        stopReason: "end_turn",
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("steer", "peer"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "user_message" &&
+          event.item.messageId === "peer",
+      );
     } finally {
       await connection.close();
     }
@@ -2021,6 +2094,51 @@ describe("ACP transformer turn lifecycle", () => {
     expect(countRequests(agent(), "session/cancel")).toBe(0);
     expect(countRequests(agent(), "session/prompt")).toBe(1);
   });
+
+  it.each(["close", "transport loss"])(
+    "releases a waiting admission after rollover %s",
+    async (shutdown) => {
+      const { connection, events, agent } = await connectVendorTurns({
+        capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
+        acpOptions: { vendorTurnsAreNeverForeground: true },
+        transformers: [
+          { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+        ],
+        harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+      });
+      try {
+        await connection.send(promptInput("origin"));
+        await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+        await connection.send({
+          ...promptInput("steer"),
+          prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+        });
+        await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
+        agent().respond(agent().requests.find((request) => request.method === "session/prompt")!, {
+          stopReason: "end_turn",
+        });
+        agent().notify("session/update", {
+          sessionId: "connector-session",
+          update: textChunk("rollover"),
+        });
+        await waitForEvent(
+          events,
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:steer" &&
+            event.state === "started",
+        );
+        await connection.send(promptInput("waiting"));
+        if (shutdown === "transport loss") {
+          agent().closeFromAgent();
+          await waitForEvent(events, (event) => event.type === "session.runtime_failed");
+        }
+        await connection.close();
+      } finally {
+        await connection.close();
+      }
+    },
+  );
 
   it("requires both steering policies and refuses an idle steer without writing", async () => {
     const disabled = await connectVendorTurns({
@@ -2072,7 +2190,7 @@ describe("ACP transformer turn lifecycle", () => {
       });
       await waitForEvent(
         events,
-        (event) => event.type === "request.completed" && event.requestId === "stop",
+        (event) => event.type === "request.failed" && event.requestId === "stop",
       );
       expect(countRequests(agent(), "session/cancel")).toBe(0);
       expect(events.filter((event) => event.type === "session.notice")).toHaveLength(1);

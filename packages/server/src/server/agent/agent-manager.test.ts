@@ -7599,6 +7599,64 @@ test("cancelAgentRun waits for an acknowledged autonomous interrupt to settle", 
   expect(manager.getAgent(snapshot.id)?.lifecycle).toBe("idle");
 });
 
+test("cancelAgentRun refuses a rejected shared-turn interrupt without force-settling the peer run", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-shared-stop-refused-"));
+  class RefusingSharedSession extends TestAgentSession {
+    override readonly capabilities = { ...TEST_CAPABILITIES, supportsSharedTurns: true };
+    override readonly interrupt = vi.fn(async () => {
+      throw new Error("This attachment cannot stop another client's turn");
+    });
+  }
+  class RefusingSharedClient extends TestAgentClient {
+    readonly session = new RefusingSharedSession({ provider: "codex", cwd: workdir });
+    override async createSession(): Promise<AgentSession> {
+      return this.session;
+    }
+  }
+  const client = new RefusingSharedClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: new AgentStorage(join(workdir, "agents"), logger),
+    logger,
+    rescueTimeouts: { interruptSessionMs: 10 },
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    const running = waitForAgentLifecycle(manager, agent.id, "running");
+    client.session.pushEvent({
+      type: "turn_started",
+      provider: "codex",
+      turnId: "peer-stop-refused",
+    });
+    await running;
+    const cancellationEvents: AgentStreamEvent[] = [];
+    const unsubscribe = manager.subscribe(
+      (event) => {
+        if (event.type === "agent_stream") cancellationEvents.push(event.event);
+      },
+      { agentId: agent.id, replayState: false },
+    );
+    try {
+      await expect(manager.cancelAgentRun(agent.id)).resolves.toEqual({ status: "refused" });
+      expect(client.session.interrupt).toHaveBeenCalledTimes(1);
+      expect(manager.getAgent(agent.id)).toMatchObject({
+        lifecycle: "running",
+        activeForegroundTurnId: null,
+        activeTurnId: "peer-stop-refused",
+      });
+      expect(manager.hasInFlightRun(agent.id)).toBe(true);
+      expect(manager.isPeerRun(agent.id)).toBe(true);
+      expect(cancellationEvents).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("failed replacement cancellation preserves an autonomous running state", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-live-replace-rejected-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);
