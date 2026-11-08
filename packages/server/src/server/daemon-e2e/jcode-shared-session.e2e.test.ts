@@ -29,7 +29,7 @@ test("jcode shares import, prompts, steering and Stop with an independent native
     for await (const chunk of request) body += chunk;
     if (request.url?.endsWith("/models")) {
       response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify({ data: [{ id: "e2e-model", object: "model" }] }));
+      response.end(JSON.stringify({ data: [{ id: "gpt-5.2", object: "model" }] }));
       return;
     }
     const completion = JSON.parse(body);
@@ -48,7 +48,7 @@ test("jcode shares import, prompts, steering and Stop with an independent native
         JSON.stringify({
           id: "auxiliary-e2e",
           object: "chat.completion",
-          model: "e2e-model",
+          model: "gpt-5.2",
           choices: [
             {
               index: 0,
@@ -72,13 +72,13 @@ test("jcode shares import, prompts, steering and Stop with an independent native
     JCODE_HOME: path.join(root, "home"),
     JCODE_RUNTIME_DIR: root,
     JCODE_OPENAI_COMPAT_API_BASE: `http://127.0.0.1:${address.port}/v1`,
-    JCODE_OPENAI_COMPAT_DEFAULT_MODEL: "e2e-model",
+    JCODE_OPENAI_COMPAT_DEFAULT_MODEL: "gpt-5.2",
     OPENAI_COMPAT_API_KEY: "isolated-test-key",
   };
   const logs: string[] = [];
   const child = spawn(
     binary,
-    ["--socket", socketPath, "--provider", "openai-compatible", "--model", "e2e-model", "serve"],
+    ["--socket", socketPath, "--provider", "openai-compatible", "--model", "gpt-5.2", "serve"],
     { env, stdio: ["ignore", "pipe", "pipe"] },
   );
   child.stdout.on("data", (data) => logs.push(String(data)));
@@ -91,7 +91,7 @@ test("jcode shares import, prompts, steering and Stop with an independent native
     const response = pending.shift()!;
     response.writeHead(200, { "Content-Type": "text/event-stream" });
     response.end(
-      `data: ${JSON.stringify({ id: "chat-e2e", object: "chat.completion.chunk", model: "e2e-model", choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: "chat-e2e", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+      `data: ${JSON.stringify({ id: "chat-e2e", object: "chat.completion.chunk", model: "gpt-5.2", choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: "chat-e2e", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
     );
   };
   try {
@@ -145,6 +145,7 @@ test("jcode shares import, prompts, steering and Stop with an independent native
       providerHandleId: `plugin:${JSON.stringify({ version: 1, data: { sessionId } })}`,
       cwd: root,
     });
+    await client.setAgentThinkingOption(imported.id, "high");
     const timeline = await client.fetchAgentTimeline(imported.id, {
       direction: "tail",
       limit: 0,

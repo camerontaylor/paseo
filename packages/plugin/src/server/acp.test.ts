@@ -856,6 +856,51 @@ lines.on("line", (line) => {
     },
   );
 
+  it("retains unchanged attached mode and effort without setters", async () => {
+    const harness = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/new") return false;
+        instance.respond(request, {
+          sessionId: "connector-session",
+          modes: { currentModeId: "safe", availableModes: [{ id: "safe", name: "Safe" }] },
+          configOptions: [
+            {
+              id: "effort",
+              name: "Effort",
+              category: "thought_level",
+              type: "select",
+              currentValue: "high",
+              options: [{ name: "High", value: "high" }],
+            },
+          ],
+        });
+        return true;
+      },
+    });
+    const registration = runAcpProvider({
+      id: "same-config",
+      label: "Same config",
+      connector: harness.connector,
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    const input = openInput();
+    input.config.mode = "safe";
+    input.config.thinkingOption = "high";
+    try {
+      await connection.send(input);
+      await waitForEvent(events, (event) => event.type === "session.ready");
+      expect(countRequests(harness.instances.at(-1)!, "session/set_config_option")).toBe(0);
+      expect(countRequests(harness.instances.at(-1)!, "session/set_mode")).toBe(0);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("serializes configuration mutations", async () => {
     let releaseMutation: (() => void) | null = null;
     const configOptions = [
@@ -2042,11 +2087,11 @@ describe("ACP transformer turn lifecycle", () => {
       await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
       agent().notify("session/update", {
         sessionId: "connector-session",
-        update: userChunk("ste", "echo"),
+        update: userChunk("ste", "steer"),
       });
       agent().notify("session/update", {
         sessionId: "connector-session",
-        update: userChunk("er", "echo"),
+        update: userChunk("er", "steer"),
       });
       agent().notify("session/update", {
         sessionId: "connector-session",
@@ -2507,7 +2552,8 @@ describe("ACP transformer turn lifecycle", () => {
       acpOptions: { vendorTurnsAreNeverForeground: true },
       harness: {
         promptUpdates: (promptText) => [
-          userChunk(promptText, "own-prompt"),
+          userChunk(promptText, "peer-same-text"),
+          userChunk(promptText, "foreground"),
           userChunk("reply REVERSE", "peer-steer"),
           userChunk("reply REVERSE", "peer-repeat"),
           textChunk("REVERSE"),
@@ -2525,6 +2571,7 @@ describe("ACP transformer turn lifecycle", () => {
       );
       expect(timelineProjection(events).filter((item) => item.type === "user_message")).toEqual([
         { type: "user_message", id: "foreground", text: "foreground" },
+        { type: "user_message", id: '["user_message_chunk","peer-same-text"]', text: "foreground" },
         { type: "user_message", id: '["user_message_chunk","peer-steer"]', text: "reply REVERSE" },
         { type: "user_message", id: '["user_message_chunk","peer-repeat"]', text: "reply REVERSE" },
       ]);

@@ -1073,14 +1073,15 @@ class AcpRuntime {
   }
 
   private async applyInitialConfig(config: ProviderSessionConfig): Promise<void> {
-    // Reattaching to a shared turn must not send an unchanged model mutation:
+    // Reattaching to a shared turn must not send an unchanged configuration mutation:
     // some daemons serialize that request behind the running provider response.
-    const current = toProviderConfigState(this.modes, this.configOptions);
-    if (config.model && config.model !== current.model) {
+    const current = () => toProviderConfigState(this.modes, this.configOptions);
+    if (config.model && config.model !== current().model) {
       await this.applyConfigChange({ target: "model", value: config.model });
     }
-    if (config.mode) await this.applyConfigChange({ target: "mode", value: config.mode });
-    if (config.thinkingOption) {
+    if (config.mode && config.mode !== current().mode)
+      await this.applyConfigChange({ target: "mode", value: config.mode });
+    if (config.thinkingOption && config.thinkingOption !== current().thinkingOption) {
       await this.applyConfigChange({ target: "thinking", value: config.thinkingOption });
     }
     for (const [id, value] of Object.entries(config.settings)) {
@@ -1317,6 +1318,13 @@ class AcpRuntime {
   private reconcileSteerEcho(
     update: Extract<SessionUpdate, { sessionUpdate: "user_message_chunk" }>,
   ): void {
+    // A distinct supplied identity is a peer message, even when its text equals
+    // an outstanding submission. Text-only matching is reserved for ID-less echoes.
+    if (update.messageId && !this.steerEchoes.has(update.messageId)) {
+      this.flushBufferedUserChunk();
+      this.reduceUserMessageChunk(update);
+      return;
+    }
     if (update.content.type !== "text") {
       this.flushBufferedUserChunk();
       this.reduceUserMessageChunk(update);
@@ -1329,11 +1337,14 @@ class AcpRuntime {
     const text =
       (previous?.content.type === "text" ? previous.content.text : "") + update.content.text;
     this.bufferedUserChunk = { ...update, content: { type: "text", text } };
-    const exact = [...this.steerEchoes].find(([, echo]) => echo === text);
+    const echoes = update.messageId
+      ? [[update.messageId, this.steerEchoes.get(update.messageId)!] as const]
+      : [...this.steerEchoes];
+    const exact = echoes.find(([, echo]) => echo === text);
     if (exact) {
       this.steerEchoes.delete(exact[0]);
       this.bufferedUserChunk = null;
-    } else if (![...this.steerEchoes.values()].some((echo) => echo.startsWith(text))) {
+    } else if (!echoes.some(([, echo]) => echo.startsWith(text))) {
       this.flushBufferedUserChunk();
     }
   }
