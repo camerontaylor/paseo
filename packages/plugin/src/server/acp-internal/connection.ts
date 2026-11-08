@@ -1073,7 +1073,12 @@ class AcpRuntime {
   }
 
   private async applyInitialConfig(config: ProviderSessionConfig): Promise<void> {
-    if (config.model) await this.applyConfigChange({ target: "model", value: config.model });
+    // Reattaching to a shared turn must not send an unchanged model mutation:
+    // some daemons serialize that request behind the running provider response.
+    const current = toProviderConfigState(this.modes, this.configOptions);
+    if (config.model && config.model !== current.model) {
+      await this.applyConfigChange({ target: "model", value: config.model });
+    }
     if (config.mode) await this.applyConfigChange({ target: "mode", value: config.mode });
     if (config.thinkingOption) {
       await this.applyConfigChange({ target: "thinking", value: config.thinkingOption });

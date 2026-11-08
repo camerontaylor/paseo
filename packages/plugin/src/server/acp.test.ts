@@ -811,6 +811,51 @@ lines.on("line", (line) => {
     await connection.close();
   });
 
+  it.each([
+    { current: "selected", requested: "selected", setters: 0 },
+    { current: "other", requested: "selected", setters: 1 },
+    { current: "", requested: "selected", setters: 1 },
+  ])(
+    "applies initial model by effective ID ($current -> $requested)",
+    async ({ current, requested, setters }) => {
+      const harness = connectorHarness({
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: current,
+            options: [
+              { name: "Selected", value: "selected" },
+              { name: "selected", value: "other" },
+            ],
+          },
+        ],
+      });
+      const registration = runAcpProvider({
+        id: "same-model",
+        label: "Same model",
+        connector: harness.connector,
+      });
+      const connection = await registration.connect({
+        versions: [1],
+        capabilities: ["prompt.message"],
+      });
+      const events: ProviderEvent[] = [];
+      connection.onEvent((event) => events.push(event));
+      const input = openInput();
+      input.config.model = requested;
+      try {
+        await connection.send(input);
+        await waitForEvent(events, (event) => event.type === "session.ready");
+        expect(countRequests(harness.instances.at(-1)!, "session/set_config_option")).toBe(setters);
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
   it("serializes configuration mutations", async () => {
     let releaseMutation: (() => void) | null = null;
     const configOptions = [
