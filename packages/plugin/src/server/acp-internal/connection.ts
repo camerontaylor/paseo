@@ -703,7 +703,7 @@ class AcpRuntime {
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n");
-    if (this.vendorTurn && text) this.steerEchoes.set(clientMessageId, text);
+    if (text) this.steerEchoes.set(clientMessageId, text);
     this.emit({
       type: "timeline.item",
       sessionId: this.options.boundarySessionId,
@@ -851,6 +851,11 @@ class AcpRuntime {
     }
     // The SDK dispatches notifications without awaiting them, so the prompt response can resolve
     // while earlier session updates are still queued. Apply them before the turn ends.
+    const echoText = prompt
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    if (echoText) this.steerEchoes.set(input.prompt.clientMessageId, echoText);
     const releaseResponse = this.promptResponses.register();
     const settled = this.call(
       this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
@@ -888,6 +893,7 @@ class AcpRuntime {
     );
     this.activePrompt = { turnId, settled };
     void settled.finally(() => {
+      this.expireSteerEcho(input.prompt.clientMessageId);
       if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
     });
   }
@@ -1299,11 +1305,8 @@ class AcpRuntime {
   private reduceLiveUserChunk(
     update: Extract<SessionUpdate, { sessionUpdate: "user_message_chunk" }>,
   ): void {
-    // Foreground prompts already publish their own message; peer turns can also echo steers.
-    if (this.activePrompt === null || (this.vendorTurnsAreNeverForeground && this.vendorTurn)) {
-      if (this.vendorTurn && this.steerEchoes.size > 0) this.reconcileSteerEcho(update);
-      else this.reduceUserMessageChunk(update);
-    } else this.fallbackChunkIds.clear();
+    if (this.steerEchoes.size > 0) this.reconcileSteerEcho(update);
+    else this.reduceUserMessageChunk(update);
   }
 
   private reconcileSteerEcho(

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +11,24 @@ import {
 import type { ProviderConnection, ProviderEvent, ProviderInput } from "./provider.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAcpProvider, type AcpOptions, type AcpStreamMessage } from "./acp.js";
+
+// Captured from camerontaylor/jcode 101858d8bc38328cd1bcc148e3973b9cb499a7d6, tests/fixtures/acp.
+function jcodeCorpusUpdates(name: string, throughResponse?: number): SessionUpdate[] {
+  const records = readFileSync(new URL(`./fixtures/jcode/${name}.jsonl`, import.meta.url), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const boundary =
+    throughResponse === undefined
+      ? records.length
+      : records.findIndex((record) => record.dir === "a2c" && record.msg.id === throughResponse) +
+        1;
+  return records.slice(0, boundary).flatMap((record) => {
+    return record.dir === "a2c" && record.msg.method === "session/update"
+      ? [record.msg.params.update as SessionUpdate]
+      : [];
+  });
+}
 
 const temporaryDirectories: string[] = [];
 
@@ -1749,6 +1768,18 @@ describe("ACP session history replay", () => {
     }
   });
 
+  it("retains distinct equal-text user rows from the real jcode replay corpus", async () => {
+    const updates = jcodeCorpusUpdates("11-import-repeated-user-replay-v1", 2);
+    const { connection, events } = await openReplaySession(updates, "replay");
+    try {
+      const users = timelineProjection(events).filter((item) => item.type === "user_message");
+      expect(users.map((item) => item.text)).toEqual(["first-user-marker", "first-user-marker"]);
+      expect(new Set(users.map((item) => item.id)).size).toBe(2);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("drops replayed updates when the open request asks to skip history", async () => {
     const { connection, events } = await openReplaySession(
       [userChunk("What is in the README?", "user-1"), textChunk("It describes the project.")],
@@ -2399,6 +2430,59 @@ describe("ACP transformer turn lifecycle", () => {
       );
       expect(vendorTerminal).toBeGreaterThan(-1);
       expect(vendorTerminal).toBeLessThan(admission);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("consumes the real jcode reverse-steer wire corpus during its own prompt", async () => {
+    const { connection, events } = await connectVendorTurns({
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      harness: { promptUpdates: () => jcodeCorpusUpdates("10-reverse-steer-v1") },
+    });
+    try {
+      await connection.send(promptInput("own-question"));
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "completed",
+      );
+      expect(timelineProjection(events).map((item) => item.text)).toEqual([
+        "own-question",
+        "before-steer",
+        "reverse-steer-marker",
+        "after-steer",
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("shows peer steering during a foreground prompt while suppressing its own echo", async () => {
+    const { connection, events } = await connectVendorTurns({
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      harness: {
+        promptUpdates: (promptText) => [
+          userChunk(promptText, "own-prompt"),
+          userChunk("reply REVERSE", "peer-steer"),
+          userChunk("reply REVERSE", "peer-repeat"),
+          textChunk("REVERSE"),
+        ],
+      },
+    });
+    try {
+      await connection.send(promptInput("foreground"));
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:foreground" &&
+          event.state === "completed",
+      );
+      expect(timelineProjection(events).filter((item) => item.type === "user_message")).toEqual([
+        { type: "user_message", id: "foreground", text: "foreground" },
+        { type: "user_message", id: '["user_message_chunk","peer-steer"]', text: "reply REVERSE" },
+        { type: "user_message", id: '["user_message_chunk","peer-repeat"]', text: "reply REVERSE" },
+      ]);
     } finally {
       await connection.close();
     }
