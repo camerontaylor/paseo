@@ -14,6 +14,8 @@ export const PROVIDER_CAPABILITIES = [
   "session.configure",
   "session.list",
   "session.persistence",
+  // Provider-reported peer turns belong to another client and are canceled only by explicit Stop.
+  "session.shared_turns",
   "session.revert.both",
   "session.revert.conversation",
   "session.revert.files",
@@ -27,6 +29,8 @@ export const PROVIDER_CAPABILITIES = [
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 
 export interface ProviderRegistration {
+  /** False rejects nonempty system instructions. Omission preserves the existing provider contract. */
+  supportsSystemPrompt?: boolean;
   /** Activate only while agents.providers contains this provider ID, independently of enabled. */
   requiresConfiguration?: boolean;
   /** Equal keys share discovery within this provider. Include effective configuration and execution environment. */

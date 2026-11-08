@@ -14,11 +14,13 @@ import type {
   ProviderRegistration,
 } from "@getpaseo/plugin/server/provider";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { describe, expect, test } from "vitest";
+import { runAcpProvider, type AcpStreamMessage } from "@getpaseo/plugin/server/acp";
+import { describe, expect, test, vi } from "vitest";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import type { AgentClient, AgentStreamEvent } from "./agent-sdk-types.js";
 import { toStoredAgentRecord } from "./agent-projections.js";
 import { AgentManager } from "./agent-manager.js";
+import { AgentRunState } from "./agent-run-state.js";
 import { buildProviderRegistry } from "./provider-registry.js";
 import { ProviderOverrideSchema } from "@getpaseo/protocol/provider-config";
 import { PluginAgentClientRegistry } from "./plugin-provider.js";
@@ -1126,6 +1128,70 @@ describe("PluginAgentClientRegistry", () => {
     },
   );
 
+  test("rejects unsupported system policy before opening a native session", async () => {
+    const harness = createProviderHarness();
+    harness.registration.supportsSystemPrompt = false;
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const client = registry.clients()[harness.registration.id]!;
+    try {
+      await expect(
+        client.createSession({
+          provider: harness.registration.id,
+          cwd: "/workspace",
+          daemonAppendSystemPrompt: "Unattended agents: wait cheaply.",
+        }),
+      ).rejects.toThrow("daemon.appendSystemPrompt cannot be delivered");
+      expect(harness.inputs.some((input) => input.type === "session.open")).toBe(false);
+      const session = await client.createSession({
+        provider: harness.registration.id,
+        cwd: "/workspace",
+      });
+      const persistence = session.describePersistence();
+      expect(persistence).not.toBeNull();
+      await session.close();
+      const openCount = harness.inputs.filter((input) => input.type === "session.open").length;
+      await expect(
+        client.createSession({
+          provider: harness.registration.id,
+          cwd: "/workspace",
+          systemPrompt: "Agent policy.",
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_CONFIGURATION" });
+      await expect(
+        client.resumeSession(persistence!, {
+          cwd: "/workspace",
+          daemonAppendSystemPrompt: "Owner policy.",
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_CONFIGURATION" });
+      expect(harness.inputs.filter((input) => input.type === "session.open")).toHaveLength(
+        openCount,
+      );
+    } finally {
+      await registry.shutdown();
+    }
+  });
+
+  test("preserves combined system policy for existing supporting plugins", async () => {
+    const harness = createProviderHarness();
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    try {
+      const session = await registry.clients()[harness.registration.id]!.createSession({
+        provider: harness.registration.id,
+        cwd: "/workspace",
+        systemPrompt: "Agent policy.",
+        daemonAppendSystemPrompt: "Owner policy.",
+      });
+      expect(harness.inputs.find((input) => input.type === "session.open")).toMatchObject({
+        config: { systemPrompt: "Agent policy.\n\nOwner policy." },
+      });
+      await session.close();
+    } finally {
+      await registry.shutdown();
+    }
+  });
+
   test("preserves nested provider child ownership during opening", async () => {
     const harness = createProviderHarness({ openChildren: openNestedChildren });
     const registry = new PluginAgentClientRegistry(createTestLogger());
@@ -1595,6 +1661,14 @@ describe("PluginAgentClientRegistry", () => {
     const client = registry.clients()[harness.registration.id]!;
     const session = await client.createSession({ provider: harness.registration.id, cwd: "/tmp" });
     try {
+      const opened = harness.inputs.find((input) => input.type === "session.open")!;
+      if (opened.type !== "session.open") throw new Error("Expected open");
+      harness.emit({
+        type: "session.turn",
+        sessionId: opened.sessionId,
+        turnId: "turn-1",
+        state: "started",
+      });
       await expect(
         session.steerActiveTurn!("follow up", {
           expectedTurnId: "turn-1",
@@ -2154,4 +2228,194 @@ test("plugin provider import launches with runtime MCP servers and returns only 
   } finally {
     await registry.shutdown();
   }
+});
+
+function acpVendorTurnHarness() {
+  const instances: Array<{ notify(method: string, params: unknown): void }> = [];
+  const connector = () => {
+    let controller!: ReadableStreamDefaultController<AcpStreamMessage>;
+    const readable = new ReadableStream<AcpStreamMessage>({
+      start(value) {
+        controller = value;
+      },
+    });
+    const writable = new WritableStream<AcpStreamMessage>({
+      write(message) {
+        if (!("method" in message)) return;
+        if (!("id" in message)) return;
+        const id = message.id;
+        const respond = (result: unknown) =>
+          controller.enqueue({ jsonrpc: "2.0", id, result } as AcpStreamMessage);
+        if (message.method === "initialize") {
+          const params = message.params as { protocolVersion: number };
+          respond({ protocolVersion: params.protocolVersion, agentCapabilities: {} });
+        } else if (message.method === "session/new") {
+          respond({ sessionId: "vendor-session", modes: null, configOptions: [] });
+        } else if (message.method === "session/close") {
+          respond({});
+        } else if (message.method === "session/prompt") {
+          respond({ stopReason: "end_turn" });
+        }
+      },
+    });
+    instances.push({
+      notify(method, params) {
+        controller.enqueue({ jsonrpc: "2.0", method, params } as AcpStreamMessage);
+      },
+    });
+    return { readable, writable };
+  };
+  return { connector, instances };
+}
+
+test("a vendor turn with no foreground turn becomes an autonomous run", async () => {
+  const logger = createTestLogger();
+  const harness = acpVendorTurnHarness();
+  const registration = runAcpProvider({
+    id: "acp-vendor-turn",
+    label: "ACP vendor turn",
+    connector: harness.connector,
+    transformers: [
+      {
+        notification(notification) {
+          if (notification.method !== "vendor/turn") return null;
+          const params = notification.params as {
+            turnId: string;
+            state: "started" | "completed" | "failed" | "canceled";
+          };
+          return { type: "turn" as const, turnId: params.turnId, state: params.state };
+        },
+      },
+    ],
+  });
+  const registry = new PluginAgentClientRegistry(logger);
+  registry.replace([registration]);
+  const manager = new AgentManager({
+    logger,
+    clients: registry.clients(),
+    providerDefinitions: registry.definitions(),
+  });
+  const trackAutonomousRun = vi.spyOn(AgentRunState.prototype, "trackAutonomousRun");
+  const agent = await manager.createAgent({ provider: registration.id, cwd: tmpdir() }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const live = harness.instances.at(-1);
+    if (!live) throw new Error("ACP connector did not start");
+    live.notify("vendor/turn", { turnId: "peer", state: "started" });
+    await vi.waitFor(() => {
+      expect(manager.getAgent(agent.id)?.lifecycle).toBe("running");
+    });
+    expect(trackAutonomousRun).toHaveBeenCalledWith(agent.id, "acp-vendor:peer");
+    expect(manager.getAgent(agent.id)?.activeTurnId).toBe("acp-vendor:peer");
+
+    live.notify("vendor/turn", { turnId: "peer", state: "completed" });
+    await vi.waitFor(() => {
+      expect(manager.getAgent(agent.id)?.lifecycle).toBe("idle");
+    });
+    expect(manager.getAgent(agent.id)?.activeTurnId).toBeNull();
+  } finally {
+    trackAutonomousRun.mockRestore();
+    await manager.closeAgent(agent.id);
+    await registry.shutdown();
+  }
+});
+
+test.each(["before", "after"])(
+  "steering turn mismatch %s dispatch never reports delivered work as unavailable",
+  async (mismatch) => {
+    const harness = createProviderHarness({
+      capabilities: [...CAPABILITIES, "prompt.steer"],
+      handleInput: async (input, emit) => {
+        if (input.type !== "session.prompt") return false;
+        emit({
+          type: "session.prompt_result",
+          sessionId: input.sessionId,
+          clientMessageId: input.prompt.clientMessageId,
+          result: { type: "steer", turnId: "successor" },
+        });
+        return true;
+      },
+    });
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const client = registry.clients()[harness.registration.id]!;
+    const session = await client.createSession({ provider: harness.registration.id, cwd: "/tmp" });
+    try {
+      const opened = harness.inputs.find((input) => input.type === "session.open")!;
+      if (opened.type !== "session.open") throw new Error("Expected open");
+      harness.emit({
+        type: "session.turn",
+        sessionId: opened.sessionId,
+        turnId: "current",
+        state: "started",
+      });
+      const result = await session.steerActiveTurn!("follow up", {
+        expectedTurnId: mismatch === "before" ? "previous" : "current",
+      });
+      expect(result).toEqual({ status: mismatch === "before" ? "unavailable" : "accepted" });
+      expect(harness.inputs.filter((input) => input.type === "session.prompt")).toHaveLength(
+        mismatch === "before" ? 0 : 1,
+      );
+    } finally {
+      await session.close();
+      registry.replace([]);
+    }
+  },
+);
+
+test("retains closing bridge events in history while suppressing UI delivery", async () => {
+  let releaseClose!: () => void;
+  let signalClosing!: () => void;
+  const closeAllowed = new Promise<void>((resolve) => {
+    releaseClose = resolve;
+  });
+  const closing = new Promise<void>((resolve) => {
+    signalClosing = resolve;
+  });
+  const harness = createProviderHarness({
+    handleInput: async (input, emit) => {
+      if (input.type !== "session.close") return false;
+      emit({
+        type: "timeline.item",
+        sessionId: input.sessionId,
+        item: { type: "assistant_message", id: "final-close", text: "Final output" },
+      });
+      emit({
+        type: "session.turn",
+        sessionId: input.sessionId,
+        turnId: "closing-turn",
+        state: "completed",
+      });
+      signalClosing();
+      await closeAllowed;
+      emit({ type: "session.closed", sessionId: input.sessionId });
+      emit({ type: "request.completed", requestId: input.requestId });
+      return true;
+    },
+  });
+  const registry = new PluginAgentClientRegistry(createTestLogger());
+  registry.replace([harness.registration]);
+  const client = registry.clients()[harness.registration.id]!;
+  const session = await client.createSession({ provider: harness.registration.id, cwd: "/tmp" });
+  const listener = vi.fn();
+  session.subscribe(listener);
+  const closed = session.close();
+  await closing;
+  const history: AgentStreamEvent[] = [];
+  for await (const event of session.streamHistory()) history.push(event);
+  expect(history).toContainEqual(
+    expect.objectContaining({ type: "turn_completed", turnId: "closing-turn" }),
+  );
+  expect(history).toContainEqual(
+    expect.objectContaining({
+      type: "timeline",
+      item: expect.objectContaining({ text: "Final output" }),
+    }),
+  );
+  expect(listener).not.toHaveBeenCalled();
+  expect(harness.inputs.filter((input) => input.type === "session.interrupt")).toHaveLength(0);
+  releaseClose();
+  await closed;
+  registry.replace([]);
 });

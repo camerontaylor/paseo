@@ -240,6 +240,12 @@ class ProviderRuntime {
     if (this.sessions.has(input.sessionId)) {
       throw new Error(`Provider session already exists: ${input.sessionId}`);
     }
+    if (this.registration.supportsSystemPrompt === false && input.config.systemPrompt?.trim()) {
+      throw providerError({
+        code: "INVALID_CONFIGURATION",
+        message: `${this.registration.label} does not support additional system instructions. The configured agent systemPrompt or daemon.appendSystemPrompt cannot be delivered; use a provider that supports them.`,
+      });
+    }
     const connection = await this.getConnection();
     requireProviderCapabilities(connection.capabilities, {
       type: "session.open",
@@ -893,16 +899,13 @@ export class PluginAgentClientRegistry {
 
     for (const [id, registration] of incoming) {
       if (this.providers.has(id)) continue;
-      const client = new PluginAgentClient(registration);
+      const client = new PluginAgentClient(registration, this.logger);
       const clients = new Set([client]);
-      const definition = createPluginProviderDefinition(
-        registration,
-        (_logger, runtimeSettings) => {
-          const configuredClient = new PluginAgentClient(registration, runtimeSettings);
-          clients.add(configuredClient);
-          return configuredClient;
-        },
-      );
+      const definition = createPluginProviderDefinition(registration, (logger, runtimeSettings) => {
+        const configuredClient = new PluginAgentClient(registration, logger, runtimeSettings);
+        clients.add(configuredClient);
+        return configuredClient;
+      });
       this.providers.set(id, { registration, client, definition, clients });
     }
   }
@@ -960,7 +963,11 @@ class PluginAgentClient implements AgentClient {
 
   readonly getCatalogCacheKey?: AgentClient["getCatalogCacheKey"];
 
-  constructor(registration: ProviderRegistration, runtimeSettings?: ProviderRuntimeSettings) {
+  constructor(
+    registration: ProviderRegistration,
+    private readonly logger: Logger,
+    runtimeSettings?: ProviderRuntimeSettings,
+  ) {
     this.provider = registration.id;
     this.runtime = new ProviderRuntime(registration, runtimeSettings);
     if (registration.getCatalogCacheKey)
@@ -1133,6 +1140,7 @@ class PluginAgentClient implements AgentClient {
         });
       },
       bind,
+      this.logger,
     );
     bind(bridge);
     return session;
@@ -1221,6 +1229,7 @@ class PluginAgentSession implements AgentSession {
       state: ProviderConfigState,
     ) => Promise<ProviderRuntimeSession>,
     private readonly onBind: (bridge: ProviderRuntimeSession) => void,
+    private readonly logger: Logger,
   ) {
     this.subagentIdsBySession.set(bridge.id, null);
     for (const event of bridge.history) this.accept(event, false);
@@ -1295,7 +1304,10 @@ class PluginAgentSession implements AgentSession {
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
     this.assertReplayComplete();
-    if (!this.bridge.negotiatedCapabilities.includes("prompt.steer")) {
+    if (
+      !this.bridge.negotiatedCapabilities.includes("prompt.steer") ||
+      this.currentTurnId !== options.expectedTurnId
+    ) {
       return { status: "unavailable" };
     }
     const result = await this.bridge.prompt({
@@ -1307,9 +1319,17 @@ class PluginAgentSession implements AgentSession {
         : { outputSchema: toJsonValue(options.outputSchema, "output schema") }),
       clearPendingPermissions: options.clearPendingPermissions,
     });
-    return result.type === "steer" && result.turnId === options.expectedTurnId
-      ? { status: "accepted" }
-      : { status: "unavailable" };
+    if (result.type === "steer" && result.turnId !== options.expectedTurnId) {
+      this.logger.warn(
+        { expectedTurnId: options.expectedTurnId, turnId: result.turnId, sessionId: this.id },
+        "Provider accepted steering into a different turn",
+      );
+    }
+    if (result.type === "failed") return { status: "unavailable" };
+    if (result.type !== "steer") {
+      throw new Error(`Provider returned ${result.type} after steering was dispatched`);
+    }
+    return { status: "accepted" };
   }
 
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
@@ -1385,11 +1405,13 @@ class PluginAgentSession implements AgentSession {
     this.closed = true;
     this.listeners.clear();
     await this.replaying?.catch(() => undefined);
-    await this.clearBinding();
-    this.replay = null;
-    this.listeners.clear();
-    this.onClose();
-    await this.bridge.close();
+    try {
+      await this.clearBinding();
+    } finally {
+      this.replay = null;
+      this.listeners.clear();
+      this.onClose();
+    }
   }
 
   async listCommands(): Promise<AgentSlashCommand[]> {
@@ -1697,12 +1719,12 @@ class PluginAgentSession implements AgentSession {
   }
 
   private async clearBinding(): Promise<void> {
+    const [bridgeClose] = await Promise.allSettled([this.bridge.close()]);
     this.unsubscribe?.();
     this.unsubscribe = null;
-    for (const child of this.children.values()) {
-      child.unsubscribe();
-      await child.session.close();
-    }
+    const childCloses = await Promise.allSettled(
+      [...this.children.values()].map((child) => child.session.close().finally(child.unsubscribe)),
+    );
     this.children.clear();
     this.subagentIdsBySession.clear();
     this.history.clear();
@@ -1712,6 +1734,8 @@ class PluginAgentSession implements AgentSession {
     this.pendingPermissions.clear();
     this.permissionResponses.clear();
     this.currentTurnId = null;
+    const failure = [bridgeClose, ...childCloses].find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
   }
 
   private assertReplayComplete(): void {
@@ -1747,7 +1771,6 @@ class PluginAgentSession implements AgentSession {
         this.permissionResponses.delete(request.id);
       }
       await this.clearBinding();
-      await this.bridge.close();
       replay.closed = true;
     }
     const bridge = await this.reopen(replay.persistence, replay.config);
@@ -1804,6 +1827,7 @@ class PluginAgentSession implements AgentSession {
 function agentCapabilities(capabilities: readonly string[]): AgentCapabilityFlags {
   const supports = (capability: ProviderCapability) => capabilities.includes(capability);
   return {
+    supportsSharedTurns: supports("session.shared_turns"),
     supportsStreaming: true,
     supportsSessionPersistence: supports("session.persistence"),
     supportsSessionListing: supports("session.list"),

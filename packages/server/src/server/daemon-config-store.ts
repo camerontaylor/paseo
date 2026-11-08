@@ -33,6 +33,7 @@ interface SupportedMutableConfigPatch {
   resumeOnStartup?: boolean;
   resumePrompt?: string;
   appendSystemPrompt?: string;
+  appendSystemPromptExcludedProviders?: string[];
   terminalProfiles?: MutableDaemonConfig["terminalProfiles"];
   agentProfiles?: MutableDaemonConfig["agentProfiles"];
   skills?: MutableDaemonConfig["skills"];
@@ -193,6 +194,7 @@ const RELOADABLE_PATHS = [
   "daemon.autoArchiveAfterMerge",
   "daemon.enableTerminalAgentHooks",
   "daemon.appendSystemPrompt",
+  "daemon.appendSystemPromptExcludedProviders",
   "daemon.terminalProfiles",
   "daemon.agentProfiles",
   "app.baseUrl",
@@ -221,6 +223,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.autoArchiveAfterMerge", "autoArchiveAfterMerge"],
   ["daemon.enableTerminalAgentHooks", "enableTerminalAgentHooks"],
   ["daemon.appendSystemPrompt", "appendSystemPrompt"],
+  ["daemon.appendSystemPromptExcludedProviders", "appendSystemPromptExcludedProviders"],
   ["daemon.terminalProfiles", "terminalProfiles"],
   ["daemon.agentProfiles", "agentProfiles"],
   ["app.baseUrl", "app.baseUrl"],
@@ -269,6 +272,17 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
   return Array.from(compacted).sort();
 }
 
+function pickPolicyPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
+  return {
+    ...(patch.appendSystemPromptExcludedProviders !== undefined
+      ? { appendSystemPromptExcludedProviders: patch.appendSystemPromptExcludedProviders }
+      : {}),
+    ...(patch.appendSystemPrompt !== undefined
+      ? { appendSystemPrompt: patch.appendSystemPrompt }
+      : {}),
+  };
+}
+
 function pickRelayPatch(
   relay: MutableDaemonConfigPatch["relay"],
 ): Pick<SupportedMutableConfigPatch, "relay"> {
@@ -302,13 +316,11 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.enableTerminalAgentHooks !== undefined
       ? { enableTerminalAgentHooks: patch.enableTerminalAgentHooks }
       : {}),
+    ...pickPolicyPatchFields(patch),
     ...(patch.resumeOnStartup !== undefined ? { resumeOnStartup: patch.resumeOnStartup } : {}),
     ...(patch.resumePrompt !== undefined ? { resumePrompt: patch.resumePrompt } : {}),
     ...(patch.idleRuntimeCleanup !== undefined
       ? { idleRuntimeCleanup: patch.idleRuntimeCleanup }
-      : {}),
-    ...(patch.appendSystemPrompt !== undefined
-      ? { appendSystemPrompt: patch.appendSystemPrompt }
       : {}),
     ...(patch.terminalProfiles !== undefined ? { terminalProfiles: patch.terminalProfiles } : {}),
     ...(patch.agentProfiles !== undefined ? { agentProfiles: patch.agentProfiles } : {}),
@@ -782,6 +794,8 @@ function mergeMutableDaemonPatch(
     next.enableTerminalAgentHooks = patch.enableTerminalAgentHooks;
   }
   if (patch.appendSystemPrompt !== undefined) next.appendSystemPrompt = patch.appendSystemPrompt;
+  if (patch.appendSystemPromptExcludedProviders !== undefined)
+    next.appendSystemPromptExcludedProviders = patch.appendSystemPromptExcludedProviders;
   if (patch.terminalProfiles !== undefined) next.terminalProfiles = patch.terminalProfiles;
   if (patch.agentProfiles !== undefined) next.agentProfiles = patch.agentProfiles;
   return Object.keys(next).length > 0 ? next : undefined;
