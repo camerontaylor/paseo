@@ -1762,6 +1762,89 @@ describe("ACP session history replay", () => {
   });
 });
 
+describe("ACP loaded session configuration", () => {
+  const loadedOptions = [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "cli-model",
+      options: [
+        { name: "CLI model", value: "cli-model" },
+        { name: "Paseo default", value: "paseo-default" },
+      ],
+    },
+    {
+      id: "effort",
+      name: "Effort",
+      category: "thought_level",
+      type: "select",
+      currentValue: "high",
+      options: [
+        { name: "Low", value: "low" },
+        { name: "High", value: "high" },
+      ],
+    },
+  ];
+
+  async function openLoadedSession(config: { model?: string; thinkingOption?: string }) {
+    const harness = connectorHarness({
+      capabilities: { loadSession: true },
+      configOptions: loadedOptions,
+    });
+    const registration = runAcpProvider({
+      id: "loaded-acp",
+      label: "Loaded ACP",
+      connector: harness.connector,
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message", "session.configure", "session.persistence"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    const input = openInput();
+    input.persistence = { version: 1, data: { sessionId: "connector-session" } };
+    input.config = { ...input.config, ...config };
+    await connection.send(input);
+    await waitForEvent(events, (event) => event.type === "session.ready");
+    const session = harness.instances.at(-1)!;
+    const reported = events.findLast((event) => event.type === "session.config") as Extract<
+      ProviderEvent,
+      { type: "session.config" }
+    >;
+    return { connection, session, config: reported.config };
+  }
+
+  it("keeps the model and thinking option session/load reports when the open names none", async () => {
+    const { connection, session, config } = await openLoadedSession({});
+    try {
+      expect(countRequests(session, "session/load")).toBe(1);
+      expect(countRequests(session, "session/set_config_option")).toBe(0);
+      expect(config.model).toBe("cli-model");
+      expect(config.thinkingOption).toBe("high");
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("still applies a model the open names explicitly", async () => {
+    const { connection, session, config } = await openLoadedSession({ model: "paseo-default" });
+    try {
+      expect(
+        session.requests
+          .filter((request) => request.method === "session/set_config_option")
+          .map((request) => request.params),
+      ).toEqual([{ sessionId: "connector-session", configId: "model", value: "paseo-default" }]);
+      expect(config.model).toBe("paseo-default");
+      expect(config.thinkingOption).toBe("high");
+    } finally {
+      await connection.close();
+    }
+  });
+});
+
 describe("ACP transformer turn lifecycle", () => {
   const vendorTurnTransformer = {
     notification(notification: { method: string; params: unknown }) {
