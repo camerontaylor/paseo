@@ -176,7 +176,7 @@ Codex MultiAgentV2 real tests use local Codex authentication rather than the Ope
 
 ### Jcode shared sessions
 
-Run `JCODE_E2E_BINARY=/absolute/path/to/jcode npm run test:integration:jcode --workspace=@getpaseo/server` with an explicitly pinned executable. The Linux CI job builds jcode source `39fb7620589835d0c7f1a47653ab74f594b56eaa`; release `v0.99.1004+fork.p199` predates its Stop fix. Keep the source pin until a released binary includes that fix.
+Run `JCODE_E2E_BINARY=/absolute/path/to/jcode npm run test:integration:local --workspace=@getpaseo/server -- src/server/daemon-e2e/jcode-shared-session.local.e2e.test.ts --maxWorkers=1 --bail=1 --exclude '**/!(jcode-shared-session).local.e2e.test.ts'` with an explicitly pinned executable. The Ubuntu server test job builds jcode source `39fb7620589835d0c7f1a47653ab74f594b56eaa`; release `v0.99.1004+fork.p199` predates its Stop fix. Keep the source pin until a released binary includes that fix.
 
 This test owns a private jcode daemon and a local OpenAI-compatible model endpoint. It needs no provider credentials. Its raw native client stands in for a second TUI attachment; it does not exercise TUI rendering. Stop must produce a matching native cancelled terminal, since Paseo's local idle state alone cannot prove cancellation.
 

@@ -18,7 +18,6 @@ const desktopPackagePath = new URL("packages/desktop/package.json", repoRoot);
 const gatedCiJobs = new Map([
   ["quality", { name: "quality", contracts: ["format", "quality", "relay", "sdk"] }],
   ["typecheck", { name: "typecheck", contract: "quality" }],
-  ["jcode-shared-session", { name: "jcode shared-session integration", contract: "server" }],
   ["server-tests-ubuntu", { name: "server-tests (ubuntu-latest)", contracts: ["server", "hub"] }],
   ["server-tests-windows", { name: "server-tests (windows-latest)", contracts: ["server", "hub"] }],
   [
@@ -374,7 +373,7 @@ test("stable iOS releases upload once and distribute to external testers before 
 test("eight Playwright shards share two-worker coverage", () => {
   const source = readFileSync(ciWorkflowPath, "utf8");
   const jobs = jobBlocks(source);
-  assert.equal(jobs.size, 22);
+  assert.equal(jobs.size, 21);
   for (let shard = 1; shard <= 8; shard++) {
     const job = jobs.get(`playwright-${shard}`).join("\n");
     assert.match(job, new RegExp(`PLAYWRIGHT_SHARD: "${shard}/8"`));
@@ -472,7 +471,6 @@ test("Windows units and integration run independently with complete routed cover
     assert.doesNotMatch(job, /continue-on-error|maxWorkers|--exclude/);
     for (const step of [
       "server_capacity",
-      "server_checkout",
       "server_node",
       "server_fetch",
       "server_install",
@@ -484,6 +482,8 @@ test("Windows units and integration run independently with complete routed cover
     }
     assert.match(job, /env: \*server_test_env/);
   }
+  assert.match(windows, /&server_checkout\b/);
+  assert.match(integration, /- \*server_checkout\b/);
   assert.match(windows, /- \*server_plugin_tests/);
   assert.match(windows, /- \*server_hub_contract/);
   assert.match(ubuntu, /run: npm run test --workspace=@getpaseo\/builtin-plugins/);
