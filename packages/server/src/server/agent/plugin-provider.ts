@@ -1334,6 +1334,11 @@ class PluginAgentSession implements AgentSession {
 
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
     this.listeners.add(callback);
+    // An attachment can announce a peer turn before the manager subscribes.
+    // Catch up this subscriber without replaying completed turns or notifying existing listeners.
+    if (this.currentTurnId) {
+      callback({ type: "turn_started", provider: this.provider, turnId: this.currentTurnId });
+    }
     return () => this.listeners.delete(callback);
   }
 
