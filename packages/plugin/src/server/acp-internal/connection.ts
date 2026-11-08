@@ -703,7 +703,9 @@ class AcpRuntime {
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n");
-    if (text) this.steerEchoes.set(clientMessageId, text);
+    if (text && this.connectionPolicy.echoesUserMessages !== false) {
+      this.steerEchoes.set(clientMessageId, text);
+    }
     this.emit({
       type: "timeline.item",
       sessionId: this.options.boundarySessionId,
@@ -855,7 +857,9 @@ class AcpRuntime {
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n");
-    if (echoText) this.steerEchoes.set(input.prompt.clientMessageId, echoText);
+    if (echoText && this.connectionPolicy.echoesUserMessages !== false) {
+      this.steerEchoes.set(input.prompt.clientMessageId, echoText);
+    }
     const releaseResponse = this.promptResponses.register();
     const settled = this.call(
       this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
@@ -1318,13 +1322,6 @@ class AcpRuntime {
   private reconcileSteerEcho(
     update: Extract<SessionUpdate, { sessionUpdate: "user_message_chunk" }>,
   ): void {
-    // A distinct supplied identity is a peer message, even when its text equals
-    // an outstanding submission. Text-only matching is reserved for ID-less echoes.
-    if (update.messageId && !this.steerEchoes.has(update.messageId)) {
-      this.flushBufferedUserChunk();
-      this.reduceUserMessageChunk(update);
-      return;
-    }
     if (update.content.type !== "text") {
       this.flushBufferedUserChunk();
       this.reduceUserMessageChunk(update);
@@ -1337,9 +1334,9 @@ class AcpRuntime {
     const text =
       (previous?.content.type === "text" ? previous.content.text : "") + update.content.text;
     this.bufferedUserChunk = { ...update, content: { type: "text", text } };
-    const echoes = update.messageId
-      ? [[update.messageId, this.steerEchoes.get(update.messageId)!] as const]
-      : [...this.steerEchoes];
+    // ACP native IDs need not equal our local submission IDs. Generic providers
+    // offer no origin correlation, so retain text matching for their own echoes.
+    const echoes = [...this.steerEchoes];
     const exact = echoes.find(([, echo]) => echo === text);
     if (exact) {
       this.fallbackChunkIds.clear();

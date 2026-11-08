@@ -14,7 +14,9 @@ This integration targets ACP v1 with jcode extensions from the
 [jcode interface contract at `a047a0c`](https://github.com/camerontaylor/jcode/blob/a047a0c07b1870043db9b655967d64866cd647ed/docs/ACP_FORK_INTERFACE.md).
 Peer-turn observation works with older jcode binaries. Steering and session MCP policy depend on
 versioned initialize metadata; steering and Stop permissions also depend on effective attachment
-support. A fresh attachment rediscovers that support.
+support. A fresh attachment rediscovers that support. The [v1 echo contract](https://github.com/camerontaylor/jcode/blob/39fb7620589835d0c7f1a47653ab74f594b56eaa/docs/ACP_FORK_INTERFACE.md#v1-steering-and-peer-lifecycle)
+keeps submitted text local and sends user updates only to other attachments, so live peer text
+is preserved even when it equals a pending local prompt or steer.
 
 The provider id stays `jcode`, so config keyed on it keeps working. The default command is
 `jcode acp`; the daemon applies the config override, so `--tool-profile full` and env
