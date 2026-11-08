@@ -11805,7 +11805,7 @@ test("tryRunOutOfBand gives providers the command another agent sent, not its en
     );
 
     const structured: AgentPromptInput = [{ type: "text", text: String(fromAgent.prompt) }];
-    expect(manager.tryRunOutOfBand(agent.id, structured)).toBe(false);
+    expect(await manager.tryRunOutOfBand(agent.id, structured)).toBe(false);
     expect(seenPrompts.at(-1)).toBe(structured);
     expect(manager.getTimeline(agent.id)).toHaveLength(1);
 
