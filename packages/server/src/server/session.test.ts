@@ -131,6 +131,7 @@ test("interruptAgentIfRunning rejects when graceful cancellation is refused", as
     agentManager: {
       getAgent: vi.fn(() => ({ id: agentId, provider: "codex", lifecycle: "running" })),
       hasInFlightRun: vi.fn(() => true),
+      isPeerRun: vi.fn(() => false),
       cancelAgentRun: vi.fn(async () => ({ status: "refused" as const })),
     },
   });
@@ -138,6 +139,21 @@ test("interruptAgentIfRunning rejects when graceful cancellation is refused", as
   await expect(asSessionInternals(session).interruptAgentIfRunning(agentId)).rejects.toThrow(
     "active run cancellation was not acknowledged",
   );
+});
+
+test("interruptAgentIfRunning leaves an observed shared turn running", async () => {
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const cancelAgentRun = vi.fn();
+  const session = createSessionForTest({
+    agentManager: {
+      getAgent: vi.fn(() => ({ id: agentId, provider: "codex", lifecycle: "running" })),
+      hasInFlightRun: vi.fn(() => true),
+      isPeerRun: vi.fn(() => true),
+      cancelAgentRun,
+    },
+  });
+  await asSessionInternals(session).interruptAgentIfRunning(agentId);
+  expect(cancelAgentRun).not.toHaveBeenCalled();
 });
 
 test("cancel_agent_request reports refusal only through its response", async () => {

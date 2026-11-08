@@ -14,6 +14,8 @@ export const PROVIDER_CAPABILITIES = [
   "session.configure",
   "session.list",
   "session.persistence",
+  // Provider-reported peer turns belong to another client and are canceled only by explicit Stop.
+  "session.shared_turns",
   "session.revert.both",
   "session.revert.conversation",
   "session.revert.files",

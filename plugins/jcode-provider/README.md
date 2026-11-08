@@ -1,32 +1,24 @@
 # Jcode provider plugin
 
 Runs jcode as the `jcode` Paseo provider over ACP, and lets a Paseo agent and a jcode TUI window
-share one live jcode session. The plugin's transformer maps jcode's `_jcode/turn` peer-turn
-notification to Paseo's `turn` vendor update (`specs/acp-transformer-turn-lifecycle.md`), so a turn
-started in the TUI shows in Paseo as a running, then finished, run.
+share one live jcode session. Turns started in the TUI appear in Paseo with the peer's messages,
+streamed output and running state.
 
 This is a built-in plugin in this fork. The transformer `turn` update it relies on is fork-only
 (camerontaylor/paseo#6) and is in no upstream release, so the plugin ships only with fork builds.
 The `>=0.15.0` requirement in `paseo-plugin.json` only keeps older daemons from loading it.
 
-## Files
+## Contract and compatibility
 
-- `index.server.ts` registers `runAcpProvider({ id: "jcode", command: ["jcode", "acp"] })` with
-  `server/peer-turns.ts` as its only transformer.
-- `server/peer-turns.ts` validates `_jcode/turn` with Zod and returns `{ type: "turn", turnId, state }`,
-  passing `error` through when it has a `message`. A malformed `error` is left off rather than
-  dropping the notification, because a dropped terminal leaves the turn open and blocks later
-  prompts. Turn content is not translated: the user message and output arrive as
-  ordinary `session/update` notifications, and emitting them again would duplicate the peer's
-  messages.
-- `server/peer-turns.test.ts` covers the mapping and runs the transformer through a scripted ACP
-  stream.
+This integration targets ACP v1 with jcode extensions from the
+[jcode interface contract at `a047a0c`](https://github.com/camerontaylor/jcode/blob/a047a0c07b1870043db9b655967d64866cd647ed/docs/ACP_FORK_INTERFACE.md).
+Peer-turn observation works with older jcode binaries. Steering and session MCP policy depend on
+versioned initialize metadata; steering and Stop permissions also depend on effective attachment
+support. A fresh attachment rediscovers that support.
 
 The provider id stays `jcode`, so config keyed on it keeps working. The default command is
 `jcode acp`; the daemon applies the config override, so `--tool-profile full` and env
-keys stay in `config.json`. A payload `sessionId` is jcode's native session id, which the ACP
-context does not expose; the connection already serves one boundary session, so the transformer does
-not filter by session.
+keys stay in `config.json`.
 
 ## Config migration
 
@@ -89,16 +81,29 @@ Keep provider keys in `config.json` `env`, never in this directory.
    over and replays history.
 4. Prompts from either client appear in both. A turn started in the TUI shows as a background run
    in Paseo, with the peer's user message, the streamed output, then idle.
-5. Stop in Paseo during a TUI turn interrupts that turn in both clients.
+5. When jcode advertises implicit steering, sending during a running turn steers it. Otherwise,
+   Paseo refuses a send during a peer turn; it does not cancel the peer's work to make room.
+6. Stop interrupts the shared turn when this attachment can stop observed turns. If jcode reports
+   that it cannot, Paseo shows a notice. Older binaries retain their existing Stop behavior.
+
+Closing the attachment sends `session/close` without a preceding cancel. jcode's owner-aware close
+can still stop work started by this attachment. Leaving that work running through an explicit
+detach is not implemented yet.
+
+When jcode declares session-supplied MCP servers unsupported, Paseo omits them and shows a notice
+naming the configured servers. Configure those servers in jcode itself.
+
+Turn-response correlation, explicit skill selection and clear, and replay of jcode's shared fixture
+corpus remain pending. Skills remain available through jcode slash commands. ACP v2 is out of scope.
 
 ## Tests
 
 ```bash
-npx vitest run plugins/jcode-provider/server/peer-turns.test.ts
+nice -n 10 npx vitest run plugins/jcode-provider/server/capabilities.test.ts plugins/jcode-provider/server/peer-turns.test.ts --bail=1
 ```
 
 The end-to-end criteria in `specs/jcode-provider-plugin.md` need a jcode build with shared sessions
 (`docs/ACP_SHARED_SESSIONS.md` in the jcode repo), a jcode TUI and a Paseo daemon from this
-branch, so they are checked by hand rather than in CI. All 7 passed on 2026-11-05 against an
-isolated jcode daemon built from `ct/acp-shared-sessions` and Paseo `0.15.0-beta.1`; the run is
-recorded in the QA section of camerontaylor/paseo#7.
+branch, so they are checked by hand rather than in CI. Historical baseline: all 7 passed on
+2026-11-05 against an isolated jcode daemon built from `ct/acp-shared-sessions` and Paseo
+`0.15.0-beta.1`; the run is recorded in the QA section of camerontaylor/paseo#7.

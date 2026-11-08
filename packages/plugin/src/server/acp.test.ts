@@ -1778,6 +1778,7 @@ describe("ACP transformer turn lifecycle", () => {
     harness?: ConnectorHarnessOptions;
     transformers?: readonly AcpTransformer[];
     acpOptions?: AcpOptions;
+    capabilities?: string[];
   }) {
     const harness = connectorHarness(options?.harness);
     const registration = runAcpProvider({
@@ -1789,7 +1790,7 @@ describe("ACP transformer turn lifecycle", () => {
     });
     const connection = await registration.connect({
       versions: [1],
-      capabilities: ["prompt.message"],
+      capabilities: options?.capabilities ?? ["prompt.message"],
     });
     const events: ProviderEvent[] = [];
     connection.onEvent((event) => events.push(event));
@@ -1818,6 +1819,416 @@ describe("ACP transformer turn lifecycle", () => {
       },
     };
   }
+
+  it("admits steers concurrently and lazily opens a rollover turn", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+      ],
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    try {
+      const opened = events.find((event) => event.type === "session.opened");
+      expect(opened?.type === "session.opened" && opened.capabilities).toContain("prompt.steer");
+      expect(opened?.type === "session.opened" && opened.capabilities).toContain(
+        "session.shared_turns",
+      );
+      await connection.send(promptInput("first"));
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      await connection.send({
+        ...promptInput("steer"),
+        prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+      });
+      const result = await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "steer",
+      );
+      expect(result.type === "session.prompt_result" && result.result).toEqual({
+        type: "steer",
+        turnId: "acp:first",
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
+      const requests = agent().requests.filter((request) => request.method === "session/prompt");
+      agent().respond(requests[0], { stopReason: "end_turn" });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("rollover"),
+      });
+      agent().respond(requests[1], { stopReason: "end_turn" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:steer" &&
+          event.state === "started",
+      );
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:steer" &&
+          event.state === "completed",
+      );
+      expect(countRequests(agent(), "session/cancel")).toBe(0);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it.each(["origin-first", "steer-first"])(
+    "settles two steers without phantom turns (%s)",
+    async (order) => {
+      const { connection, events, agent } = await connectVendorTurns({
+        capabilities: ["prompt.message", "prompt.steer"],
+        transformers: [
+          { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+        ],
+        harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+      });
+      try {
+        await connection.send(promptInput("origin"));
+        await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+        for (const id of ["steer-1", "steer-2"]) {
+          await connection.send({
+            ...promptInput(id),
+            prompt: { ...promptInput(id).prompt, delivery: "steer" },
+          });
+          const result = await waitForEvent(
+            events,
+            (event) => event.type === "session.prompt_result" && event.clientMessageId === id,
+          );
+          expect(result.type === "session.prompt_result" && result.result).toEqual({
+            type: "steer",
+            turnId: "acp:origin",
+          });
+        }
+        await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(3);
+        agent().notify("session/update", {
+          sessionId: "connector-session",
+          update: { sessionUpdate: "usage_update", used: 10, size: 100 },
+        });
+        const usage = await waitForEvent(events, (event) => event.type === "session.usage");
+        expect(usage.type === "session.usage" && usage.turnId).toBe("acp:origin");
+        const requests = agent().requests.filter((request) => request.method === "session/prompt");
+        for (const index of order === "origin-first" ? [0, 1, 2] : [2, 1, 0]) {
+          agent().respond(requests[index], { stopReason: "end_turn" });
+        }
+        await waitForEvent(
+          events,
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:origin" &&
+            event.state === "completed",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(events.filter((event) => event.type === "session.turn")).toHaveLength(2);
+        expect(countRequests(agent(), "session/cancel")).toBe(0);
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
+  it("steers an observed peer turn without creating another terminal", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+      ],
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer", state: "started" });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "started",
+      );
+      await connection.send({
+        ...promptInput("steer"),
+        prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+      });
+      const result = await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "steer",
+      );
+      expect(result.type === "session.prompt_result" && result.result).toEqual({
+        type: "steer",
+        turnId: "acp-vendor:peer",
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      await connection.send({
+        ...promptInput("steering"),
+        prompt: { ...promptInput("steering").prompt, delivery: "steer" },
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("ste", "echo"),
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("er", "echo"),
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("someone else", "peer-message"),
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("peer output"),
+      });
+      // A peer message can be a prefix of a pending echo; flush it on the turn boundary.
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("st", "peer-prefix"),
+      });
+      agent().notify("vendor/turn", { turnId: "peer", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "completed",
+      );
+      agent().respond(agent().requests.find((request) => request.method === "session/prompt")!, {
+        stopReason: "end_turn",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(events.filter((event) => event.type === "session.turn")).toHaveLength(2);
+      const userMessages = events.filter(
+        (event) => event.type === "timeline.item" && event.item.type === "user_message",
+      );
+      expect(userMessages).toHaveLength(4);
+      expect(
+        userMessages.some(
+          (event) =>
+            event.type === "timeline.item" &&
+            event.item.type === "user_message" &&
+            event.item.text === "someone else",
+        ),
+      ).toBe(true);
+      expect(
+        userMessages.some(
+          (event) =>
+            event.type === "timeline.item" &&
+            event.item.type === "user_message" &&
+            event.item.text === "st",
+        ),
+      ).toBe(true);
+      expect(countRequests(agent(), "session/cancel")).toBe(0);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("does not suppress a peer message after the steer response", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer"],
+      transformers: [
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+      ],
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer", state: "started" });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "started",
+      );
+      await connection.send({
+        ...promptInput("steer"),
+        prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      agent().respond(agent().requests.find((request) => request.method === "session/prompt")!, {
+        stopReason: "end_turn",
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("steer", "peer"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "user_message" &&
+          event.item.messageId === "peer",
+      );
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("waits for an active shared prompt instead of canceling it", async () => {
+    const { connection, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "session.shared_turns"],
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    try {
+      await connection.send(promptInput("first"));
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      await connection.send(promptInput("second"));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(countRequests(agent(), "session/cancel")).toBe(0);
+      expect(countRequests(agent(), "session/prompt")).toBe(1);
+      agent().respond(agent().requests.find((request) => request.method === "session/prompt")!, {
+        stopReason: "end_turn",
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("closes while a shared prompt admission is waiting without canceling", async () => {
+    const { connection, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "session.shared_turns"],
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    await connection.send(promptInput("first"));
+    await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+    await connection.send(promptInput("waiting"));
+    await connection.close();
+    expect(countRequests(agent(), "session/cancel")).toBe(0);
+    expect(countRequests(agent(), "session/prompt")).toBe(1);
+  });
+
+  it.each(["close", "transport loss"])(
+    "releases a waiting admission after rollover %s",
+    async (shutdown) => {
+      const { connection, events, agent } = await connectVendorTurns({
+        capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
+        acpOptions: { vendorTurnsAreNeverForeground: true },
+        transformers: [
+          { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+        ],
+        harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+      });
+      try {
+        await connection.send(promptInput("origin"));
+        await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+        await connection.send({
+          ...promptInput("steer"),
+          prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+        });
+        await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
+        agent().respond(agent().requests.find((request) => request.method === "session/prompt")!, {
+          stopReason: "end_turn",
+        });
+        agent().notify("session/update", {
+          sessionId: "connector-session",
+          update: textChunk("rollover"),
+        });
+        await waitForEvent(
+          events,
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:steer" &&
+            event.state === "started",
+        );
+        await connection.send(promptInput("waiting"));
+        if (shutdown === "transport loss") {
+          agent().closeFromAgent();
+          await waitForEvent(events, (event) => event.type === "session.runtime_failed");
+        }
+        await connection.close();
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
+  it("requires both steering policies and refuses an idle steer without writing", async () => {
+    const disabled = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer"],
+      transformers: [
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: false }) },
+      ],
+    });
+    const opened = disabled.events.find((event) => event.type === "session.opened");
+    expect(opened?.type === "session.opened" && opened.capabilities).not.toContain("prompt.steer");
+    await disabled.connection.close();
+    const enabled = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer"],
+      transformers: [
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+      ],
+    });
+    try {
+      await enabled.connection.send({
+        ...promptInput("idle"),
+        prompt: { ...promptInput("idle").prompt, delivery: "steer" },
+      });
+      const result = await waitForEvent(
+        enabled.events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "idle",
+      );
+      expect(result.type === "session.prompt_result" && result.result.type).toBe("failed");
+      expect(countRequests(enabled.agent(), "session/prompt")).toBe(0);
+    } finally {
+      await enabled.connection.close();
+    }
+  });
+
+  it("respects a policy that forbids stopping an observed turn", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [{ attach: () => ({ stopObservedTurns: false }) }],
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer", state: "started" });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "started",
+      );
+      await connection.send({
+        type: "session.interrupt",
+        sessionId: "session-1",
+        requestId: "stop",
+      });
+      await waitForEvent(
+        events,
+        (event) => event.type === "request.failed" && event.requestId === "stop",
+      );
+      expect(countRequests(agent(), "session/cancel")).toBe(0);
+      expect(events.filter((event) => event.type === "session.notice")).toHaveLength(1);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it.each([false, true])("omits configured MCP servers on open (load: %s)", async (load) => {
+    const harness = connectorHarness({ capabilities: { loadSession: true } });
+    const connection = await runAcpProvider({
+      id: "mcp-policy",
+      label: "MCP policy",
+      connector: harness.connector,
+      transformers: [{ initialize: () => ({ sendSessionMcpServers: false }) }],
+    }).connect({ versions: [1], capabilities: ["prompt.message", "session.persistence"] });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    const input = openInput();
+    input.config.mcpServers = { example: { type: "stdio", command: "example" } };
+    if (load) input.persistence = { version: 1, data: { sessionId: "connector-session" } };
+    try {
+      await connection.send(input);
+      await waitForEvent(events, (event) => event.type === "session.ready");
+      const instance = harness.instances.at(-1)!;
+      const request = instance.requests.find(
+        (entry) => entry.method === (load ? "session/load" : "session/new"),
+      );
+      expect((request!.params as { mcpServers: unknown[] }).mcpServers).toEqual([]);
+      const notices = events.filter((event) => event.type === "session.notice");
+      expect(notices).toHaveLength(1);
+      expect(notices[0].type === "session.notice" && notices[0].notice.description).toContain(
+        "example",
+      );
+    } finally {
+      await connection.close();
+    }
+  });
 
   it("reports a vendor turn as a namespaced started, timeline, completed sequence", async () => {
     const { connection, events, agent } = await connectVendorTurns();

@@ -1,5 +1,6 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { runAcpProvider } from "@getpaseo/plugin/server/acp";
+import { jcodeCapabilities } from "./server/capabilities.js";
 import { jcodePeerTurns } from "./server/peer-turns.js";
 
 export default function contribute(server: PluginServerContext) {
@@ -17,7 +18,7 @@ export default function contribute(server: PluginServerContext) {
         // and attributes the peer's output to Paseo's reply.
         vendorTurnsAreNeverForeground: true,
       },
-      transformers: [jcodePeerTurns],
+      transformers: [jcodePeerTurns, jcodeCapabilities],
     }),
   );
   return () => {};

@@ -19,6 +19,7 @@ import {
   AgentManager,
   AgentManagerShuttingDownError,
   AgentRunCancellationError,
+  PeerTurnActiveError,
   commandMayHaveChangedExternalState,
   type AgentManagerEvent,
   type ManagedAgent,
@@ -7598,6 +7599,64 @@ test("cancelAgentRun waits for an acknowledged autonomous interrupt to settle", 
   expect(manager.getAgent(snapshot.id)?.lifecycle).toBe("idle");
 });
 
+test("cancelAgentRun refuses a rejected shared-turn interrupt without force-settling the peer run", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-shared-stop-refused-"));
+  class RefusingSharedSession extends TestAgentSession {
+    override readonly capabilities = { ...TEST_CAPABILITIES, supportsSharedTurns: true };
+    override readonly interrupt = vi.fn(async () => {
+      throw new Error("This attachment cannot stop another client's turn");
+    });
+  }
+  class RefusingSharedClient extends TestAgentClient {
+    readonly session = new RefusingSharedSession({ provider: "codex", cwd: workdir });
+    override async createSession(): Promise<AgentSession> {
+      return this.session;
+    }
+  }
+  const client = new RefusingSharedClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: new AgentStorage(join(workdir, "agents"), logger),
+    logger,
+    rescueTimeouts: { interruptSessionMs: 10 },
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    const running = waitForAgentLifecycle(manager, agent.id, "running");
+    client.session.pushEvent({
+      type: "turn_started",
+      provider: "codex",
+      turnId: "peer-stop-refused",
+    });
+    await running;
+    const cancellationEvents: AgentStreamEvent[] = [];
+    const unsubscribe = manager.subscribe(
+      (event) => {
+        if (event.type === "agent_stream") cancellationEvents.push(event.event);
+      },
+      { agentId: agent.id, replayState: false },
+    );
+    try {
+      await expect(manager.cancelAgentRun(agent.id)).resolves.toEqual({ status: "refused" });
+      expect(client.session.interrupt).toHaveBeenCalledTimes(1);
+      expect(manager.getAgent(agent.id)).toMatchObject({
+        lifecycle: "running",
+        activeForegroundTurnId: null,
+        activeTurnId: "peer-stop-refused",
+      });
+      expect(manager.hasInFlightRun(agent.id)).toBe(true);
+      expect(manager.isPeerRun(agent.id)).toBe(true);
+      expect(cancellationEvents).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("failed replacement cancellation preserves an autonomous running state", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-live-replace-rejected-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);
@@ -13811,4 +13870,119 @@ test("an out-of-band command racing idle cleanup waits for the resumed runtime",
   expect(await command).toEqual({ disposition: "out_of_band" });
   expect(h.commands).toEqual(["/maintenance"]);
   expect(h.prompts).toEqual([]);
+});
+
+test.each([true, false])(
+  "shared-turn protection leaves explicit Stop available (shared=%s)",
+  async (shared) => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-shared-turn-"));
+    class SharedSession extends TestAgentSession {
+      override readonly capabilities = { ...TEST_CAPABILITIES, supportsSharedTurns: shared };
+      interrupts = 0;
+      override async interrupt(): Promise<void> {
+        this.interrupts += 1;
+        this.pushEvent({
+          type: "turn_canceled",
+          provider: "codex",
+          turnId: "peer-turn",
+          reason: "Stopped",
+        });
+      }
+    }
+    class SharedClient extends TestAgentClient {
+      readonly session = new SharedSession({ provider: "codex", cwd: workdir });
+      override async createSession(): Promise<AgentSession> {
+        return this.session;
+      }
+    }
+    const client = new SharedClient();
+    const manager = new AgentManager({
+      clients: { codex: client },
+      registry: new AgentStorage(join(workdir, "agents"), logger),
+      logger,
+    });
+    try {
+      const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+        workspaceId: undefined,
+      });
+      const running = waitForAgentLifecycle(manager, agent.id, "running");
+      client.session.pushEvent({ type: "turn_started", provider: "codex", turnId: "peer-turn" });
+      await running;
+      expect(manager.isPeerRun(agent.id)).toBe(shared);
+      if (shared) {
+        await expect(
+          startAgentRun(manager, agent.id, "replacement", logger, {
+            replaceRunning: true,
+            runOptions: { clientMessageId: "rejected-replace" },
+          }),
+        ).rejects.toBeInstanceOf(PeerTurnActiveError);
+        await expect(
+          startAgentRun(manager, agent.id, "follow up", logger, {
+            replaceRunning: true,
+            activeTurnBehavior: "steer",
+            runOptions: { clientMessageId: "rejected-steer" },
+          }),
+        ).rejects.toBeInstanceOf(PeerTurnActiveError);
+        await expect(
+          manager.rewind(agent.id, "previous-message", "conversation"),
+        ).rejects.toBeInstanceOf(PeerTurnActiveError);
+        expect(manager.getTimeline(agent.id)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "user_message",
+              clientMessageId: "rejected-replace",
+              text: "replacement",
+            }),
+            expect.objectContaining({
+              type: "user_message",
+              clientMessageId: "rejected-steer",
+              text: "follow up",
+            }),
+          ]),
+        );
+        expect(client.session.interrupts).toBe(0);
+        expect(manager.getAgent(agent.id)?.lifecycle).toBe("running");
+        await manager.cancelAgentRun(agent.id);
+        expect(client.session.interrupts).toBe(1);
+      } else {
+        await startAgentRun(manager, agent.id, "replacement", logger, { replaceRunning: true });
+        expect(client.session.interrupts).toBe(1);
+      }
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);
+
+test("reload settles an observed shared turn without interrupting its provider", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-shared-reload-"));
+  class SharedSession extends TestAgentSession {
+    override readonly capabilities = { ...TEST_CAPABILITIES, supportsSharedTurns: true };
+    readonly interrupt = vi.fn(async () => undefined);
+  }
+  class SharedClient extends TestAgentClient {
+    readonly session = new SharedSession({ provider: "codex", cwd: workdir });
+    override async createSession(): Promise<AgentSession> {
+      return this.session;
+    }
+  }
+  const client = new SharedClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: new AgentStorage(join(workdir, "agents"), logger),
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    const running = waitForAgentLifecycle(manager, agent.id, "running");
+    client.session.pushEvent({ type: "turn_started", provider: "codex", turnId: "peer-turn" });
+    await running;
+    await manager.reloadAgentSession(agent.id);
+    expect(client.session.interrupt).not.toHaveBeenCalled();
+    expect(manager.hasInFlightRun(agent.id)).toBe(false);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
