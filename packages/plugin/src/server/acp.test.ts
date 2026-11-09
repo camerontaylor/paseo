@@ -1099,7 +1099,7 @@ lines.on("line", (line) => {
     await connection.close();
   });
 
-  it("does not claim exact permission policy, listing, image, or configuration support", async () => {
+  it("keeps local policy configurable without claiming unsupported vendor features", async () => {
     const executable = await fakeAcp(basicAgent);
     const { connection, events } = await connect(executable, [
       "prompt.message",
@@ -1112,16 +1112,31 @@ lines.on("line", (line) => {
     expect(connection.capabilities).toEqual(["prompt.message", "session.configure"]);
     await connection.send(openInput());
     const opened = await waitForEvent(events, (event) => event.type === "session.opened");
-    expect(opened).toMatchObject({ capabilities: ["prompt.message"] });
+    expect(opened).toMatchObject({ capabilities: ["prompt.message", "session.configure"] });
     await waitForEvent(events, (event) => event.type === "session.ready");
-    await expect(
-      connection.send({
-        type: "session.configure",
-        requestId: "configure-unsupported",
-        sessionId: "session-1",
-        changes: { model: "not-advertised" },
-      }),
-    ).rejects.toThrow("session.configure");
+    await connection.send({
+      type: "session.configure",
+      requestId: "configure-local",
+      sessionId: "session-1",
+      changes: { settings: { auto_accept: true } },
+    });
+    await waitForEvent(
+      events,
+      (event) => event.type === "request.completed" && event.requestId === "configure-local",
+    );
+    expect(events.findLast((event) => event.type === "session.config")).toMatchObject({
+      config: { settings: [expect.objectContaining({ id: "auto_accept", value: true })] },
+    });
+    await connection.send({
+      type: "session.configure",
+      requestId: "configure-unsupported",
+      sessionId: "session-1",
+      changes: { model: "not-advertised" },
+    });
+    expect(await waitForEvent(events, (event) => event.type === "request.failed")).toMatchObject({
+      requestId: "configure-unsupported",
+      error: { message: "ACP session does not expose model configuration" },
+    });
     await connection.close();
   });
 

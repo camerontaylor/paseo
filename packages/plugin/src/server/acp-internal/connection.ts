@@ -628,15 +628,11 @@ class AcpRuntime {
     this.sharedTurns = connectionCapabilities.includes("session.shared_turns");
     this.hasToolPolicy = Boolean(input.config.toolPolicy);
     await this.applyInitialConfig(input.config);
+    // The local auto_accept toggle is configurable even without vendor options.
     const sessionCapabilities = connectionCapabilities.filter(
       (capability) =>
-        (capability !== "prompt.steer" ||
-          (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true)) &&
-        (capability !== "session.configure" ||
-          this.modes !== null ||
-          this.configOptions.length > 0 ||
-          "auto_accept" in input.config.settings ||
-          this.transformers.some((transformer) => transformer.configure !== undefined)),
+        capability !== "prompt.steer" ||
+        (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true),
     );
     this.emit({
       type: "session.opened",
