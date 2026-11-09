@@ -546,7 +546,7 @@ class AcpRuntime {
     // Publish the transport failure before those RPCs clear pending steering work.
     void this.connection.closed.then(async () => {
       await this.drainNotifications();
-      this.handleUnexpectedTransportClose();
+      return this.handleUnexpectedTransportClose();
     });
     child?.on("error", (error) => {
       if (this.processFailed) return;
