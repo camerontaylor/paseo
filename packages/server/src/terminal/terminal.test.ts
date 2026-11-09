@@ -2,7 +2,7 @@ import { TerminalInputModeTracker } from "@getpaseo/protocol/terminal-input-mode
 import { createTerminalSerializer } from "./terminal-serializer.js";
 import { readTerminalState } from "./test-utils/terminal-state.js";
 import type { TerminalState } from "@getpaseo/protocol/messages";
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { isPlatform } from "../test-utils/platform.js";
 import {
   buildTerminalEnvironment,
@@ -28,7 +28,6 @@ import {
   rmSync,
   statSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -149,35 +148,6 @@ if (isPlatform("win32") && !process.env.ComSpec && !process.env.COMSPEC) {
 const sessions: TerminalSession[] = [];
 const temporaryDirs: string[] = [];
 
-// TEMPORARY PR15 Windows lifecycle diagnostic; does not catch or change process exits.
-let diagnosticTestName = "module";
-function traceWindowsTerminalLifecycle(step: string, detail?: unknown): void {
-  if (!isPlatform("win32")) return;
-  writeSync(
-    2,
-    `WINDOWS_TERMINAL_LIFECYCLE ${JSON.stringify({ at: process.hrtime.bigint().toString(), workerPid: process.pid, parentPid: process.ppid, test: diagnosticTestName, step, detail })}\n`,
-  );
-}
-const originalProcessKill = process.kill;
-beforeAll(() => {
-  if (!isPlatform("win32")) return;
-  process.kill = function (this: unknown, ...args: Parameters<typeof process.kill>) {
-    const [pid, signal] = args;
-    if (signal !== 0)
-      traceWindowsTerminalLifecycle("process.kill", { pid, signal, self: pid === process.pid });
-    return Reflect.apply(originalProcessKill, this, args) as ReturnType<typeof process.kill>;
-  };
-});
-afterAll(() => {
-  if (!isPlatform("win32")) return;
-  process.kill = originalProcessKill;
-  traceWindowsTerminalLifecycle("file.finished");
-});
-beforeEach(({ task }) => {
-  diagnosticTestName = task.name;
-  traceWindowsTerminalLifecycle("test.begin");
-});
-
 /**
  * `kill()` publishes a logical exit before the native PTY releases its process.
  * Wait for native teardown before removing directories held as a shell's cwd.
@@ -185,34 +155,18 @@ beforeEach(({ task }) => {
  * ENOTEMPTY handling below covers those, while other cleanup errors fail.
  */
 async function waitForSessionExit(session: TerminalSession): Promise<void> {
-  traceWindowsTerminalLifecycle("killAndWait.begin", { id: session.id, pid: session.pid });
-  const dispose = session.onExit((info) =>
-    traceWindowsTerminalLifecycle("session.exit", { pid: session.pid, info }),
-  );
-  try {
-    await session.killAndWait({ gracefulTimeoutMs: 1000, forceTimeoutMs: 1000 });
-    traceWindowsTerminalLifecycle("killAndWait.resolved", { pid: session.pid });
-  } finally {
-    dispose();
-  }
+  await session.killAndWait({ gracefulTimeoutMs: 1000, forceTimeoutMs: 1000 });
 }
 
 afterEach(async () => {
   vi.useRealTimers();
-  traceWindowsTerminalLifecycle(
-    "cleanup.begin",
-    sessions.map(({ id, pid }) => ({ id, pid })),
-  );
   await Promise.all(sessions.map(waitForSessionExit));
-  traceWindowsTerminalLifecycle("cleanup.native.done");
   sessions.length = 0;
   while (temporaryDirs.length > 0) {
     const dir = temporaryDirs.pop();
     if (dir) {
       try {
-        traceWindowsTerminalLifecycle("directory.remove.begin", { dir });
         rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
-        traceWindowsTerminalLifecycle("directory.remove.done", { dir });
       } catch (error) {
         if (
           typeof error !== "object" ||
@@ -229,7 +183,6 @@ afterEach(async () => {
 });
 
 function trackSession(session: TerminalSession): TerminalSession {
-  traceWindowsTerminalLifecycle("session.created", { id: session.id, pid: session.pid });
   sessions.push(session);
   return session;
 }
@@ -455,10 +408,6 @@ describe("createTerminal", () => {
       // spawned process actually received back out of the pty.
       const nastyPrompt =
         'line one\nline two: git commit -m "wip" && echo $HOME | grep ^x > out.txt';
-      const trace: Array<{ at: string; kind: string; detail: unknown }> = [];
-      const record = (kind: string, detail: unknown) =>
-        trace.push({ at: process.hrtime.bigint().toString(), kind, detail });
-      record("spawn.begin", { executable: process.execPath, argv: nastyPrompt });
       const session = trackSession(
         await createTerminal({
           workspaceId: "ws-test",
@@ -469,29 +418,10 @@ describe("createTerminal", () => {
         }),
       );
 
-      record("spawn.created", { pid: session.pid });
-      const disposeOutput = session.subscribe((event) => record("pty", event));
-      const disposeExit = session.onExit((event) => record("exit", event));
-      try {
-        const state = await waitForState(session, (s) => getRowText(s, 0).startsWith("["));
-        expect(JSON.parse(getRowText(state, 0))).toEqual([nastyPrompt]);
-      } catch (error) {
-        try {
-          const replay = session.serializeReplay();
-          record("failed.replay", {
-            metadata: replay.metadata,
-            ansi: Buffer.from(replay.data).toString("base64"),
-            lines: getLines(await readTerminalState(session)),
-          });
-        } catch (captureError) {
-          record("failed.capture", String(captureError));
-        }
-        console.error("POSIX_ARGV_TRACE", JSON.stringify(trace));
-        throw error;
-      } finally {
-        disposeOutput();
-        disposeExit();
-      }
+      const state = await waitForState(session, (current) =>
+        getRowText(current, 0).startsWith("["),
+      );
+      expect(JSON.parse(getRowText(state, 0))).toEqual([nastyPrompt]);
     },
   );
 
@@ -2007,36 +1937,6 @@ it.each([false, true])(
   },
 );
 
-// TEMPORARY PR15 diagnostic: remove once Windows command parsing/OSC delivery is localized.
-function traceManagedWindowsSession(session: TerminalSession, shell: string): void {
-  if (!isPlatform("win32")) return;
-  const record = (kind: string, detail: unknown) =>
-    console.info(
-      "MANAGED_WINDOWS_TRACE",
-      JSON.stringify({
-        at: process.hrtime.bigint().toString(),
-        pid: session.pid,
-        shell,
-        kind,
-        detail,
-      }),
-    );
-  record("created", { execPath: process.execPath });
-  session.subscribe((event) => record("pty", event));
-  session.onCommandFinished((event) => record("finished", event));
-  session.onExit((event) => record("exit", event));
-  const send = session.send.bind(session);
-  session.send = (message) => {
-    record(
-      "send",
-      message.type === "command"
-        ? { message, rendered: buildTerminalCommand(message, shell) }
-        : message,
-    );
-    send(message);
-  };
-}
-
 // These are real interactive shells: no synthetic OSC injection or manual completion callbacks.
 describe("managed command dispatch", () => {
   const shells = isPlatform("win32")
@@ -2057,7 +1957,6 @@ describe("managed command dispatch", () => {
         env: { HOME: home, ZDOTDIR: home, PASEO_MANAGED_UNSAFE: "must-not-expand" },
       }),
     );
-    traceManagedWindowsSession(session, shell);
     const completions: Array<number | null> = [];
     session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
     await expect.poll(() => session.hasOutput()).toBe(true);
@@ -2147,7 +2046,6 @@ describe("managed command dispatch", () => {
       const session = trackSession(
         await createTerminal({ workspaceId: "ws-powershell", cwd: home, shell }),
       );
-      traceManagedWindowsSession(session, shell);
       const completions: Array<number | null> = [];
       session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
       const revision = () => session.serializeReplay().metadata.revision;
@@ -2265,7 +2163,6 @@ describe("managed command dispatch", () => {
       const session = trackSession(
         await createTerminal({ workspaceId: "ws-early-powershell", cwd: home, shell }),
       );
-      traceManagedWindowsSession(session, shell);
       // Product bootstrap accepts first output; callers can dispatch before the shell prompt.
       // Exercise the stricter immediate-send case without borrowing shell-readiness waits.
       session.send({
@@ -2301,7 +2198,6 @@ describe("managed command dispatch", () => {
       const cwd = mkdtempSync(join(tmpdir(), "managed-service-"));
       temporaryDirs.push(cwd);
       const session = trackSession(await createTerminal({ cwd, workspaceId: "ws-service", shell }));
-      traceManagedWindowsSession(session, shell);
       const codes: Array<number | null> = [];
       const output: string[] = [];
       session.onCommandFinished(({ exitCode }) => codes.push(exitCode));
