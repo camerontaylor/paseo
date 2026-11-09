@@ -2714,6 +2714,9 @@ const styles = StyleSheet.create((theme) => ({
     ...theme.shadow.md,
   },
   projectRowPressTarget: {
+    // Cover the row's vertical padding while trailing actions remain sibling targets.
+    marginVertical: -theme.spacing[2],
+    paddingVertical: theme.spacing[2],
     flex: 1,
     minWidth: 0,
     alignSelf: "stretch",
