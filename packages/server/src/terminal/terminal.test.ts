@@ -2,7 +2,7 @@ import { TerminalInputModeTracker } from "@getpaseo/protocol/terminal-input-mode
 import { createTerminalSerializer } from "./terminal-serializer.js";
 import { readTerminalState } from "./test-utils/terminal-state.js";
 import type { TerminalState } from "@getpaseo/protocol/messages";
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { isPlatform } from "../test-utils/platform.js";
 import {
   buildTerminalEnvironment,
@@ -28,6 +28,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as pty from "node-pty";
@@ -130,6 +131,35 @@ if (isPlatform("win32") && !process.env.ComSpec && !process.env.COMSPEC) {
 const sessions: TerminalSession[] = [];
 const temporaryDirs: string[] = [];
 
+// TEMPORARY PR15 Windows lifecycle diagnostic; does not catch or change process exits.
+let diagnosticTestName = "module";
+function traceWindowsTerminalLifecycle(step: string, detail?: unknown): void {
+  if (!isPlatform("win32")) return;
+  writeSync(
+    2,
+    `WINDOWS_TERMINAL_LIFECYCLE ${JSON.stringify({ at: process.hrtime.bigint().toString(), workerPid: process.pid, parentPid: process.ppid, test: diagnosticTestName, step, detail })}\n`,
+  );
+}
+const originalProcessKill = process.kill;
+beforeAll(() => {
+  if (!isPlatform("win32")) return;
+  process.kill = function (this: unknown, ...args: Parameters<typeof process.kill>) {
+    const [pid, signal] = args;
+    if (signal !== 0)
+      traceWindowsTerminalLifecycle("process.kill", { pid, signal, self: pid === process.pid });
+    return Reflect.apply(originalProcessKill, this, args) as ReturnType<typeof process.kill>;
+  };
+});
+afterAll(() => {
+  if (!isPlatform("win32")) return;
+  process.kill = originalProcessKill;
+  traceWindowsTerminalLifecycle("file.finished");
+});
+beforeEach(({ task }) => {
+  diagnosticTestName = task.name;
+  traceWindowsTerminalLifecycle("test.begin");
+});
+
 /**
  * `kill()` publishes a logical exit before the native PTY releases its process.
  * Wait for native teardown before removing directories held as a shell's cwd.
@@ -137,18 +167,34 @@ const temporaryDirs: string[] = [];
  * ENOTEMPTY handling below covers those, while other cleanup errors fail.
  */
 async function waitForSessionExit(session: TerminalSession): Promise<void> {
-  await session.killAndWait({ gracefulTimeoutMs: 1000, forceTimeoutMs: 1000 });
+  traceWindowsTerminalLifecycle("killAndWait.begin", { id: session.id, pid: session.pid });
+  const dispose = session.onExit((info) =>
+    traceWindowsTerminalLifecycle("session.exit", { pid: session.pid, info }),
+  );
+  try {
+    await session.killAndWait({ gracefulTimeoutMs: 1000, forceTimeoutMs: 1000 });
+    traceWindowsTerminalLifecycle("killAndWait.resolved", { pid: session.pid });
+  } finally {
+    dispose();
+  }
 }
 
 afterEach(async () => {
   vi.useRealTimers();
+  traceWindowsTerminalLifecycle(
+    "cleanup.begin",
+    sessions.map(({ id, pid }) => ({ id, pid })),
+  );
   await Promise.all(sessions.map(waitForSessionExit));
+  traceWindowsTerminalLifecycle("cleanup.native.done");
   sessions.length = 0;
   while (temporaryDirs.length > 0) {
     const dir = temporaryDirs.pop();
     if (dir) {
       try {
+        traceWindowsTerminalLifecycle("directory.remove.begin", { dir });
         rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+        traceWindowsTerminalLifecycle("directory.remove.done", { dir });
       } catch (error) {
         if (
           typeof error !== "object" ||
@@ -165,6 +211,7 @@ afterEach(async () => {
 });
 
 function trackSession(session: TerminalSession): TerminalSession {
+  traceWindowsTerminalLifecycle("session.created", { id: session.id, pid: session.pid });
   sessions.push(session);
   return session;
 }

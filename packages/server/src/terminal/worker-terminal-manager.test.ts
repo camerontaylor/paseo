@@ -25,6 +25,7 @@ import {
   readFileSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -1638,8 +1639,17 @@ it.each([1, 4])(
 );
 
 it("drains protocol 5 while current managed commands survive reattachment", async () => {
+  const trace = (step: string, detail?: unknown) => {
+    if (isPlatform("win32"))
+      writeSync(
+        2,
+        `WINDOWS_MIGRATION_LIFECYCLE ${JSON.stringify({ at: process.hrtime.bigint().toString(), workerPid: process.pid, step, detail })}\n`,
+      );
+  };
+  trace("test.begin");
   const paseoHome = createTemporaryHome();
   const old = await leaveWorkerWithTerminal(paseoHome, 5);
+  trace("old.created", old);
   manager = await startRealWorkerManager({ paseoHome });
   const draining = manager.getTerminal(old.terminalId)!;
   expect(draining.supportsCommandDispatch).toBe(false);
@@ -1679,11 +1689,40 @@ it("drains protocol 5 while current managed commands survive reattachment", asyn
   });
   await waitForCondition(() => afterReconnect.length === 1, 10000);
   expect(afterReconnect).toEqual([7]);
+  trace("reattachment.passed", { current: current.id, afterReconnect });
   expect(isProcessAlive(old.programPid)).toBe(true);
+  trace("close.begin", { workerPid: old.workerPid, programPid: old.programPid });
   await manager.closeTerminals();
-  expect(isProcessAlive(old.programPid)).toBe(false);
-  expect(isProcessAlive(old.workerPid)).toBe(false);
-  expect(await workerRecords(paseoHome)).toEqual([]);
+  trace("close.resolved");
+  try {
+    expect(isProcessAlive(old.programPid)).toBe(false);
+    expect(isProcessAlive(old.workerPid)).toBe(false);
+    expect(await workerRecords(paseoHome)).toEqual([]);
+    trace("cleanup.passed");
+  } catch (error) {
+    trace("cleanup.failed", {
+      programAlive: isProcessAlive(old.programPid),
+      workerAlive: isProcessAlive(old.workerPid),
+    });
+    if (isPlatform("win32")) {
+      const inspector = createTerminalWorkerProcessInspector();
+      const identities = await Promise.allSettled([
+        inspector.inspect(old.programPid),
+        inspector.inspect(old.workerPid),
+      ]);
+      const records = await listTerminalWorkerRecords(paseoHome).then(
+        (entries) =>
+          entries.map((entry) => {
+            if (!("record" in entry)) return { path: entry.path, error: String(entry.error) };
+            const { pid, identity, terminals, protocolVersion, closing } = entry.record;
+            return { pid, identity, terminals, protocolVersion, closing };
+          }),
+        (captureError: unknown) => ({ captureError: String(captureError) }),
+      );
+      trace("cleanup.failure.snapshot", { identities, records });
+    }
+    throw error;
+  }
 }, 30000);
 
 it("leaves a worker from a newer Paseo running, reports it incompatible, and closes it on a kill stop", async () => {
