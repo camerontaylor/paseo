@@ -389,8 +389,12 @@ export function buildTerminalCommand(
       command = `${cmd ? "cd /d" : "cd --"} ${quote(message.cwd)} && ${invocation}`;
     }
   }
-  // PSReadLine needs Enter (CR), rather than LF line-editing input, for each logical line.
-  if (powershell) return `${command.replace(/\r\n|\r|\n/g, "\r")}\r`;
+  if (powershell) {
+    // Submit one complete expression instead of exposing intermediate multiline prefixes
+    // to PSReadLine. Dot sourcing retains the interactive scope, cwd and native exit code.
+    const encoded = Buffer.from(command, "utf8").toString("base64");
+    return `. ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))))\r`;
+  }
   if (!message.completion || family === "zsh") return `${command}\r`;
   if (["bash", "sh", "dash"].includes(family)) {
     // Newlines keep a trailing comment from eating the status capture. A subshell restores

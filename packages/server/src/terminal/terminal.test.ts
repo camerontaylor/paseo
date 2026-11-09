@@ -2073,22 +2073,48 @@ describe("managed command dispatch", () => {
     await expect.poll(() => completions).toEqual([0, 7, 0]);
     expect(readFileSync(join(cwd, "still-alive"), "utf8")).toBe("yes");
   });
-  it.each(["powershell.exe", "pwsh.exe"])("renders literal PowerShell dispatch for %s", (shell) => {
-    expect(
-      buildTerminalCommand(
-        {
-          type: "command",
-          command: "npm.cmd",
-          args: ["run", "build"],
-          cwd: "C:/space & apostrophe' [literal]",
-          completion: true,
-        },
-        shell,
-      ),
-    ).toBe(
-      "Set-Location -LiteralPath 'C:/space & apostrophe'' [literal]'; if ($?) {\r& 'npm.cmd' 'run' 'build'\r}\r",
-    );
-  });
+  it.each(["powershell.exe", "pwsh.exe"])(
+    "renders one physical PowerShell submission for %s",
+    (shell) => {
+      const decode = (rendered: string) => {
+        const encoded = rendered.match(
+          /^\. \(\[scriptblock\]::Create\(\[Text.Encoding\]::UTF8.GetString\(\[Convert\]::FromBase64String\('([A-Za-z0-9+/=]+)'\)\)\)\)\r$/,
+        )?.[1];
+        expect(encoded).toBeDefined();
+        expect(rendered.slice(0, -1)).not.toMatch(/[\r\n]/);
+        return Buffer.from(encoded!, "base64").toString("utf8");
+      };
+      expect(
+        decode(
+          buildTerminalCommand(
+            {
+              type: "command",
+              command: "npm.cmd",
+              args: ["run", "build"],
+              cwd: "C:/space & apostrophe' [literal]",
+              completion: true,
+            },
+            shell,
+          ),
+        ),
+      ).toBe(
+        "Set-Location -LiteralPath 'C:/space & apostrophe'' [literal]'; if ($?) {\n& 'npm.cmd' 'run' 'build'\n}",
+      );
+      const body =
+        "$scopeValue = '雪 & apostrophe'' ! %PATH%'\r\nWrite-Output $scopeValue\n# trailing comment";
+      expect(
+        decode(buildTerminalCommand({ type: "command", command: body, completion: true }, shell)),
+      ).toBe(body);
+      expect(
+        decode(
+          buildTerminalCommand(
+            { type: "command", command: body, cwd: "C:/literal", completion: true },
+            shell,
+          ),
+        ),
+      ).toBe(`Set-Location -LiteralPath 'C:/literal'; if ($?) {\n${body}\n}`);
+    },
+  );
   it.runIf(isPlatform("win32")).each(["powershell.exe", "pwsh.exe"])(
     "preserves supported PowerShell command execution in %s",
     async (shell) => {
@@ -2108,7 +2134,7 @@ describe("managed command dispatch", () => {
       const completions: Array<number | null> = [];
       session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
       await expect.poll(() => session.hasOutput()).toBe(true);
-      const literal = "space & pipe| dollar$ apostrophe' percent%PATH% bang!";
+      const literal = "雪 space & pipe| dollar$ apostrophe' percent%PATH% bang!";
       const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
       for (const code of [7, 0]) {
         const result = join(home, `result-${code}.json`);
@@ -2131,6 +2157,40 @@ describe("managed command dispatch", () => {
           args: [literal],
         });
       }
+      const scope = join(home, "scope.json");
+      session.send({
+        type: "command",
+        command: `$paseoDispatchScope = ${quote(literal)}\r\n$env:PASEO_DISPATCH_SCOPE = 'scoped'\n& ${quote(process.execPath)} -e 'process.exit(7)' # trailing comment`,
+        cwd,
+        completion: true,
+      });
+      session.send({
+        type: "input",
+        data: `[System.IO.File]::WriteAllText(${quote(scope)}, (ConvertTo-Json @{ value = $paseoDispatchScope; env = $env:PASEO_DISPATCH_SCOPE; code = $LASTEXITCODE }))\r`,
+      });
+      await expect.poll(() => existsSync(scope)).toBe(true);
+      expect(JSON.parse(readFileSync(scope, "utf8"))).toEqual({
+        value: literal,
+        env: "scoped",
+        code: 7,
+      });
+      const ready = join(home, "stdin-ready");
+      const input = join(home, "stdin.json");
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "const fs=require('node:fs');process.stdin.once('data',data=>{fs.writeFileSync(process.argv[2],JSON.stringify(data.toString().trim()));process.exit(0)});fs.writeFileSync(process.argv[1],'ready')",
+          ready,
+          input,
+        ],
+        completion: false,
+      });
+      await expect.poll(() => existsSync(ready)).toBe(true);
+      session.send({ type: "input", data: "foreground-input\r" });
+      await expect.poll(() => existsSync(input)).toBe(true);
+      expect(JSON.parse(readFileSync(input, "utf8"))).toBe("foreground-input");
       const forbidden = join(home, "must-not-run.json");
       const settled = join(home, "guard-settled.txt");
       session.send({
