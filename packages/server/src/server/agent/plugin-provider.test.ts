@@ -2406,12 +2406,13 @@ test.each(["rollover", "same-peer"])(
     );
     const states: string[] = [];
     const turns: AgentStreamEvent[] = [];
+    const streamTypes: string[] = [];
     const unsubscribe = manager.subscribe(
       (event) => {
         if (event.type === "agent_state") states.push(event.agent.lifecycle);
         if (event.type === "agent_stream" && event.event.type.startsWith("turn_"))
           turns.push(event.event);
-        if (event.type === "agent_stream") expect(event.event.type).not.toBe("pending_work");
+        if (event.type === "agent_stream") streamTypes.push(event.event.type);
       },
       { agentId: agent.id, replayState: false },
     );
@@ -2471,6 +2472,7 @@ test.each(["rollover", "same-peer"])(
         live.notify("vendor/turn", { turnId: "peer", state: "completed" });
       }
       expect((await finish).status).toBe("idle");
+      expect(streamTypes).not.toContain("pending_work");
       expect(manager.getAgent(agent.id)?.lifecycle).toBe("idle");
       expect(states.slice(0, -1)).not.toContain("idle");
       expect(

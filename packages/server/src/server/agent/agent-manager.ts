@@ -5035,6 +5035,10 @@ export class AgentManager {
     }
   }
 
+  /**
+   * Native brackets can end before an accepted steer receives its own output.
+   * Keep finish waiters open across that gap without inventing a turn identity.
+   */
   private onPendingProviderWork(agent: ActiveManagedAgent, pending: boolean): void {
     agent.pendingProviderWork = pending;
     if (pending) agent.lifecycle = "running";
