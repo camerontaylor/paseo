@@ -2054,7 +2054,7 @@ describe("managed command dispatch", () => {
         shell,
       ),
     ).toBe(
-      "Set-Location -LiteralPath 'C:/space & apostrophe'' [literal]'; if ($?) {\n& 'npm.cmd' 'run' 'build'\n}\r",
+      "Set-Location -LiteralPath 'C:/space & apostrophe'' [literal]'; if ($?) {\r& 'npm.cmd' 'run' 'build'\r}\r",
     );
   });
   it.runIf(isPlatform("win32")).each(["powershell.exe", "pwsh.exe"])(

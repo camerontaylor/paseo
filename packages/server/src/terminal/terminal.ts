@@ -389,6 +389,8 @@ export function buildTerminalCommand(
       command = `${cmd ? "cd /d" : "cd --"} ${quote(message.cwd)} && ${invocation}`;
     }
   }
+  // PSReadLine needs Enter (CR), rather than LF line-editing input, for each logical line.
+  if (powershell) return `${command.replace(/\r\n|\r|\n/g, "\r")}\r`;
   if (!message.completion || family === "zsh") return `${command}\r`;
   if (["bash", "sh", "dash"].includes(family)) {
     // Newlines keep a trailing comment from eating the status capture. A subshell restores
