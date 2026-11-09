@@ -1134,6 +1134,9 @@ describe.skipIf(isPlatform("win32"))("terminal title", () => {
     const homeDir = mkdtempSync(join(tmpdir(), "terminal-zsh-packaged-home-"));
     temporaryDirs.push(homeDir);
     writeFileSync(join(homeDir, ".zshrc"), "PS1='PASEO_CUSTOM_PROMPT> '\n");
+    const inheritedZdotdir = join(homeDir, "inherited-zdotdir");
+    mkdirSync(inheritedZdotdir);
+    writeFileSync(join(inheritedZdotdir, ".zshrc"), "PS1='INHERITED_PROMPT> '\n");
 
     const fakeAppRoot = join(homeDir, "Paseo.app", "Contents", "Resources");
     const inaccessiblePackagedIntegrationDir = join(
@@ -1166,8 +1169,10 @@ describe.skipIf(isPlatform("win32"))("terminal title", () => {
 
     const env = buildTerminalEnvironment({
       shell: "/bin/zsh",
+      baseEnv: { ...process.env, ZDOTDIR: inheritedZdotdir },
       env: {
         HOME: homeDir,
+        ZDOTDIR: homeDir,
       },
       zshShellIntegrationDir: inaccessiblePackagedIntegrationDir,
     });
