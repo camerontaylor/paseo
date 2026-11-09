@@ -37,6 +37,9 @@ export const jcodeCapabilities: AcpTransformer = {
     if (!parsed.success) return null;
     const metadata = parsed.data._meta.jcode;
     return {
+      // V1 never echoes this attachment's prompt or steer, including peer-turn
+      // adoption. Contract: ACP_FORK_INTERFACE.md at 39fb7620589835d0c7f1a47653ab74f594b56eaa.
+      echoesUserMessages: false,
       steering: metadata.extensions?.includes("shared_control") === true,
       ...(metadata.sessionMcpServers === false ? { sendSessionMcpServers: false } : {}),
     };

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +11,24 @@ import {
 import type { ProviderConnection, ProviderEvent, ProviderInput } from "./provider.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAcpProvider, type AcpOptions, type AcpStreamMessage } from "./acp.js";
+
+// Captured from camerontaylor/jcode 101858d8bc38328cd1bcc148e3973b9cb499a7d6, tests/fixtures/acp.
+function jcodeCorpusUpdates(name: string, throughResponse?: number): SessionUpdate[] {
+  const records = readFileSync(new URL(`./fixtures/jcode/${name}.jsonl`, import.meta.url), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const boundary =
+    throughResponse === undefined
+      ? records.length
+      : records.findIndex((record) => record.dir === "a2c" && record.msg.id === throughResponse) +
+        1;
+  return records.slice(0, boundary).flatMap((record) => {
+    return record.dir === "a2c" && record.msg.method === "session/update"
+      ? [record.msg.params.update as SessionUpdate]
+      : [];
+  });
+}
 
 const temporaryDirectories: string[] = [];
 
@@ -790,6 +809,96 @@ lines.on("line", (line) => {
     );
     expect(rows.at(-1)).toMatchObject({ type: "tool_call", status: "canceled", error: null });
     await connection.close();
+  });
+
+  it.each([
+    { current: "selected", requested: "selected", setters: 0 },
+    { current: "other", requested: "selected", setters: 1 },
+    { current: "", requested: "selected", setters: 1 },
+  ])(
+    "applies initial model by effective ID ($current -> $requested)",
+    async ({ current, requested, setters }) => {
+      const harness = connectorHarness({
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: current,
+            options: [
+              { name: "Selected", value: "selected" },
+              { name: "selected", value: "other" },
+            ],
+          },
+        ],
+      });
+      const registration = runAcpProvider({
+        id: "same-model",
+        label: "Same model",
+        connector: harness.connector,
+      });
+      const connection = await registration.connect({
+        versions: [1],
+        capabilities: ["prompt.message"],
+      });
+      const events: ProviderEvent[] = [];
+      connection.onEvent((event) => events.push(event));
+      const input = openInput();
+      input.config.model = requested;
+      try {
+        await connection.send(input);
+        await waitForEvent(events, (event) => event.type === "session.ready");
+        expect(countRequests(harness.instances.at(-1)!, "session/set_config_option")).toBe(setters);
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
+  it("retains unchanged attached mode and effort without setters", async () => {
+    const harness = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/new") return false;
+        instance.respond(request, {
+          sessionId: "connector-session",
+          modes: { currentModeId: "safe", availableModes: [{ id: "safe", name: "Safe" }] },
+          configOptions: [
+            {
+              id: "effort",
+              name: "Effort",
+              category: "thought_level",
+              type: "select",
+              currentValue: "high",
+              options: [{ name: "High", value: "high" }],
+            },
+          ],
+        });
+        return true;
+      },
+    });
+    const registration = runAcpProvider({
+      id: "same-config",
+      label: "Same config",
+      connector: harness.connector,
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    const input = openInput();
+    input.config.mode = "safe";
+    input.config.thinkingOption = "high";
+    try {
+      await connection.send(input);
+      await waitForEvent(events, (event) => event.type === "session.ready");
+      expect(countRequests(harness.instances.at(-1)!, "session/set_config_option")).toBe(0);
+      expect(countRequests(harness.instances.at(-1)!, "session/set_mode")).toBe(0);
+    } finally {
+      await connection.close();
+    }
   });
 
   it("serializes configuration mutations", async () => {
@@ -1698,52 +1807,71 @@ describe("ACP session history replay", () => {
     }
   });
 
-  it("does not duplicate the live prompt echo when the agent echoes it as a user chunk", async () => {
-    const harness = connectorHarness({
-      capabilities: { loadSession: true },
-      promptUpdates: (promptText) => [
-        { sessionUpdate: "user_message_chunk", content: { type: "text", text: promptText } },
-        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Acknowledged" } },
-      ],
-    });
-    const registration = runAcpProvider({
-      id: "echo-acp",
-      label: "Echo ACP",
-      connector: harness.connector,
-    });
-    const connection = await registration.connect({
-      versions: [1],
-      capabilities: ["prompt.message", "session.persistence"],
-    });
-    const events: ProviderEvent[] = [];
-    connection.onEvent((event) => events.push(event));
-    const input = openInput();
-    input.persistence = { version: 1, data: { sessionId: "connector-session" } };
-    input.history = "replay";
-    await connection.send(input);
-    await waitForEvent(events, (event) => event.type === "session.ready");
+  it.each([undefined, "provider-native-echo"])(
+    "suppresses the own prompt echo with native ID %s",
+    async (messageId) => {
+      const harness = connectorHarness({
+        capabilities: { loadSession: true },
+        promptUpdates: (promptText) => [
+          {
+            sessionUpdate: "user_message_chunk",
+            messageId,
+            content: { type: "text", text: promptText },
+          },
+          { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Acknowledged" } },
+        ],
+      });
+      const registration = runAcpProvider({
+        id: "echo-acp",
+        label: "Echo ACP",
+        connector: harness.connector,
+      });
+      const connection = await registration.connect({
+        versions: [1],
+        capabilities: ["prompt.message", "session.persistence"],
+      });
+      const events: ProviderEvent[] = [];
+      connection.onEvent((event) => events.push(event));
+      const input = openInput();
+      input.persistence = { version: 1, data: { sessionId: "connector-session" } };
+      input.history = "replay";
+      await connection.send(input);
+      await waitForEvent(events, (event) => event.type === "session.ready");
 
-    await connection.send({
-      type: "session.prompt",
-      sessionId: "session-1",
-      prompt: {
-        clientMessageId: "echo-1",
-        delivery: "auto",
-        input: { type: "message", content: [{ type: "text", text: "hello" }] },
-      },
-    });
+      await connection.send({
+        type: "session.prompt",
+        sessionId: "session-1",
+        prompt: {
+          clientMessageId: "echo-1",
+          delivery: "auto",
+          input: { type: "message", content: [{ type: "text", text: "hello" }] },
+        },
+      });
+      try {
+        await waitForEvent(
+          events,
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:echo-1" &&
+            event.state === "completed",
+        );
+        expect(timelineProjection(events)).toEqual([
+          { type: "user_message", id: "echo-1", text: "hello" },
+          { type: "assistant_message", id: "agent_message_chunk:1", text: "Acknowledged" },
+        ]);
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
+  it("retains distinct equal-text user rows from the real jcode replay corpus", async () => {
+    const updates = jcodeCorpusUpdates("11-import-repeated-user-replay-v1", 2);
+    const { connection, events } = await openReplaySession(updates, "replay");
     try {
-      await waitForEvent(
-        events,
-        (event) =>
-          event.type === "session.turn" &&
-          event.turnId === "acp:echo-1" &&
-          event.state === "completed",
-      );
-      expect(timelineProjection(events)).toEqual([
-        { type: "user_message", id: "echo-1", text: "hello" },
-        { type: "assistant_message", id: "agent_message_chunk:1", text: "Acknowledged" },
-      ]);
+      const users = timelineProjection(events).filter((item) => item.type === "user_message");
+      expect(users.map((item) => item.text)).toEqual(["first-user-marker", "first-user-marker"]);
+      expect(new Set(users.map((item) => item.id)).size).toBe(2);
     } finally {
       await connection.close();
     }
@@ -2399,6 +2527,166 @@ describe("ACP transformer turn lifecycle", () => {
       );
       expect(vendorTerminal).toBeGreaterThan(-1);
       expect(vendorTerminal).toBeLessThan(admission);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("consumes the real jcode reverse-steer wire corpus during its own prompt", async () => {
+    const { connection, events } = await connectVendorTurns({
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      harness: { promptUpdates: () => jcodeCorpusUpdates("10-reverse-steer-v1") },
+    });
+    try {
+      await connection.send(promptInput("own-question"));
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "completed",
+      );
+      expect(timelineProjection(events).map((item) => item.text)).toEqual([
+        "own-question",
+        "before-steer",
+        "reverse-steer-marker",
+        "after-steer",
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("keeps anonymous assistant messages separate across a suppressed foreground steer echo", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer"],
+      transformers: [
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+      ],
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    try {
+      await connection.send(promptInput("origin"));
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("before"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "before",
+      );
+      await connection.send({
+        ...promptInput("steer"),
+        prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(2);
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("steer"),
+      });
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("after"),
+      });
+      for (const promptRequest of agent().requests.filter(
+        (request) => request.method === "session/prompt",
+      )) {
+        agent().respond(promptRequest, { stopReason: "end_turn" });
+      }
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:origin" &&
+          event.state === "completed",
+      );
+      expect(timelineProjection(events)).toEqual([
+        { type: "user_message", id: "origin", text: "origin" },
+        { type: "assistant_message", id: "agent_message_chunk:1", text: "before" },
+        { type: "user_message", id: "steer", text: "steer" },
+        { type: "assistant_message", id: "agent_message_chunk:2", text: "after" },
+      ]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("preserves equal-text peer input while a no-own-echo profile has a pending own steer", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [
+        {
+          initialize: () => ({ steering: true, echoesUserMessages: false }),
+          attach: () => ({ steering: true }),
+        },
+      ],
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer", state: "started" });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "started",
+      );
+      await connection.send({
+        ...promptInput("steer"),
+        prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: userChunk("steer", "peer-native"),
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "user_message" &&
+          event.item.messageId === "peer-native",
+      );
+      expect(timelineProjection(events).filter((item) => item.type === "user_message")).toEqual([
+        { type: "user_message", id: "steer", text: "steer" },
+        { type: "user_message", id: '["user_message_chunk","peer-native"]', text: "steer" },
+      ]);
+      agent().notify("vendor/turn", { turnId: "peer", state: "completed" });
+      agent().respond(agent().requests.find((request) => request.method === "session/prompt")!, {
+        stopReason: "end_turn",
+      });
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("preserves equal-text peer steering during a foreground prompt for a no-own-echo profile", async () => {
+    const { connection, events } = await connectVendorTurns({
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [{ initialize: () => ({ echoesUserMessages: false }) }],
+      harness: {
+        promptUpdates: (promptText) => [
+          userChunk(promptText, "peer-same-text"),
+          userChunk("reply REVERSE", "peer-steer"),
+          userChunk("reply REVERSE", "peer-repeat"),
+          textChunk("REVERSE"),
+        ],
+      },
+    });
+    try {
+      await connection.send(promptInput("foreground"));
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:foreground" &&
+          event.state === "completed",
+      );
+      expect(timelineProjection(events).filter((item) => item.type === "user_message")).toEqual([
+        { type: "user_message", id: "foreground", text: "foreground" },
+        { type: "user_message", id: '["user_message_chunk","peer-same-text"]', text: "foreground" },
+        { type: "user_message", id: '["user_message_chunk","peer-steer"]', text: "reply REVERSE" },
+        { type: "user_message", id: '["user_message_chunk","peer-repeat"]', text: "reply REVERSE" },
+      ]);
     } finally {
       await connection.close();
     }

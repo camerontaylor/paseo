@@ -422,6 +422,46 @@ test("conversation rewind discards withdrawn plugin turns before and after a rep
   });
 });
 
+test("late plugin subscribers adopt only the active bracket without notifying existing subscribers twice", async () => {
+  const harness = createProviderHarness();
+  const registry = new PluginAgentClientRegistry(createTestLogger());
+  registry.replace([harness.registration]);
+  const client = registry.clients()[harness.registration.id]!;
+  const session = await client.createSession({ provider: harness.registration.id, cwd: tmpdir() });
+  const first: AgentStreamEvent[] = [];
+  const late: AgentStreamEvent[] = [];
+  const after: AgentStreamEvent[] = [];
+  try {
+    session.subscribe((event) => first.push(event));
+    const opened = harness.inputs.find((input) => input.type === "session.open")!;
+    if (opened.type !== "session.open") throw new Error("Missing open request");
+    harness.emit({
+      type: "session.turn",
+      sessionId: opened.sessionId,
+      turnId: "peer-active",
+      state: "started",
+    });
+    session.subscribe((event) => late.push(event));
+    harness.emit({
+      type: "session.turn",
+      sessionId: opened.sessionId,
+      turnId: "peer-active",
+      state: "completed",
+    });
+    session.subscribe((event) => after.push(event));
+    const expected = [
+      { type: "turn_started", provider: harness.registration.id, turnId: "peer-active" },
+      { type: "turn_completed", provider: harness.registration.id, turnId: "peer-active" },
+    ];
+    expect(first).toEqual(expected);
+    expect(late).toEqual(expected);
+    expect(after).toEqual([]);
+  } finally {
+    await session.close();
+    await registry.shutdown();
+  }
+});
+
 test("file-only plugin rewind preserves the conversation before and after a replacement prompt", async () => {
   await withRewindAgent(async ({ manager, agentId, nativeMessages, messages }) => {
     await manager.rewind(agentId, "user-B", "files");

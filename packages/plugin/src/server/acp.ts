@@ -64,6 +64,8 @@ export interface AcpContext {
 }
 
 export interface AcpConnectionPolicy {
+  /** False when the negotiated profile never echoes this attachment's submitted text. */
+  echoesUserMessages?: boolean;
   sendSessionMcpServers?: boolean;
   steering?: boolean;
 }

@@ -45,6 +45,7 @@ function attach(value: AttachmentInfo["response"], capabilities = agentCapabilit
 describe("jcodeCapabilities", () => {
   it("reads versioned adapter support and effective attachment support", () => {
     expect(initialize(agentCapabilities)).toEqual({
+      echoesUserMessages: false,
       steering: true,
       sendSessionMcpServers: false,
     });
@@ -65,7 +66,7 @@ describe("jcodeCapabilities", () => {
           },
         },
       }),
-    ).toEqual({ steering: true, sendSessionMcpServers: false });
+    ).toEqual({ echoesUserMessages: false, steering: true, sendSessionMcpServers: false });
     expect(
       attach({
         _meta: {
@@ -83,8 +84,9 @@ describe("jcodeCapabilities", () => {
       initialize({
         _meta: { jcode: { interfaceVersion: 1, extensions: [], sessionMcpServers: true } },
       }),
-    ).toEqual({ steering: false });
+    ).toEqual({ echoesUserMessages: false, steering: false });
     expect(initialize({ _meta: { jcode: { interfaceVersion: 1 } } })).toEqual({
+      echoesUserMessages: false,
       steering: false,
     });
     expect(

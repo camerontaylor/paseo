@@ -174,6 +174,12 @@ Live provider smoke tests belong in `*.real.e2e.test.ts`, not `*.test.ts`, even 
 
 Codex MultiAgentV2 real tests use local Codex authentication rather than the OpenRouter-compatible test provider. OpenRouter does not accept Codex collaboration-history items on the parent follow-up request, so it cannot verify a complete native sub-agent turn.
 
+### Jcode shared sessions
+
+Run `JCODE_E2E_BINARY=/absolute/path/to/jcode npm run test:integration:local --workspace=@getpaseo/server -- src/server/daemon-e2e/jcode-shared-session.local.e2e.test.ts --maxWorkers=1 --bail=1 --exclude '**/!(jcode-shared-session).local.e2e.test.ts'` with an explicitly pinned executable. The Ubuntu server test job builds jcode source `39fb7620589835d0c7f1a47653ab74f594b56eaa`; release `v0.99.1004+fork.p199` predates its Stop fix. Keep the source pin until a released binary includes that fix.
+
+This test owns a private jcode daemon and a local OpenAI-compatible model endpoint. It needs no provider credentials. Its raw native client stands in for a second TUI attachment; it does not exercise TUI rendering. Stop must produce a matching native cancelled terminal, since Paseo's local idle state alone cannot prove cancellation.
+
 ### Test setup
 
 - Server: `packages/server/src/test-utils/vitest-setup.ts` loads `.env.test`, sets `PASEO_SUPERVISED=0`, and disables Git/SSH prompts. Add new global env shims here, not in individual tests.

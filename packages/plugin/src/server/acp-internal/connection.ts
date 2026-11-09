@@ -703,7 +703,9 @@ class AcpRuntime {
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n");
-    if (this.vendorTurn && text) this.steerEchoes.set(clientMessageId, text);
+    if (text && this.connectionPolicy.echoesUserMessages !== false) {
+      this.steerEchoes.set(clientMessageId, text);
+    }
     this.emit({
       type: "timeline.item",
       sessionId: this.options.boundarySessionId,
@@ -851,6 +853,13 @@ class AcpRuntime {
     }
     // The SDK dispatches notifications without awaiting them, so the prompt response can resolve
     // while earlier session updates are still queued. Apply them before the turn ends.
+    const echoText = prompt
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    if (echoText && this.connectionPolicy.echoesUserMessages !== false) {
+      this.steerEchoes.set(input.prompt.clientMessageId, echoText);
+    }
     const releaseResponse = this.promptResponses.register();
     const settled = this.call(
       this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
@@ -888,6 +897,7 @@ class AcpRuntime {
     );
     this.activePrompt = { turnId, settled };
     void settled.finally(() => {
+      this.expireSteerEcho(input.prompt.clientMessageId);
       if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
     });
   }
@@ -1067,9 +1077,15 @@ class AcpRuntime {
   }
 
   private async applyInitialConfig(config: ProviderSessionConfig): Promise<void> {
-    if (config.model) await this.applyConfigChange({ target: "model", value: config.model });
-    if (config.mode) await this.applyConfigChange({ target: "mode", value: config.mode });
-    if (config.thinkingOption) {
+    // Reattaching to a shared turn must not send an unchanged configuration mutation:
+    // some daemons serialize that request behind the running provider response.
+    const current = () => toProviderConfigState(this.modes, this.configOptions);
+    if (config.model && config.model !== current().model) {
+      await this.applyConfigChange({ target: "model", value: config.model });
+    }
+    if (config.mode && config.mode !== current().mode)
+      await this.applyConfigChange({ target: "mode", value: config.mode });
+    if (config.thinkingOption && config.thinkingOption !== current().thinkingOption) {
       await this.applyConfigChange({ target: "thinking", value: config.thinkingOption });
     }
     for (const [id, value] of Object.entries(config.settings)) {
@@ -1299,11 +1315,8 @@ class AcpRuntime {
   private reduceLiveUserChunk(
     update: Extract<SessionUpdate, { sessionUpdate: "user_message_chunk" }>,
   ): void {
-    // Foreground prompts already publish their own message; peer turns can also echo steers.
-    if (this.activePrompt === null || (this.vendorTurnsAreNeverForeground && this.vendorTurn)) {
-      if (this.vendorTurn && this.steerEchoes.size > 0) this.reconcileSteerEcho(update);
-      else this.reduceUserMessageChunk(update);
-    } else this.fallbackChunkIds.clear();
+    if (this.steerEchoes.size > 0) this.reconcileSteerEcho(update);
+    else this.reduceUserMessageChunk(update);
   }
 
   private reconcileSteerEcho(
@@ -1321,11 +1334,15 @@ class AcpRuntime {
     const text =
       (previous?.content.type === "text" ? previous.content.text : "") + update.content.text;
     this.bufferedUserChunk = { ...update, content: { type: "text", text } };
-    const exact = [...this.steerEchoes].find(([, echo]) => echo === text);
+    // ACP native IDs need not equal our local submission IDs. Generic providers
+    // offer no origin correlation, so retain text matching for their own echoes.
+    const echoes = [...this.steerEchoes];
+    const exact = echoes.find(([, echo]) => echo === text);
     if (exact) {
+      this.fallbackChunkIds.clear();
       this.steerEchoes.delete(exact[0]);
       this.bufferedUserChunk = null;
-    } else if (![...this.steerEchoes.values()].some((echo) => echo.startsWith(text))) {
+    } else if (!echoes.some(([, echo]) => echo.startsWith(text))) {
       this.flushBufferedUserChunk();
     }
   }
