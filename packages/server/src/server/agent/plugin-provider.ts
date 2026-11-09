@@ -2021,6 +2021,7 @@ function decodePersistence(handle: AgentPersistenceHandle): ProviderPersistence 
   if (fromMetadata !== undefined) {
     return ProviderPersistenceSchema.parse(fromMetadata);
   }
+  // COMPAT(legacy-acp-persistence): added in v0.15.3, remove after 2027-05-10.
   // Legacy ACP sessions stored the native id before the plugin migration.
   if (handle.metadata?.provider === "acp" && !handle.sessionId.startsWith("plugin:")) {
     return { version: 1, data: { sessionId: handle.sessionId } };
