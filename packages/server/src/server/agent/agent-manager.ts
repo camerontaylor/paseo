@@ -429,6 +429,8 @@ interface HandleStreamEventOptions {
 }
 
 interface ManagedAgentBase {
+  /** Provider requests awaiting settlement, independent of native turn identity. */
+  pendingProviderWork?: boolean;
   id: string;
   provider: AgentProvider;
   cwd: string;
@@ -3092,7 +3094,7 @@ export class AgentManager {
     const terminalError = mutableAgent.lastError;
     const shouldHoldBusyForReplacement = mutableAgent.pendingReplacement && !terminalError;
     let nextLifecycle: "running" | "error" | "idle";
-    if (shouldHoldBusyForReplacement) {
+    if (shouldHoldBusyForReplacement || mutableAgent.pendingProviderWork) {
       nextLifecycle = "running";
     } else if (terminalError) {
       nextLifecycle = "error";
@@ -4893,6 +4895,11 @@ export class AgentManager {
     const { agent, event, options, isForegroundEvent, eventTurnId, terminalDisposition, flags } =
       params;
     switch (event.type) {
+      case "pending_work":
+        this.onPendingProviderWork(agent, event.pending);
+        flags.shouldDispatchEvent = false;
+        flags.shouldNotifyWaiters = false;
+        return undefined;
       case "thread_started":
         this.onStreamThreadStarted(agent);
         return undefined;
@@ -5028,6 +5035,20 @@ export class AgentManager {
     }
   }
 
+  /**
+   * Native brackets can end before an accepted steer receives its own output.
+   * Keep finish waiters open across that gap without inventing a turn identity.
+   */
+  private onPendingProviderWork(agent: ActiveManagedAgent, pending: boolean): void {
+    agent.pendingProviderWork = pending;
+    if (pending) agent.lifecycle = "running";
+    else if (!agent.activeTurnId && !agent.activeForegroundTurnId && !agent.pendingReplacement) {
+      agent.lifecycle = agent.lastError ? "error" : "idle";
+      this.runs.settleTerminalRun(agent.id, undefined);
+    }
+    this.emitState(agent);
+  }
+
   private onStreamTurnCompleted(params: {
     agent: ActiveManagedAgent;
     event: Extract<AgentStreamEvent, { type: "turn_completed" }>;
@@ -5059,7 +5080,8 @@ export class AgentManager {
       !isForegroundEvent &&
       !agent.activeForegroundTurnId &&
       agent.lifecycle !== "idle" &&
-      !agent.pendingReplacement
+      !agent.pendingReplacement &&
+      !agent.pendingProviderWork
     ) {
       (agent as ActiveManagedAgent).lifecycle = "idle";
       this.emitState(agent);
@@ -5092,7 +5114,7 @@ export class AgentManager {
       "handleStreamEvent: turn_failed",
     );
     if (terminalDisposition === "stale") return;
-    if (!isForegroundEvent && !agent.activeForegroundTurnId) {
+    if (!isForegroundEvent && !agent.activeForegroundTurnId && !agent.pendingProviderWork) {
       agent.lifecycle = "error";
     }
     agent.lastError = event.error;
@@ -5134,7 +5156,12 @@ export class AgentManager {
       "agent.manager.turn.canceled",
     );
     if (terminalDisposition === "stale") return;
-    if (!isForegroundEvent && !agent.activeForegroundTurnId && !agent.pendingReplacement) {
+    if (
+      !isForegroundEvent &&
+      !agent.activeForegroundTurnId &&
+      !agent.pendingReplacement &&
+      !agent.pendingProviderWork
+    ) {
       agent.lifecycle = "idle";
     }
     agent.lastError = undefined;

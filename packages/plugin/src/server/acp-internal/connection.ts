@@ -543,23 +543,24 @@ class AcpRuntime {
     if (!child) void this.connection.closed.then(() => this.handleUnexpectedTransportClose());
     child?.on("error", (error) => {
       this.processFailed = true;
+      if (!this.closing && this.nativeSessionId) {
+        this.emit({
+          type: "session.runtime_failed",
+          sessionId: this.options.boundarySessionId,
+          error: { message: describeError(error) },
+        });
+      }
       this.settlePendingWork();
-      if (this.closing || !this.nativeSessionId) return;
-      this.emit({
-        type: "session.runtime_failed",
-        sessionId: this.options.boundarySessionId,
-        error: { message: describeError(error) },
-      });
     });
     child?.once("close", (code, signal) => {
       if (this.closing || this.processFailed || !this.nativeSessionId) return;
       this.processFailed = true;
-      this.settlePendingWork();
       this.emit({
         type: "session.runtime_failed",
         sessionId: this.options.boundarySessionId,
         error: { message: `ACP process exited (${signal ?? code ?? "unknown"})` },
       });
+      this.settlePendingWork();
     });
   }
 
@@ -771,8 +772,14 @@ class AcpRuntime {
         releaseResponse();
       },
     );
+    const wasPending = this.outstandingSteers.size > 0;
     this.outstandingSteers.set(clientMessageId, { attachedTurnId: turnId, settled });
-    void settled.finally(() => this.outstandingSteers.delete(clientMessageId));
+    if (!wasPending) this.emitPendingWork(true);
+    void settled.finally(() => {
+      if (this.outstandingSteers.delete(clientMessageId) && this.outstandingSteers.size === 0) {
+        this.emitPendingWork(false);
+      }
+    });
     this.emit({
       type: "session.prompt_result",
       sessionId: this.options.boundarySessionId,
@@ -1046,6 +1053,7 @@ class AcpRuntime {
   /** Ends an open vendor turn before the boundary connection stops delivering events. */
   closeVendorTurn(): void {
     this.endVendorTurn("canceled", { message: "Session closed by Paseo" });
+    this.clearOutstandingSteers();
   }
 
   async closeSession(): Promise<void> {
@@ -1664,18 +1672,29 @@ class AcpRuntime {
     if (this.closing || this.processFailed) return;
     this.processFailed = true;
     this.endVendorTurn("failed", { message: "ACP transport closed" });
+    if (this.nativeSessionId) {
+      this.emit({
+        type: "session.runtime_failed",
+        sessionId: this.options.boundarySessionId,
+        error: { message: "ACP transport closed unexpectedly" },
+      });
+    }
     this.settlePendingWork();
-    if (!this.nativeSessionId) return;
-    this.emit({
-      type: "session.runtime_failed",
-      sessionId: this.options.boundarySessionId,
-      error: { message: "ACP transport closed unexpectedly" },
-    });
+  }
+
+  private emitPendingWork(pending: boolean): void {
+    this.emit({ type: "session.pending_work", sessionId: this.options.boundarySessionId, pending });
+  }
+
+  private clearOutstandingSteers(): void {
+    const wasPending = this.outstandingSteers.size > 0;
+    this.outstandingSteers.clear();
+    if (wasPending) this.emitPendingWork(false);
   }
 
   private settlePendingWork(): void {
     this.promptResponses.flush();
-    this.outstandingSteers.clear();
+    this.clearOutstandingSteers();
     // A user-initiated close leaves the peer turn running on the agent's side, so it was
     // canceled rather than failed; only a broken transport fails it.
     this.endVendorTurn(
