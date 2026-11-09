@@ -4639,6 +4639,41 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
   });
 });
 
+test("resume keeps applying the saved permission mode when the native session reports another", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-resume-mode-"));
+  class BuildModeSession extends TestAgentSession {
+    override async getRuntimeInfo() {
+      return { ...(await super.getRuntimeInfo()), modeId: "build" };
+    }
+  }
+  class BuildModeClient extends TestAgentClient {
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      this.resumeOverrides.push(config);
+      return new BuildModeSession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  }
+  const client = new BuildModeClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  try {
+    const resumed = await manager.resumeAgentFromPersistence(
+      {
+        provider: "codex",
+        sessionId: "resume-mode-session",
+        metadata: { provider: "codex", cwd: workdir, modeId: "plan" },
+      },
+      { cwd: workdir },
+    );
+    expect(client.resumeOverrides.at(-1)?.modeId).toBe("plan");
+    expect(resumed.config.modeId).toBe("plan");
+  } finally {
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test.each(["native-model", null])(
   "import uses reported model %s before resolving a default",
   async (model) => {
@@ -4646,7 +4681,12 @@ test.each(["native-model", null])(
     const storage = new AgentStorage(join(workdir, "agents"), logger);
     class NativeSession extends TestAgentSession {
       override async getRuntimeInfo() {
-        return { ...(await super.getRuntimeInfo()), model, thinkingOptionId: "high" };
+        return {
+          ...(await super.getRuntimeInfo()),
+          model,
+          thinkingOptionId: "high",
+          modeId: "build",
+        };
       }
     }
     class ImportClient extends TestAgentClient {
@@ -4678,8 +4718,10 @@ test.each(["native-model", null])(
       });
       expect(imported.config.model).toBe(model ?? "gpt-5.4");
       expect(imported.config.thinkingOptionId).toBe("high");
+      expect(imported.config.modeId).toBe("build");
       await manager.flush();
       expect((await storage.get(imported.id))?.config?.model).toBe(model ?? "gpt-5.4");
+      expect((await storage.get(imported.id))?.config?.modeId).toBe("build");
     } finally {
       await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
       await storage.flush();

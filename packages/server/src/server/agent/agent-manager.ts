@@ -1663,7 +1663,7 @@ export class AgentManager {
     await this.requireExternalMcpSupport(session, providerLaunchConfig, launchContext);
     return this.registerSession(
       session,
-      await this.resolveLoadedSessionConfig(session, storedConfig, purpose),
+      await this.resolveLoadedSessionConfig(session, storedConfig, { purpose }),
       resolvedAgentId,
       {
         ...options,
@@ -1736,6 +1736,7 @@ export class AgentManager {
       const importedConfig = await this.resolveLoadedSessionConfig(
         imported.session,
         stripInternalPaseoMcpServer(imported.config),
+        { adoptMode: true },
       );
       const timelineRows = buildImportedTimelineRows(imported.timeline);
       const initialTitle = resolveImportedAgentTitle(importedConfig, timelineRows);
@@ -5826,7 +5827,7 @@ export class AgentManager {
   private async resolveLoadedSessionConfig(
     session: AgentSession,
     config: AgentSessionConfig,
-    purpose?: AgentResumePurpose,
+    options: { purpose?: AgentResumePurpose; adoptMode?: boolean } = {},
   ): Promise<AgentSessionConfig> {
     // A native session may have changed since our last snapshot. Read it before
     // choosing a default so opening it never replaces its model or thinking level.
@@ -5839,8 +5840,11 @@ export class AgentManager {
           runtime?.thinkingOptionId !== undefined
             ? (runtime.thinkingOptionId ?? undefined)
             : config.thinkingOptionId,
+        // Only an import adopts the native mode. On resume and refresh the saved mode is
+        // the user's permission choice in Paseo and keeps being applied.
+        modeId: options.adoptMode ? (runtime?.modeId ?? config.modeId) : config.modeId,
       },
-      { purpose },
+      { purpose: options.purpose },
     );
   }
 
