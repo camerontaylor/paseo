@@ -598,7 +598,7 @@ describe("runWorktreeAutoTerminals", () => {
       terminalManager: createStubTerminalManager(calls, records),
     });
     expect(calls[0]).toMatchObject({
-      cwd: realpathSync(packageDirectory),
+      cwd: realpathSync.native(packageDirectory),
       name: "packages/web: build",
     });
     expect(records[0]?.commands).toEqual([
@@ -606,7 +606,7 @@ describe("runWorktreeAutoTerminals", () => {
         type: "command",
         command: process.platform === "win32" ? "npm.cmd" : "npm",
         args: ["run", "build"],
-        cwd: realpathSync(packageDirectory),
+        cwd: realpathSync.native(packageDirectory),
         completion: true,
       },
     ]);
