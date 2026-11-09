@@ -98,7 +98,8 @@ try {
       repo,
       "packages/server/dist/server/terminal/shell-integration/cmd/report-command-finished.cmd",
     );
-    const executable = desktop.process().spawnfile;
+    // Playwright uses a cmd.exe launcher on Windows; ask the Electron process itself.
+    const executable = await desktop.evaluate(() => process.execPath);
     for (const code of [0, 7]) {
       const fixture = path.join(root, `reporter-${code}.cmd`);
       await writeFile(
