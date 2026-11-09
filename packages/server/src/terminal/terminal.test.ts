@@ -2133,12 +2133,31 @@ describe("managed command dispatch", () => {
       traceManagedWindowsSession(session, shell);
       const completions: Array<number | null> = [];
       session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
-      await expect.poll(() => session.hasOutput()).toBe(true);
+      const revision = () => session.serializeReplay().metadata.revision;
+      let promptCount = 0;
+      const waitForPrompt = async (afterRevision = -1, completed = () => true) => {
+        const countPrompts = (state: TerminalState) =>
+          [...state.scrollback, ...state.grid].filter((row) => /^PS .*>/.test(rowToText(row)))
+            .length;
+        const returned = await waitForState(
+          session,
+          (state) =>
+            revision() > afterRevision &&
+            completed() &&
+            countPrompts(state) > promptCount &&
+            /^PS .*>$/.test(getRowText(state, state.cursor.row)),
+        );
+        promptCount = countPrompts(returned);
+      };
+      // Banner/mode output precedes readiness. Require a new prompt at the parsed cursor,
+      // not the command's echo or a prompt retained from an earlier invocation.
+      await waitForPrompt();
       const literal = "雪 space & pipe| dollar$ apostrophe' percent%PATH% bang!";
       const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
       for (const code of [7, 0]) {
         const result = join(home, `result-${code}.json`);
         const status = join(home, `status-${code}.txt`);
+        const commandRevision = revision();
         session.send({
           type: "command",
           command: process.execPath,
@@ -2146,6 +2165,8 @@ describe("managed command dispatch", () => {
           ...(code === 7 ? { cwd } : {}),
           completion: true,
         });
+        await waitForPrompt(commandRevision, () => existsSync(result));
+        const statusRevision = revision();
         session.send({
           type: "input",
           data: `[System.IO.File]::WriteAllText(${quote(status)}, [string]$LASTEXITCODE)\r`,
@@ -2156,14 +2177,19 @@ describe("managed command dispatch", () => {
           cwd: realpathSync(cwd),
           args: [literal],
         });
+        await waitForPrompt(statusRevision);
       }
       const scope = join(home, "scope.json");
+      const scopeReady = join(home, "scope-ready");
+      const scopeRevision = revision();
       session.send({
         type: "command",
-        command: `$paseoDispatchScope = ${quote(literal)}\r\n$env:PASEO_DISPATCH_SCOPE = 'scoped'\n& ${quote(process.execPath)} -e 'process.exit(7)' # trailing comment`,
+        command: `$paseoDispatchScope = ${quote(literal)}\r\n$env:PASEO_DISPATCH_SCOPE = 'scoped'\n& ${quote(process.execPath)} -e ${quote(`require('node:fs').writeFileSync(${JSON.stringify(scopeReady)}, 'ready');process.exit(7)`)} # trailing comment`,
         cwd,
         completion: true,
       });
+      await waitForPrompt(scopeRevision, () => existsSync(scopeReady));
+      const scopeStatusRevision = revision();
       session.send({
         type: "input",
         data: `[System.IO.File]::WriteAllText(${quote(scope)}, (ConvertTo-Json @{ value = $paseoDispatchScope; env = $env:PASEO_DISPATCH_SCOPE; code = $LASTEXITCODE }))\r`,
@@ -2174,6 +2200,7 @@ describe("managed command dispatch", () => {
         env: "scoped",
         code: 7,
       });
+      await waitForPrompt(scopeStatusRevision);
       const ready = join(home, "stdin-ready");
       const input = join(home, "stdin.json");
       session.send({
@@ -2188,11 +2215,14 @@ describe("managed command dispatch", () => {
         completion: false,
       });
       await expect.poll(() => existsSync(ready)).toBe(true);
+      const stdinRevision = revision();
       session.send({ type: "input", data: "foreground-input\r" });
       await expect.poll(() => existsSync(input)).toBe(true);
       expect(JSON.parse(readFileSync(input, "utf8"))).toBe("foreground-input");
+      await waitForPrompt(stdinRevision);
       const forbidden = join(home, "must-not-run.json");
       const settled = join(home, "guard-settled.txt");
+      const guardRevision = revision();
       session.send({
         type: "command",
         command: process.execPath,
@@ -2200,6 +2230,7 @@ describe("managed command dispatch", () => {
         cwd: join(home, "missing directory"),
         completion: true,
       });
+      await waitForPrompt(guardRevision);
       session.send({
         type: "input",
         data: `[System.IO.File]::WriteAllText(${quote(settled)}, 'settled')\r`,
