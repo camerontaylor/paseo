@@ -102,6 +102,7 @@ test("streaming request failures terminate with an error response and no updates
 test("older clients receive an existing rpc_error on failure", async () => {
   const emitted: SessionOutboundMessage[] = [];
   const usage = new UsageSession({
+    isEnabled: () => true,
     emit: (message) => emitted.push(message),
     logger: pino({ level: "silent" }),
   });
