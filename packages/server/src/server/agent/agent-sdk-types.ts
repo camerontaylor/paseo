@@ -796,6 +796,12 @@ export interface ResolveAgentDefaultModeInput {
 export interface AgentClient {
   readonly provider: AgentProvider;
   readonly capabilities: AgentCapabilityFlags;
+  /**
+   * True when a loaded native session restores its own model and thinking option and
+   * reports them. The manager then sends only explicit overrides on load and adopts what
+   * the session reports. Otherwise the saved selection is sent on every load.
+   */
+  readonly restoresSessionConfig?: boolean;
   createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,

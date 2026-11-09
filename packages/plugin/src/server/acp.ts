@@ -148,6 +148,8 @@ export function runAcpProvider(options: RunAcpProviderOptions): ProviderRegistra
     description: options.description,
     icon: options.icon,
     command: options.command,
+    // session/load reports the loaded session's configOptions.
+    restoresSessionConfig: true,
     connect(request) {
       return createAcpProviderConnection(options, request);
     },

@@ -15,6 +15,9 @@ import type { PromptResponse } from "@agentclientprotocol/sdk";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { asInternals } from "../test-utils/class-mocks.js";
 import { ACPAgentSession, type ACPAdmissionState } from "./providers/acp-agent.js";
+import { ClaudeAgentClient } from "./providers/claude/agent.js";
+import type { ClaudeQueryInput } from "./providers/claude/query.js";
+import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   AgentManager,
   AgentManagerShuttingDownError,
@@ -4619,7 +4622,7 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
     },
   });
   expect(client.lastResumeOverrides).toMatchObject({
-    model: undefined,
+    model: "gpt-5.4",
     systemPrompt: "new prompt",
     mcpServers: {
       paseo: {
@@ -4637,6 +4640,98 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
       PASEO_AGENT_CWD: workdir,
     },
   });
+});
+
+// Answers every prompt with one completed turn, so a test can read the options of each SDK query.
+class CompletingClaudeQuery {
+  private readonly output: AsyncGenerator<SDKMessage>;
+
+  constructor(input: ClaudeQueryInput) {
+    this.output = this.events(input);
+  }
+
+  private async *events(input: ClaudeQueryInput): AsyncGenerator<SDKMessage> {
+    if (typeof input.prompt === "string") throw new Error("Expected streaming input");
+    for await (const _prompt of input.prompt) {
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: "claude-saved-selection",
+        model: input.options.model ?? "claude-sonnet-5-5",
+        permissionMode: "default",
+      } as SDKMessage;
+      yield { type: "assistant", message: { content: "DONE" } } as SDKMessage;
+      yield {
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 },
+        total_cost_usd: 0,
+      } as SDKMessage;
+    }
+  }
+
+  next() {
+    return this.output.next();
+  }
+  return() {
+    return this.output.return();
+  }
+  close() {}
+  async interrupt() {}
+  async setPermissionMode() {}
+  async setModel() {}
+  async supportedCommands() {
+    return [];
+  }
+  [Symbol.asyncIterator]() {
+    return this;
+  }
+}
+
+test("Claude reloads and storage loads keep sending the saved model and thinking level", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-claude-saved-selection-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const queries: Array<Pick<ClaudeQueryInput["options"], "model" | "effort" | "thinking">> = [];
+  const client = new ClaudeAgentClient({
+    logger,
+    resolveBinary: async () => "/test/claude",
+    queryFactory: (input) => {
+      const { model, effort, thinking } = input.options;
+      queries.push({ model, effort, thinking });
+      return new CompletingClaudeQuery(input) as unknown as Query;
+    },
+  });
+  const manager = new AgentManager({ clients: { claude: client }, registry: storage, logger });
+  const lastQuery = () => queries.at(-1);
+  try {
+    const created = await manager.createAgent(
+      { provider: "claude", cwd: workdir, model: "claude-haiku-5-5", thinkingOptionId: "low" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    await manager.runAgent(created.id, "first");
+    expect(lastQuery()).toMatchObject({ model: "claude-haiku-5-5", effort: "low" });
+
+    // Voice mode reloads with only a system prompt.
+    await manager.reloadAgentSession(created.id, { systemPrompt: "voice" });
+    await manager.runAgent(created.id, "after reload");
+    expect(lastQuery()).toMatchObject({ model: "claude-haiku-5-5", effort: "low" });
+
+    await manager.flush();
+    await manager.closeAgent(created.id);
+    const loaded = await ensureAgentLoaded(created.id, {
+      agentManager: manager,
+      agentStorage: storage,
+      logger,
+    });
+    await manager.runAgent(loaded.id, "after storage load");
+    expect(lastQuery()).toMatchObject({ model: "claude-haiku-5-5", effort: "low" });
+    expect(loaded.config).toMatchObject({ model: "claude-haiku-5-5", thinkingOptionId: "low" });
+  } finally {
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test("resume keeps applying the saved permission mode when the native session reports another", async () => {

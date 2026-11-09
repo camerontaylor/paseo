@@ -34,7 +34,7 @@ export type AgentLoaderManager = Pick<
   | "hydrateTimelineFromProvider"
   | "resumeAgentFromPersistence"
 > &
-  Partial<Pick<AgentManager, "waitForAgentClose">>;
+  Partial<Pick<AgentManager, "waitForAgentClose" | "restoresSessionConfig">>;
 
 export interface EnsureAgentLoadedDeps {
   agentManager: AgentLoaderManager;
@@ -113,10 +113,16 @@ export async function ensureAgentLoaded(
 
     let snapshot: ManagedAgent;
     if (handle) {
-      // A storage snapshot is not an instruction to change the native session.
+      const overrides = buildConfigOverrides(record);
+      // A native session that restores its own selection keeps it: the stored model and
+      // thinking option are a snapshot, not an instruction to change that session.
+      if (deps.agentManager.restoresSessionConfig?.(record.provider)) {
+        delete overrides.model;
+        delete overrides.thinkingOptionId;
+      }
       snapshot = await deps.agentManager.resumeAgentFromPersistence(
         handle,
-        { ...buildConfigOverrides(record), model: undefined, thinkingOptionId: undefined },
+        overrides,
         agentId,
         { ...extractTimestamps(record), attention: extractAttention(record) },
         record.archivedAt ? { purpose: "history" } : undefined,

@@ -1623,10 +1623,11 @@ export class AgentManager {
     const purpose = currentResumeOptions?.purpose ?? "interactive";
 
     const launchEnv = record?.launchEnv;
+    const loadsNativeConfig = this.restoresSessionConfig(handle.provider);
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       mergedConfig,
       resolvedAgentId,
-      { purpose, env: launchEnv, resolveDefaultModel: false },
+      { purpose, env: launchEnv, resolveDefaultModel: !loadsNativeConfig },
     );
     const client = this.requireClient(handle.provider);
     const available = await client.isAvailable();
@@ -1651,7 +1652,7 @@ export class AgentManager {
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(
-      this.loadedSessionLaunchConfig(launchConfig, overrides),
+      this.loadedSessionLaunchConfig(loadsNativeConfig, launchConfig, overrides),
       launchContext,
     );
     const session = await client.resumeSession(
@@ -1663,7 +1664,7 @@ export class AgentManager {
     await this.requireExternalMcpSupport(session, providerLaunchConfig, launchContext);
     return this.registerSession(
       session,
-      await this.resolveLoadedSessionConfig(session, storedConfig, { purpose }),
+      await this.loadedSessionConfig(loadsNativeConfig, session, storedConfig, { purpose }),
       resolvedAgentId,
       {
         ...options,
@@ -1806,11 +1807,13 @@ export class AgentManager {
       ...overrides,
       provider,
     } as AgentSessionConfig;
+    // Only a reload that loads a session restoring its own selection leaves it to the session.
+    // Without a persistence handle the reload creates a new session, which gets the default.
+    const loadsNativeConfig = Boolean(handle) && this.restoresSessionConfig(provider);
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       refreshConfig,
       agentId,
-      // Without a persistence handle the reload creates a new session, which gets the default.
-      { env: existing.launchEnv, resolveDefaultModel: !handle },
+      { env: existing.launchEnv, resolveDefaultModel: !loadsNativeConfig },
     );
     const hadPreviousPaseoToolPolicy = this.paseoToolPolicies.has(agentId);
     const previousPaseoToolPolicy = this.paseoToolPolicies.get(agentId);
@@ -1829,7 +1832,7 @@ export class AgentManager {
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(
-      handle ? this.loadedSessionLaunchConfig(launchConfig, overrides) : launchConfig,
+      this.loadedSessionLaunchConfig(loadsNativeConfig, launchConfig, overrides),
       launchContext,
     );
     if (
@@ -1865,7 +1868,7 @@ export class AgentManager {
         this.discardReloadedChildren(agentId);
       }
 
-      const loadedConfig = await this.resolveLoadedSessionConfig(session, storedConfig);
+      const loadedConfig = await this.loadedSessionConfig(loadsNativeConfig, session, storedConfig);
       // Preserve existing labels and timeline during reload.
       handedToRegistration = true;
       return this.registerSession(session, loadedConfig, agentId, {
@@ -5815,13 +5818,30 @@ export class AgentManager {
     }
   }
 
+  /** Whether this provider's loaded sessions restore their own model and thinking option. */
+  restoresSessionConfig(provider: AgentProvider): boolean {
+    return this.clients.get(provider)?.restoresSessionConfig === true;
+  }
+
   private loadedSessionLaunchConfig(
+    loadsNativeConfig: boolean,
     config: AgentSessionConfig,
     overrides: Partial<AgentSessionConfig> = {},
   ): AgentSessionConfig {
+    // Providers that do not restore a selection get the saved one on every load.
+    if (!loadsNativeConfig) return config;
     // Saved selections are snapshots; only a caller's overrides are instructions
     // to change a native session while opening it.
     return { ...config, model: overrides.model, thinkingOptionId: overrides.thinkingOptionId };
+  }
+
+  private async loadedSessionConfig(
+    loadsNativeConfig: boolean,
+    session: AgentSession,
+    config: AgentSessionConfig,
+    options: { purpose?: AgentResumePurpose } = {},
+  ): Promise<AgentSessionConfig> {
+    return loadsNativeConfig ? this.resolveLoadedSessionConfig(session, config, options) : config;
   }
 
   private async resolveLoadedSessionConfig(
