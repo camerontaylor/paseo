@@ -1,11 +1,7 @@
-import {
-  discoverPackageScripts,
-  packageScriptLabel,
-  packageScriptCommand,
-} from "./workspace-scripts/package-scripts.js";
+import { discoverPackageScripts, packageScriptLabel } from "./workspace-scripts/package-scripts.js";
 import type { Logger } from "pino";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
-import type { TerminalSession } from "../terminal/terminal.js";
+import type { ClientMessage, TerminalSession } from "../terminal/terminal.js";
 import {
   getScriptConfigs,
   getWorktreeTerminalSpecs,
@@ -507,6 +503,9 @@ async function acquireWorkspaceScriptTerminal(params: {
   let reusableTerminal: TerminalSession | null = null;
   if (!serviceScript && existingRuntimeEntry?.terminalId) {
     reusableTerminal = terminalManager.getTerminal(existingRuntimeEntry.terminalId) ?? null;
+    // A previous-version worker keeps its existing terminals alive while draining. New
+    // managed commands belong to a current worker; never send it an unknown message.
+    if (reusableTerminal?.supportsCommandDispatch === false) reusableTerminal = null;
   }
   const terminal =
     reusableTerminal ??
@@ -550,8 +549,25 @@ async function resolveWorkspaceScript({
   const terminalName = packageScript ? packageScriptLabel(packageScript) : scriptName;
   const scriptCwd = packageScript ? packageScript.cwd : repoRoot;
 
-  const command = packageScript ? packageScriptCommand(packageScript) : config.command;
-  return { configResult, scriptConfigs, config, packageJson, terminalName, scriptCwd, command };
+  const dispatch: Extract<ClientMessage, { type: "command" }> = {
+    type: "command",
+    command: config.command,
+    completion: !isServiceScript(config),
+  };
+  if (packageScript) {
+    dispatch.command = packageScript.executable;
+    dispatch.args = ["run", packageScript.packageJson.script];
+    dispatch.cwd = packageScript.cwd;
+  }
+  return {
+    configResult,
+    scriptConfigs,
+    config,
+    packageJson,
+    terminalName,
+    scriptCwd,
+    dispatch,
+  };
 }
 
 export async function spawnWorkspaceScript(
@@ -573,7 +589,7 @@ export async function spawnWorkspaceScript(
     logger,
     onLifecycleChanged,
   } = options;
-  const { configResult, scriptConfigs, config, packageJson, terminalName, scriptCwd, command } =
+  const { configResult, scriptConfigs, config, packageJson, terminalName, scriptCwd, dispatch } =
     await resolveWorkspaceScript({ repoRoot, workspaceId, scriptName, runtimeStore, logger });
 
   const serviceScript = isServiceScript(config);
@@ -701,7 +717,7 @@ export async function spawnWorkspaceScript(
       });
       terminal.setActivity("working");
     }
-    terminal.send({ type: "input", data: `${command}\r` });
+    terminal.send(dispatch);
 
     logger?.info(
       {

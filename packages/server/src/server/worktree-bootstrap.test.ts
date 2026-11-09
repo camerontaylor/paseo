@@ -18,7 +18,7 @@ import {
   resolveWorktreeRuntimeEnv,
 } from "../utils/worktree.js";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
-import type { TerminalSession } from "../terminal/terminal.js";
+import type { ClientMessage, TerminalSession } from "../terminal/terminal.js";
 
 interface CreateAgentWorktreeTestOptions {
   cwd: string;
@@ -248,6 +248,7 @@ describe("runWorktreeAutoTerminals", () => {
     triggerExit: (exitCode: number) => void;
     triggerCommandFinished: (exitCode: number) => void;
     sentInputs: string[];
+    commands: Extract<ClientMessage, { type: "command" }>[];
     activity: string[];
     commandSubscriptions: number;
   }
@@ -276,6 +277,7 @@ describe("runWorktreeAutoTerminals", () => {
           commandSubscriptions: 0,
           id: terminalId,
           sentInputs,
+          commands: [],
           activity,
           triggerCommandFinished: (exitCode) => {
             commandFinishedHandler?.({ exitCode });
@@ -295,6 +297,11 @@ describe("runWorktreeAutoTerminals", () => {
           send: (message) => {
             if (message.type === "input") {
               sentInputs.push(message.data);
+            } else if (message.type === "command") {
+              record.commands.push(message);
+              sentInputs.push(
+                `${message.command}${message.args ? " " + message.args.map((arg) => `'${arg}'`).join(" ") : ""}\r`,
+              );
             }
           },
           subscribe: (listener) => {
@@ -390,6 +397,9 @@ describe("runWorktreeAutoTerminals", () => {
     expect(createTerminalCalls[0]?.cwd).toBe(testRepoDir);
     expect(createTerminalCalls[0]?.name).toBe("api");
     expect(terminalRecords[0]?.sentInputs).toEqual(["npm run api\r"]);
+    expect(terminalRecords[0]?.commands).toEqual([
+      { type: "command", command: "npm run api", completion: false },
+    ]);
     expect(createTerminalCalls[0]?.env).not.toHaveProperty("PORT");
     expect(createTerminalCalls[0]?.env?.PASEO_PORT).toEqual(expect.any(String));
     expect(createTerminalCalls[0]?.env?.HOST).toBe("127.0.0.1");
@@ -591,7 +601,15 @@ describe("runWorktreeAutoTerminals", () => {
       cwd: realpathSync(packageDirectory),
       name: "packages/web: build",
     });
-    expect(records[0]?.sentInputs[0]).toContain("npm run 'build'");
+    expect(records[0]?.commands).toEqual([
+      {
+        type: "command",
+        command: process.platform === "win32" ? "npm.cmd" : "npm",
+        args: ["run", "build"],
+        cwd: realpathSync(packageDirectory),
+        completion: true,
+      },
+    ]);
     expect(records[0]?.activity).toEqual(["working"]);
     records[0]?.triggerCommandFinished(1);
     expect(records[0]?.activity).toEqual(["working", "idle"]);
@@ -683,6 +701,24 @@ describe("runWorktreeAutoTerminals", () => {
       terminalId: firstResult.terminalId,
       exitCode: 0,
     });
+    const oldSession = terminalManager.getTerminal(firstResult.terminalId)!;
+    Object.defineProperty(oldSession, "supportsCommandDispatch", { value: false });
+    const currentResult = await spawnWorkspaceScript({
+      repoRoot: repoDir,
+      workspaceId: repoDir,
+      projectSlug: "repo",
+      branchName: "feature-script-rerun",
+      scriptName: "typecheck",
+      daemonPort: null,
+      serviceProxy: routeStore,
+      runtimeStore,
+      terminalManager,
+    });
+    expect(currentResult.terminalId).not.toBe(firstResult.terminalId);
+    expect(createTerminalCalls).toHaveLength(2);
+    expect(terminalManager.getTerminal(firstResult.terminalId)).toBe(oldSession);
+    expect(terminalRecords[0]?.sentInputs).toHaveLength(2);
+    expect(terminalRecords[1]?.sentInputs).toEqual(["npm run typecheck\r"]);
   });
 
   it("tracks command completion when reusing a live terminal from a stopped plain script entry", async () => {

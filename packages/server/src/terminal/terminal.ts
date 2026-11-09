@@ -74,6 +74,7 @@ export interface TerminalCommandFinishedInfo {
 
 export type ClientMessage =
   | { type: "input"; data: string }
+  | { type: "command"; command: string; args?: string[]; cwd?: string; completion: boolean }
   | { type: "resize"; rows: number; cols: number }
   | { type: "mouse"; row: number; col: number; button: number; action: "down" | "up" | "move" };
 
@@ -92,6 +93,7 @@ export interface TerminalSession {
   name: string;
   cwd: string;
   workspaceId: string;
+  readonly supportsCommandDispatch?: boolean;
   send(msg: ClientMessage): void;
   subscribe(listener: (msg: ServerMessage) => void): () => void;
   onExit(listener: (info: TerminalExitInfo) => void): () => void;
@@ -343,14 +345,56 @@ function escapeCmdExeMetaChars(text: string): string {
  * just without the original line breaks, instead of cmd.exe splitting the
  * prompt into multiple commands.
  */
-function escapeCmdExeArgument(rawArg: string): string {
+function escapeCmdExeArgument(rawArg: string, shim = true): string {
   const arg = rawArg.replace(/\r\n|\r|\n/g, " ");
 
   let escaped = arg.replace(/(\\*)"/g, '$1$1\\"');
   escaped = escaped.replace(/(\\*)$/, "$1$1");
   escaped = `"${escaped}"`;
 
-  return escapeCmdExeMetaChars(escapeCmdExeMetaChars(escaped));
+  const once = escapeCmdExeMetaChars(escaped);
+  return shim ? escapeCmdExeMetaChars(once) : once;
+}
+
+/** Render managed commands in the shell that owns this PTY, including after reattachment. */
+export function buildTerminalCommand(
+  message: Extract<ClientMessage, { type: "command" }>,
+  shell: string,
+): string {
+  const family = basename(shell).toLowerCase();
+  const cmd = family === "cmd.exe" || family === "cmd";
+  const quote = (value: string) =>
+    cmd ? escapeCmdExeMetaChars(value) : `'${value.replaceAll("'", "'\\''")}'`;
+  let invocation = message.command;
+  if (message.args) {
+    if (cmd) {
+      const shim = /\.(cmd|bat)$/i.test(message.command);
+      invocation = [
+        escapeCmdExeMetaChars(message.command),
+        ...message.args.map((argument) => escapeCmdExeArgument(argument, shim)),
+      ].join(" ");
+    } else {
+      invocation = [message.command, ...message.args].map(quote).join(" ");
+    }
+  }
+  const command = message.cwd
+    ? `${cmd ? "cd /d" : "cd --"} ${quote(message.cwd)} && ${invocation}`
+    : invocation;
+  if (!message.completion || family === "zsh") return `${command}\r`;
+  if (["bash", "sh", "dash"].includes(family)) {
+    // Newlines keep a trailing comment from eating the status capture. A subshell restores
+    // the command status without terminating the interactive parent or losing its cwd/env.
+    return `{\n${command}\n}\n_paseo_script_status=$?; printf '\\033]633;D;%s\\007' "$_paseo_script_status"; (exit "$_paseo_script_status")\r`;
+  }
+  if (cmd) {
+    // Each line is parsed after the preceding command finishes, so ERRORLEVEL is not
+    // expanded before the managed command runs. Do not exit the interactive parent.
+    const report =
+      "process.stdout.write(String.fromCharCode(27)+']633;D;'+process.argv[1]+String.fromCharCode(7));process.exit(Number(process.argv[1]))";
+    return `${command}\rset "_paseo_script_status=%errorlevel%"\r"${process.execPath}" -e "${report}" %_paseo_script_status%\r`;
+  }
+  // Explicit shell profiles retain their existing completion behavior.
+  return `${command}\r`;
 }
 
 /**
@@ -406,7 +450,7 @@ export async function resolveTerminalSpawnCommand(
       "/d",
       "/s",
       "/c",
-      `"${[escapeCmdExeMetaChars(resolved), ...args.map(escapeCmdExeArgument)].join(" ")}"`,
+      `"${[escapeCmdExeMetaChars(resolved), ...args.map((argument) => escapeCmdExeArgument(argument))].join(" ")}"`,
     ].join(" ");
     return { command: comSpec, args: commandLine };
   }
@@ -1160,6 +1204,10 @@ export async function createTerminal(
     if (killed) return;
 
     switch (msg.type) {
+      case "command":
+        pendingInput += buildTerminalCommand(msg, spawnCommand);
+        scheduleInputFlush();
+        break;
       case "input": {
         if (isTerminalActivityInterruptInput(msg.data)) {
           activityTracker.interrupt();
@@ -1382,6 +1430,7 @@ export async function createTerminal(
     name,
     cwd,
     workspaceId,
+    supportsCommandDispatch: true,
     send,
     subscribe,
     onExit,

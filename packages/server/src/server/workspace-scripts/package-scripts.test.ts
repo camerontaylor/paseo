@@ -30,16 +30,19 @@ describe("package script discovery", () => {
     expect(scripts).toEqual([
       {
         command: "pnpm run 'build'",
+        executable: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
         cwd: root,
         packageJson: { path: "package.json", script: "build" },
       },
       {
         command: "bun run 'build'",
+        executable: "bun",
         cwd: join(root, "packages/api"),
         packageJson: { path: "packages/api/package.json", script: "build" },
       },
       {
         command: "pnpm run 'build'",
+        executable: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
         cwd: join(root, "packages/web"),
         packageJson: { path: "packages/web/package.json", script: "build" },
       },
@@ -76,6 +79,7 @@ describe("package script discovery", () => {
     expect([...(await discoverPackageScripts(root)).values()]).toEqual([
       {
         command: "yarn run 'test'",
+        executable: process.platform === "win32" ? "yarn.cmd" : "yarn",
         cwd: root,
         packageJson: { path: "package.json", script: "test" },
       },

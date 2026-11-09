@@ -23,6 +23,7 @@ import {
   mkdtempSync,
   mkdirSync,
   realpathSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -1931,3 +1932,86 @@ it.each([false, true])(
     }
   },
 );
+
+// These are real interactive shells: no synthetic OSC injection or manual completion callbacks.
+describe("managed command dispatch", () => {
+  const shells = isPlatform("win32")
+    ? [resolveDefaultTerminalShell()]
+    : ["/bin/bash", "/bin/sh", ...(existsSync("/bin/zsh") ? ["/bin/zsh"] : [])];
+  it.each(shells)("reports real success/nonzero and reuses %s", async (shell) => {
+    const home = mkdtempSync(join(tmpdir(), "managed-command-"));
+    temporaryDirs.push(home);
+    const cwd = join(home, "space & apostrophe' %PASEO_MANAGED_UNSAFE% directory");
+    mkdirSync(cwd);
+    writeFileSync(join(home, ".zshenv"), "");
+    writeFileSync(join(home, ".zshrc"), "PS1='$ '\n");
+    const session = trackSession(
+      await createTerminal({
+        workspaceId: "ws-managed",
+        cwd: home,
+        shell,
+        env: { HOME: home, ZDOTDIR: home, PASEO_MANAGED_UNSAFE: "must-not-expand" },
+      }),
+    );
+    const completions: Array<number | null> = [];
+    session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
+    await expect.poll(() => session.hasOutput()).toBe(true);
+    session.send({
+      type: "command",
+      command: process.execPath,
+      args: [
+        "-e",
+        "require('node:fs').writeFileSync('argv.json', JSON.stringify(process.argv.slice(1)))",
+        "space & pipe| dollar$ apostrophe' percent%PASEO_MANAGED_UNSAFE%",
+      ],
+      cwd,
+      completion: true,
+    });
+    await expect.poll(() => completions).toEqual([0]);
+    expect(JSON.parse(readFileSync(join(cwd, "argv.json"), "utf8"))).toEqual([
+      "space & pipe| dollar$ apostrophe' percent%PASEO_MANAGED_UNSAFE%",
+    ]);
+    let failingCommand = "printf '%s' first\nprintf '%s' second; (exit 7) # trailing comment";
+    if (isPlatform("win32")) failingCommand = `"${process.execPath}" -e "process.exit(7)"`;
+    else if (shell.endsWith("zsh")) failingCommand = "(exit 7)";
+    session.send({ type: "command", command: failingCommand, completion: true });
+    await expect.poll(() => completions).toEqual([0, 7]);
+    session.send({
+      type: "command",
+      command: process.execPath,
+      args: ["-e", "require('node:fs').writeFileSync('still-alive', 'yes')"],
+      completion: true,
+    });
+    await expect.poll(() => completions).toEqual([0, 7, 0]);
+    expect(readFileSync(join(cwd, "still-alive"), "utf8")).toBe("yes");
+  });
+  it.each(shells.filter((shell) => !shell.endsWith("zsh")))(
+    "leaves foreground service stdin and completion unchanged in %s",
+    async (shell) => {
+      const cwd = mkdtempSync(join(tmpdir(), "managed-service-"));
+      temporaryDirs.push(cwd);
+      const session = trackSession(await createTerminal({ cwd, workspaceId: "ws-service", shell }));
+      const codes: Array<number | null> = [];
+      const output: string[] = [];
+      session.onCommandFinished(({ exitCode }) => codes.push(exitCode));
+      session.subscribe((event) => {
+        if (event.type === "output") output.push(event.data);
+      });
+      await expect.poll(() => session.hasOutput()).toBe(true);
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "console.log('SERVICE_READY');process.stdin.once('data', data => {require('node:fs').writeFileSync('stdin.txt',data);process.exit(0)})",
+        ],
+        completion: false,
+      });
+      await expect.poll(() => output.join("").includes("SERVICE_READY\r\n")).toBe(true);
+      session.send({ type: "input", data: "foreground-input\r" });
+      await expect.poll(() => existsSync(join(cwd, "stdin.txt"))).toBe(true);
+      expect(readFileSync(join(cwd, "stdin.txt"), "utf8")).toContain("foreground-input");
+      expect(codes).toEqual([]);
+    },
+  );
+});
