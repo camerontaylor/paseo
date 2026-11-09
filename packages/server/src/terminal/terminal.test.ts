@@ -31,6 +31,7 @@ import {
   writeSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as pty from "node-pty";
 import xterm from "@xterm/headless";
 import { delimiter, join } from "node:path";
@@ -2189,4 +2190,134 @@ describe("managed command dispatch", () => {
       else expect(codes).toEqual([]);
     },
   );
+});
+
+// The native boundary is controlled; the real headless terminal and session lifecycle run.
+describe("native PTY close ownership", () => {
+  async function controlledTerminal(platform: NodeJS.Platform) {
+    const events = new EventEmitter();
+    const nativeKill = vi.fn<(signal?: string) => void>();
+    const nativePty: pty.IPty = {
+      pid: 123456,
+      cols: 80,
+      rows: 24,
+      process: "controlled",
+      handleFlowControl: false,
+      onData: (listener) => {
+        events.on("data", listener);
+        return {
+          dispose: () => {
+            events.off("data", listener);
+          },
+        };
+      },
+      onExit: (listener) => {
+        events.on("exit", listener);
+        return {
+          dispose: () => {
+            events.off("exit", listener);
+          },
+        };
+      },
+      kill: nativeKill,
+      write: vi.fn(),
+      resize: vi.fn(),
+      clear: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+    };
+    const spawn = vi.spyOn(pty, "spawn").mockReturnValue(nativePty);
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    let session: TerminalSession;
+    try {
+      session = await createTerminal({
+        workspaceId: "ws-controlled-close",
+        cwd: realpathSync(tmpdir()),
+        command: process.execPath,
+      });
+    } catch (error) {
+      spawn.mockRestore();
+      throw error;
+    }
+    Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+    const exit = () => {
+      events.emit("exit", { exitCode: 0, signal: 0 });
+    };
+    return {
+      session,
+      nativeKill,
+      exit,
+      restore: () => {
+        exit();
+        Object.defineProperty(process, "platform", descriptor);
+        spawn.mockRestore();
+        vi.useRealTimers();
+      },
+    };
+  }
+
+  it("closes Windows PTY once after kill and concurrent waiters still await native exit", async () => {
+    const terminal = await controlledTerminal("win32");
+    const waits: Promise<void>[] = [];
+    let settled = 0;
+    const waitAndCount = async () => {
+      await terminal.session.killAndWait();
+      settled++;
+    };
+    try {
+      terminal.session.kill();
+      waits.push(waitAndCount(), waitAndCount());
+      await Promise.resolve();
+      expect(terminal.nativeKill).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(0);
+      terminal.exit();
+      await Promise.all(waits);
+      expect(settled).toBe(2);
+      await terminal.session.killAndWait();
+      terminal.session.kill();
+      expect(terminal.nativeKill).toHaveBeenCalledTimes(1);
+    } finally {
+      terminal.restore();
+      await Promise.allSettled(waits);
+    }
+  });
+
+  it("retries a Windows close that threw before a successful request", async () => {
+    const terminal = await controlledTerminal("win32");
+    let wait: Promise<void> | undefined;
+    try {
+      vi.useFakeTimers();
+      terminal.nativeKill
+        .mockImplementationOnce(() => {
+          throw new Error("close unavailable");
+        })
+        .mockImplementationOnce(terminal.exit);
+      wait = terminal.session.killAndWait({ gracefulTimeoutMs: 10, forceTimeoutMs: 10 });
+      expect(terminal.nativeKill).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10);
+      await wait;
+      expect(terminal.nativeKill).toHaveBeenCalledTimes(2);
+    } finally {
+      terminal.restore();
+      await wait;
+    }
+  });
+
+  it("preserves POSIX force escalation while waiting for native exit", async () => {
+    const terminal = await controlledTerminal("linux");
+    let wait: Promise<void> | undefined;
+    try {
+      vi.useFakeTimers();
+      terminal.nativeKill.mockImplementation((signal) => {
+        if (signal === "SIGKILL") terminal.exit();
+      });
+      wait = terminal.session.killAndWait({ gracefulTimeoutMs: 10, forceTimeoutMs: 10 });
+      await vi.advanceTimersByTimeAsync(10);
+      await wait;
+      expect(terminal.nativeKill.mock.calls).toEqual([[undefined], ["SIGKILL"]]);
+    } finally {
+      terminal.restore();
+      await wait;
+    }
+  });
 });

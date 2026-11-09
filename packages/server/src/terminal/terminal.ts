@@ -835,6 +835,7 @@ export async function createTerminal(
   let disposed = false;
   let exitEmitted = false;
   let processExited = false;
+  let windowsCloseRequested = false;
   const processExitWaiters = new Set<() => void>();
   let exitInfo: TerminalExitInfo | null = null;
   // Recent output is retained as whole chunks plus a running char length so we
@@ -1372,7 +1373,11 @@ export async function createTerminal(
 
   function killPtyProcess(signal?: NodeJS.Signals): void {
     if (process.platform === "win32") {
+      // Closing ConPTY is a one-way request, including while native exit is pending.
+      // A throwing request may be retried; POSIX still supports signal escalation.
+      if (windowsCloseRequested) return;
       ptyProcess.kill();
+      windowsCloseRequested = true;
       return;
     }
     ptyProcess.kill(signal);
