@@ -543,23 +543,24 @@ class AcpRuntime {
     if (!child) void this.connection.closed.then(() => this.handleUnexpectedTransportClose());
     child?.on("error", (error) => {
       this.processFailed = true;
+      if (!this.closing && this.nativeSessionId) {
+        this.emit({
+          type: "session.runtime_failed",
+          sessionId: this.options.boundarySessionId,
+          error: { message: describeError(error) },
+        });
+      }
       this.settlePendingWork();
-      if (this.closing || !this.nativeSessionId) return;
-      this.emit({
-        type: "session.runtime_failed",
-        sessionId: this.options.boundarySessionId,
-        error: { message: describeError(error) },
-      });
     });
     child?.once("close", (code, signal) => {
       if (this.closing || this.processFailed || !this.nativeSessionId) return;
       this.processFailed = true;
-      this.settlePendingWork();
       this.emit({
         type: "session.runtime_failed",
         sessionId: this.options.boundarySessionId,
         error: { message: `ACP process exited (${signal ?? code ?? "unknown"})` },
       });
+      this.settlePendingWork();
     });
   }
 

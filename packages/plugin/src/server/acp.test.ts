@@ -1948,6 +1948,73 @@ describe("ACP transformer turn lifecycle", () => {
     };
   }
 
+  it("publishes subprocess failure before clearing a steer pending after peer completion", async () => {
+    const executable = await fakeAcp(`const readline = require("node:readline");
+const lines = readline.createInterface({ input: process.stdin });
+const send = (message, callback) => process.stdout.write(JSON.stringify(message) + "\\n", callback);
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: message.params.protocolVersion, agentCapabilities: {} } });
+  else if (message.method === "session/new") {
+    send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "native-1", modes: null, configOptions: [] } });
+    send({ jsonrpc: "2.0", method: "vendor/turn", params: { turnId: "peer", state: "started" } });
+  } else if (message.method === "session/prompt") {
+    send({ jsonrpc: "2.0", method: "vendor/turn", params: { turnId: "peer", state: "completed" } }, () => process.exit(17));
+  }
+});`);
+    const registration = runAcpProvider({
+      id: "subprocess-pending-steer",
+      label: "Subprocess pending steer",
+      command: [process.execPath, executable],
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [
+        vendorTurnTransformer,
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+      ],
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send(openInput());
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "started",
+      );
+      await connection.send({
+        ...promptInput("pending-at-exit"),
+        prompt: { ...promptInput("pending-at-exit").prompt, delivery: "steer" },
+      });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.pending_work" && !event.pending,
+      );
+      await waitForEvent(events, (event) => event.type === "session.runtime_failed");
+      const terminal = events.findIndex(
+        (event) => event.type === "session.turn" && event.state === "completed",
+      );
+      const failure = events.findIndex((event) => event.type === "session.runtime_failed");
+      const cleared = events.findIndex(
+        (event) => event.type === "session.pending_work" && !event.pending,
+      );
+      expect(terminal).toBeGreaterThan(-1);
+      expect(failure).toBeGreaterThan(terminal);
+      expect(cleared).toBeGreaterThan(failure);
+      expect(
+        events
+          .filter((event) => event.type === "session.pending_work")
+          .map((event) => event.pending),
+      ).toEqual([true, false]);
+      expect(events.filter((event) => event.type === "session.turn")).toHaveLength(2);
+      expect(events.filter((event) => event.type === "session.runtime_failed")).toHaveLength(1);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("admits steers concurrently and lazily opens a rollover turn", async () => {
     const { connection, events, agent } = await connectVendorTurns({
       capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
