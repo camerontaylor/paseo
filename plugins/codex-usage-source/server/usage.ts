@@ -51,6 +51,8 @@ const responseSchema = z.object({
   credits: z.object({ balance: number.optional() }).nullish(),
 });
 
+type RoutedInput = Extract<CodexUsageInput, { route: unknown }>;
+
 interface Auth {
   token: string;
   accountId?: string;
@@ -78,14 +80,14 @@ export async function discover(
   return present;
 }
 
-function globalRoutes(lookup: StoreLookup): CodexUsageInput[] {
+function globalRoutes(lookup: StoreLookup): RoutedInput[] {
   const env = lookup.env ?? process.env;
   const home = lookup.home ?? homedir();
   const paths = [
     ...(env.CODEX_HOME ? [join(env.CODEX_HOME, "auth.json")] : []),
     join(home, ".codex", "auth.json"),
   ];
-  const candidates: CodexUsageInput[] = [...new Set(paths)].map((path) => ({
+  const candidates: RoutedInput[] = [...new Set(paths)].map((path) => ({
     route: { store: "codex", path },
   }));
   candidates.push(
@@ -104,7 +106,7 @@ function globalRoutes(lookup: StoreLookup): CodexUsageInput[] {
 function sessionRoutes(
   scope: Extract<UsageScope, { kind: "session" }>,
   lookup: StoreLookup,
-): CodexUsageInput[] {
+): RoutedInput[] {
   const env = scope.env;
   const home = lookup.home ?? homedir();
   if (scope.provider === "codex") {
@@ -131,9 +133,30 @@ function sessionRoutes(
 }
 
 export async function readAuth(
-  input: CodexUsageInput,
+  input: CodexUsageInput | Record<string, never>,
   lookup: StoreLookup = {},
 ): Promise<Auth | null> {
+  if ("providerId" in input) {
+    if (!input.codexHome) return null;
+    return readAuth(
+      { route: { store: "codex", path: join(input.codexHome, "auth.json") } },
+      lookup,
+    );
+  }
+  if (!("route" in input)) {
+    const env = lookup.env ?? process.env;
+    const home = lookup.home ?? homedir();
+    const paths = [
+      ...(env.CODEX_HOME ? [join(env.CODEX_HOME, "auth.json")] : []),
+      join(home, ".config", "codex", "auth.json"),
+      join(home, ".codex", "auth.json"),
+    ];
+    for (const path of new Set(paths)) {
+      const auth = await readAuth({ route: { store: "codex", path } }, lookup);
+      if (auth) return auth;
+    }
+    return null;
+  }
   const route = input.route;
   if (route.store !== "codex") {
     const oauth = await readHarness(route, lookup);
@@ -191,7 +214,7 @@ export async function fetchUsage(
 ): Promise<UsageReport> {
   const auth = await readAuth(input, lookup);
   if (!auth) throw new Error("Codex login store no longer exists");
-  const refreshedBy = input.route.store;
+  const refreshedBy = "route" in input ? input.route.store : "codex";
   if (auth.expires !== undefined && auth.expires <= (lookup.now ?? Date.now)())
     return unavailable({
       kind: "expired",
@@ -277,7 +300,7 @@ function claimString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function accountIdentity(auth: Auth, input: CodexUsageInput): { key: string; label?: string } {
+function accountIdentity(auth: Auth, input: RoutedInput): { key: string; label?: string } {
   const access = jwtClaims(auth.token);
   const id = jwtClaims(auth.idToken);
   const accessAuth = claimObject(access, "https://api.openai.com/auth");
@@ -296,7 +319,22 @@ function accountIdentity(auth: Auth, input: CodexUsageInput): { key: string; lab
   return { key: key ?? hashAccountKey(JSON.stringify(input.route)), ...(label ? { label } : {}) };
 }
 
-function harnessLabel(input: CodexUsageInput): string {
+function harnessLabel(input: RoutedInput): string {
   const labels = { codex: "Codex", opencode: "OpenCode", pi: "Pi", omp: "OMP" };
   return labels[input.route.store];
+}
+
+export async function identify(
+  input: CodexUsageInput | Record<string, never>,
+  lookup: StoreLookup = {},
+) {
+  if ("providerId" in input) return { key: `provider.${input.providerId}`, label: input.label };
+  const auth = await readAuth(input, lookup);
+  if (!auth) return null;
+  return accountIdentity(auth, {
+    route:
+      "route" in input
+        ? input.route
+        : { store: "codex", path: join(lookup.home ?? homedir(), ".codex", "auth.json") },
+  });
 }

@@ -51,10 +51,9 @@ export async function resolveInlinePathOpen(input: PathOpenInput): Promise<PathO
 
 export function createInlinePathOpener(input: {
   workspaceRoot: string;
-  client: {
-    listDirectory(root: string, path: string): Promise<unknown>;
-    getDirectorySuggestions: GetDirectorySuggestions;
-  } | null;
+  sourceCwd?: string;
+  onError?: (error: "pathUnavailable" | "outsideWorkspaceDirectory" | null) => void;
+  client: (PathOpenInput["client"] & { getDirectorySuggestions?: GetDirectorySuggestions }) | null;
   resolveRelativeFiles?: boolean;
   openFile: (location: WorkspaceFileLocation, disposition: OpenFileDisposition) => void;
   openDirectory: (path: string) => void;
@@ -64,8 +63,19 @@ export function createInlinePathOpener(input: {
   return {
     async open(target: InlinePathTarget, disposition: OpenFileDisposition) {
       const ownGeneration = ++generation;
-      const normalized = normalizeInlinePathTarget(target.path, input.workspaceRoot);
-      if (!normalized) return;
+      const normalized = normalizeInlinePathTarget(target.path, {
+        sourceCwd: input.sourceCwd ?? input.workspaceRoot,
+        workspaceRoot: input.workspaceRoot,
+      });
+      if (!normalized) {
+        input.onError?.("pathUnavailable");
+        return;
+      }
+      if ("error" in normalized) {
+        input.onError?.(normalized.error);
+        return;
+      }
+      input.onError?.(null);
       const destination = await resolveInlinePathOpen({
         ...normalized,
         lineStart: target.lineStart,
@@ -79,7 +89,7 @@ export function createInlinePathOpener(input: {
         input.openOutsideDirectory(destination.directoryPath);
       } else if (normalized.file) {
         const resolvedTarget =
-          input.resolveRelativeFiles && input.client
+          input.resolveRelativeFiles && input.client?.getDirectorySuggestions
             ? await resolveMissingNestedRelativeFile({
                 target,
                 workspaceRoot: input.workspaceRoot,
@@ -87,8 +97,11 @@ export function createInlinePathOpener(input: {
               })
             : target;
         if (ownGeneration !== generation) return;
-        const resolved = normalizeInlinePathTarget(resolvedTarget.path, input.workspaceRoot);
-        if (!resolved?.file) return;
+        const resolved = normalizeInlinePathTarget(resolvedTarget.path, {
+          sourceCwd: input.sourceCwd ?? input.workspaceRoot,
+          workspaceRoot: input.workspaceRoot,
+        });
+        if (!resolved || "error" in resolved || !resolved.file) return;
         const location = normalizeWorkspaceFileLocation({
           path: resolved.file,
           lineStart: resolvedTarget.lineStart,

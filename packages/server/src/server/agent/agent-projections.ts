@@ -25,6 +25,7 @@ import {
   resolveStoredAgentUpdatedAt,
   toAgentPersistenceHandle,
 } from "../persistence-hooks.js";
+import { restoreCompanionEntries } from "./companion-stream.js";
 export type { ManagedAgent };
 
 interface ProjectionOptions {
@@ -107,6 +108,8 @@ export function toStoredAgentRecord(
       : null,
     internal: options?.internal,
     owner: agent.owner,
+    artifacts: agent.artifacts ?? [],
+    companionEntries: agent.companionEntries ?? [],
   } satisfies StoredAgentRecord;
 }
 
@@ -150,6 +153,8 @@ export function toAgentPayload(
     labels: agent.labels,
     archivedAt: options?.archivedAt ?? null,
     ...(agent.internal ? { internal: true } : {}),
+    artifacts: agent.artifacts ?? [],
+    companionEntries: agent.companionEntries ?? [],
   };
 
   const usage = sanitizeUsage(agent.lastUsage);
@@ -204,6 +209,16 @@ function buildStoredPersistenceHandle(
     return null;
   }
   return toAgentPersistenceHandle(validProviders, record.persistence);
+}
+
+/** Stream facts a stored record carries: artifacts always, companion entries when present. */
+function buildStoredStreamFacts(
+  record: StoredAgentRecord,
+): Pick<AgentSnapshotPayload, "artifacts" | "companionEntries"> {
+  return {
+    artifacts: record.artifacts ?? [],
+    companionEntries: restoreCompanionEntries(record),
+  };
 }
 
 export function buildStoredAgentPayload(
@@ -261,6 +276,7 @@ export function buildStoredAgentPayload(
     ...(record.internal ? { internal: true } : {}),
     labels: normalizeLabels(record.labels),
     ...(typeof record.lastError === "string" ? { lastError: record.lastError } : {}),
+    ...buildStoredStreamFacts(record),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
   };
 }
@@ -442,6 +458,9 @@ function projectPersistenceHandleForWire(
     return projected;
   }
   delete projected.metadata.mcpServers;
+  // Resume log only. Clients read pending questions from pendingPermissions,
+  // and this array dominates directory snapshots (kilobytes per agent).
+  delete projected.metadata.asyncQuestions;
   if (Object.keys(projected.metadata).length === 0) {
     delete projected.metadata;
   }

@@ -1,0 +1,9 @@
+mise WARN  Failed to resolve tool version list for android-sdk: [/tmp/tmad-port/full-custom-plus-voice/.tool-versions] android-sdk@21.0: timed out after 3.00s
+
+ RUN  v4.1.7 /tmp/tmad-port/full-custom-plus-voice
+
+
+ Test Files  4 passed (4)
+      Tests  373 passed (373)
+   Start at  11:23:33
+   Duration  14.73s (transform 14.80s, setup 0ms, import 26.19s, tests 4.01s, environment 1ms)
