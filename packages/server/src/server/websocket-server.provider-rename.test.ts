@@ -1,3 +1,4 @@
+import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
 import { createServer, type Server as HTTPServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -89,6 +90,7 @@ function createWebSocketServer(params: {
       scheduleForWorktree: () => {},
       scheduleForDirectory: () => {},
     }),
+    createWorkspaceRuntimeStore(),
     undefined,
     undefined,
     undefined,
@@ -183,7 +185,7 @@ describe("provider rename migration wiring", () => {
       }),
     );
 
-    harness.configStore.patch({
+    await harness.configStore.patch({
       replaceProviders: { "claude-job": { extends: "claude", label: "Job" } },
       removeProviders: ["claude-work"],
       renameProviders: { "claude-work": "claude-job" },
@@ -247,7 +249,7 @@ describe("provider rename migration ordering", () => {
     const broadcasts = captureConfigBroadcasts(harness.wsServer);
     const gate = gateRenameProvider(harness.agentStorage);
 
-    harness.configStore.patch({
+    await harness.configStore.patch({
       replaceProviders: { "claude-job": { extends: "claude", label: "Job" } },
       removeProviders: ["claude-work"],
       renameProviders: { "claude-work": "claude-job" },
@@ -255,7 +257,7 @@ describe("provider rename migration ordering", () => {
     await vi.waitFor(() => expect(gate.calls()).toBe(1));
 
     // The second change lands while the first migration is blocked inside storage.
-    harness.configStore.patch({
+    await harness.configStore.patch({
       replaceProviders: { "claude-final": { extends: "claude", label: "Final" } },
       removeProviders: ["claude-job"],
       renameProviders: { "claude-job": "claude-final" },
@@ -289,7 +291,7 @@ describe("provider rename migration ordering", () => {
     await harness.agentStorage.upsert(storedRecord({ id: "agent-drained" }));
     const gate = gateRenameProvider(harness.agentStorage);
 
-    harness.configStore.patch({
+    await harness.configStore.patch({
       replaceProviders: { "claude-job": { extends: "claude", label: "Job" } },
       removeProviders: ["claude-work"],
       renameProviders: { "claude-work": "claude-job" },
@@ -322,7 +324,7 @@ describe("provider rename migration ordering", () => {
         persistence: { provider: "codex-work", sessionId: "session-codex" },
       }),
     );
-    harness.configStore.patch({
+    await harness.configStore.patch({
       replaceProviders: { "codex-work": { extends: "codex", label: "Codex Work" } },
     });
 
@@ -334,7 +336,7 @@ describe("provider rename migration ordering", () => {
       return original(from, to);
     }) as AgentStorage["renameProvider"];
 
-    harness.configStore.patch({
+    await harness.configStore.patch({
       replaceProviders: { "claude-job": { extends: "claude", label: "Job" } },
       removeProviders: ["claude-work"],
       renameProviders: { "claude-work": "claude-job" },
@@ -342,7 +344,7 @@ describe("provider rename migration ordering", () => {
     await vi.waitFor(() => expect(calls).toBe(1));
 
     // The failed batch keeps its record and the tail still runs the next change.
-    harness.configStore.patch({
+    await harness.configStore.patch({
       replaceProviders: { "codex-final": { extends: "codex", label: "Codex Final" } },
       removeProviders: ["codex-work"],
       renameProviders: { "codex-work": "codex-final" },

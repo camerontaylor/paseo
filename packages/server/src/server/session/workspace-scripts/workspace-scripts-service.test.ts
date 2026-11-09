@@ -222,14 +222,14 @@ describe("buildSnapshot", () => {
         lifecycle: "stopped",
       }),
     ]);
-    expect(service.buildSnapshot(workspace)).toEqual(scripts);
+    expect(await service.buildSnapshot(workspace)).toEqual(scripts);
     writeFileSync(manifest, JSON.stringify({ scripts: { test: "echo test" } }));
     expect((await service.list("ws-1")).map((script) => script.packageJson?.script)).toEqual([
       "test",
     ]);
-    expect(service.buildSnapshot(workspace).map((script) => script.packageJson?.script)).toEqual([
-      "test",
-    ]);
+    expect(
+      (await service.buildSnapshot(workspace)).map((script) => script.packageJson?.script),
+    ).toEqual(["test"]);
   });
 
   test("keeps configured and healthy package scripts when another manifest is invalid", async () => {

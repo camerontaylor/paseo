@@ -587,7 +587,10 @@ describe("runWorktreeAutoTerminals", () => {
       runtimeStore,
       terminalManager: createStubTerminalManager(calls, records),
     });
-    expect(calls[0]).toMatchObject({ cwd: packageDirectory, name: "packages/web: build" });
+    expect(calls[0]).toMatchObject({
+      cwd: realpathSync(packageDirectory),
+      name: "packages/web: build",
+    });
     expect(records[0]?.sentInputs[0]).toContain("npm run 'build'");
     expect(records[0]?.activity).toEqual(["working"]);
     records[0]?.triggerCommandFinished(1);

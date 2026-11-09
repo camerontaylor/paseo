@@ -69,7 +69,7 @@ test.each(["codex-usage-source", "unrelated-plugin"])(
         label: "Work",
         codexHome: "/old",
       });
-      store.patch({
+      await store.patch({
         providers: {
           "codex-work": { extends: "codex", label: "Renamed", env: { CODEX_HOME: "/new" } },
         },
