@@ -386,6 +386,7 @@ class AcpRuntime {
   private sharedTurns = false;
   nativeSessionId = "";
   private readonly child: ChildProcessWithoutNullStreams | null;
+  private readonly transportFailure: Promise<void>;
   private emit: (event: ProviderEvent) => void;
   private readonly messages = new Map<string, string>();
   private readonly toolCalls = new Map<string, AcpToolCallSnapshot>();
@@ -542,10 +543,14 @@ class AcpRuntime {
         this.promptResponses,
       ),
     );
-    // The SDK rejects in-flight RPCs at EOF before a subprocess emits `close`.
-    // Publish the transport failure before those RPCs clear pending steering work.
-    void this.connection.closed.then(async () => {
+    const processClosed = child
+      ? new Promise<void>((resolve) => child.once("close", () => resolve()))
+      : null;
+    // EOF can precede the subprocess close event. Preserve its exit diagnostic and
+    // publish failure before rejected RPCs release pending steering work.
+    this.transportFailure = this.connection.closed.then(async () => {
       await this.drainNotifications();
+      if (processClosed) await settlesWithin(processClosed, 1_000);
       return this.handleUnexpectedTransportClose();
     });
     child?.on("error", (error) => {
@@ -1675,15 +1680,13 @@ class AcpRuntime {
   }
 
   private call<Value>(operation: Promise<Value>): Promise<Value> {
-    if (this.connection.signal.aborted) {
-      return Promise.reject(new Error("ACP transport is closed"));
-    }
-    return Promise.race([
-      operation,
-      this.connection.closed.then(() => {
-        throw new Error("ACP transport closed unexpectedly");
-      }),
-    ]);
+    const closed = this.transportFailure.then(() => {
+      throw new Error("ACP transport closed unexpectedly");
+    });
+    return Promise.race([operation, closed]).catch(async (error) => {
+      if (this.connection.signal.aborted) await this.transportFailure;
+      throw error;
+    });
   }
 
   private enqueueNotification(operation: () => void): Promise<void> {
