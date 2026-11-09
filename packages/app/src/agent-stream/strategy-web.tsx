@@ -961,11 +961,13 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
       updateScrollMetrics();
       evaluateHistoryStart();
     }
+    let observedContentGeometry = getObservedViewportGeometry(scrollContainer);
     const observer = new ResizeObserver(() => {
       flushSync(() => {
         measureVirtualizedRows();
       });
       const nextGeometry = getObservedViewportGeometry(scrollContainer);
+      observedContentGeometry = nextGeometry;
       if (pendingResumeGeometryCheckRef.current) {
         pendingResumeGeometryCheckRef.current = false;
         reportReadingPosition();
@@ -998,7 +1000,12 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     // Observe those commits too, so the next frame sees the grown content at the
     // bottom instead of waiting for the resize notification after animation frames.
     const contentChanges = new MutationObserver(() => {
-      if (isActiveRef.current && followOutputRef.current) forceStickToBottom();
+      const nextGeometry = getObservedViewportGeometry(scrollContainer);
+      const changed = !observedViewportGeometriesEqual(observedContentGeometry, nextGeometry);
+      observedContentGeometry = nextGeometry;
+      // Hover decorations can replace children without growing content. Moving the viewport
+      // then can move a pressed button out from under the pointer before mouseup.
+      if (changed && isActiveRef.current && followOutputRef.current) forceStickToBottom();
     });
     if (contentNode)
       contentChanges.observe(contentNode, { childList: true, characterData: true, subtree: true });

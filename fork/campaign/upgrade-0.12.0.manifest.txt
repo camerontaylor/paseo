@@ -1,0 +1,7 @@
+# Base: v0.12.0 (cafe4b01c8522ff39560241c5deb01427dc8dc5b)
+# custom is updated separately; this successor includes the accepted beta.1 owners.
+# #7179 and #7169 production implementations now come from upstream stable.
+# Preserve fork guards, sourced identity, ACK correlation and cleanup regressions.
+# Retain OPEN #6762/#7057/#7062/#7146/#7106 and U2a-U2f fork-only behavior.
+custom
+upgrade/basket-0.12.0

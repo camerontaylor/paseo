@@ -1,4 +1,5 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { ProjectPullRequestsShortcut } from "@/screens/project-pull-requests/shortcut";
 import {
   View,
   Text,
@@ -62,7 +63,7 @@ import {
 } from "@/utils/host-routes";
 import {
   shouldShowSidebarHostLabels,
-  useSidebarProjectStatusBucket,
+  useSidebarProjectStatus,
   type SidebarProjectEntry,
   type SidebarWorkspaceEntry,
   type SidebarWorkspacePlacement,
@@ -246,6 +247,7 @@ interface ProjectHeaderRowProps {
   displayName: string;
   iconDataUri: string | null;
   statusBucket: SidebarStateBucket | null;
+  statusEnteredAt?: number | null;
   selected?: boolean;
   chevron: "expand" | "collapse" | null;
   onPress: () => void;
@@ -404,6 +406,7 @@ const prBadgeStyles = StyleSheet.create((theme) => ({
 
 function ProjectRowTrailingActions({
   projectViewKey,
+  canBrowsePullRequests,
   displayName,
   worktreeTarget,
   settingsTarget,
@@ -416,6 +419,7 @@ function ProjectRowTrailingActions({
   removeProjectStatus,
 }: {
   projectViewKey: string;
+  canBrowsePullRequests: boolean;
   displayName: string;
   worktreeTarget: SidebarProjectHostTarget | null;
   settingsTarget: { serverId: string; projectId: string } | null;
@@ -430,6 +434,13 @@ function ProjectRowTrailingActions({
   const actionsVisible = isHovered || platformIsNative || isMobileBreakpoint;
   return (
     <View style={styles.projectTrailingActions}>
+      {worktreeTarget && canBrowsePullRequests ? (
+        <ProjectPullRequestsShortcut
+          target={worktreeTarget}
+          displayName={displayName}
+          visible={actionsVisible}
+        />
+      ) : null}
       {worktreeTarget ? (
         <NewWorktreeButton
           displayName={displayName}
@@ -850,6 +861,7 @@ function NewWorkspaceGhostRow({
 }
 
 function ProjectHeaderRow({
+  statusEnteredAt,
   project,
   displayName,
   iconDataUri,
@@ -949,6 +961,7 @@ function ProjectHeaderRow({
           displayName={displayName}
           iconDataUri={iconDataUri}
           statusBucket={statusBucket}
+          statusEnteredAt={statusEnteredAt}
           projectViewKey={project.viewKey}
           backdrop={getSidebarRowBackdrop({ isDragging, isPressed, selected, isHovered })}
           chevron={chevron}
@@ -962,19 +975,6 @@ function ProjectHeaderRow({
           </Text>
         </View>
       </View>
-      <ProjectRowTrailingActions
-        projectViewKey={project.viewKey}
-        displayName={displayName}
-        worktreeTarget={worktreeTarget}
-        settingsTarget={settingsTarget}
-        projectPath={projectPath}
-        isHovered={isHovered}
-        isMobileBreakpoint={isMobileBreakpoint}
-        isProjectActive={isProjectActive}
-        onBeginWorkspaceSetup={handleBeginWorkspaceSetup}
-        onRemoveProject={onRemoveProject}
-        removeProjectStatus={removeProjectStatus}
-      />
       {showShortcutBadge && shortcutNumber !== null ? (
         <View style={styles.projectShortcutBadgeOverlay} pointerEvents="none">
           <SidebarWorkspaceShortcutBadge number={shortcutNumber} />
@@ -991,10 +991,11 @@ function ProjectHeaderRow({
         ref={dragHandleProps?.setActivatorNodeRef as unknown as Ref<View>}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
+        style={projectRowStyle({ pressed: isPressed })}
       >
         <PressHighlight
           accessibilityRole="button"
-          style={projectRowStyle}
+          style={styles.projectRowPressTarget}
           highlightStyle={styles.projectRowPressed}
           onPressIn={handleProjectPressIn}
           onTouchMove={interaction.handleTouchMove}
@@ -1004,6 +1005,23 @@ function ProjectHeaderRow({
         >
           {rowChildren}
         </PressHighlight>
+        <ProjectRowTrailingActions
+          canBrowsePullRequests={project.hosts.some(
+            (host) =>
+              host.serverId === worktreeTarget?.serverId && host.worktreeSupport !== "unsupported",
+          )}
+          projectViewKey={project.viewKey}
+          displayName={displayName}
+          worktreeTarget={worktreeTarget}
+          settingsTarget={settingsTarget}
+          projectPath={projectPath}
+          isHovered={isHovered}
+          isMobileBreakpoint={isMobileBreakpoint}
+          isProjectActive={isProjectActive}
+          onBeginWorkspaceSetup={handleBeginWorkspaceSetup}
+          onRemoveProject={onRemoveProject}
+          removeProjectStatus={removeProjectStatus}
+        />
       </View>
     );
   }
@@ -1016,11 +1034,12 @@ function ProjectHeaderRow({
         ref={dragHandleProps?.setActivatorNodeRef as unknown as Ref<View>}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
+        style={projectRowStyle({ pressed: isPressed })}
       >
         <ContextMenuTrigger
           enabledOnMobile={false}
           accessibilityRole="button"
-          style={projectRowStyle}
+          style={styles.projectRowPressTarget}
           highlightStyle={styles.projectRowPressed}
           onPressIn={handleProjectPressIn}
           onTouchMove={interaction.handleTouchMove}
@@ -1030,6 +1049,23 @@ function ProjectHeaderRow({
         >
           {rowChildren}
         </ContextMenuTrigger>
+        <ProjectRowTrailingActions
+          canBrowsePullRequests={project.hosts.some(
+            (host) =>
+              host.serverId === worktreeTarget?.serverId && host.worktreeSupport !== "unsupported",
+          )}
+          projectViewKey={project.viewKey}
+          displayName={displayName}
+          worktreeTarget={worktreeTarget}
+          settingsTarget={settingsTarget}
+          projectPath={projectPath}
+          isHovered={isHovered}
+          isMobileBreakpoint={isMobileBreakpoint}
+          isProjectActive={isProjectActive}
+          onBeginWorkspaceSetup={handleBeginWorkspaceSetup}
+          onRemoveProject={onRemoveProject}
+          removeProjectStatus={removeProjectStatus}
+        />
       </View>
       <ContextMenuContent
         align="start"
@@ -1624,7 +1660,7 @@ function ProjectBlock({
 
   // Collapsed rows hide their workspace rows, so the project row carries the most urgent
   // status among them; expanded rows leave the signal to the child rows themselves.
-  const aggregateStatusBucket = useSidebarProjectStatusBucket({
+  const aggregateStatus = useSidebarProjectStatus({
     workspaces: project.workspaces,
     enabled: collapsed,
   });
@@ -1827,7 +1863,8 @@ function ProjectBlock({
         project={project}
         displayName={displayName}
         iconDataUri={iconDataUri}
-        statusBucket={aggregateStatusBucket}
+        statusBucket={aggregateStatus?.bucket ?? null}
+        statusEnteredAt={aggregateStatus?.enteredAt}
         selected={false}
         chevron={rowModel.chevron}
         onPress={handleToggleCollapsed}
@@ -2675,6 +2712,15 @@ const styles = StyleSheet.create((theme) => ({
     transform: [{ scale: 1.02 }],
     zIndex: 3,
     ...theme.shadow.md,
+  },
+  projectRowPressTarget: {
+    // Cover the row's vertical padding while trailing actions remain sibling targets.
+    marginVertical: -theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+    flex: 1,
+    minWidth: 0,
+    alignSelf: "stretch",
+    justifyContent: "center",
   },
   projectRowLeft: {
     flexDirection: "row",

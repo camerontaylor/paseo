@@ -1,5 +1,6 @@
 import { verifyAttachedDaemonControls } from "./daemon-lifecycle-renderer.electron.mjs";
 import { once } from "node:events";
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -90,6 +91,41 @@ try {
   });
   captured = launch.instance;
   await openDesktop();
+  if (process.platform === "win32") {
+    // Run the actual Electron executable as the reporter, with no Node-mode variable
+    // inherited by either the user command or its interactive parent.
+    const reporter = path.join(
+      repo,
+      "packages/server/dist/server/terminal/shell-integration/cmd/report-command-finished.cmd",
+    );
+    // Playwright uses a cmd.exe launcher on Windows; ask the Electron process itself.
+    const executable = await desktop.evaluate(() => process.execPath);
+    for (const code of [0, 7]) {
+      const fixture = path.join(root, `reporter-${code}.cmd`);
+      await writeFile(
+        fixture,
+        [
+          "@echo off",
+          `"${process.execPath}" -e "process.stdout.write('USER_ENV='+String(process.env.ELECTRON_RUN_AS_NODE));process.exit(${code})"`,
+          `call "${reporter}" "${executable}"`,
+          '@setlocal & set "_reporter_status=%errorlevel%" & echo PARENT_ENV=%ELECTRON_RUN_AS_NODE%',
+          "@exit /b %_reporter_status%",
+        ].join("\r\n"),
+      );
+      const result = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", fixture], {
+        env,
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, code, JSON.stringify(result));
+      assert.ok(result.stdout.includes(`\x1b]633;D;${code}\x07`), JSON.stringify(result));
+      assert.ok(result.stdout.includes("USER_ENV=undefined"), result.stdout);
+      assert.ok(result.stdout.includes("PARENT_ENV="), result.stdout);
+      assert.ok(!result.stdout.includes("PARENT_ENV=1"), result.stdout);
+    }
+    console.log("Actual Electron cmd reporter: status0/status7 and scoped Node environment passed");
+  }
   const attached = await command("start_desktop_daemon");
   assert.equal(attached.pid, captured.pid);
   assert.equal(attached.desktopManaged, true);
