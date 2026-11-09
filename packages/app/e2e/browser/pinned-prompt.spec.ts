@@ -25,6 +25,13 @@ function pinnedPrompt(page: Page) {
   return page.getByTestId("pinned-prompt");
 }
 
+/** The outgoing pin remains mounted during its exit animation. */
+async function expectSettledPin(page: Page, prompt: string): Promise<void> {
+  await expect(pinnedPrompt(page).filter({ hasText: prompt })).toHaveCount(1);
+  await expect(pinnedPrompt(page)).toHaveCount(1);
+  await expect(pinnedPrompt(page)).toContainText(prompt);
+}
+
 /** Scrolls down until the prompt's own bubble has left the top of the transcript. */
 async function scrollPromptAboveFold(page: Page, prompt: string): Promise<void> {
   await scrollTimelinePromptIntoView(page, prompt);
@@ -96,20 +103,21 @@ test.describe("pinned current prompt", () => {
   }) => {
     await scrollPromptAboveFold(page, agent.prompts[8]!);
 
-    await expect(pinnedPrompt(page)).toContainText(agent.prompts[8]!);
+    await expectSettledPin(page, agent.prompts[8]!);
   });
 
   test("swaps the pin when the reader crosses into the next turn", async ({ page }) => {
     await scrollPromptAboveFold(page, agent.prompts[6]!);
-    await expect(pinnedPrompt(page)).toContainText(agent.prompts[6]!);
+    await expectSettledPin(page, agent.prompts[6]!);
 
     await scrollPromptAboveFold(page, agent.prompts[7]!);
 
-    await expect(pinnedPrompt(page)).toContainText(agent.prompts[7]!);
+    await expectSettledPin(page, agent.prompts[7]!);
   });
 
   test("scrolls the real message back under the pin when clicked", async ({ page }) => {
     await scrollPromptAboveFold(page, agent.prompts[8]!);
+    await expectSettledPin(page, agent.prompts[8]!);
     await pinnedPrompt(page).click();
 
     await expectTimelinePromptLandedBelowTop(page, agent.prompts[8]!);
@@ -119,7 +127,7 @@ test.describe("pinned current prompt", () => {
 
   test("hides the pin on a compact viewport", async ({ page }) => {
     await scrollPromptAboveFold(page, agent.prompts[8]!);
-    await expect(pinnedPrompt(page)).toContainText(agent.prompts[8]!);
+    await expectSettledPin(page, agent.prompts[8]!);
 
     await page.setViewportSize(COMPACT_VIEWPORT);
 
