@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
-import { connect, type Socket } from "node:net";
+import { connect, createServer as createSocketServer, type Socket } from "node:net";
 import { mkdtemp, rm, mkdir, symlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +22,42 @@ test("jcode shares import, prompts, steering and Stop with an independent native
     );
   const root = await mkdtemp(path.join(tmpdir(), "paseo-jcode-shared-"));
   const socketPath = path.join(root, "jcode.sock");
+  const relayPath = path.join(root, "acp.sock");
+  const nativeWire: NativeFrame[] = [];
+  const relaySockets = new Set<Socket>();
+  let connectionSequence = 0;
+  const relay = createSocketServer((adapter) => {
+    const daemon = connect(socketPath);
+    const connection = ++connectionSequence;
+    for (const [socket, direction] of [
+      [adapter, "request"],
+      [daemon, "response"],
+    ] as const) {
+      relaySockets.add(socket);
+      socket.once("close", () => relaySockets.delete(socket));
+      socket.on("error", () => {
+        adapter.destroy();
+        daemon.destroy();
+      });
+      createInterface({ input: socket }).on("line", (raw) => {
+        const message = JSON.parse(raw) as Record<string, unknown>;
+        nativeWire.push({
+          at: performance.now(),
+          connection,
+          direction,
+          message,
+          raw,
+          // Request/Ack top-level IDs are u64: do not correlate their rounded JS numbers.
+          id:
+            message.type === "ack" || message.type === "soft_interrupt"
+              ? /"id"\s*:\s*(\d+)/.exec(raw)?.[1]
+              : undefined,
+        });
+      });
+    }
+    adapter.pipe(daemon);
+    daemon.pipe(adapter);
+  });
   const pending: ServerResponse[] = [];
   const requests: Array<{ messages?: Array<{ role: string; content: unknown }> }> = [];
   const model = createServer(async (request, response) => {
@@ -86,7 +122,105 @@ test("jcode shares import, prompts, steering and Stop with an independent native
   let paseo: Awaited<ReturnType<typeof createTestPaseoDaemon>> | undefined;
   let client: DaemonClient | undefined;
   let peer: Socket | undefined;
+  let unsubscribeState: (() => void) | undefined;
+  let watchedIdentity: unknown;
+  const prematureIdle: Array<{ at: number; lifecycle: string }> = [];
   const events: Array<Record<string, unknown>> = [];
+  const matchesIdentity = (event: Record<string, unknown>, identity: unknown) =>
+    JSON.stringify(event.identity) === JSON.stringify(identity);
+  const nativeEnds = (identity: unknown) =>
+    nativeWire.filter(
+      ({ direction, message }) =>
+        direction === "response" &&
+        message.type === "turn_event" &&
+        message.end === "completed" &&
+        matchesIdentity(message, identity),
+    );
+  const peerTurn = async (text: string) => {
+    await expect
+      .poll(() =>
+        events.find((event) => event.type === "turn_started" && event.user_content === text),
+      )
+      .toMatchObject({
+        identity: { runtime_generation: expect.any(String), turn_id: expect.any(Number) },
+      });
+    return events.find((event) => event.type === "turn_started" && event.user_content === text)!
+      .identity;
+  };
+  const waitForQueuedSteer = async (text: string, identity: unknown) => {
+    await expect
+      .poll(
+        () => {
+          const request = nativeWire.find(
+            ({ direction, message }) =>
+              direction === "request" &&
+              message.type === "soft_interrupt" &&
+              message.content === text,
+          );
+          if (!request?.id) return 0;
+          // 39fb sends a receipt Ack before dispatch and another after queue insertion.
+          // Only the second confirms the safe-point work is queued; neither means injected.
+          return nativeWire.filter(
+            (frame) =>
+              frame.connection === request.connection &&
+              frame.direction === "response" &&
+              frame.message.type === "ack" &&
+              frame.id === request.id,
+          ).length;
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(2);
+    expect(nativeEnds(identity)).toHaveLength(0);
+  };
+  const waitForInjection = async (text: string, identity: unknown) => {
+    await expect
+      .poll(
+        () =>
+          events.find(
+            (event) =>
+              event.type === "turn_event" &&
+              matchesIdentity(event, identity) &&
+              (event.event as { type?: string; content?: string }).type ===
+                "soft_interrupt_injected" &&
+              (event.event as { content?: string }).content === text,
+          ),
+        { timeout: 15_000 },
+      )
+      .toMatchObject({ identity, event: { type: "soft_interrupt_injected", content: text } });
+    expect(
+      events.filter((event) => event.type === "turn_started" && event.user_content === text),
+    ).toHaveLength(0);
+  };
+  const finishNativeTurn = async (text: string, identity: unknown) => {
+    expect((await client!.fetchAgent({ agentId: importedId! })).agent.status).toBe("running");
+    let finished = false;
+    const finish = client!.waitForFinish(importedId!, 15_000).then((result) => {
+      finished = true;
+      return result;
+    });
+    // A server round trip while the provider is held proves this is an active wait.
+    expect((await client!.fetchAgent({ agentId: importedId! })).agent.status).toBe("running");
+    expect(finished).toBe(false);
+    reply(text);
+    await expect.poll(() => nativeEnds(identity).length, { timeout: 15_000 }).toBe(1);
+    await expect
+      .poll(
+        () =>
+          events.filter(
+            (event) =>
+              event.type === "turn_event" &&
+              event.end === "completed" &&
+              matchesIdentity(event, identity),
+          ).length,
+        { timeout: 15_000 },
+      )
+      .toBe(1);
+    expect((await finish).status).toBe("idle");
+    expect(prematureIdle).toEqual([]);
+    watchedIdentity = undefined;
+  };
+  let importedId: string | undefined;
   const reply = (text: string) => {
     const response = pending.shift()!;
     response.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -104,6 +238,7 @@ test("jcode shares import, prompts, steering and Stop with an independent native
         { timeout: 15_000 },
       )
       .toBe(true);
+    await new Promise<void>((resolve) => relay.listen(relayPath, resolve));
     peer = connect(socketPath);
     await new Promise<void>((resolve, reject) => {
       peer!.once("connect", resolve);
@@ -131,7 +266,7 @@ test("jcode shares import, prompts, steering and Stop with an independent native
     for (const [key, value] of Object.entries(env)) {
       if (key.startsWith("JCODE_") || key === "OPENAI_COMPAT_API_KEY") vi.stubEnv(key, value);
     }
-    vi.stubEnv("JCODE_SOCKET", socketPath);
+    vi.stubEnv("JCODE_SOCKET", relayPath);
     vi.stubEnv("PATH", `${path.join(root, "bin")}${path.delimiter}${process.env.PATH}`);
     paseo = await createTestPaseoDaemon({ pluginsEnabled: true });
     client = new DaemonClient({ url: `ws://127.0.0.1:${paseo.port}/ws` });
@@ -145,6 +280,20 @@ test("jcode shares import, prompts, steering and Stop with an independent native
       providerHandleId: `plugin:${JSON.stringify({ version: 1, data: { sessionId } })}`,
       cwd: root,
     });
+    importedId = imported.id;
+    unsubscribeState = paseo.daemon.agentManager.subscribe(
+      (event) => {
+        if (
+          event.type === "agent_state" &&
+          watchedIdentity &&
+          event.agent.lifecycle !== "running" &&
+          nativeEnds(watchedIdentity).length === 0
+        ) {
+          prematureIdle.push({ at: performance.now(), lifecycle: event.agent.lifecycle });
+        }
+      },
+      { agentId: imported.id, replayState: false },
+    );
     await client.setAgentThinkingOption(imported.id, "high");
     const timeline = await client.fetchAgentTimeline(imported.id, {
       direction: "tail",
@@ -170,27 +319,40 @@ test("jcode shares import, prompts, steering and Stop with an independent native
     };
     await client.sendMessage(imported.id, "FOREGROUND");
     await expect.poll(() => pending.length, { timeout: 15_000 }).toBe(1);
+    const foregroundIdentity = await peerTurn("FOREGROUND");
+    watchedIdentity = foregroundIdentity;
     peer.write(
       `${JSON.stringify({ type: "soft_interrupt", id: 3, content: "REVERSE-STEER", urgent: true })}\n`,
     );
+    await expect
+      .poll(() => events.filter((event) => event.type === "ack" && event.id === 3).length, {
+        timeout: 15_000,
+      })
+      .toBe(2);
     // Injection occurs at the provider safe point. Release the response before awaiting it.
     reply("FOREGROUND-INTERMEDIATE");
     await expect
       .poll(users, { timeout: 15_000 })
       .toEqual(["BASELINE", "FOREGROUND", "REVERSE-STEER"]);
     await expect.poll(() => pending.length, { timeout: 15_000 }).toBe(1);
-    reply("REVERSE-ANSWER");
-    expect((await client.waitForFinish(imported.id, 15_000)).status).toBe("idle");
+    await waitForInjection("REVERSE-STEER", foregroundIdentity);
+    await finishNativeTurn("REVERSE-ANSWER", foregroundIdentity);
     peer.write(`${JSON.stringify({ type: "message", id: 4, content: "PEER-TURN" })}\n`);
     await expect.poll(() => pending.length, { timeout: 15_000 }).toBe(1);
+    const forwardIdentity = await peerTurn("PEER-TURN");
+    watchedIdentity = forwardIdentity;
+    await expect
+      .poll(async () => (await client!.fetchAgent({ agentId: imported.id })).agent.status)
+      .toBe("running");
     const forward = client.sendMessage(imported.id, "FORWARD-STEER", {
       activeTurnBehavior: "steer",
     });
+    await waitForQueuedSteer("FORWARD-STEER", forwardIdentity);
     reply("PEER-INTERMEDIATE");
     await forward;
+    await waitForInjection("FORWARD-STEER", forwardIdentity);
     await expect.poll(() => pending.length, { timeout: 15_000 }).toBe(1);
-    reply("FORWARD-ANSWER");
-    expect((await client.waitForFinish(imported.id, 15_000)).status).toBe("idle");
+    await finishNativeTurn("FORWARD-ANSWER", forwardIdentity);
     expect(await users()).toEqual([
       "BASELINE",
       "FOREGROUND",
@@ -245,14 +407,17 @@ test("jcode shares import, prompts, steering and Stop with an independent native
     ]);
     expect(refreshed).toMatchObject({ agentId: imported.id });
     expect((await client.fetchAgent({ agentId: imported.id })).agent.status).toBe("running");
+    const reloadIdentity = await peerTurn("RELOAD-SURVIVES");
+    watchedIdentity = reloadIdentity;
     const afterReloadSteer = client.sendMessage(imported.id, "AFTER-RELOAD-STEER", {
       activeTurnBehavior: "steer",
     });
+    await waitForQueuedSteer("AFTER-RELOAD-STEER", reloadIdentity);
     reply("RELOAD-INTERMEDIATE");
     await afterReloadSteer;
+    await waitForInjection("AFTER-RELOAD-STEER", reloadIdentity);
     await expect.poll(() => pending.length, { timeout: 15_000 }).toBe(1);
-    reply("RELOAD-ANSWER");
-    expect((await client.waitForFinish(imported.id, 15_000)).status).toBe("idle");
+    await finishNativeTurn("RELOAD-ANSWER", reloadIdentity);
     expect(
       events.filter((event) => event.type === "turn_event" && event.end === "cancelled"),
     ).toHaveLength(1);
@@ -302,7 +467,7 @@ test("jcode shares import, prompts, steering and Stop with an independent native
     ).toEqual(originalBaseline);
   } catch (error) {
     throw new Error(
-      `${String(error)}\n${logs.join("")}\n${JSON.stringify(events)}\nREQUESTS:${JSON.stringify(requests.map((request) => request.messages?.slice(-1)))}`,
+      `${String(error)}\n${logs.join("")}\n${JSON.stringify(events)}\nNATIVE-WIRE:${JSON.stringify(nativeWire)}\nREQUESTS:${JSON.stringify(requests.map((request) => request.messages?.slice(-1)))}`,
       {
         cause: error,
       },
@@ -310,9 +475,12 @@ test("jcode shares import, prompts, steering and Stop with an independent native
   } finally {
     for (const response of pending) response.destroy();
     peer?.destroy();
+    unsubscribeState?.();
     child.kill("SIGTERM");
     await client?.close();
     await paseo?.close();
+    for (const socket of relaySockets) socket.destroy();
+    await new Promise<void>((resolve) => relay.close(() => resolve()));
     vi.unstubAllEnvs();
     await new Promise<void>((resolve) => {
       if (child.exitCode !== null) resolve();
@@ -323,3 +491,12 @@ test("jcode shares import, prompts, steering and Stop with an independent native
     await rm(root, { recursive: true, force: true });
   }
 }, 60_000);
+
+interface NativeFrame {
+  at: number;
+  connection: number;
+  direction: "request" | "response";
+  id?: string;
+  message: Record<string, unknown>;
+  raw: string;
+}
