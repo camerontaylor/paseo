@@ -195,6 +195,29 @@ describe("AgentStorage", () => {
     expect(persisted.config?.providerOptions).toEqual({ allowedTools: ["Read"] });
   });
 
+  test("reads archived custom-provider records without a registered provider", async () => {
+    const projectDir = path.join(storagePath, "historical-project");
+    await fs.mkdir(projectDir, { recursive: true });
+    const saved = {
+      id: "historical-agent",
+      provider: "gjc",
+      archivedAt: "2025-01-02T00:00:00.000Z",
+      cwd: "/tmp/historical-project",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-01T00:00:00.000Z",
+      persistence: { provider: "gjc", sessionId: "historical-session" },
+    };
+    await fs.writeFile(path.join(projectDir, `${saved.id}.json`), JSON.stringify(saved), "utf8");
+
+    const records = await storage.list();
+    expect(records.map(({ id, provider, persistence }) => ({ id, provider, persistence }))).toEqual(
+      [{ id: saved.id, provider: saved.provider, persistence: saved.persistence }],
+    );
+    expect(records[0].archivedAt).toBe(saved.archivedAt);
+    const reloaded = new AgentStorage(storagePath, logger);
+    expect(await reloaded.get(saved.id)).toEqual(records[0]);
+  });
+
   test("applySnapshot stores and reloads featureValues when present", async () => {
     await storage.applySnapshot(
       createManagedAgent({
