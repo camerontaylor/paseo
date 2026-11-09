@@ -363,8 +363,12 @@ export function buildTerminalCommand(
 ): string {
   const family = basename(shell).toLowerCase();
   const cmd = family === "cmd.exe" || family === "cmd";
-  const quote = (value: string) =>
-    cmd ? escapeCmdExeMetaChars(value) : `'${value.replaceAll("'", "'\\''")}'`;
+  const powershell = ["powershell", "powershell.exe", "pwsh", "pwsh.exe"].includes(family);
+  const quote = (value: string) => {
+    if (powershell) return `'${value.replaceAll("'", "''")}'`;
+    if (cmd) return escapeCmdExeMetaChars(value);
+    return `'${value.replaceAll("'", "'\\''")}'`;
+  };
   let invocation = message.command;
   if (message.args) {
     if (cmd) {
@@ -374,12 +378,17 @@ export function buildTerminalCommand(
         ...message.args.map((argument) => escapeCmdExeArgument(argument, shim)),
       ].join(" ");
     } else {
-      invocation = [message.command, ...message.args].map(quote).join(" ");
+      invocation = `${powershell ? "& " : ""}${[message.command, ...message.args].map(quote).join(" ")}`;
     }
   }
-  const command = message.cwd
-    ? `${cmd ? "cd /d" : "cd --"} ${quote(message.cwd)} && ${invocation}`
-    : invocation;
+  let command = invocation;
+  if (message.cwd) {
+    if (powershell) {
+      command = `Set-Location -LiteralPath ${quote(message.cwd)}; if ($?) {\n${invocation}\n}`;
+    } else {
+      command = `${cmd ? "cd /d" : "cd --"} ${quote(message.cwd)} && ${invocation}`;
+    }
+  }
   if (!message.completion || family === "zsh") return `${command}\r`;
   if (["bash", "sh", "dash"].includes(family)) {
     // Newlines keep a trailing comment from eating the status capture. A subshell restores

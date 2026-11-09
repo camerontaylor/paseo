@@ -6,6 +6,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { isPlatform } from "../test-utils/platform.js";
 import {
   buildTerminalEnvironment,
+  buildTerminalCommand,
   assertTerminalCommandCanStart,
   createTerminal,
   ensureNodePtySpawnHelperExecutableForCurrentPlatform,
@@ -1985,6 +1986,82 @@ describe("managed command dispatch", () => {
     await expect.poll(() => completions).toEqual([0, 7, 0]);
     expect(readFileSync(join(cwd, "still-alive"), "utf8")).toBe("yes");
   });
+  it.each(["powershell.exe", "pwsh.exe"])("renders literal PowerShell dispatch for %s", (shell) => {
+    expect(
+      buildTerminalCommand(
+        {
+          type: "command",
+          command: "npm.cmd",
+          args: ["run", "build"],
+          cwd: "C:/space & apostrophe' [literal]",
+          completion: true,
+        },
+        shell,
+      ),
+    ).toBe(
+      "Set-Location -LiteralPath 'C:/space & apostrophe'' [literal]'; if ($?) {\n& 'npm.cmd' 'run' 'build'\n}\r",
+    );
+  });
+  it.runIf(isPlatform("win32")).each(["powershell.exe", "pwsh.exe"])(
+    "preserves supported PowerShell command execution in %s",
+    async (shell) => {
+      const home = mkdtempSync(join(tmpdir(), "managed-powershell-"));
+      temporaryDirs.push(home);
+      const cwd = join(home, "space & apostrophe' [literal] %PATH% directory");
+      mkdirSync(cwd);
+      const script = join(home, "capture.cjs");
+      writeFileSync(
+        script,
+        "require('node:fs').writeFileSync(process.argv[2],JSON.stringify({cwd:process.cwd(),args:process.argv.slice(4)}));process.exit(Number(process.argv[3]))",
+      );
+      const session = trackSession(
+        await createTerminal({ workspaceId: "ws-powershell", cwd: home, shell }),
+      );
+      const completions: Array<number | null> = [];
+      session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
+      await expect.poll(() => session.hasOutput()).toBe(true);
+      const literal = "space & pipe| dollar$ apostrophe' percent%PATH% bang!";
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+      for (const code of [7, 0]) {
+        const result = join(home, `result-${code}.json`);
+        const status = join(home, `status-${code}.txt`);
+        session.send({
+          type: "command",
+          command: process.execPath,
+          args: [script, result, String(code), literal],
+          ...(code === 7 ? { cwd } : {}),
+          completion: true,
+        });
+        session.send({
+          type: "input",
+          data: `[System.IO.File]::WriteAllText(${quote(status)}, [string]$LASTEXITCODE)\r`,
+        });
+        await expect.poll(() => existsSync(status)).toBe(true);
+        expect(readFileSync(status, "utf8")).toBe(String(code));
+        expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({
+          cwd: realpathSync(cwd),
+          args: [literal],
+        });
+      }
+      const forbidden = join(home, "must-not-run.json");
+      const settled = join(home, "guard-settled.txt");
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [script, forbidden, "0"],
+        cwd: join(home, "missing directory"),
+        completion: true,
+      });
+      session.send({
+        type: "input",
+        data: `[System.IO.File]::WriteAllText(${quote(settled)}, 'settled')\r`,
+      });
+      await expect.poll(() => existsSync(settled)).toBe(true);
+      expect(existsSync(forbidden)).toBe(false);
+      // PowerShell retains its existing lifecycle behavior; dispatch adds no completion hook.
+      expect(completions).toEqual([]);
+    },
+  );
   const inputCases = shells
     .filter((shell) => !shell.endsWith("zsh"))
     .flatMap(
