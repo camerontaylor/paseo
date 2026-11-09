@@ -431,9 +431,11 @@ test.describe("Viewed agent timelines", () => {
       await page.screenshot({ path: testInfo.outputPath("updating-chat.png") });
       gate.releaseHeldTimelineResponses();
       await expect(page.getByRole("alert").filter({ hasText: "Updating messages" })).toHaveCount(0);
-      const recoveredMessage = page.getByText("Committed while the chat reconnects.", {
-        exact: true,
-      });
+      const recoveredMessage = page
+        .getByTestId("user-message")
+        .getByText("Committed while the chat reconnects.", {
+          exact: true,
+        });
       await expect(recoveredMessage).toHaveCount(1);
       await expect(recoveredMessage).toBeVisible();
     } finally {
