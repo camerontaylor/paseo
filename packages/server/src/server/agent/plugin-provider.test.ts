@@ -1402,7 +1402,17 @@ describe("PluginAgentClientRegistry", () => {
     },
   );
   test("resumes a legacy ACP persistence handle through the plugin", async () => {
-    const harness = createProviderHarness();
+    const harness = createProviderHarness({
+      handleInput: async (input, emit) => {
+        if (input.type === "session.open")
+          emit({
+            type: "timeline.item",
+            sessionId: input.sessionId,
+            item: { type: "assistant_message", id: "legacy-answer", text: "Retained answer" },
+          });
+        return false;
+      },
+    });
     const registry = new PluginAgentClientRegistry(createTestLogger());
     registry.replace([harness.registration]);
     const session = await registry.clients()[harness.registration.id]!.resumeSession(
@@ -1417,6 +1427,14 @@ describe("PluginAgentClientRegistry", () => {
       persistence: { version: 1, data: { sessionId: "session_rose_legacy" } },
       history: "replay",
     });
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) history.push(event);
+    expect(history).toContainEqual(
+      expect.objectContaining({
+        type: "timeline",
+        item: expect.objectContaining({ type: "assistant_message", text: "Retained answer" }),
+      }),
+    );
     await session.close();
     await registry.shutdown();
   });
@@ -1434,13 +1452,12 @@ describe("PluginAgentClientRegistry", () => {
       const harness = createProviderHarness();
       const registry = new PluginAgentClientRegistry(createTestLogger());
       registry.replace([harness.registration]);
+      const client = registry.clients()[harness.registration.id]!;
       await expect(
-        registry
-          .clients()
-          [harness.registration.id]!.resumeSession(
-            { provider: harness.registration.id, sessionId, metadata },
-            { cwd: "/workspace" },
-          ),
+        client.resumeSession(
+          { provider: harness.registration.id, sessionId, metadata },
+          { cwd: "/workspace" },
+        ),
       ).rejects.toThrow();
       expect(harness.inputs).toEqual([]);
       await registry.shutdown();
