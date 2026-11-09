@@ -1626,7 +1626,7 @@ export class AgentManager {
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       mergedConfig,
       resolvedAgentId,
-      { purpose, env: launchEnv },
+      { purpose, env: launchEnv, resolveDefaultModel: false },
     );
     const client = this.requireClient(handle.provider);
     const available = await client.isAvailable();
@@ -1698,6 +1698,7 @@ export class AgentManager {
         cwd: input.cwd,
       },
       resolvedAgentId,
+      { resolveDefaultModel: false },
     );
     this.paseoToolPolicies.set(resolvedAgentId, paseoToolPolicy);
     const launchContext = await this.buildLaunchContext(
@@ -1726,6 +1727,7 @@ export class AgentManager {
     try {
       const importedConfig = await this.normalizeConfig(
         stripInternalPaseoMcpServer(imported.config),
+        { resolveDefaultModel: false },
       );
       const timelineRows = buildImportedTimelineRows(imported.timeline);
       const initialTitle = resolveImportedAgentTitle(importedConfig, timelineRows);
@@ -1798,7 +1800,7 @@ export class AgentManager {
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       refreshConfig,
       agentId,
-      { env: existing.launchEnv },
+      { env: existing.launchEnv, resolveDefaultModel: !handle },
     );
     const hadPreviousPaseoToolPolicy = this.paseoToolPolicies.has(agentId);
     const previousPaseoToolPolicy = this.paseoToolPolicies.get(agentId);
@@ -5794,11 +5796,16 @@ export class AgentManager {
   private async prepareSessionConfig(
     config: AgentSessionConfig,
     agentId: string,
-    options: { env?: Record<string, string>; purpose?: AgentResumePurpose } = {},
+    options: {
+      env?: Record<string, string>;
+      purpose?: AgentResumePurpose;
+      resolveDefaultModel?: boolean;
+    } = {},
   ): Promise<PreparedSessionConfig> {
     const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), {
       env: options.env,
       purpose: options.purpose,
+      resolveDefaultModel: options.resolveDefaultModel,
     });
     const paseoToolPolicy = this.paseoToolsEnabled
       ? this.resolvePaseoToolPolicy(storedConfig.provider)

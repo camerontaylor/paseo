@@ -1076,9 +1076,17 @@ class PluginAgentClient implements AgentClient {
     });
     const persistence = session.describePersistence();
     if (!persistence) throw new Error(`Plugin provider '${this.provider}' did not persist import`);
+    const runtimeInfo = await session.getRuntimeInfo();
     return {
       session,
-      config: { ...context.storedConfig, provider: this.provider, cwd: input.cwd },
+      config: {
+        ...context.storedConfig,
+        provider: this.provider,
+        cwd: input.cwd,
+        model: runtimeInfo.model ?? undefined,
+        modeId: runtimeInfo.modeId ?? undefined,
+        thinkingOptionId: runtimeInfo.thinkingOptionId ?? undefined,
+      },
       persistence,
       timeline: session.timelineHistory(),
       providerSubagentEvents: session.subagentHistory(),

@@ -856,6 +856,68 @@ lines.on("line", (line) => {
     },
   );
 
+  it("loads the native model without applying the first catalog choice, then permits explicit configuration", async () => {
+    const harness = connectorHarness({
+      capabilities: { loadSession: true },
+      configOptions: [
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "native-model",
+          options: [
+            { name: "Default OpenAI", value: "openai-default" },
+            { name: "Native route", value: "native-model" },
+          ],
+        },
+      ],
+    });
+    const connection = await runAcpProvider({
+      id: "import-model",
+      label: "Import model",
+      connector: harness.connector,
+    }).connect({
+      versions: [1],
+      capabilities: ["prompt.message", "session.persistence", "session.configure"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    const input = openInput();
+    input.persistence = { version: 1, data: { sessionId: "connector-session" } };
+    delete input.config.model;
+    try {
+      await connection.send(input);
+      await waitForEvent(events, (event) => event.type === "session.ready");
+      const agent = harness.instances.at(-1)!;
+      expect(countRequests(agent, "session/load")).toBe(1);
+      expect(countRequests(agent, "session/set_config_option")).toBe(0);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session.config",
+          config: expect.objectContaining({ model: "native-model" }),
+        }),
+      );
+      await connection.send({
+        type: "session.configure",
+        requestId: "explicit-model",
+        sessionId: "session-1",
+        changes: { model: "openai-default" },
+      });
+      await waitForEvent(
+        events,
+        (event) => event.type === "request.completed" && event.requestId === "explicit-model",
+      );
+      expect(
+        agent.requests
+          .filter((request) => request.method === "session/set_config_option")
+          .map((request) => request.params),
+      ).toEqual([{ sessionId: "connector-session", configId: "model", value: "openai-default" }]);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("retains unchanged attached mode and effort without setters", async () => {
     const harness = connectorHarness({
       handleRequest(instance, request) {

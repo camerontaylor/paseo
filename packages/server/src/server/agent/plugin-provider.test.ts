@@ -2245,6 +2245,65 @@ test("plugin without a runtime safety capability uses baseline collection withou
   }
 });
 
+test.each(["native-model", undefined])(
+  "plugin import stores loaded configuration %s for resume",
+  async (model) => {
+    const harness = createProviderHarness({
+      async handleInput(input, emit) {
+        if (input.type !== "session.open") return false;
+        emit({
+          type: "session.opened",
+          requestId: input.requestId,
+          sessionId: input.sessionId,
+          capabilities: CAPABILITIES,
+          restoration: "core",
+          persistence: { version: 1, data: { token: "root" } },
+          cwd: input.config.cwd,
+        });
+        emit({
+          type: "session.config",
+          sessionId: input.sessionId,
+          config: {
+            model,
+            mode: "native-mode",
+            thinkingOption: "native-effort",
+            models: [],
+            modes: [],
+            thinkingOptions: [],
+            settings: [],
+          },
+        });
+        emit({ type: "session.ready", requestId: input.requestId, sessionId: input.sessionId });
+        return true;
+      },
+    });
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const client = registry.clients()[harness.registration.id]!;
+    const storedConfig = { provider: harness.registration.id, cwd: "/project" };
+    try {
+      const imported = await client.importSession!(
+        { providerHandleId: 'plugin:{"version":1,"data":{"token":"root"}}', cwd: "/project" },
+        { config: storedConfig, storedConfig },
+      );
+      expect(imported.config).toEqual({
+        ...storedConfig,
+        model,
+        modeId: "native-mode",
+        thinkingOptionId: "native-effort",
+      });
+      await imported.session.close();
+      const resumed = await client.resumeSession(imported.persistence, imported.config);
+      expect(harness.inputs.findLast((input) => input.type === "session.open")).toMatchObject({
+        config: { model, mode: "native-mode", thinkingOption: "native-effort" },
+      });
+      await resumed.close();
+    } finally {
+      await registry.shutdown();
+    }
+  },
+);
+
 test("plugin provider import launches with runtime MCP servers and returns only saved configuration", async () => {
   const harness = createProviderHarness();
   const registry = new PluginAgentClientRegistry(createTestLogger());
@@ -2263,7 +2322,12 @@ test("plugin provider import launches with runtime MCP servers and returns only 
         config: expect.objectContaining({ mcpServers: { company } }),
       }),
     );
-    expect(imported.config).toEqual(storedConfig);
+    expect(imported.config).toEqual({
+      ...storedConfig,
+      model: "plugin-model",
+      modeId: "build",
+      thinkingOptionId: undefined,
+    });
     await imported.session.close();
   } finally {
     await registry.shutdown();

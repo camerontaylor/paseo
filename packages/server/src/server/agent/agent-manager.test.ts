@@ -4619,7 +4619,6 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
     },
   });
   expect(client.lastResumeOverrides).toMatchObject({
-    model: "gpt-5.4",
     systemPrompt: "new prompt",
     mcpServers: {
       paseo: {
@@ -4629,6 +4628,7 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
       },
     },
   });
+  expect(client.lastResumeOverrides).not.toHaveProperty("model");
   expect(client.lastResumeOverrides).not.toHaveProperty("modeId");
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: resumed.id,
@@ -4638,6 +4638,63 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
     },
   });
 });
+
+test.each(["native-model", undefined])(
+  "import preserves native model %s through storage and resume instead of the creation default",
+  async (nativeModel) => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-import-model-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    class ImportClient extends TestAgentClient {
+      importConfig: AgentSessionConfig | undefined;
+      async importSession(
+        _input: ImportProviderSessionInput,
+        context: ImportProviderSessionContext,
+      ) {
+        this.importConfig = context.config;
+        const config = { provider: this.provider, cwd: workdir, model: nativeModel };
+        return {
+          session: new TestAgentSession(config),
+          config,
+          persistence: { provider: this.provider, sessionId: "native", metadata: config },
+          timeline: [],
+        };
+      }
+    }
+    const client = new ImportClient();
+    const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+    try {
+      const imported = await manager.importProviderSession({
+        provider: "codex",
+        providerHandleId: "native",
+        cwd: workdir,
+        workspaceId: "workspace",
+      });
+      expect(client.importConfig?.model).toBeUndefined();
+      expect(imported.config.model).toBe(nativeModel);
+      await storage.flush();
+      const record = await storage.get(imported.id);
+      expect(record?.config?.model).toBe(nativeModel);
+      await manager.closeAgent(imported.id);
+      const resumed = await manager.resumeAgentFromPersistence(
+        record!.persistence!,
+        { provider: "codex", cwd: workdir, ...record!.config },
+        imported.id,
+      );
+      expect(client.resumeOverrides.at(-1)?.model).toBe(nativeModel);
+      expect(resumed.config.model).toBe(nativeModel);
+      const refreshed = await manager.reloadAgentSession(resumed.id);
+      expect(client.resumeOverrides.at(-1)?.model).toBe(nativeModel);
+      expect(refreshed.config.model).toBe(nativeModel);
+      const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+      expect(client.createdConfigs.at(-1)?.model).toBe("gpt-5.4");
+      expect(created.config.model).toBe("gpt-5.4");
+    } finally {
+      await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+      await storage.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("importProviderSession imports the selected session without listing and publishes ready state", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-import-session-"));
