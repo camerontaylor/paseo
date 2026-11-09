@@ -406,6 +406,10 @@ describe("createTerminal", () => {
       // spawned process actually received back out of the pty.
       const nastyPrompt =
         'line one\nline two: git commit -m "wip" && echo $HOME | grep ^x > out.txt';
+      const trace: Array<{ at: string; kind: string; detail: unknown }> = [];
+      const record = (kind: string, detail: unknown) =>
+        trace.push({ at: process.hrtime.bigint().toString(), kind, detail });
+      record("spawn.begin", { executable: process.execPath, argv: nastyPrompt });
       const session = trackSession(
         await createTerminal({
           workspaceId: "ws-test",
@@ -416,9 +420,29 @@ describe("createTerminal", () => {
         }),
       );
 
-      const state = await waitForState(session, (s) => getRowText(s, 0).startsWith("["));
-
-      expect(JSON.parse(getRowText(state, 0))).toEqual([nastyPrompt]);
+      record("spawn.created", { pid: session.pid });
+      const disposeOutput = session.subscribe((event) => record("pty", event));
+      const disposeExit = session.onExit((event) => record("exit", event));
+      try {
+        const state = await waitForState(session, (s) => getRowText(s, 0).startsWith("["));
+        expect(JSON.parse(getRowText(state, 0))).toEqual([nastyPrompt]);
+      } catch (error) {
+        try {
+          const replay = session.serializeReplay();
+          record("failed.replay", {
+            metadata: replay.metadata,
+            ansi: Buffer.from(replay.data).toString("base64"),
+            lines: getLines(await readTerminalState(session)),
+          });
+        } catch (captureError) {
+          record("failed.capture", String(captureError));
+        }
+        console.error("POSIX_ARGV_TRACE", JSON.stringify(trace));
+        throw error;
+      } finally {
+        disposeOutput();
+        disposeExit();
+      }
     },
   );
 
@@ -2048,6 +2072,7 @@ describe("managed command dispatch", () => {
       const session = trackSession(
         await createTerminal({ workspaceId: "ws-powershell", cwd: home, shell }),
       );
+      traceManagedWindowsSession(session, shell);
       const completions: Array<number | null> = [];
       session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
       await expect.poll(() => session.hasOutput()).toBe(true);
