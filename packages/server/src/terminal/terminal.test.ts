@@ -60,6 +60,23 @@ function getLines(state: TerminalState): string[] {
   return state.grid.map(rowToText);
 }
 
+function observePowerShellPrompts(state: TerminalState): { count: number; atCursor: boolean } {
+  const rows = [...state.scrollback, ...state.grid];
+  const wrapped = [...(state.scrollbackWrapped ?? []), ...(state.gridWrapped ?? [])];
+  const cursorRow = state.scrollback.length + state.cursor.row;
+  const lines: string[] = [];
+  let cursorLine = -1;
+  for (const [index, row] of rows.entries()) {
+    if (index === 0 || !wrapped[index - 1]) lines.push("");
+    lines[lines.length - 1] += row.map((cell) => cell.char).join("");
+    if (index === cursorRow) cursorLine = lines.length - 1;
+  }
+  return {
+    count: lines.filter((line) => /^PS .*>/.test(line.trimEnd())).length,
+    atCursor: /^PS .*>$/.test(lines[cursorLine]?.trimEnd() ?? ""),
+  };
+}
+
 function rowHasChar(row: TerminalRow, char: string): boolean {
   return row.some((cell) => cell.char === char);
 }
@@ -2136,18 +2153,16 @@ describe("managed command dispatch", () => {
       const revision = () => session.serializeReplay().metadata.revision;
       let promptCount = 0;
       const waitForPrompt = async (afterRevision = -1, completed = () => true) => {
-        const countPrompts = (state: TerminalState) =>
-          [...state.scrollback, ...state.grid].filter((row) => /^PS .*>/.test(rowToText(row)))
-            .length;
-        const returned = await waitForState(
-          session,
-          (state) =>
+        const returned = await waitForState(session, (state) => {
+          const prompts = observePowerShellPrompts(state);
+          return (
             revision() > afterRevision &&
             completed() &&
-            countPrompts(state) > promptCount &&
-            /^PS .*>$/.test(getRowText(state, state.cursor.row)),
-        );
-        promptCount = countPrompts(returned);
+            prompts.count > promptCount &&
+            prompts.atCursor
+          );
+        });
+        promptCount = observePowerShellPrompts(returned).count;
       };
       // Banner/mode output precedes readiness. Require a new prompt at the parsed cursor,
       // not the command's echo or a prompt retained from an earlier invocation.
@@ -2368,6 +2383,7 @@ describe("native PTY close ownership", () => {
       session,
       nativeKill,
       exit,
+      output: (data: string) => events.emit("data", data),
       restore: () => {
         exit();
         Object.defineProperty(process, "platform", descriptor);
@@ -2376,6 +2392,27 @@ describe("native PTY close ownership", () => {
       },
     };
   }
+
+  it("observes PowerShell prompts across cursor wrapping and the scrollback boundary", async () => {
+    const terminal = await controlledTerminal(process.platform);
+    try {
+      const prompt = `PS C:/${"long-directory/".repeat(30)}>`;
+      terminal.output(`PS C:/initial> command\r\n${prompt} `);
+      const state = await waitForState(terminal.session, (current) =>
+        getLines(current).join("\n").includes(">"),
+      );
+      expect(observePowerShellPrompts(state)).toEqual({ count: 2, atCursor: true });
+      const scrolledPrompt = `PS C:/${"long-directory/".repeat(200)}>`;
+      terminal.output(`command\r\n${"padding\r\n".repeat(23)}${scrolledPrompt} `);
+      const scrolled = await waitForState(
+        terminal.session,
+        (current) => current.scrollback.length > 0,
+      );
+      expect(observePowerShellPrompts(scrolled)).toEqual({ count: 3, atCursor: true });
+    } finally {
+      terminal.restore();
+    }
+  });
 
   it("closes Windows PTY once after kill and concurrent waiters still await native exit", async () => {
     const terminal = await controlledTerminal("win32");
