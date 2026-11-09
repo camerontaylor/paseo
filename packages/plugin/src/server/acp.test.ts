@@ -8,7 +8,12 @@ import {
   type Agent,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk";
-import type { ProviderConnection, ProviderEvent, ProviderInput } from "./provider.js";
+import type {
+  ProviderCapability,
+  ProviderConnection,
+  ProviderEvent,
+  ProviderInput,
+} from "./provider.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAcpProvider, type AcpOptions, type AcpStreamMessage } from "./acp.js";
 
@@ -453,6 +458,59 @@ lines.on("line", (line) => {
     );
     expect(harness.instances).toHaveLength(1);
     await connection.close();
+  });
+
+  it("keeps advertised tool policy ahead of local auto-accept", async () => {
+    const harness = connectorHarness();
+    const registration = runAcpProvider({
+      id: "sdk-acp",
+      label: "SDK ACP",
+      connector: harness.connector,
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message", "permission", "session.configure"],
+    });
+    // The adapter does not advertise exact tool policy yet. Simulate that future
+    // advertisement to exercise runtime precedence beyond the admission guard.
+    (connection.capabilities as ProviderCapability[]).push("permission.tool_policy");
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    const input = openInput();
+    input.config.settings = { auto_accept: true };
+    input.config.toolPolicy = { preapproved: [] };
+    try {
+      await connection.send(input);
+      await waitForEvent(events, (event) => event.type === "session.ready");
+      expect(events.findLast((event) => event.type === "session.config")).toMatchObject({
+        config: { settings: [expect.objectContaining({ id: "auto_accept", value: false })] },
+      });
+      const result = harness.instances[1]!.request("session/request_permission", {
+        sessionId: "connector-session",
+        toolCall: {
+          toolCallId: "policy",
+          title: "Tool",
+          kind: "execute",
+          status: "pending",
+          content: [],
+          rawInput: {},
+        },
+        options: [
+          { optionId: "yes", name: "Allow", kind: "allow_once" },
+          { optionId: "no", name: "Reject", kind: "reject_once" },
+        ],
+      });
+      await waitForEvent(events, (event) => event.type === "session.permission");
+      await connection.send({
+        type: "session.permission",
+        sessionId: "session-1",
+        permissionId: "permission:policy",
+        response: { behavior: "deny" },
+      });
+      await expect(result).resolves.toEqual({ outcome: { outcome: "selected", optionId: "no" } });
+    } finally {
+      await connection.close();
+    }
   });
 
   it("keeps ambiguous allow choices in permission mediation", async () => {
