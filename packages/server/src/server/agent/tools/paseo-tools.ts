@@ -1323,7 +1323,7 @@ function createToolCatalog(
 
   if (
     options.voiceOnly ||
-    callerAgentId ||
+    scope === "agent" ||
     options.enableVoiceTools ||
     callerContext?.enableVoiceTools
   ) {

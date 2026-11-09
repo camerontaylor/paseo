@@ -363,9 +363,11 @@ test("successful voice attach, STT failure and transport loss preserve work and 
 function captureAgentManagerEvents(): {
   subscribe: ReturnType<typeof vi.fn>;
   dispatch: (event: AgentManagerEvent) => void;
+  activeCount: () => number;
 } {
   const callbacks = new Set<(event: AgentManagerEvent) => void>();
   return {
+    activeCount: () => callbacks.size,
     subscribe: vi.fn((callback: (event: AgentManagerEvent) => void) => {
       callbacks.add(callback);
       return () => callbacks.delete(callback);
@@ -483,6 +485,7 @@ test("side conversation updates and removals reach a subscribed modern source", 
     { [CLIENT_CAPS.ownedSubscriptions]: true, [CLIENT_CAPS.sideConversations]: true },
     socket,
   );
+  expect(events.activeCount()).toBe(0);
   await session.handleMessage(
     {
       type: "session.events.set_subscription.request",
@@ -491,6 +494,7 @@ test("side conversation updates and removals reach a subscribed modern source", 
     },
     socket,
   );
+  expect(events.activeCount()).toBe(1);
   targetedMessages.length = 0;
 
   events.dispatch({
@@ -526,6 +530,17 @@ test("side conversation updates and removals reach a subscribed modern source", 
   }
   // The proof-carrying lane replaces the legacy broadcast for modern sources.
   expect(messages).toEqual([]);
+  const subscriptionId = targetedMessages[0]!.message.payload.subscriptionId;
+  await session.handleMessage(
+    {
+      type: "subscription.release.request",
+      requestId: "release-side-conversation-events",
+      subscriptionId,
+    },
+    socket,
+  );
+  expect(events.activeCount()).toBe(0);
+  await session.cleanup();
 });
 
 test("side conversation removals skip a subscribed modern source without the capability", async () => {
