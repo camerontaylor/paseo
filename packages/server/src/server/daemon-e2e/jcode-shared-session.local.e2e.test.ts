@@ -525,17 +525,32 @@ test("jcode import keeps the model the CLI session chose", async () => {
   // Paseo reaches the daemon only through this relay, so it sees every request Paseo sends.
   const paseoRequests: Array<Record<string, unknown>> = [];
   const relaySockets = new Set<Socket>();
+  const relayErrors: { connection: number; error: string }[] = [];
+  let shuttingDown = false;
+  let connectionSequence = 0;
   const relay = createSocketServer((adapter) => {
     const daemon = connect(socketPath);
+    const connection = ++connectionSequence;
+    let failed = false;
+    const onError = (error: Error) => {
+      if (!failed && !shuttingDown) relayErrors.push({ connection, error: error.message });
+      failed = true;
+      adapter.destroy();
+      daemon.destroy();
+    };
     for (const socket of [adapter, daemon]) {
       relaySockets.add(socket);
-      socket.once("close", () => relaySockets.delete(socket));
-      socket.on("error", () => {
-        adapter.destroy();
-        daemon.destroy();
-      });
+      socket.on("error", onError);
     }
-    createInterface({ input: adapter }).on("line", (raw) => paseoRequests.push(JSON.parse(raw)));
+    const lines = createInterface({ input: adapter });
+    adapter.once("close", () => {
+      relaySockets.delete(adapter);
+      lines.close();
+    });
+    daemon.once("close", () => relaySockets.delete(daemon));
+    // Readline forwards input errors through its own emitter, even with a socket handler.
+    lines.on("error", onError);
+    lines.on("line", (raw) => paseoRequests.push(JSON.parse(raw)));
     adapter.pipe(daemon);
     daemon.pipe(adapter);
   });
@@ -658,17 +673,27 @@ test("jcode import keeps the model the CLI session chose", async () => {
       "gpt-5.2-mini",
     );
     expect(paseoRequests.filter((request) => request.type === "set_model")).toEqual([]);
+    expect(relayErrors).toEqual([]);
   } catch (error) {
     throw new Error(
-      `${String(error)}\n${logs.join("")}\n${JSON.stringify(events)}\nPASEO-REQUESTS:${JSON.stringify(paseoRequests)}`,
+      `${String(error)}\n${logs.join("")}\n${JSON.stringify(events)}\nPASEO-REQUESTS:${JSON.stringify(paseoRequests)}\nRELAY-ERRORS:${JSON.stringify(relayErrors)}`,
       { cause: error },
     );
   } finally {
+    shuttingDown = true;
     peer?.destroy();
     await client?.close();
     await paseo?.close();
     const relayClosed = new Promise<void>((resolve) => relay.close(() => resolve()));
-    for (const socket of relaySockets) socket.destroy();
+    await Promise.all(
+      [...relaySockets].map(
+        (socket) =>
+          new Promise<void>((resolve) => {
+            socket.once("close", () => resolve());
+            socket.destroy();
+          }),
+      ),
+    );
     await relayClosed;
     vi.unstubAllEnvs();
     const childExited = new Promise<void>((resolve) => {
