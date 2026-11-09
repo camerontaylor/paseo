@@ -26,6 +26,7 @@ import {
   ACP_STOPPED_TURN_ADMISSION_TIMEOUT_MS,
   ACPAgentClient,
   ACPAgentSession,
+  type ACPAgentSessionOptions,
   type ACPAdmissionState,
   type ACPStopKind,
   type SpawnedACPProcess,
@@ -39,6 +40,7 @@ import {
   resolveACPModelSelection,
   summarizeACPRequestError,
 } from "./acp-agent.js";
+import { AgentManager } from "../agent-manager.js";
 import { createIdleRuntimeCleanup } from "../idle-runtime-cleanup/index.js";
 import type { ProcessTerminator, TreeKillTarget } from "../../../utils/tree-kill.js";
 import {
@@ -60,6 +62,7 @@ import type {
   AgentCapabilityFlags,
   AgentPersistenceHandle,
   AgentSession,
+  AgentSessionConfig,
   ProviderRefreshContext,
 } from "../agent-sdk-types.js";
 import { buildProviderRegistry } from "../provider-registry.js";
@@ -5930,4 +5933,78 @@ describe("custom ACP provider with configured models", () => {
 
     expect((await created.getRuntimeInfo()).model).toBe("advertised-default");
   });
+});
+
+test("generic ACP import and reload retain native model and thinking selections", async () => {
+  let model = "native-model";
+  let thinking = "high";
+  const setModel = vi.fn();
+  const setConfig = vi.fn();
+  class NativeSession extends ACPAgentSession {
+    protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+      return {
+        child: createProbeChildStub(),
+        connection: {
+          loadSession: async () => ({
+            modes: null,
+            configOptions: [
+              selectConfigOption(
+                "model",
+                ["default-model", "native-model", "external-model"],
+                model,
+              ),
+              selectConfigOption("thought_level", ["low", "high"], thinking),
+            ],
+          }),
+          unstable_setSessionModel: setModel,
+          setSessionConfigOption: setConfig,
+        } as unknown as ClientSideConnection,
+        initialize: { agentCapabilities: { loadSession: true } },
+      } as SpawnedACPProcess;
+    }
+  }
+  class NativeClient extends GenericACPAgentClient {
+    override async isAvailable() {
+      return true;
+    }
+    override async fetchCatalog() {
+      return {
+        models: [
+          { provider: this.provider, id: "default-model", label: "Default", isDefault: true },
+        ],
+        modes: [],
+      };
+    }
+    protected override createAgentSession(
+      config: AgentSessionConfig,
+      options: ACPAgentSessionOptions,
+    ) {
+      return new NativeSession(config, { ...options, terminateProcess: async () => "terminated" });
+    }
+  }
+  const logger = createTestLogger();
+  const client = new NativeClient({
+    logger,
+    command: ["test-acp"],
+    providerId: "acp",
+    waitForInitialCommands: false,
+  });
+  const manager = new AgentManager({ logger, clients: { acp: client } });
+  try {
+    const imported = await manager.importProviderSession({
+      provider: "acp",
+      providerHandleId: "native",
+      cwd: tmpdir(),
+      workspaceId: "workspace",
+    });
+    expect(imported.config).toMatchObject({ model: "native-model", thinkingOptionId: "high" });
+    model = "external-model";
+    thinking = "low";
+    const reloaded = await manager.reloadAgentSession(imported.id);
+    expect(reloaded.config).toMatchObject({ model: "external-model", thinkingOptionId: "low" });
+    expect(setModel).not.toHaveBeenCalled();
+    expect(setConfig).not.toHaveBeenCalled();
+  } finally {
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+  }
 });

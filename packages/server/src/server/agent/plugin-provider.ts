@@ -965,6 +965,7 @@ class PluginAgentClient implements AgentClient {
   private readonly pendingChildren: PendingChild[] = [];
 
   readonly getCatalogCacheKey?: AgentClient["getCatalogCacheKey"];
+  readonly restoresSessionConfig: boolean;
 
   constructor(
     registration: ProviderRegistration,
@@ -972,6 +973,7 @@ class PluginAgentClient implements AgentClient {
     runtimeSettings?: ProviderRuntimeSettings,
   ) {
     this.provider = registration.id;
+    this.restoresSessionConfig = registration.restoresSessionConfig === true;
     this.runtime = new ProviderRuntime(registration, runtimeSettings);
     if (registration.getCatalogCacheKey)
       this.getCatalogCacheKey = (options) => this.runtime.catalogCacheKey(options);

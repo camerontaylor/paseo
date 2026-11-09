@@ -516,6 +516,198 @@ test("jcode shares import, prompts, steering and Stop with an independent native
   }
 }, 60_000);
 
+test("jcode import keeps the model the CLI session chose", async () => {
+  if (!binary || !path.isAbsolute(binary))
+    throw new Error("Set JCODE_E2E_BINARY to an absolute, pinned jcode executable");
+  const root = await mkdtemp(path.join(tmpdir(), "paseo-jcode-model-"));
+  const socketPath = path.join(root, "jcode.sock");
+  const relayPath = path.join(root, "acp.sock");
+  // Paseo reaches the daemon only through this relay, so it sees every request Paseo sends.
+  const paseoRequests: Array<Record<string, unknown>> = [];
+  const relaySockets = new Set<Socket>();
+  const relayErrors: { connection: number; error: string }[] = [];
+  let shuttingDown = false;
+  let connectionSequence = 0;
+  const relay = createSocketServer((adapter) => {
+    const daemon = connect(socketPath);
+    const connection = ++connectionSequence;
+    let failed = false;
+    const onError = (error: Error) => {
+      if (!failed && !shuttingDown) relayErrors.push({ connection, error: error.message });
+      failed = true;
+      adapter.destroy();
+      daemon.destroy();
+    };
+    for (const socket of [adapter, daemon]) {
+      relaySockets.add(socket);
+      socket.on("error", onError);
+    }
+    const lines = createInterface({ input: adapter });
+    adapter.once("close", () => {
+      relaySockets.delete(adapter);
+      lines.close();
+    });
+    daemon.once("close", () => relaySockets.delete(daemon));
+    // Readline forwards input errors through its own emitter, even with a socket handler.
+    lines.on("error", onError);
+    lines.on("line", (raw) => paseoRequests.push(JSON.parse(raw)));
+    adapter.pipe(daemon);
+    daemon.pipe(adapter);
+  });
+  const model = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    if (request.url?.endsWith("/models")) {
+      response.setHeader("Content-Type", "application/json");
+      response.end(
+        JSON.stringify({
+          data: [
+            { id: "gpt-5.2", object: "model" },
+            { id: "gpt-5.2-mini", object: "model" },
+          ],
+        }),
+      );
+      return;
+    }
+    const completion = JSON.parse(body) as { model: string; stream?: boolean };
+    const content = `ANSWER from ${completion.model}`;
+    if (completion.stream === true) {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({ id: "chat-e2e", object: "chat.completion.chunk", model: completion.model, choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: "chat-e2e", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+      );
+      return;
+    }
+    response.setHeader("Content-Type", "application/json");
+    response.end(
+      JSON.stringify({
+        id: "chat-e2e",
+        object: "chat.completion",
+        model: completion.model,
+        choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => model.listen(0, "127.0.0.1", resolve));
+  const address = model.address();
+  if (!address || typeof address === "string") throw new Error("Missing fake model port");
+  const env = {
+    ...process.env,
+    JCODE_NO_TELEMETRY: "1",
+    JCODE_HOME: path.join(root, "home"),
+    JCODE_RUNTIME_DIR: root,
+    JCODE_OPENAI_COMPAT_API_BASE: `http://127.0.0.1:${address.port}/v1`,
+    JCODE_OPENAI_COMPAT_DEFAULT_MODEL: "gpt-5.2",
+    OPENAI_COMPAT_API_KEY: "isolated-test-key",
+  };
+  const logs: string[] = [];
+  const child = spawn(
+    binary,
+    ["--socket", socketPath, "--provider", "openai-compatible", "--model", "gpt-5.2", "serve"],
+    { env, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  child.stdout.on("data", (data) => logs.push(String(data)));
+  child.stderr.on("data", (data) => logs.push(String(data)));
+  const events: Array<Record<string, unknown>> = [];
+  let peer: Socket | undefined;
+  let paseo: Awaited<ReturnType<typeof createTestPaseoDaemon>> | undefined;
+  let client: DaemonClient | undefined;
+  try {
+    await expect
+      .poll(
+        () => {
+          if (child.exitCode !== null) throw new Error(logs.join(""));
+          return existsSync(socketPath);
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await new Promise<void>((resolve) => relay.listen(relayPath, resolve));
+    peer = connect(socketPath);
+    await new Promise<void>((resolve, reject) => {
+      peer!.once("connect", resolve);
+      peer!.once("error", reject);
+    });
+    createInterface({ input: peer }).on("line", (line) => events.push(JSON.parse(line)));
+    peer.write(
+      `${JSON.stringify({ type: "subscribe", id: 1, supports_turn_identity: true, working_dir: root, client_instance_id: "e2e-peer" })}\n`,
+    );
+    await expect
+      .poll(() => events.find((event) => event.type === "session"))
+      .toMatchObject({ session_id: expect.any(String) });
+    // The CLI user picks a model other than the daemon default, then works in the session.
+    peer.write(`${JSON.stringify({ type: "set_model", id: 2, model: "gpt-5.2-mini" })}\n`);
+    peer.write(`${JSON.stringify({ type: "message", id: 3, content: "BASELINE" })}\n`);
+    await expect
+      .poll(
+        () =>
+          events.filter((event) => event.type === "turn_event" && event.end === "completed").length,
+        { timeout: 15_000 },
+      )
+      .toBe(1);
+
+    await mkdir(path.join(root, "bin"));
+    await symlink(binary, path.join(root, "bin/jcode"));
+    for (const [key, value] of Object.entries(env)) {
+      if (key.startsWith("JCODE_") || key === "OPENAI_COMPAT_API_KEY") vi.stubEnv(key, value);
+    }
+    vi.stubEnv("JCODE_SOCKET", relayPath);
+    vi.stubEnv("PATH", `${path.join(root, "bin")}${path.delimiter}${process.env.PATH}`);
+    paseo = await createTestPaseoDaemon({ pluginsEnabled: true });
+    client = new DaemonClient({ url: `ws://127.0.0.1:${paseo.port}/ws` });
+    await client.connect();
+    await client.fetchAgents({ subscribe: {} });
+    const repo = fileURLToPath(new URL("../../../../..", import.meta.url));
+    await client.installDirectoryPlugin(path.join(repo, "plugins/jcode-provider"));
+    const sessionId = events.find((event) => event.type === "session")!.session_id;
+    const imported = await client.importAgent({
+      providerId: "jcode",
+      providerHandleId: `plugin:${JSON.stringify({ version: 1, data: { sessionId } })}`,
+      cwd: root,
+    });
+    expect(imported.model).toContain("gpt-5.2-mini");
+    expect(paseo.daemon.agentManager.getAgent(imported.id)?.config.model).toContain("gpt-5.2-mini");
+
+    await client.refreshAgent(imported.id);
+    expect((await client.fetchAgent({ agentId: imported.id }))?.agent.model).toContain(
+      "gpt-5.2-mini",
+    );
+    expect(paseoRequests.filter((request) => request.type === "set_model")).toEqual([]);
+    expect(relayErrors).toEqual([]);
+  } catch (error) {
+    throw new Error(
+      `${String(error)}\n${logs.join("")}\n${JSON.stringify(events)}\nPASEO-REQUESTS:${JSON.stringify(paseoRequests)}\nRELAY-ERRORS:${JSON.stringify(relayErrors)}`,
+      { cause: error },
+    );
+  } finally {
+    shuttingDown = true;
+    peer?.destroy();
+    await client?.close();
+    await paseo?.close();
+    const relayClosed = new Promise<void>((resolve) => relay.close(() => resolve()));
+    await Promise.all(
+      [...relaySockets].map(
+        (socket) =>
+          new Promise<void>((resolve) => {
+            socket.once("close", () => resolve());
+            socket.destroy();
+          }),
+      ),
+    );
+    await relayClosed;
+    vi.unstubAllEnvs();
+    const childExited = new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) resolve();
+      else child.once("exit", () => resolve());
+    });
+    child.kill("SIGTERM");
+    await childExited;
+    model.closeAllConnections();
+    await new Promise<void>((resolve) => model.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60_000);
+
 interface NativeFrame {
   at: number;
   connection: number;

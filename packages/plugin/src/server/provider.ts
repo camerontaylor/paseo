@@ -31,6 +31,12 @@ export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 export interface ProviderRegistration {
   /** False rejects nonempty system instructions. Omission preserves the existing provider contract. */
   supportsSystemPrompt?: boolean;
+  /**
+   * True when a loaded session restores its own model and thinking option and reports them in
+   * `session.config`. The daemon then sends only explicit changes when it loads a session.
+   * Omission preserves the existing contract: the daemon sends its saved selection on every load.
+   */
+  restoresSessionConfig?: boolean;
   /** Activate only while agents.providers contains this provider ID, independently of enabled. */
   requiresConfiguration?: boolean;
   /** Equal keys share discovery within this provider. Include effective configuration and execution environment. */

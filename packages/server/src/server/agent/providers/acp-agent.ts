@@ -938,6 +938,8 @@ export class ACPAgentClient implements AgentClient {
   readonly provider: string;
   private readonly usageProvider?: string;
   readonly capabilities: AgentCapabilityFlags;
+  // session/load reports the loaded session's model and thinking option.
+  readonly restoresSessionConfig = true;
   readonly resolveCreateConfig = resolveACPCreateConfig;
   readonly isCreateConfigUnattended = isACPCreateConfigUnattended;
 

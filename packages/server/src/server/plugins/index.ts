@@ -685,6 +685,7 @@ export class PluginService {
           label: provider.label,
           description: provider.description,
           supportsSystemPrompt: provider.supportsSystemPrompt,
+          restoresSessionConfig: provider.restoresSessionConfig,
           command: provider.command,
           requiresConfiguration: provider.requiresConfiguration,
           status: provider.hasStatus

@@ -390,6 +390,7 @@ const provider: ProviderRegistration = {
   id: "direct-example",
   label: "Direct example",
   supportsSystemPrompt: false,
+  restoresSessionConfig: true,
   icon: "icon.svg",
   async connect(request) {
     const listeners = new Set<(event: ProviderEvent) => void>();
@@ -496,6 +497,7 @@ export default function contribute(server: PluginServerContext) {
       id: "direct-example",
       label: "Direct example",
       supportsSystemPrompt: false,
+      restoresSessionConfig: true,
       iconPath: "icon.svg",
     });
     const connection = await runtime.connectProvider("provider-round-trip", "direct-example", {
