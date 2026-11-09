@@ -1668,7 +1668,7 @@ export class Session {
     }
 
     const hasInFlightRun = this.agentManager.hasInFlightRun(agentId);
-    if (!hasInFlightRun) {
+    if (!hasInFlightRun || this.agentManager.isPeerRun(agentId)) {
       this.sessionLogger.trace(
         {
           agentId,

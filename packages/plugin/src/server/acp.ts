@@ -60,6 +60,19 @@ export interface AcpOptions {
 
 export interface AcpContext {
   sessionId: string;
+  agentCapabilities?: JsonValue;
+}
+
+export interface AcpConnectionPolicy {
+  /** False when the negotiated profile never echoes this attachment's submitted text. */
+  echoesUserMessages?: boolean;
+  sendSessionMcpServers?: boolean;
+  steering?: boolean;
+}
+
+export interface AcpSessionPolicy {
+  steering?: boolean;
+  stopObservedTurns?: boolean;
 }
 
 export interface AcpConfigAccess {
@@ -106,6 +119,8 @@ export type AcpVendorUpdate =
     };
 
 export interface AcpTransformer {
+  initialize?(info: { agentCapabilities: JsonValue }): AcpConnectionPolicy | null;
+  attach?(info: { response: JsonValue }, context: AcpContext): AcpSessionPolicy | null;
   discover?(
     catalog: ProviderCatalog,
     context: AcpDiscoveryContext,

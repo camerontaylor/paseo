@@ -26,8 +26,8 @@ This directory retains tooling that must travel with the assembled source:
   links locally; it never shares the entire root `node_modules` directory.
 
 Upstream has no `fork/` directory. Keep source-coupled fork files here so they
-have a separate namespace during upstream merges. Store future plans and
-operational evidence in agents instead.
+have a separate namespace during upstream merges. Store fleet operational evidence in agents. Product plans and research belong in
+the [companion project](https://github.com/camerontaylor/toolkit-research/blob/main/projects/paseo/README.md).
 
 Permanent product changes belong to `custom`. Keep external carries on separate
 branches and as separate Desvio manifest inputs. Assemble them only into a

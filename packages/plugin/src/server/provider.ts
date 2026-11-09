@@ -14,6 +14,8 @@ export const PROVIDER_CAPABILITIES = [
   "session.configure",
   "session.list",
   "session.persistence",
+  // Provider-reported peer turns belong to another client and are canceled only by explicit Stop.
+  "session.shared_turns",
   "session.revert.both",
   "session.revert.conversation",
   "session.revert.files",
@@ -597,6 +599,8 @@ export type ProviderEvent =
       state: "started" | "completed" | "failed" | "canceled";
       error?: ProviderError;
     }
+  /** Submitted work can remain pending between native turn brackets. */
+  | { type: "session.pending_work"; sessionId: string; pending: boolean }
   | { type: "session.usage"; sessionId: string; turnId?: string; usage: ProviderUsage }
   | { type: "session.config"; sessionId: string; config: ProviderConfigState }
   | { type: "session.commands"; sessionId: string; commands: ProviderCommand[] }
@@ -1390,6 +1394,9 @@ export const ProviderEventSchema: z.ZodType<ProviderEvent> = z.discriminatedUnio
       state: z.enum(["started", "completed", "failed", "canceled"]),
       error: providerErrorSchema.optional(),
     })
+    .strip(),
+  z
+    .object({ type: z.literal("session.pending_work"), sessionId: idSchema, pending: z.boolean() })
     .strip(),
   z
     .object({

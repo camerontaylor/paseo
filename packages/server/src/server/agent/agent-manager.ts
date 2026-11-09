@@ -141,6 +141,13 @@ export class AgentManagerShuttingDownError extends Error {
   }
 }
 
+export class PeerTurnActiveError extends Error {
+  constructor(readonly agentId: string) {
+    super("A turn from another client is running. Wait for it or press Stop.");
+    this.name = "PeerTurnActiveError";
+  }
+}
+
 export class AgentRunCancellationError extends Error {
   constructor(agentId: string, action: "reload" | "replace" | "rewind" | "stop") {
     super(
@@ -422,6 +429,8 @@ interface HandleStreamEventOptions {
 }
 
 interface ManagedAgentBase {
+  /** Provider requests awaiting settlement, independent of native turn identity. */
+  pendingProviderWork?: boolean;
   id: string;
   provider: AgentProvider;
   cwd: string;
@@ -1048,6 +1057,15 @@ export class AgentManager {
     const nowMs = Date.now();
     const nextMs = nowMs > previousMs ? nowMs : previousMs + 1;
     return new Date(nextMs).toISOString();
+  }
+
+  isPeerRun(agentId: string): boolean {
+    const agent = this.agents.get(agentId);
+    return (
+      agent?.capabilities.supportsSharedTurns === true &&
+      agent.activeForegroundTurnId === null &&
+      this.runs.getRun(agentId)?.kind === "autonomous"
+    );
   }
 
   hasInFlightRun(agentId: string): boolean {
@@ -3090,7 +3108,7 @@ export class AgentManager {
     const terminalError = mutableAgent.lastError;
     const shouldHoldBusyForReplacement = mutableAgent.pendingReplacement && !terminalError;
     let nextLifecycle: "running" | "error" | "idle";
-    if (shouldHoldBusyForReplacement) {
+    if (shouldHoldBusyForReplacement || mutableAgent.pendingProviderWork) {
       nextLifecycle = "running";
     } else if (terminalError) {
       nextLifecycle = "error";
@@ -3145,12 +3163,29 @@ export class AgentManager {
     return "closed_current";
   }
 
+  private assertPromptCanReplacePeerRun(
+    agentId: string,
+    prompt: AgentPromptInput,
+    options?: AgentRunOptions,
+  ): void {
+    if (!this.isPeerRun(agentId)) return;
+    if (options?.clientMessageId) {
+      const agent = this.requireSessionAgent(agentId);
+      this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "rejected", {
+        messageId: options.clientMessageId,
+      });
+      this.emitState(agent);
+    }
+    throw new PeerTurnActiveError(agentId);
+  }
+
   async replaceAgentRun(
     agentId: string,
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<AsyncGenerator<AgentStreamEvent>> {
     const snapshot = this.requireAgent(agentId);
+    this.assertPromptCanReplacePeerRun(agentId, prompt, options);
     if (
       snapshot.lifecycle !== "running" &&
       !snapshot.activeForegroundTurnId &&
@@ -3246,6 +3281,8 @@ export class AgentManager {
     if (result.status === "accepted") {
       return { status: "steered" };
     }
+
+    this.assertPromptCanReplacePeerRun(agentId, prompt, options);
 
     // Providers without autonomous steering keep their existing dispatch behavior. The shared
     // admission may recognize the turn, but only an accepted steer can own it without replacement.
@@ -3592,6 +3629,17 @@ export class AgentManager {
     agentId: string,
     action: "reload" | "replace" | "rewind",
   ): Promise<void> {
+    if (this.isPeerRun(agentId)) {
+      if (action !== "reload") throw new PeerTurnActiveError(agentId);
+      const agent = this.requireSessionAgent(agentId);
+      await this.dispatchSessionEvent(agent, {
+        type: "turn_canceled",
+        provider: agent.provider,
+        turnId: agent.activeTurnId ?? undefined,
+        reason: "Session reloaded",
+      });
+      return;
+    }
     const result = await this.cancelAgentRun(agentId);
     if (result.status === "refused") {
       throw new AgentRunCancellationError(agentId, action);
@@ -4869,6 +4917,11 @@ export class AgentManager {
     const { agent, event, options, isForegroundEvent, eventTurnId, terminalDisposition, flags } =
       params;
     switch (event.type) {
+      case "pending_work":
+        this.onPendingProviderWork(agent, event.pending);
+        flags.shouldDispatchEvent = false;
+        flags.shouldNotifyWaiters = false;
+        return undefined;
       case "thread_started":
         this.onStreamThreadStarted(agent);
         return undefined;
@@ -5004,6 +5057,20 @@ export class AgentManager {
     }
   }
 
+  /**
+   * Native brackets can end before an accepted steer receives its own output.
+   * Keep finish waiters open across that gap without inventing a turn identity.
+   */
+  private onPendingProviderWork(agent: ActiveManagedAgent, pending: boolean): void {
+    agent.pendingProviderWork = pending;
+    if (pending) agent.lifecycle = "running";
+    else if (!agent.activeTurnId && !agent.activeForegroundTurnId && !agent.pendingReplacement) {
+      agent.lifecycle = agent.lastError ? "error" : "idle";
+      this.runs.settleTerminalRun(agent.id, undefined);
+    }
+    this.emitState(agent);
+  }
+
   private onStreamTurnCompleted(params: {
     agent: ActiveManagedAgent;
     event: Extract<AgentStreamEvent, { type: "turn_completed" }>;
@@ -5035,7 +5102,8 @@ export class AgentManager {
       !isForegroundEvent &&
       !agent.activeForegroundTurnId &&
       agent.lifecycle !== "idle" &&
-      !agent.pendingReplacement
+      !agent.pendingReplacement &&
+      !agent.pendingProviderWork
     ) {
       (agent as ActiveManagedAgent).lifecycle = "idle";
       this.emitState(agent);
@@ -5068,7 +5136,7 @@ export class AgentManager {
       "handleStreamEvent: turn_failed",
     );
     if (terminalDisposition === "stale") return;
-    if (!isForegroundEvent && !agent.activeForegroundTurnId) {
+    if (!isForegroundEvent && !agent.activeForegroundTurnId && !agent.pendingProviderWork) {
       agent.lifecycle = "error";
     }
     agent.lastError = event.error;
@@ -5110,7 +5178,12 @@ export class AgentManager {
       "agent.manager.turn.canceled",
     );
     if (terminalDisposition === "stale") return;
-    if (!isForegroundEvent && !agent.activeForegroundTurnId && !agent.pendingReplacement) {
+    if (
+      !isForegroundEvent &&
+      !agent.activeForegroundTurnId &&
+      !agent.pendingReplacement &&
+      !agent.pendingProviderWork
+    ) {
       agent.lifecycle = "idle";
     }
     agent.lastError = undefined;
