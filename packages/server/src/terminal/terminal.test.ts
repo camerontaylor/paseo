@@ -2241,6 +2241,36 @@ describe("managed command dispatch", () => {
       expect(completions).toEqual([]);
     },
   );
+  it.runIf(isPlatform("win32")).each(["powershell.exe", "pwsh.exe"])(
+    "retains immediate structured PowerShell dispatch in %s",
+    async (shell) => {
+      const home = mkdtempSync(join(tmpdir(), "early-powershell-"));
+      temporaryDirs.push(home);
+      const result = join(home, "early-result.json");
+      const session = trackSession(
+        await createTerminal({ workspaceId: "ws-early-powershell", cwd: home, shell }),
+      );
+      traceManagedWindowsSession(session, shell);
+      // Product bootstrap accepts first output; callers can dispatch before the shell prompt.
+      // Exercise the stricter immediate-send case without borrowing shell-readiness waits.
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync(process.argv[1], JSON.stringify(process.argv[2]))",
+          result,
+          "early 雪 & literal",
+        ],
+        completion: false,
+      });
+      await waitForState(
+        session,
+        (state) => existsSync(result) && /^PS .*>$/.test(getRowText(state, state.cursor.row)),
+      );
+      expect(JSON.parse(readFileSync(result, "utf8"))).toBe("early 雪 & literal");
+    },
+  );
   const inputCases = shells
     .filter((shell) => !shell.endsWith("zsh"))
     .flatMap(
