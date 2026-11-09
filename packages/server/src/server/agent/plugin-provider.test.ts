@@ -2404,12 +2404,14 @@ test.each(["rollover", "same-peer"])(
       undefined,
       { workspaceId: undefined },
     );
-    const states: string[] = [];
+    let terminalSubmitted = false;
+    const states: { lifecycle: string; terminalSubmitted: boolean }[] = [];
     const turns: AgentStreamEvent[] = [];
     const streamTypes: string[] = [];
     const unsubscribe = manager.subscribe(
       (event) => {
-        if (event.type === "agent_state") states.push(event.agent.lifecycle);
+        if (event.type === "agent_state")
+          states.push({ lifecycle: event.agent.lifecycle, terminalSubmitted });
         if (event.type === "agent_stream" && event.event.type.startsWith("turn_"))
           turns.push(event.event);
         if (event.type === "agent_stream") streamTypes.push(event.event.type);
@@ -2456,6 +2458,7 @@ test.each(["rollover", "same-peer"])(
         });
         await vi.waitFor(() => expect(manager.getAgent(agent.id)?.activeTurnId).toBe("acp:late"));
         expect(finished).toBe(false);
+        terminalSubmitted = true;
         live.promptResponses[0]({ stopReason: "end_turn" });
       } else {
         live.promptResponses[0]({ stopReason: "end_turn" });
@@ -2469,12 +2472,17 @@ test.each(["rollover", "same-peer"])(
           { type: "turn_started", provider: registration.id, turnId: "acp-vendor:peer" },
         ]);
         stop();
+        terminalSubmitted = true;
         live.notify("vendor/turn", { turnId: "peer", state: "completed" });
       }
       expect((await finish).status).toBe("idle");
       expect(streamTypes).not.toContain("pending_work");
       expect(manager.getAgent(agent.id)?.lifecycle).toBe("idle");
-      expect(states.slice(0, -1)).not.toContain("idle");
+      // Metadata can emit additional idle snapshots after the provider terminal.
+      const workingStates = states.filter((state) => !state.terminalSubmitted);
+      expect(workingStates.length).toBeGreaterThan(0);
+      expect(workingStates.filter((state) => state.lifecycle !== "running")).toEqual([]);
+      expect(states.at(-1)?.lifecycle).toBe("idle");
       expect(
         turns.map((event) => ({
           type: event.type,
