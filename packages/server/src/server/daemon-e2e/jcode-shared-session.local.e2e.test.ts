@@ -25,21 +25,33 @@ test("jcode shares import, prompts, steering and Stop with an independent native
   const relayPath = path.join(root, "acp.sock");
   const nativeWire: NativeFrame[] = [];
   const relaySockets = new Set<Socket>();
+  const relayErrors: { connection: number; error: string }[] = [];
+  let shuttingDown = false;
   let connectionSequence = 0;
   const relay = createSocketServer((adapter) => {
     const daemon = connect(socketPath);
     const connection = ++connectionSequence;
+    let failed = false;
+    const onError = (error: Error) => {
+      if (!failed && !shuttingDown) relayErrors.push({ connection, error: error.message });
+      failed = true;
+      adapter.destroy();
+      daemon.destroy();
+    };
     for (const [socket, direction] of [
       [adapter, "request"],
       [daemon, "response"],
     ] as const) {
       relaySockets.add(socket);
-      socket.once("close", () => relaySockets.delete(socket));
-      socket.on("error", () => {
-        adapter.destroy();
-        daemon.destroy();
+      const lines = createInterface({ input: socket });
+      socket.once("close", () => {
+        relaySockets.delete(socket);
+        lines.close();
       });
-      createInterface({ input: socket }).on("line", (raw) => {
+      socket.on("error", onError);
+      // Readline forwards input errors through its own emitter, even with a socket handler.
+      lines.on("error", onError);
+      lines.on("line", (raw) => {
         const message = JSON.parse(raw) as Record<string, unknown>;
         nativeWire.push({
           at: performance.now(),
@@ -465,27 +477,39 @@ test("jcode shares import, prompts, steering and Stop with an independent native
         .filter((entry) => entry.item.type === "user_message" && entry.item.text === "BASELINE")
         .map((entry) => entry.item.id),
     ).toEqual(originalBaseline);
+    expect(relayErrors).toEqual([]);
   } catch (error) {
     throw new Error(
-      `${String(error)}\n${logs.join("")}\n${JSON.stringify(events)}\nNATIVE-WIRE:${JSON.stringify(nativeWire)}\nREQUESTS:${JSON.stringify(requests.map((request) => request.messages?.slice(-1)))}`,
+      `${String(error)}\n${logs.join("")}\n${JSON.stringify(events)}\nNATIVE-WIRE:${JSON.stringify(nativeWire)}\nRELAY-ERRORS:${JSON.stringify(relayErrors)}\nREQUESTS:${JSON.stringify(requests.map((request) => request.messages?.slice(-1)))}`,
       {
         cause: error,
       },
     );
   } finally {
+    shuttingDown = true;
     for (const response of pending) response.destroy();
     peer?.destroy();
     unsubscribeState?.();
-    child.kill("SIGTERM");
     await client?.close();
     await paseo?.close();
-    for (const socket of relaySockets) socket.destroy();
-    await new Promise<void>((resolve) => relay.close(() => resolve()));
+    const relayClosed = new Promise<void>((resolve) => relay.close(() => resolve()));
+    await Promise.all(
+      [...relaySockets].map(
+        (socket) =>
+          new Promise<void>((resolve) => {
+            socket.once("close", () => resolve());
+            socket.destroy();
+          }),
+      ),
+    );
+    await relayClosed;
     vi.unstubAllEnvs();
-    await new Promise<void>((resolve) => {
-      if (child.exitCode !== null) resolve();
+    const childExited = new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) resolve();
       else child.once("exit", () => resolve());
     });
+    child.kill("SIGTERM");
+    await childExited;
     model.closeAllConnections();
     await new Promise<void>((resolve) => model.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
