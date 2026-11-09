@@ -1947,6 +1947,108 @@ describe("managed command dispatch", () => {
   const shells = isPlatform("win32")
     ? [resolveDefaultTerminalShell()]
     : ["/bin/bash", "/bin/sh", ...(existsSync("/bin/zsh") ? ["/bin/zsh"] : [])];
+  it.skipIf(!hasZsh).each([false, true])(
+    "owns managed zsh completion with startup hooks replaced=%s",
+    async (replaceHooks) => {
+      const home = mkdtempSync(join(tmpdir(), "managed-zsh-hooks-"));
+      temporaryDirs.push(home);
+      const cwd = join(home, "space & apostrophe' directory");
+      mkdirSync(cwd);
+      writeFileSync(join(home, ".zshenv"), "");
+      writeFileSync(
+        join(home, ".zshrc"),
+        `PS1='ZSH_PROMPT:%?> '
+export PASEO_PROFILE_ENV='loaded'
+${replaceHooks ? "precmd_functions=()\npreexec_functions=()\n" : ""}`,
+      );
+      const session = trackSession(
+        await createTerminal({
+          workspaceId: "ws-zsh-hooks",
+          cwd: home,
+          shell: "/bin/zsh",
+          env: { HOME: home, ZDOTDIR: home, PASEO_MANAGED_ENV: "preserved" },
+        }),
+      );
+      const completions: Array<number | null> = [];
+      session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
+      let promptCount = 0;
+      const waitForPrompt = async (code: number) => {
+        await waitForState(session, (state) => {
+          let count = 0;
+          for (const row of [...state.scrollback, ...state.grid]) {
+            if (rowToText(row).startsWith("ZSH_PROMPT:")) count++;
+          }
+          if (count <= promptCount || getRowText(state, state.cursor.row) !== `ZSH_PROMPT:${code}>`)
+            return false;
+          promptCount = count;
+          return true;
+        });
+      };
+      await waitForPrompt(0);
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync('marker-0.json', JSON.stringify({cwd:process.cwd(),env:process.env.PASEO_MANAGED_ENV,profile:process.env.PASEO_PROFILE_ENV,args:process.argv.slice(1)}))",
+          "literal & apostrophe' 雪",
+        ],
+        cwd,
+        completion: true,
+      });
+      await waitForPrompt(0);
+      expect(completions).toEqual([0]);
+      expect(JSON.parse(readFileSync(join(cwd, "marker-0.json"), "utf8"))).toEqual({
+        cwd: realpathSync(cwd),
+        env: "preserved",
+        profile: "loaded",
+        args: ["literal & apostrophe' 雪"],
+      });
+      const node = `'${process.execPath.replaceAll("'", "'\\''")}'`;
+      session.send({
+        type: "command",
+        command: `printf '%s' first\nprintf '%s' second\n${node} -e "require('node:fs').writeFileSync('marker-7','done');process.exit(7)" # trailing comment`,
+        completion: true,
+      });
+      await waitForPrompt(7);
+      expect(readFileSync(join(cwd, "marker-7"), "utf8")).toBe("done");
+      expect(completions).toEqual([0, 7]);
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "const fs=require('node:fs');process.stdin.once('data',data=>{fs.writeFileSync('stdin.json',JSON.stringify(data.toString().trim()));process.exit(0)});fs.writeFileSync('stdin-ready','ready')",
+        ],
+        completion: true,
+      });
+      await waitForState(session, () => existsSync(join(cwd, "stdin-ready")));
+      session.send({ type: "input", data: "foreground-input\r" });
+      await waitForPrompt(0);
+      expect(JSON.parse(readFileSync(join(cwd, "stdin.json"), "utf8"))).toBe("foreground-input");
+      expect(completions).toEqual([0, 7, 0]);
+      expect(session.getExitInfo()).toBeNull();
+      session.send({ type: "input", data: "(exit 3)\r" });
+      await waitForPrompt(3);
+      expect(completions).toEqual(replaceHooks ? [0, 7, 0] : [0, 7, 0, 3]);
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "const fs=require('node:fs');process.stdin.once('data',data=>{fs.writeFileSync('service-input.json',JSON.stringify(data.toString().trim()));process.exit(0)});fs.writeFileSync('service-ready','ready')",
+        ],
+        completion: false,
+      });
+      await waitForState(session, () => existsSync(join(cwd, "service-ready")));
+      session.send({ type: "input", data: "service-input\r" });
+      await waitForPrompt(0);
+      expect(JSON.parse(readFileSync(join(cwd, "service-input.json"), "utf8"))).toBe(
+        "service-input",
+      );
+      expect(completions).toEqual(replaceHooks ? [0, 7, 0] : [0, 7, 0, 3, 0]);
+    },
+  );
   it.each(shells)("reports real success/nonzero and reuses %s", async (shell) => {
     const home = mkdtempSync(join(tmpdir(), "managed-command-"));
     temporaryDirs.push(home);

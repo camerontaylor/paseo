@@ -395,11 +395,14 @@ export function buildTerminalCommand(
     const encoded = Buffer.from(command, "utf8").toString("base64");
     return `. ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))))\r`;
   }
-  if (!message.completion || family === "zsh") return `${command}\r`;
-  if (["bash", "sh", "dash"].includes(family)) {
+  if (!message.completion) return `${command}\r`;
+  if (["bash", "sh", "dash", "zsh"].includes(family)) {
     // Newlines keep a trailing comment from eating the status capture. A subshell restores
     // the command status without terminating the interactive parent or losing its cwd/env.
-    return `{\n${command}\n_paseo_script_status=$?; printf '\\033]633;D;%s\\007' "$_paseo_script_status"; (exit "$_paseo_script_status")\n}\r`;
+    // Managed zsh commands own completion even if user startup replaced its hook arrays.
+    // Capture status first; clear only our active marker so an intact precmd adds no second D.
+    const resetZshActive = family === "zsh" ? "_PASEO_ZSH_COMMAND_ACTIVE=0; " : "";
+    return `{\n${command}\n_paseo_script_status=$?; ${resetZshActive}printf '\\033]633;D;%s\\007' "$_paseo_script_status"; (exit "$_paseo_script_status")\n}\r`;
   }
   if (cmd) {
     // The batch reporter gets a fresh parse after the command finishes. Its first line
