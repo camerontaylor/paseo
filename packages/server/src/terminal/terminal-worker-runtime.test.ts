@@ -218,5 +218,8 @@ describe("terminal worker bundle", () => {
       packages.map(() => "node-pty"),
     );
     expect(existsSync(path.join(outDir, "shell-integration", "zsh"))).toBe(true);
+    expect(
+      existsSync(path.join(outDir, "shell-integration", "cmd", "report-command-finished.cmd")),
+    ).toBe(true);
   });
 });

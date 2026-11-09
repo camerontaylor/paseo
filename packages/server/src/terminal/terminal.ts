@@ -396,11 +396,15 @@ export function buildTerminalCommand(
     return `{\n${command}\n_paseo_script_status=$?; printf '\\033]633;D;%s\\007' "$_paseo_script_status"; (exit "$_paseo_script_status")\n}\r`;
   }
   if (cmd) {
-    // Parse the whole compound before running its foreground program, so command source
-    // never becomes the program's stdin. CALL defers ERRORLEVEL expansion until it returns.
-    const report =
-      "process.stdout.write(String.fromCharCode(27)+']633;D;'+process.argv[1]+String.fromCharCode(7));process.exit(Number(process.argv[1]))";
-    return `(\r${command}\rcall "${process.execPath}" -e "${report}" %%errorlevel%%\r)\r`;
+    // The batch reporter gets a fresh parse after the command finishes. Its first line
+    // expands ERRORLEVEL before SETLOCAL changes it and scopes Electron's Node mode.
+    // Keep the user's command outside CALL's additional expansion pass.
+    const reporter = resolveExternalProcessPath(
+      fileURLToPath(
+        new URL("./shell-integration/cmd/report-command-finished.cmd", import.meta.url),
+      ),
+    );
+    return `(\r${command}\rcall "${reporter}" "${process.execPath}"\r)\r`;
   }
   // Explicit shell profiles retain their existing completion behavior.
   return `${command}\r`;
