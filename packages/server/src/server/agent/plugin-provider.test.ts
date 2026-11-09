@@ -1401,6 +1401,89 @@ describe("PluginAgentClientRegistry", () => {
       }
     },
   );
+  test("resumes a legacy ACP persistence handle through the plugin", async () => {
+    const harness = createProviderHarness({
+      handleInput: async (input, emit) => {
+        if (input.type === "session.open")
+          emit({
+            type: "timeline.item",
+            sessionId: input.sessionId,
+            item: { type: "assistant_message", id: "legacy-answer", text: "Retained answer" },
+          });
+        return false;
+      },
+    });
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const session = await registry.clients()[harness.registration.id]!.resumeSession(
+      {
+        provider: harness.registration.id,
+        sessionId: "session_rose_legacy",
+        metadata: { provider: "acp" },
+      },
+      { cwd: "/workspace" },
+    );
+    expect(harness.inputs.find((input) => input.type === "session.open")).toMatchObject({
+      persistence: { version: 1, data: { sessionId: "session_rose_legacy" } },
+      history: "replay",
+    });
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) history.push(event);
+    expect(history).toContainEqual(
+      expect.objectContaining({
+        type: "timeline",
+        item: expect.objectContaining({ type: "assistant_message", text: "Retained answer" }),
+      }),
+    );
+    await session.close();
+    await registry.shutdown();
+  });
+
+  test.each([
+    { sessionId: "native", metadata: {} },
+    { sessionId: "plugin:invalid", metadata: { provider: "acp" } },
+    {
+      sessionId: "native",
+      metadata: { provider: "acp", pluginProviderPersistence: { invalid: true } },
+    },
+  ])(
+    "rejects malformed plugin persistence without treating it as legacy: %j",
+    async ({ sessionId, metadata }) => {
+      const harness = createProviderHarness();
+      const registry = new PluginAgentClientRegistry(createTestLogger());
+      registry.replace([harness.registration]);
+      const client = registry.clients()[harness.registration.id]!;
+      await expect(
+        client.resumeSession(
+          { provider: harness.registration.id, sessionId, metadata },
+          { cwd: "/workspace" },
+        ),
+      ).rejects.toThrow();
+      expect(harness.inputs).toEqual([]);
+      await registry.shutdown();
+    },
+  );
+
+  test("archives and unarchives legacy ACP handles using plugin persistence", async () => {
+    const harness = createProviderHarness({
+      capabilities: [...CAPABILITIES, "session.archive", "session.unarchive"],
+    });
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const client = registry.clients()[harness.registration.id]!;
+    const handle = {
+      provider: harness.registration.id,
+      sessionId: "legacy-id",
+      metadata: { provider: "acp" },
+    };
+    await client.archiveNativeSession!(handle);
+    await client.unarchiveNativeSession!(handle);
+    expect(harness.inputs).toMatchObject([
+      { type: "session.archive", persistence: { version: 1, data: { sessionId: "legacy-id" } } },
+      { type: "session.unarchive", persistence: { version: 1, data: { sessionId: "legacy-id" } } },
+    ]);
+    await registry.shutdown();
+  });
 
   test("gates persistence operations on negotiated provider capabilities", async () => {
     const harness = createProviderHarness({ capabilities: ["session.persistence"] });

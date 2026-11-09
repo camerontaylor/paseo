@@ -321,7 +321,7 @@ describe("jcodePeerTurns through an ACP connection", () => {
             { id: "medium", label: "Medium" },
             { id: "high", label: "High" },
           ],
-          settings: [],
+          settings: [{ type: "toggle", id: "auto_accept", label: "Auto-accept", value: false }],
         },
       });
 

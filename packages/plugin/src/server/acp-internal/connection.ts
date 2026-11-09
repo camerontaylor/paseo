@@ -386,6 +386,7 @@ class AcpRuntime {
   private sharedTurns = false;
   nativeSessionId = "";
   private readonly child: ChildProcessWithoutNullStreams | null;
+  private readonly transportFailure: Promise<void>;
   private emit: (event: ProviderEvent) => void;
   private readonly messages = new Map<string, string>();
   private readonly toolCalls = new Map<string, AcpToolCallSnapshot>();
@@ -399,6 +400,8 @@ class AcpRuntime {
   private readonly transformers: readonly AcpTransformer[];
   private readonly vendorTurnsAreNeverForeground: boolean;
   private configOptions: SessionConfigOption[] = [];
+  private autoAccept = false;
+  private hasToolPolicy = false;
   private modes: NewSessionResponse["modes"] = null;
   private commandWaiter: (() => void) | null = null;
   private messageSequence = 0;
@@ -540,8 +543,18 @@ class AcpRuntime {
         this.promptResponses,
       ),
     );
-    if (!child) void this.connection.closed.then(() => this.handleUnexpectedTransportClose());
+    const processClosed = child
+      ? new Promise<void>((resolve) => child.once("close", () => resolve()))
+      : null;
+    // EOF can precede the subprocess close event. Preserve its exit diagnostic and
+    // publish failure before rejected RPCs release pending steering work.
+    this.transportFailure = this.connection.closed.then(async () => {
+      await this.drainNotifications();
+      if (processClosed) await settlesWithin(processClosed, 1_000);
+      return this.handleUnexpectedTransportClose();
+    });
     child?.on("error", (error) => {
+      if (this.processFailed) return;
       this.processFailed = true;
       if (!this.closing && this.nativeSessionId) {
         this.emit({
@@ -624,15 +637,13 @@ class AcpRuntime {
       );
     }
     this.sharedTurns = connectionCapabilities.includes("session.shared_turns");
+    this.hasToolPolicy = Boolean(input.config.toolPolicy);
     await this.applyInitialConfig(input.config);
+    // The local auto_accept toggle is configurable even without vendor options.
     const sessionCapabilities = connectionCapabilities.filter(
       (capability) =>
-        (capability !== "prompt.steer" ||
-          (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true)) &&
-        (capability !== "session.configure" ||
-          this.modes !== null ||
-          this.configOptions.length > 0 ||
-          this.transformers.some((transformer) => transformer.configure !== undefined)),
+        capability !== "prompt.steer" ||
+        (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true),
     );
     this.emit({
       type: "session.opened",
@@ -1016,6 +1027,7 @@ class AcpRuntime {
     }
     const previousModes = this.modes ? structuredClone(this.modes) : null;
     const previousOptions = structuredClone(this.configOptions);
+    const previousAutoAccept = this.autoAccept;
     this.configTransaction = true;
     this.stagedTransformerConfig = null;
     let committedConfig: ProviderConfigState | null = null;
@@ -1041,6 +1053,7 @@ class AcpRuntime {
       }
       this.modes = previousModes;
       this.configOptions = previousOptions;
+      this.autoAccept = previousAutoAccept;
       this.stagedTransformerConfig = null;
       throw error;
     } finally {
@@ -1073,7 +1086,7 @@ class AcpRuntime {
     this.settlePendingWork();
     await this.closeConnector();
     const child = this.child;
-    if (!child || this.processFailed) return;
+    if (!child) return;
     if (child.exitCode !== null || child.signalCode !== null) return;
     const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
     await terminateProcess(child, "SIGTERM");
@@ -1102,6 +1115,11 @@ class AcpRuntime {
   }
 
   private async applyConfigChange(change: AcpConfigChange): Promise<void> {
+    // Paseo owns this policy; it is not an agent ACP config option.
+    if (change.target === "setting" && change.id === "auto_accept") {
+      this.autoAccept = !this.hasToolPolicy && change.value === true;
+      return;
+    }
     const access = this.configAccess();
     for (const transformer of this.transformers) {
       if (
@@ -1176,6 +1194,13 @@ class AcpRuntime {
   }
 
   private emitConfigSnapshot(config: ProviderConfigState): void {
+    config = {
+      ...config,
+      settings: [
+        ...config.settings.filter((setting) => setting.id !== "auto_accept"),
+        { type: "toggle", id: "auto_accept", label: "Auto-accept", value: this.autoAccept },
+      ],
+    };
     this.emit({
       type: "session.config",
       sessionId: this.options.boundarySessionId,
@@ -1210,6 +1235,10 @@ class AcpRuntime {
   }
 
   private requestPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    const allows = request.options.filter((option) => option.kind === "allow_once");
+    if (this.autoAccept && allows.length === 1) {
+      return Promise.resolve({ outcome: { outcome: "selected", optionId: allows[0]!.optionId } });
+    }
     const permissionId = `permission:${request.toolCall.toolCallId}`;
     return new Promise((resolve) => {
       this.permissions.set(permissionId, { request, resolve });
@@ -1651,15 +1680,13 @@ class AcpRuntime {
   }
 
   private call<Value>(operation: Promise<Value>): Promise<Value> {
-    if (this.connection.signal.aborted) {
-      return Promise.reject(new Error("ACP transport is closed"));
-    }
-    return Promise.race([
-      operation,
-      this.connection.closed.then(() => {
-        throw new Error("ACP transport closed unexpectedly");
-      }),
-    ]);
+    const closed = this.transportFailure.then(() => {
+      throw new Error("ACP transport closed unexpectedly");
+    });
+    return Promise.race([operation, closed]).catch(async (error) => {
+      if (this.connection.signal.aborted) await this.transportFailure;
+      throw error;
+    });
   }
 
   private enqueueNotification(operation: () => void): Promise<void> {
