@@ -384,14 +384,14 @@ export function buildTerminalCommand(
   if (["bash", "sh", "dash"].includes(family)) {
     // Newlines keep a trailing comment from eating the status capture. A subshell restores
     // the command status without terminating the interactive parent or losing its cwd/env.
-    return `{\n${command}\n}\n_paseo_script_status=$?; printf '\\033]633;D;%s\\007' "$_paseo_script_status"; (exit "$_paseo_script_status")\r`;
+    return `{\n${command}\n_paseo_script_status=$?; printf '\\033]633;D;%s\\007' "$_paseo_script_status"; (exit "$_paseo_script_status")\n}\r`;
   }
   if (cmd) {
-    // Each line is parsed after the preceding command finishes, so ERRORLEVEL is not
-    // expanded before the managed command runs. Do not exit the interactive parent.
+    // Parse the whole compound before running its foreground program, so command source
+    // never becomes the program's stdin. CALL defers ERRORLEVEL expansion until it returns.
     const report =
       "process.stdout.write(String.fromCharCode(27)+']633;D;'+process.argv[1]+String.fromCharCode(7));process.exit(Number(process.argv[1]))";
-    return `${command}\rset "_paseo_script_status=%errorlevel%"\r"${process.execPath}" -e "${report}" %_paseo_script_status%\r`;
+    return `(\r${command}\rcall "${process.execPath}" -e "${report}" %%errorlevel%%\r)\r`;
   }
   // Explicit shell profiles retain their existing completion behavior.
   return `${command}\r`;

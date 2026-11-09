@@ -1985,9 +1985,18 @@ describe("managed command dispatch", () => {
     await expect.poll(() => completions).toEqual([0, 7, 0]);
     expect(readFileSync(join(cwd, "still-alive"), "utf8")).toBe("yes");
   });
-  it.each(shells.filter((shell) => !shell.endsWith("zsh")))(
-    "leaves foreground service stdin and completion unchanged in %s",
-    async (shell) => {
+  const inputCases = shells
+    .filter((shell) => !shell.endsWith("zsh"))
+    .flatMap(
+      (shell) =>
+        [
+          [shell, false],
+          [shell, true],
+        ] as const,
+    );
+  it.each(inputCases)(
+    "preserves foreground stdin in %s with completion=%s",
+    async (shell, completion) => {
       const cwd = mkdtempSync(join(tmpdir(), "managed-service-"));
       temporaryDirs.push(cwd);
       const session = trackSession(await createTerminal({ cwd, workspaceId: "ws-service", shell }));
@@ -2005,13 +2014,14 @@ describe("managed command dispatch", () => {
           "-e",
           "console.log('SERVICE_READY');process.stdin.once('data', data => {require('node:fs').writeFileSync('stdin.txt',data);process.exit(0)})",
         ],
-        completion: false,
+        completion,
       });
       await expect.poll(() => output.join("").includes("SERVICE_READY\r\n")).toBe(true);
       session.send({ type: "input", data: "foreground-input\r" });
       await expect.poll(() => existsSync(join(cwd, "stdin.txt"))).toBe(true);
       expect(readFileSync(join(cwd, "stdin.txt"), "utf8")).toContain("foreground-input");
-      expect(codes).toEqual([]);
+      if (completion) await expect.poll(() => codes).toEqual([0]);
+      else expect(codes).toEqual([]);
     },
   );
 });
