@@ -1,3 +1,4 @@
+import * as native from "@getpaseo/expo-two-way-audio";
 import type {
   AudioEngine,
   AudioEngineCallbacks,
@@ -15,8 +16,6 @@ export function createAudioEngine(
   callbacks: AudioEngineCallbacks,
   options?: AudioEngineOptions,
 ): AudioEngine {
-  const native = require("@getpaseo/expo-two-way-audio");
-
   const refs: {
     initialized: boolean;
     captureActive: boolean;

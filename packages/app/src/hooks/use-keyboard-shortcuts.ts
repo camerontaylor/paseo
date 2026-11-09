@@ -30,6 +30,7 @@ import { useOpenAddProject } from "@/hooks/use-open-add-project";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { useKeyboardShortcutOverrides } from "@/hooks/use-keyboard-shortcut-overrides";
 import { isNative } from "@/constants/platform";
+import { goHistory } from "@/navigation/history/replay";
 import { keyboardShortcutsAvailable } from "@/keyboard/availability";
 import { getDesktopHost, isElectronRuntime } from "@/desktop/host";
 import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
@@ -186,6 +187,8 @@ export function useKeyboardShortcuts({
       case "router-back":
         router.back();
         return true;
+      case "history-go":
+        return goHistory(action.delta);
       case "router-push":
         router.push(action.route as Parameters<typeof router.push>[0]);
         return true;
