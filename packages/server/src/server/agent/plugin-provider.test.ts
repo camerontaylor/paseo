@@ -2270,9 +2270,13 @@ test("plugin provider import launches with runtime MCP servers and returns only 
   }
 });
 
-function acpVendorTurnHarness() {
-  const instances: Array<{ notify(method: string, params: unknown): void }> = [];
+function acpVendorTurnHarness(options: { holdPrompts?: boolean } = {}) {
+  const instances: Array<{
+    notify(method: string, params: unknown): void;
+    promptResponses: Array<(result: unknown) => void>;
+  }> = [];
   const connector = () => {
+    const promptResponses: Array<(result: unknown) => void> = [];
     let controller!: ReadableStreamDefaultController<AcpStreamMessage>;
     const readable = new ReadableStream<AcpStreamMessage>({
       start(value) {
@@ -2294,11 +2298,13 @@ function acpVendorTurnHarness() {
         } else if (message.method === "session/close") {
           respond({});
         } else if (message.method === "session/prompt") {
-          respond({ stopReason: "end_turn" });
+          promptResponses.push(respond);
+          if (!options.holdPrompts) respond({ stopReason: "end_turn" });
         }
       },
     });
     instances.push({
+      promptResponses,
       notify(method, params) {
         controller.enqueue({ jsonrpc: "2.0", method, params } as AcpStreamMessage);
       },
@@ -2356,6 +2362,179 @@ test("a vendor turn with no foreground turn becomes an autonomous run", async ()
     expect(manager.getAgent(agent.id)?.activeTurnId).toBeNull();
   } finally {
     trackAutonomousRun.mockRestore();
+    await manager.closeAgent(agent.id);
+    await registry.shutdown();
+  }
+});
+
+test.each(["rollover", "same-peer"])(
+  "pending accepted ACP steer keeps finish waiters active through %s settlement",
+  async (schedule) => {
+    const logger = createTestLogger();
+    const harness = acpVendorTurnHarness({ holdPrompts: true });
+    const registration = runAcpProvider({
+      id: "acp-pending-steer",
+      label: "ACP pending steer",
+      connector: harness.connector,
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [
+        {
+          initialize: () => ({ steering: true }),
+          attach: () => ({ steering: true }),
+          notification(notification) {
+            if (notification.method !== "vendor/turn") return null;
+            const params = notification.params as {
+              turnId: string;
+              state: "started" | "completed";
+            };
+            return { type: "turn" as const, ...params };
+          },
+        },
+      ],
+    });
+    const registry = new PluginAgentClientRegistry(logger);
+    registry.replace([registration]);
+    const manager = new AgentManager({
+      logger,
+      clients: registry.clients(),
+      providerDefinitions: registry.definitions(),
+    });
+    const agent = await manager.createAgent(
+      { provider: registration.id, cwd: tmpdir() },
+      undefined,
+      { workspaceId: undefined },
+    );
+    const states: string[] = [];
+    const turns: AgentStreamEvent[] = [];
+    const unsubscribe = manager.subscribe(
+      (event) => {
+        if (event.type === "agent_state") states.push(event.agent.lifecycle);
+        if (event.type === "agent_stream" && event.event.type.startsWith("turn_"))
+          turns.push(event.event);
+        if (event.type === "agent_stream") expect(event.event.type).not.toBe("pending_work");
+      },
+      { agentId: agent.id, replayState: false },
+    );
+    try {
+      const live = harness.instances.at(-1)!;
+      live.notify("vendor/turn", { turnId: "peer", state: "started" });
+      await vi.waitFor(() => expect(manager.getAgent(agent.id)?.lifecycle).toBe("running"));
+      expect(
+        await manager.steerAgentRun(agent.id, "late steer", { clientMessageId: "late" }),
+      ).toEqual({ status: "accepted" });
+      const activeCatchUp: AgentStreamEvent[] = [];
+      const stopCatchUp = agent.session!.subscribe((event) => activeCatchUp.push(event));
+      expect(activeCatchUp).toEqual([
+        { type: "pending_work", provider: registration.id, pending: true },
+        { type: "turn_started", provider: registration.id, turnId: "acp-vendor:peer" },
+      ]);
+      stopCatchUp();
+      let finished = false;
+      const finish = manager.waitForAgentEvent(agent.id, { waitForActive: true }).then((result) => {
+        finished = true;
+        return result;
+      });
+      if (schedule === "rollover") {
+        live.notify("vendor/turn", { turnId: "peer", state: "completed" });
+        await vi.waitFor(() => expect(manager.getAgent(agent.id)?.activeTurnId).toBeNull());
+        expect(manager.getAgent(agent.id)?.lifecycle).toBe("running");
+        expect(finished).toBe(false);
+        expect(turns.map((event) => event.type)).toEqual(["turn_started", "turn_completed"]);
+        const caughtUp: AgentStreamEvent[] = [];
+        const stop = agent.session!.subscribe((event) => caughtUp.push(event));
+        expect(caughtUp).toEqual([
+          { type: "pending_work", provider: registration.id, pending: true },
+        ]);
+        stop();
+        live.notify("session/update", {
+          sessionId: "vendor-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "late output" },
+          },
+        });
+        await vi.waitFor(() => expect(manager.getAgent(agent.id)?.activeTurnId).toBe("acp:late"));
+        expect(finished).toBe(false);
+        live.promptResponses[0]({ stopReason: "end_turn" });
+      } else {
+        live.promptResponses[0]({ stopReason: "end_turn" });
+        await vi.waitFor(() => expect(manager.getAgent(agent.id)?.pendingProviderWork).toBe(false));
+        expect(manager.getAgent(agent.id)?.activeTurnId).toBe("acp-vendor:peer");
+        expect(manager.getAgent(agent.id)?.lifecycle).toBe("running");
+        expect(finished).toBe(false);
+        const caughtUp: AgentStreamEvent[] = [];
+        const stop = agent.session!.subscribe((event) => caughtUp.push(event));
+        expect(caughtUp).toEqual([
+          { type: "turn_started", provider: registration.id, turnId: "acp-vendor:peer" },
+        ]);
+        stop();
+        live.notify("vendor/turn", { turnId: "peer", state: "completed" });
+      }
+      expect((await finish).status).toBe("idle");
+      expect(manager.getAgent(agent.id)?.lifecycle).toBe("idle");
+      expect(states.slice(0, -1)).not.toContain("idle");
+      expect(
+        turns.map((event) => ({
+          type: event.type,
+          turnId: "turnId" in event ? event.turnId : undefined,
+        })),
+      ).toEqual([
+        { type: "turn_started", turnId: "acp-vendor:peer" },
+        { type: "turn_completed", turnId: "acp-vendor:peer" },
+        ...(schedule === "rollover"
+          ? [
+              { type: "turn_started", turnId: "acp:late" },
+              { type: "turn_completed", turnId: "acp:late" },
+            ]
+          : []),
+      ]);
+    } finally {
+      unsubscribe();
+      await manager.closeAgent(agent.id);
+      await registry.shutdown();
+    }
+  },
+);
+
+test("runtime failure clears pending plugin work without an idle success gap", async () => {
+  const logger = createTestLogger();
+  const harness = createProviderHarness();
+  const registry = new PluginAgentClientRegistry(logger);
+  registry.replace([harness.registration]);
+  const manager = new AgentManager({
+    logger,
+    clients: registry.clients(),
+    providerDefinitions: registry.definitions(),
+  });
+  const agent = await manager.createAgent(
+    { provider: harness.registration.id, cwd: tmpdir() },
+    undefined,
+    { workspaceId: undefined },
+  );
+  const opened = harness.inputs.find((input) => input.type === "session.open")!;
+  if (opened.type !== "session.open") throw new Error("Missing plugin session");
+  try {
+    harness.emit({ type: "session.pending_work", sessionId: opened.sessionId, pending: true });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id)?.lifecycle).toBe("running"));
+    const states: string[] = [];
+    const stop = manager.subscribe(
+      (event) => {
+        if (event.type === "agent_state") states.push(event.agent.lifecycle);
+      },
+      { agentId: agent.id, replayState: false },
+    );
+    const finish = manager.waitForAgentEvent(agent.id, { waitForActive: true });
+    harness.emit({
+      type: "session.runtime_failed",
+      sessionId: opened.sessionId,
+      error: { message: "transport gone" },
+    });
+    expect((await finish).status).toBe("error");
+    expect(manager.getAgent(agent.id)?.pendingProviderWork).toBe(false);
+    expect(states).not.toContain("idle");
+    expect(manager.getAgent(agent.id)?.lastError).toBe("transport gone");
+    stop();
+  } finally {
     await manager.closeAgent(agent.id);
     await registry.shutdown();
   }

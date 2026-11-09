@@ -2005,6 +2005,139 @@ describe("ACP transformer turn lifecycle", () => {
     }
   });
 
+  it("keeps accepted work pending across a peer terminal before rollover output", async () => {
+    const { connection, events, agent } = await connectVendorTurns({
+      capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [
+        { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+      ],
+      harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+    });
+    try {
+      agent().notify("vendor/turn", { turnId: "peer", state: "started" });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "started",
+      );
+      await connection.send({
+        ...promptInput("late-steer"),
+        prompt: { ...promptInput("late-steer").prompt, delivery: "steer" },
+      });
+      await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+      agent().notify("vendor/turn", { turnId: "peer", state: "completed" });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.turn" && event.state === "completed",
+      );
+      expect(events.filter((event) => event.type === "session.pending_work")).toEqual([
+        { type: "session.pending_work", sessionId: "session-1", pending: true },
+      ]);
+      expect(events.filter((event) => event.type === "session.turn")).toEqual([
+        {
+          type: "session.turn",
+          sessionId: "session-1",
+          turnId: "acp-vendor:peer",
+          state: "started",
+        },
+        {
+          type: "session.turn",
+          sessionId: "session-1",
+          turnId: "acp-vendor:peer",
+          state: "completed",
+        },
+      ]);
+      agent().notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("late output"),
+      });
+      agent().respond(agent().requests.find((request) => request.method === "session/prompt")!, {
+        stopReason: "end_turn",
+      });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.pending_work" && event.pending === false,
+      );
+      expect(
+        events
+          .filter((event) => event.type === "session.turn")
+          .map((event) => ({ turnId: event.turnId, state: event.state })),
+      ).toEqual([
+        { turnId: "acp-vendor:peer", state: "started" },
+        { turnId: "acp-vendor:peer", state: "completed" },
+        { turnId: "acp:late-steer", state: "started" },
+        { turnId: "acp:late-steer", state: "completed" },
+      ]);
+      expect(
+        events.findIndex((event) => event.type === "session.pending_work" && !event.pending),
+      ).toBeGreaterThan(
+        events.findIndex(
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:late-steer" &&
+            event.state === "completed",
+        ),
+      );
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it.each(["rejected", "connection-closed", "transport-closed"])(
+    "clears accepted pending work once after %s without inventing a turn",
+    async (ending) => {
+      const { connection, events, agent } = await connectVendorTurns({
+        capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
+        acpOptions: { vendorTurnsAreNeverForeground: true },
+        transformers: [
+          { initialize: () => ({ steering: true }), attach: () => ({ steering: true }) },
+        ],
+        harness: { handleRequest: (_instance, request) => request.method === "session/prompt" },
+      });
+      try {
+        agent().notify("vendor/turn", { turnId: "peer", state: "started" });
+        await waitForEvent(
+          events,
+          (event) => event.type === "session.turn" && event.state === "started",
+        );
+        await connection.send({
+          ...promptInput("late"),
+          prompt: { ...promptInput("late").prompt, delivery: "steer" },
+        });
+        await expect.poll(() => countRequests(agent(), "session/prompt")).toBe(1);
+        agent().notify("vendor/turn", { turnId: "peer", state: "completed" });
+        await waitForEvent(
+          events,
+          (event) => event.type === "session.turn" && event.state === "completed",
+        );
+        if (ending === "rejected")
+          agent().reject(
+            agent().requests.find((request) => request.method === "session/prompt")!,
+            "late admission failed",
+          );
+        else if (ending === "transport-closed") agent().closeFromAgent();
+        else await connection.close();
+        await waitForEvent(
+          events,
+          (event) => event.type === "session.pending_work" && event.pending === false,
+        );
+        expect(
+          events
+            .filter((event) => event.type === "session.pending_work")
+            .map((event) => event.pending),
+        ).toEqual([true, false]);
+        expect(events.filter((event) => event.type === "session.turn")).toHaveLength(2);
+        if (ending === "transport-closed") {
+          expect(events.findIndex((event) => event.type === "session.runtime_failed")).toBeLessThan(
+            events.findIndex((event) => event.type === "session.pending_work" && !event.pending),
+          );
+        }
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
   it.each(["origin-first", "steer-first"])(
     "settles two steers without phantom turns (%s)",
     async (order) => {

@@ -608,6 +608,7 @@ class ProviderRuntimeSession {
     Deferred<Extract<ProviderEvent, { type: "session.prompt_result" }>>
   >();
   private readonly activeTurnIds = new Set<string>();
+  private pendingWork = false;
   private terminal = false;
   private closePromise: Promise<void> | null = null;
   config: ProviderConfigState = { models: [], modes: [], thinkingOptions: [], settings: [] };
@@ -669,6 +670,7 @@ class ProviderRuntimeSession {
     if (
       this.terminal ||
       this.prompts.size ||
+      this.pendingWork ||
       this.activeTurnIds.size ||
       !this.capabilities.includes("session.can_stop_runtime")
     )
@@ -808,7 +810,7 @@ class ProviderRuntimeSession {
   connectionClosed(error = new Error("Provider connection closed")): void {
     // Closing fails only an interrupted turn. An idle session goes stale, and its next prompt
     // reopens it from persistence.
-    if (!this.terminal && this.activeTurnIds.size > 0) {
+    if (!this.terminal && (this.activeTurnIds.size > 0 || this.pendingWork)) {
       this.publish({
         type: "session.runtime_failed",
         sessionId: this.id,
@@ -839,6 +841,7 @@ class ProviderRuntimeSession {
   }
 
   private publish(event: ProviderEvent): void {
+    if (event.type === "session.pending_work") this.pendingWork = event.pending;
     if (event.type === "session.turn") {
       if (event.state === "started") this.activeTurnIds.add(event.turnId);
       else this.activeTurnIds.delete(event.turnId);
@@ -1210,6 +1213,7 @@ class PluginAgentSession implements AgentSession {
   private readonly childSnapshots = new Map<string, Map<string, TimelineTextSnapshot>>();
   private unsubscribe: (() => void) | null = null;
   private currentTurnId: string | null = null;
+  private pendingWork = false;
   private closed = false;
   private replay: {
     persistence: ProviderPersistence;
@@ -1336,6 +1340,8 @@ class PluginAgentSession implements AgentSession {
     this.listeners.add(callback);
     // An attachment can announce a peer turn before the manager subscribes.
     // Catch up this subscriber without replaying completed turns or notifying existing listeners.
+    if (this.pendingWork)
+      callback({ type: "pending_work", provider: this.provider, pending: true });
     if (this.currentTurnId) {
       callback({ type: "turn_started", provider: this.provider, turnId: this.currentTurnId });
     }
@@ -1511,13 +1517,17 @@ class PluginAgentSession implements AgentSession {
   private accept(event: ProviderEvent, live: boolean): void {
     const translated = this.translate(event);
     for (const next of translated) {
-      this.history.push(next);
+      if (next.type !== "pending_work") this.history.push(next);
       if (live) this.emit(next);
     }
   }
 
   private translate(event: ProviderEvent): AgentStreamEvent[] {
     switch (event.type) {
+      case "session.pending_work":
+        if (this.pendingWork === event.pending) return [];
+        this.pendingWork = event.pending;
+        return [{ type: "pending_work", provider: this.provider, pending: event.pending }];
       case "session.turn":
         return [this.translateTurn(event)];
       case "session.usage":
@@ -1540,12 +1550,21 @@ class PluginAgentSession implements AgentSession {
       case "session.notice":
         return this.translateNotice(event);
       case "session.runtime_failed":
-        return [this.translateFailure(event.error)];
+        return [this.translateFailure(event.error), ...this.clearPendingWork()];
       case "session.closed":
-        return event.error ? [this.translateFailure(event.error)] : [];
+        return [
+          ...(event.error ? [this.translateFailure(event.error)] : []),
+          ...this.clearPendingWork(),
+        ];
       default:
         return [];
     }
+  }
+
+  private clearPendingWork(): AgentStreamEvent[] {
+    if (!this.pendingWork) return [];
+    this.pendingWork = false;
+    return [{ type: "pending_work", provider: this.provider, pending: false }];
   }
 
   private translateTurn(event: Extract<ProviderEvent, { type: "session.turn" }>): AgentStreamEvent {
@@ -1739,6 +1758,7 @@ class PluginAgentSession implements AgentSession {
     this.pendingPermissions.clear();
     this.permissionResponses.clear();
     this.currentTurnId = null;
+    this.pendingWork = false;
     const failure = [bridgeClose, ...childCloses].find((result) => result.status === "rejected");
     if (failure?.status === "rejected") throw failure.reason;
   }
