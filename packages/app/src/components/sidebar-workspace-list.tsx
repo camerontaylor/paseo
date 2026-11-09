@@ -975,23 +975,6 @@ function ProjectHeaderRow({
           </Text>
         </View>
       </View>
-      <ProjectRowTrailingActions
-        canBrowsePullRequests={project.hosts.some(
-          (host) =>
-            host.serverId === worktreeTarget?.serverId && host.worktreeSupport !== "unsupported",
-        )}
-        projectViewKey={project.viewKey}
-        displayName={displayName}
-        worktreeTarget={worktreeTarget}
-        settingsTarget={settingsTarget}
-        projectPath={projectPath}
-        isHovered={isHovered}
-        isMobileBreakpoint={isMobileBreakpoint}
-        isProjectActive={isProjectActive}
-        onBeginWorkspaceSetup={handleBeginWorkspaceSetup}
-        onRemoveProject={onRemoveProject}
-        removeProjectStatus={removeProjectStatus}
-      />
       {showShortcutBadge && shortcutNumber !== null ? (
         <View style={styles.projectShortcutBadgeOverlay} pointerEvents="none">
           <SidebarWorkspaceShortcutBadge number={shortcutNumber} />
@@ -1008,10 +991,11 @@ function ProjectHeaderRow({
         ref={dragHandleProps?.setActivatorNodeRef as unknown as Ref<View>}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
+        style={projectRowStyle({ pressed: isPressed })}
       >
         <PressHighlight
           accessibilityRole="button"
-          style={projectRowStyle}
+          style={styles.projectRowPressTarget}
           highlightStyle={styles.projectRowPressed}
           onPressIn={handleProjectPressIn}
           onTouchMove={interaction.handleTouchMove}
@@ -1021,6 +1005,23 @@ function ProjectHeaderRow({
         >
           {rowChildren}
         </PressHighlight>
+        <ProjectRowTrailingActions
+          canBrowsePullRequests={project.hosts.some(
+            (host) =>
+              host.serverId === worktreeTarget?.serverId && host.worktreeSupport !== "unsupported",
+          )}
+          projectViewKey={project.viewKey}
+          displayName={displayName}
+          worktreeTarget={worktreeTarget}
+          settingsTarget={settingsTarget}
+          projectPath={projectPath}
+          isHovered={isHovered}
+          isMobileBreakpoint={isMobileBreakpoint}
+          isProjectActive={isProjectActive}
+          onBeginWorkspaceSetup={handleBeginWorkspaceSetup}
+          onRemoveProject={onRemoveProject}
+          removeProjectStatus={removeProjectStatus}
+        />
       </View>
     );
   }
@@ -1033,11 +1034,12 @@ function ProjectHeaderRow({
         ref={dragHandleProps?.setActivatorNodeRef as unknown as Ref<View>}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
+        style={projectRowStyle({ pressed: isPressed })}
       >
         <ContextMenuTrigger
           enabledOnMobile={false}
           accessibilityRole="button"
-          style={projectRowStyle}
+          style={styles.projectRowPressTarget}
           highlightStyle={styles.projectRowPressed}
           onPressIn={handleProjectPressIn}
           onTouchMove={interaction.handleTouchMove}
@@ -1047,6 +1049,23 @@ function ProjectHeaderRow({
         >
           {rowChildren}
         </ContextMenuTrigger>
+        <ProjectRowTrailingActions
+          canBrowsePullRequests={project.hosts.some(
+            (host) =>
+              host.serverId === worktreeTarget?.serverId && host.worktreeSupport !== "unsupported",
+          )}
+          projectViewKey={project.viewKey}
+          displayName={displayName}
+          worktreeTarget={worktreeTarget}
+          settingsTarget={settingsTarget}
+          projectPath={projectPath}
+          isHovered={isHovered}
+          isMobileBreakpoint={isMobileBreakpoint}
+          isProjectActive={isProjectActive}
+          onBeginWorkspaceSetup={handleBeginWorkspaceSetup}
+          onRemoveProject={onRemoveProject}
+          removeProjectStatus={removeProjectStatus}
+        />
       </View>
       <ContextMenuContent
         align="start"
@@ -2693,6 +2712,15 @@ const styles = StyleSheet.create((theme) => ({
     transform: [{ scale: 1.02 }],
     zIndex: 3,
     ...theme.shadow.md,
+  },
+  projectRowPressTarget: {
+    // Cover the row's vertical padding while trailing actions remain sibling targets.
+    marginVertical: -theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+    flex: 1,
+    minWidth: 0,
+    alignSelf: "stretch",
+    justifyContent: "center",
   },
   projectRowLeft: {
     flexDirection: "row",

@@ -27,7 +27,8 @@ test("lists built-in and subprocess usage; validates input and isolates fetch er
     await client.connect();
     const updates: string[] = [];
     const first = await client.listUsageReports({}, (report) => updates.push(report.id));
-    expect(updates).toEqual(first.reports.map((report) => report.id));
+    // Fetches stream in completion order; the final array retains discovery order.
+    expect([...updates].sort()).toEqual(first.reports.map((report) => report.id).sort());
     await expect(client.listUsageReports({ agentId: "missing-agent" })).rejects.toThrow(
       "Unknown agent",
     );

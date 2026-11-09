@@ -25,28 +25,32 @@ function pinnedPrompt(page: Page) {
   return page.getByTestId("pinned-prompt");
 }
 
+/** The outgoing pin remains mounted during its exit animation. */
+async function expectSettledPin(page: Page, prompt: string): Promise<void> {
+  await expect(pinnedPrompt(page).filter({ hasText: prompt })).toHaveCount(1);
+  await expect(pinnedPrompt(page)).toHaveCount(1);
+  await expect(pinnedPrompt(page)).toContainText(prompt);
+}
+
 /** Scrolls down until the prompt's own bubble has left the top of the transcript. */
 async function scrollPromptAboveFold(page: Page, prompt: string): Promise<void> {
   await scrollTimelinePromptIntoView(page, prompt);
   const promptRow = timeline(page).getByTestId("user-message").filter({ hasText: prompt });
+  const [timelineBox, promptBox] = await Promise.all([
+    timeline(page).boundingBox(),
+    promptRow.boundingBox(),
+  ]);
+  if (!timelineBox || !promptBox) throw new Error(`Expected a rendered prompt for ${prompt}`);
+  // Move just beyond this bubble, keeping the reading line inside its own assistant turn.
+  const distance = promptBox.y + promptBox.height - timelineBox.y + 2;
+  await timeline(page).evaluate((element, delta) => {
+    if (element instanceof HTMLElement) element.scrollTop += delta;
+  }, distance);
   await expect
-    .poll(
-      async () => {
-        const [timelineBox, promptBox] = await Promise.all([
-          timeline(page).boundingBox(),
-          promptRow.boundingBox().catch(() => null),
-        ]);
-        if (!timelineBox) return false;
-        // Once the row unmounts it is definitively above the fold.
-        if (!promptBox) return true;
-        if (promptBox.y + promptBox.height < timelineBox.y) return true;
-        await timeline(page).evaluate((element) => {
-          if (element instanceof HTMLElement) element.scrollTop += 160;
-        });
-        return false;
-      },
-      { timeout: 15_000 },
-    )
+    .poll(async () => {
+      const box = await promptRow.boundingBox();
+      return box === null || box.y + box.height < timelineBox.y;
+    })
     .toBe(true);
 }
 
@@ -99,20 +103,21 @@ test.describe("pinned current prompt", () => {
   }) => {
     await scrollPromptAboveFold(page, agent.prompts[8]!);
 
-    await expect(pinnedPrompt(page)).toContainText(agent.prompts[8]!);
+    await expectSettledPin(page, agent.prompts[8]!);
   });
 
   test("swaps the pin when the reader crosses into the next turn", async ({ page }) => {
     await scrollPromptAboveFold(page, agent.prompts[6]!);
-    await expect(pinnedPrompt(page)).toContainText(agent.prompts[6]!);
+    await expectSettledPin(page, agent.prompts[6]!);
 
     await scrollPromptAboveFold(page, agent.prompts[7]!);
 
-    await expect(pinnedPrompt(page)).toContainText(agent.prompts[7]!);
+    await expectSettledPin(page, agent.prompts[7]!);
   });
 
   test("scrolls the real message back under the pin when clicked", async ({ page }) => {
     await scrollPromptAboveFold(page, agent.prompts[8]!);
+    await expectSettledPin(page, agent.prompts[8]!);
     await pinnedPrompt(page).click();
 
     await expectTimelinePromptLandedBelowTop(page, agent.prompts[8]!);
@@ -122,7 +127,7 @@ test.describe("pinned current prompt", () => {
 
   test("hides the pin on a compact viewport", async ({ page }) => {
     await scrollPromptAboveFold(page, agent.prompts[8]!);
-    await expect(pinnedPrompt(page)).toContainText(agent.prompts[8]!);
+    await expectSettledPin(page, agent.prompts[8]!);
 
     await page.setViewportSize(COMPACT_VIEWPORT);
 

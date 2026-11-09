@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { TFunction } from "i18next";
-import { ListFilter, MessageSquare, SquarePen } from "lucide-react-native";
+import { SquarePen } from "lucide-react-native";
 import React, {
   memo,
   type ReactNode,
@@ -33,7 +33,7 @@ import {
   useRetainedPanelActive,
 } from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
-import { SegmentedControl } from "@/components/ui/segmented-control";
+import { AgentViewSwitcher } from "@/components/agent-view-switcher";
 import { Composer } from "@/composer";
 import { AgentCommandsProvider } from "@/agent-commands";
 import {
@@ -1110,7 +1110,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   onAttentionPromptSend: () => void;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
-  const { t } = useTranslation();
   // The workspace sheet is for looking; Open as tab brings the agent back with its composer.
   const showsComposer = usePaneContext().host !== "sheet";
   // The dock lays out fullscreen for the same session the composer edits in.
@@ -1138,7 +1137,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   // Gate companion controls and mutations once. Supplied file snapshots remain
   // readable on older hosts without reconstructing a companion stream.
   const companionStreamSupported = useHostFeature(serverId, "companionStreamPortV1");
-  const isCompact = useIsCompactFormFactor();
   const subagentRows = useSubagentsForParent({ serverId, parentAgentId: agentId });
   const tasks = useSessionStore((state): TodoEntry[] | undefined =>
     state.sessions[serverId]?.agentTasks.get(agentId),
@@ -1266,40 +1264,9 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     </RetainedPanel>
   );
 
-  const viewOptions = useMemo(
-    () => [
-      {
-        value: "chat" as const,
-        label: t("agentPanel.artifacts.chatTab"),
-        icon: ({ color, size }: { color: string; size: number }) => (
-          <MessageSquare color={color} size={size} />
-        ),
-        testID: "agent-view-chat",
-      },
-      {
-        value: "artifacts" as const,
-        label: t("agentPanel.stream.tab"),
-        icon: ({ color, size }: { color: string; size: number }) => (
-          <ListFilter color={color} size={size} />
-        ),
-        testID: "agent-view-artifacts",
-      },
-    ],
-    [t],
-  );
-
   const dockContent = (
     <View style={styles.contentContainer}>
-      <SegmentedControl
-        options={viewOptions}
-        value={selectedView}
-        onValueChange={handleSetSelectedView}
-        size={isCompact ? "md" : "sm"}
-        textWrap={isCompact}
-        testID="agent-view-switcher"
-        style={styles.viewSwitcher}
-        segmentStyle={isCompact ? styles.compactSegment : undefined}
-      />
+      <AgentViewSwitcher value={selectedView} onValueChange={handleSetSelectedView} />
       {streamContent}
       {!isChatVisible ? (
         <CompanionFeed
@@ -1336,7 +1303,13 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
 
   const composerSlot = (
     <RetainedPanelActivity active={isChatVisible}>
-      <View collapsable={false} style={!isChatVisible ? styles.hiddenPane : undefined}>
+      <View
+        collapsable={false}
+        style={[
+          isComposerFullscreen && styles.fullscreenComposer,
+          !isChatVisible && styles.hiddenPane,
+        ]}
+      >
         {composerSection}
       </View>
     </RetainedPanelActivity>
@@ -1846,18 +1819,7 @@ const styles = StyleSheet.create((theme) => ({
     overflow: "hidden",
     ...(isWeb ? { userSelect: "none" as const } : {}),
   },
-  viewSwitcher: {
-    minHeight: 40,
-    flexShrink: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: theme.spacing[3],
-    paddingVertical: theme.spacing[2],
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-  },
-  compactSegment: { minHeight: 44 },
+  fullscreenComposer: { flex: 1, minHeight: 0 },
   hiddenPane: { display: "none" },
   timelineSyncCalloutRail: {
     width: "100%",

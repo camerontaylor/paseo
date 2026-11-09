@@ -1808,8 +1808,9 @@ export class Session {
 
   private hasSideConversationDemand(): boolean {
     return this.clientSources.size > 0
-      ? [...this.clientSources.values()].some(({ capabilities }) =>
-          capabilities.has(CLIENT_CAPS.sideConversations),
+      ? [...this.clientSources.entries()].some(
+          ([source, { capabilities }]) =>
+            !this.delivery.isModern(source) && capabilities.has(CLIENT_CAPS.sideConversations),
         )
       : this.sideConversationDemandWithoutSource;
   }
@@ -2242,13 +2243,14 @@ export class Session {
     );
   }
 
-  private handleAgentRemovedEvent(event: Extract<AgentManagerEvent, { type: "agent_removed" }>): void {
+  private handleAgentRemovedEvent(
+    event: Extract<AgentManagerEvent, { type: "agent_removed" }>,
+  ): void {
     if (event.internal) return;
     void this.agentUpdates
       .removeAgent(event.agentId)
       .then(() => {
-        if (event.workspaceId)
-          return this.emitWorkspaceUpdateForWorkspaceId(event.workspaceId);
+        if (event.workspaceId) return this.emitWorkspaceUpdateForWorkspaceId(event.workspaceId);
         return undefined;
       })
       .catch((error) => {

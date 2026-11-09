@@ -14,6 +14,7 @@ type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
 export interface PackageScript {
   command: string;
+  executable: string;
   cwd: string;
   packageJson: { path: string; script: string };
 }
@@ -84,6 +85,7 @@ export async function discoverPackageScripts(
       const id = `package.json:${encodeURIComponent(packagePath)}:${encodeURIComponent(name)}`;
       scripts.set(id, {
         command: `${manager} run ${quoteArgument(name)}`,
+        executable: process.platform === "win32" && manager !== "bun" ? `${manager}.cmd` : manager,
         cwd: directory,
         packageJson: { path: packagePath, script: name },
       });
@@ -104,13 +106,4 @@ export function packageScriptLabel(script: PackageScript): string {
   return directory === "."
     ? script.packageJson.script
     : `${directory}: ${script.packageJson.script}`;
-}
-
-/** A retained terminal may have been used interactively between runs. */
-export function packageScriptCommand(script: PackageScript): string {
-  const directory = quoteArgument(script.cwd);
-  if (process.platform === "win32") {
-    return `Set-Location -LiteralPath ${directory}; if ($?) { ${script.command} }`;
-  }
-  return `cd -- ${directory} && ${script.command}`;
 }

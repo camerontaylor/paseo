@@ -69,6 +69,12 @@ export function createProvider(): ProviderRegistration {
 
 把原生 SDK、进程和流保留在连接的实现内部。在发布之前，把它的输出转换为 `ProviderEvent` 对象。
 
+## 系统指令 {#system-instructions}
+
+如果原生 API 无法传递额外的系统指令，请把 `ProviderRegistration.supportsSystemPrompt` 设为 `false`。Paseo 会在打开或恢复该 Provider 会话前拒绝非空的 Agent `systemPrompt` 或 `daemon.appendSystemPrompt`。它不会丢弃这些指令，也不会把它们转换成对话消息。已有 Provider 如果已经实现系统提示词契约，可以省略这个字段。
+
+`ProviderSessionConfig.systemPrompt` 包含合并后的 Agent 和 daemon 指令。请在 Provider 的默认系统提示词之外应用这些指令。原生 API 如果只能替换默认提示词，或把工作区规则作为用户上下文插入，就不满足这个契约。
+
 ## 启动 Provider CLI {#launch-the-provider-cli}
 
 对于进程传输和 CLI 探测，请使用 `@getpaseo/plugin/server` 中的 `spawnProcess` 和 `execCommand`。两者都能处理 Windows 的 `.cmd`/`.bat` 启动器，并为 shell 参数加引号。原生的 Node `spawn` 和 `execFile` 在 Windows 上会拒绝这些启动器。
