@@ -131,29 +131,13 @@ const sessions: TerminalSession[] = [];
 const temporaryDirs: string[] = [];
 
 /**
- * `kill()` only signals; the shell exits asynchronously and keeps writing on
- * the way out (zsh drops a history file and a compdump into `$ZDOTDIR`).
- * Deleting its directory before then loses the race as `ENOTEMPTY`: the
- * recursive walk empties the directory, the dying shell recreates a file in it,
- * and the final rmdir fails.
- *
- * Waiting for the exit shrinks that window but does not close it: some of those
- * writes come from processes zsh forked, which outlive the pty and answer to
- * nothing we hold. Retries alone did not close it either.
- *
- * The known post-retry `ENOTEMPTY` race is reported and tolerated because it
- * belongs to a descendant shell outliving the tested terminal. Any other
- * cleanup error still fails the test that owns the directory.
+ * `kill()` publishes a logical exit before the native PTY releases its process.
+ * Wait for native teardown before removing directories held as a shell's cwd.
+ * Descendant zsh writes can still outlive the PTY; the existing post-retry
+ * ENOTEMPTY handling below covers those, while other cleanup errors fail.
  */
 async function waitForSessionExit(session: TerminalSession): Promise<void> {
-  const exited = new Promise<void>((resolve) => {
-    const dispose = session.onExit(() => {
-      dispose();
-      resolve();
-    });
-    session.kill();
-  });
-  await Promise.race([exited, delay(2_000)]);
+  await session.killAndWait({ gracefulTimeoutMs: 1000, forceTimeoutMs: 1000 });
 }
 
 afterEach(async () => {
