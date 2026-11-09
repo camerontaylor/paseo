@@ -471,7 +471,6 @@ test("Windows units and integration run independently with complete routed cover
     assert.doesNotMatch(job, /continue-on-error|maxWorkers|--exclude/);
     for (const step of [
       "server_capacity",
-      "server_checkout",
       "server_node",
       "server_fetch",
       "server_install",
@@ -483,6 +482,8 @@ test("Windows units and integration run independently with complete routed cover
     }
     assert.match(job, /env: \*server_test_env/);
   }
+  assert.match(windows, /&server_checkout\b/);
+  assert.match(integration, /- \*server_checkout\b/);
   assert.match(windows, /- \*server_plugin_tests/);
   assert.match(windows, /- \*server_hub_contract/);
   assert.match(ubuntu, /run: npm run test --workspace=@getpaseo\/builtin-plugins/);

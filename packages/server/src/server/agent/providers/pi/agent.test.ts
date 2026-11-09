@@ -1878,6 +1878,116 @@ describe("PiRpcAgentSession", () => {
     expect(fakeSession.setThinkingLevelRequests).toEqual(["high"]);
   });
 
+  test("warns about the latest cached request when changing opencode-go effort", async () => {
+    const { pi, session, events } = await createSession();
+    onTestFinished(() => session.close());
+    const runtime = pi.latestSession();
+    runtime.state = {
+      ...runtime.state,
+      model: { provider: "opencode-go", id: "space-bunny-free" },
+      thinkingLevel: "high",
+      messageCount: 4,
+    };
+    runtime.messages = [
+      {
+        role: "assistant",
+        provider: "opencode-go",
+        model: "space-bunny-free",
+        content: [],
+        usage: { cacheRead: 17463 },
+      },
+      {
+        role: "assistant",
+        provider: "opencode-go",
+        model: "space-bunny-free",
+        content: [],
+        usage: { cacheRead: 18340 },
+      },
+    ];
+    await session.getRuntimeInfo();
+    const originalSetThinking = runtime.setThinkingLevel.bind(runtime);
+    runtime.setThinkingLevel = async (level) => {
+      await originalSetThinking(level);
+      runtime.state = { ...runtime.state, thinkingLevel: "low" };
+    };
+
+    await expect(session.setThinkingOption("low")).resolves.toEqual({
+      type: "warning",
+      message:
+        "Thinking changed from high to low. On opencode-go, changing effort may invalidate the prompt cache and reprocess the conversation on the next request. The latest request reused 18340 cached input tokens; this is an observed count, not a forecast. Keep the same effort to preserve cache reuse.",
+    });
+    expect(runtime.setThinkingLevelRequests).toEqual(["low"]);
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("low");
+    expect(events.eventTypes().filter((type) => type === "thinking_option_changed")).toHaveLength(
+      2,
+    );
+  });
+
+  test("keeps an effort update successful when cache telemetry fails", async () => {
+    const { pi, session } = await createSession();
+    onTestFinished(() => session.close());
+    const runtime = pi.latestSession();
+    runtime.state = {
+      ...runtime.state,
+      model: { provider: "opencode-go", id: "space-bunny-free" },
+      messageCount: 2,
+    };
+    runtime.setThinkingLevel = async () => {
+      runtime.state = { ...runtime.state, thinkingLevel: "low" };
+    };
+    runtime.getMessages = async () => {
+      throw new Error("history unavailable");
+    };
+
+    await expect(session.setThinkingOption("low")).resolves.toMatchObject({
+      type: "warning",
+      message: expect.stringContaining("cache cost is unknown"),
+    });
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("low");
+  });
+
+  test("does not fetch cache telemetry when Pi clamps effort to the current level", async () => {
+    const { pi, session } = await createSession();
+    onTestFinished(() => session.close());
+    const runtime = pi.latestSession();
+    runtime.state = {
+      ...runtime.state,
+      model: { provider: "opencode-go", id: "space-bunny-free" },
+      messageCount: 2,
+    };
+    runtime.getMessages = async () => {
+      throw new Error("should not fetch history");
+    };
+    await expect(session.setThinkingOption("low")).resolves.toBeUndefined();
+    expect(runtime.setThinkingLevelRequests).toEqual(["low"]);
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("medium");
+  });
+
+  test("syncs extension effort events into persistence and emits only effective changes", async () => {
+    const { pi, session, events } = await createSession();
+    onTestFinished(() => session.close());
+    const changes: AgentStreamEvent[] = [];
+    session.subscribe((event) => {
+      if (event.type === "thinking_option_changed") changes.push(event);
+    });
+    pi.latestSession().state = { ...pi.latestSession().state, thinkingLevel: "high" };
+    pi.latestSession().emit({ type: "thinking_level_changed", level: "high" });
+    pi.latestSession().emit({ type: "thinking_level_changed", level: "high" });
+    pi.latestSession().emit({ type: "thinking_level_changed", level: "invalid" });
+    await session.getRuntimeInfo();
+
+    expect(changes).toEqual([
+      { type: "thinking_option_changed", provider: "pi", thinkingOptionId: "high" },
+    ]);
+    expect(events.eventTypes()).toEqual(["thinking_option_changed"]);
+    const persistence = session.describePersistence()!;
+    expect(persistence.metadata?.thinkingOptionId).toBe("high");
+    const resumedPi = new FakePi();
+    const resumed = await createClient(resumedPi).resumeSession(persistence);
+    onTestFinished(() => resumed.close());
+    expect(resumedPi.recordedLaunches[0]?.thinkingOptionId).toBe("high");
+  });
+
   test.each([
     { requested: "medium", effective: "high", rpcRequest: "medium" },
     { requested: "xhigh", effective: "max", rpcRequest: "xhigh" },
@@ -1988,9 +2098,31 @@ describe("PiRpcAgentSession", () => {
   test("surfaces state refresh failures after a Pi thinking update", async () => {
     const { pi, session } = await createSession();
     onTestFinished(() => session.close());
-    pi.latestSession().getStateError = new Error("Pi state unavailable");
+    const runtime = pi.latestSession();
+    runtime.setThinkingLevel = async () => {
+      runtime.getStateError = new Error("Pi state unavailable");
+    };
 
     await expect(session.setThinkingOption("high")).rejects.toThrow("Pi state unavailable");
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("medium");
+  });
+
+  test("does not change effort when the initial Pi state refresh fails", async () => {
+    const { pi, session } = await createSession();
+    onTestFinished(() => session.close());
+    pi.latestSession().getStateError = new Error("Pi state unavailable");
+    await expect(session.setThinkingOption("high")).rejects.toThrow("Pi state unavailable");
+    expect(pi.latestSession().setThinkingLevelRequests).toEqual([]);
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("medium");
+  });
+
+  test("surfaces a rejected Pi effort update without changing persisted effort", async () => {
+    const { pi, session } = await createSession();
+    onTestFinished(() => session.close());
+    pi.latestSession().setThinkingLevel = async () => {
+      throw new Error("effort update rejected");
+    };
+    await expect(session.setThinkingOption("high")).rejects.toThrow("effort update rejected");
     expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("medium");
   });
 
@@ -2189,6 +2321,22 @@ describe("PiRpcAgentSession", () => {
       },
       { type: "timeline", item: { type: "user_message", text: "/plan on" } },
       { type: "turn_completed" },
+    ]);
+  });
+
+  test("syncs an effort change discovered when a local slash command completes", async () => {
+    const { pi, session } = await createSession();
+    onTestFinished(() => session.close());
+    const changes: AgentStreamEvent[] = [];
+    session.subscribe((event) => {
+      if (event.type === "thinking_option_changed") changes.push(event);
+    });
+    await session.startTurn("/custom-command");
+    pi.latestSession().state = { ...pi.latestSession().state, thinkingLevel: "high" };
+    await flushTurnScheduling();
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("high");
+    expect(changes).toEqual([
+      { type: "thinking_option_changed", provider: "pi", thinkingOptionId: "high" },
     ]);
   });
 

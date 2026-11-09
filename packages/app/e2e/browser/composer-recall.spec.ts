@@ -3,7 +3,6 @@ import {
   composerLocator,
   expectComposerDraft,
   expectComposerVisible,
-  submitMessage,
   typeIntoFocusedComposer,
 } from "../support/helpers/composer";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
@@ -13,7 +12,11 @@ function userMessages(page: Page) {
 }
 
 async function sendAndWaitForMessage(page: Page, text: string, expectedCount: number) {
-  await submitMessage(page, text);
+  const composer = composerLocator(page);
+  await composer.fill(text);
+  // An optimistic row can appear before the previous submission settles.
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  await composer.press("Enter");
   await expect(userMessages(page)).toHaveCount(expectedCount, { timeout: 30_000 });
   await expectComposerDraft(page, "");
 }
@@ -49,6 +52,7 @@ test.describe("Composer recall", () => {
       await pressInComposer(page, "ArrowUp");
       await expectComposerDraft(page, "add tests for login");
 
+      await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
       await pressInComposer(page, "Enter");
       await expect(userMessages(page)).toHaveCount(3, { timeout: 30_000 });
       await expect(userMessages(page).last()).toContainText("add tests for login");

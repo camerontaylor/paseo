@@ -14,11 +14,14 @@ import type {
   ProviderRegistration,
 } from "@getpaseo/plugin/server/provider";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { describe, expect, test } from "vitest";
+import { runAcpProvider, type AcpStreamMessage } from "@getpaseo/plugin/server/acp";
+import { describe, expect, test, vi } from "vitest";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import type { AgentClient, AgentStreamEvent } from "./agent-sdk-types.js";
 import { toStoredAgentRecord } from "./agent-projections.js";
 import { AgentManager } from "./agent-manager.js";
+import { ensureAgentLoaded } from "./agent-loading.js";
+import { AgentRunState } from "./agent-run-state.js";
 import { buildProviderRegistry } from "./provider-registry.js";
 import { ProviderOverrideSchema } from "@getpaseo/protocol/provider-config";
 import { PluginAgentClientRegistry } from "./plugin-provider.js";
@@ -418,6 +421,46 @@ test("conversation rewind discards withdrawn plugin turns before and after a rep
       afterReplacement: ["A", "Reply A", "D", "Reply D"],
     });
   });
+});
+
+test("late plugin subscribers adopt only the active bracket without notifying existing subscribers twice", async () => {
+  const harness = createProviderHarness();
+  const registry = new PluginAgentClientRegistry(createTestLogger());
+  registry.replace([harness.registration]);
+  const client = registry.clients()[harness.registration.id]!;
+  const session = await client.createSession({ provider: harness.registration.id, cwd: tmpdir() });
+  const first: AgentStreamEvent[] = [];
+  const late: AgentStreamEvent[] = [];
+  const after: AgentStreamEvent[] = [];
+  try {
+    session.subscribe((event) => first.push(event));
+    const opened = harness.inputs.find((input) => input.type === "session.open")!;
+    if (opened.type !== "session.open") throw new Error("Missing open request");
+    harness.emit({
+      type: "session.turn",
+      sessionId: opened.sessionId,
+      turnId: "peer-active",
+      state: "started",
+    });
+    session.subscribe((event) => late.push(event));
+    harness.emit({
+      type: "session.turn",
+      sessionId: opened.sessionId,
+      turnId: "peer-active",
+      state: "completed",
+    });
+    session.subscribe((event) => after.push(event));
+    const expected = [
+      { type: "turn_started", provider: harness.registration.id, turnId: "peer-active" },
+      { type: "turn_completed", provider: harness.registration.id, turnId: "peer-active" },
+    ];
+    expect(first).toEqual(expected);
+    expect(late).toEqual(expected);
+    expect(after).toEqual([]);
+  } finally {
+    await session.close();
+    await registry.shutdown();
+  }
 });
 
 test("file-only plugin rewind preserves the conversation before and after a replacement prompt", async () => {
@@ -1126,6 +1169,70 @@ describe("PluginAgentClientRegistry", () => {
     },
   );
 
+  test("rejects unsupported system policy before opening a native session", async () => {
+    const harness = createProviderHarness();
+    harness.registration.supportsSystemPrompt = false;
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const client = registry.clients()[harness.registration.id]!;
+    try {
+      await expect(
+        client.createSession({
+          provider: harness.registration.id,
+          cwd: "/workspace",
+          daemonAppendSystemPrompt: "Unattended agents: wait cheaply.",
+        }),
+      ).rejects.toThrow("daemon.appendSystemPrompt cannot be delivered");
+      expect(harness.inputs.some((input) => input.type === "session.open")).toBe(false);
+      const session = await client.createSession({
+        provider: harness.registration.id,
+        cwd: "/workspace",
+      });
+      const persistence = session.describePersistence();
+      expect(persistence).not.toBeNull();
+      await session.close();
+      const openCount = harness.inputs.filter((input) => input.type === "session.open").length;
+      await expect(
+        client.createSession({
+          provider: harness.registration.id,
+          cwd: "/workspace",
+          systemPrompt: "Agent policy.",
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_CONFIGURATION" });
+      await expect(
+        client.resumeSession(persistence!, {
+          cwd: "/workspace",
+          daemonAppendSystemPrompt: "Owner policy.",
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_CONFIGURATION" });
+      expect(harness.inputs.filter((input) => input.type === "session.open")).toHaveLength(
+        openCount,
+      );
+    } finally {
+      await registry.shutdown();
+    }
+  });
+
+  test("preserves combined system policy for existing supporting plugins", async () => {
+    const harness = createProviderHarness();
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    try {
+      const session = await registry.clients()[harness.registration.id]!.createSession({
+        provider: harness.registration.id,
+        cwd: "/workspace",
+        systemPrompt: "Agent policy.",
+        daemonAppendSystemPrompt: "Owner policy.",
+      });
+      expect(harness.inputs.find((input) => input.type === "session.open")).toMatchObject({
+        config: { systemPrompt: "Agent policy.\n\nOwner policy." },
+      });
+      await session.close();
+    } finally {
+      await registry.shutdown();
+    }
+  });
+
   test("preserves nested provider child ownership during opening", async () => {
     const harness = createProviderHarness({ openChildren: openNestedChildren });
     const registry = new PluginAgentClientRegistry(createTestLogger());
@@ -1294,6 +1401,89 @@ describe("PluginAgentClientRegistry", () => {
       }
     },
   );
+  test("resumes a legacy ACP persistence handle through the plugin", async () => {
+    const harness = createProviderHarness({
+      handleInput: async (input, emit) => {
+        if (input.type === "session.open")
+          emit({
+            type: "timeline.item",
+            sessionId: input.sessionId,
+            item: { type: "assistant_message", id: "legacy-answer", text: "Retained answer" },
+          });
+        return false;
+      },
+    });
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const session = await registry.clients()[harness.registration.id]!.resumeSession(
+      {
+        provider: harness.registration.id,
+        sessionId: "session_rose_legacy",
+        metadata: { provider: "acp" },
+      },
+      { cwd: "/workspace" },
+    );
+    expect(harness.inputs.find((input) => input.type === "session.open")).toMatchObject({
+      persistence: { version: 1, data: { sessionId: "session_rose_legacy" } },
+      history: "replay",
+    });
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) history.push(event);
+    expect(history).toContainEqual(
+      expect.objectContaining({
+        type: "timeline",
+        item: expect.objectContaining({ type: "assistant_message", text: "Retained answer" }),
+      }),
+    );
+    await session.close();
+    await registry.shutdown();
+  });
+
+  test.each([
+    { sessionId: "native", metadata: {} },
+    { sessionId: "plugin:invalid", metadata: { provider: "acp" } },
+    {
+      sessionId: "native",
+      metadata: { provider: "acp", pluginProviderPersistence: { invalid: true } },
+    },
+  ])(
+    "rejects malformed plugin persistence without treating it as legacy: %j",
+    async ({ sessionId, metadata }) => {
+      const harness = createProviderHarness();
+      const registry = new PluginAgentClientRegistry(createTestLogger());
+      registry.replace([harness.registration]);
+      const client = registry.clients()[harness.registration.id]!;
+      await expect(
+        client.resumeSession(
+          { provider: harness.registration.id, sessionId, metadata },
+          { cwd: "/workspace" },
+        ),
+      ).rejects.toThrow();
+      expect(harness.inputs).toEqual([]);
+      await registry.shutdown();
+    },
+  );
+
+  test("archives and unarchives legacy ACP handles using plugin persistence", async () => {
+    const harness = createProviderHarness({
+      capabilities: [...CAPABILITIES, "session.archive", "session.unarchive"],
+    });
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const client = registry.clients()[harness.registration.id]!;
+    const handle = {
+      provider: harness.registration.id,
+      sessionId: "legacy-id",
+      metadata: { provider: "acp" },
+    };
+    await client.archiveNativeSession!(handle);
+    await client.unarchiveNativeSession!(handle);
+    expect(harness.inputs).toMatchObject([
+      { type: "session.archive", persistence: { version: 1, data: { sessionId: "legacy-id" } } },
+      { type: "session.unarchive", persistence: { version: 1, data: { sessionId: "legacy-id" } } },
+    ]);
+    await registry.shutdown();
+  });
 
   test("gates persistence operations on negotiated provider capabilities", async () => {
     const harness = createProviderHarness({ capabilities: ["session.persistence"] });
@@ -1595,6 +1785,14 @@ describe("PluginAgentClientRegistry", () => {
     const client = registry.clients()[harness.registration.id]!;
     const session = await client.createSession({ provider: harness.registration.id, cwd: "/tmp" });
     try {
+      const opened = harness.inputs.find((input) => input.type === "session.open")!;
+      if (opened.type !== "session.open") throw new Error("Expected open");
+      harness.emit({
+        type: "session.turn",
+        sessionId: opened.sessionId,
+        turnId: "turn-1",
+        state: "started",
+      });
       await expect(
         session.steerActiveTurn!("follow up", {
           expectedTurnId: "turn-1",
@@ -2154,4 +2352,503 @@ test("plugin provider import launches with runtime MCP servers and returns only 
   } finally {
     await registry.shutdown();
   }
+});
+
+function acpVendorTurnHarness(options: { holdPrompts?: boolean } = {}) {
+  const instances: Array<{
+    notify(method: string, params: unknown): void;
+    promptResponses: Array<(result: unknown) => void>;
+  }> = [];
+  const connector = () => {
+    const promptResponses: Array<(result: unknown) => void> = [];
+    let controller!: ReadableStreamDefaultController<AcpStreamMessage>;
+    const readable = new ReadableStream<AcpStreamMessage>({
+      start(value) {
+        controller = value;
+      },
+    });
+    const writable = new WritableStream<AcpStreamMessage>({
+      write(message) {
+        if (!("method" in message)) return;
+        if (!("id" in message)) return;
+        const id = message.id;
+        const respond = (result: unknown) =>
+          controller.enqueue({ jsonrpc: "2.0", id, result } as AcpStreamMessage);
+        if (message.method === "initialize") {
+          const params = message.params as { protocolVersion: number };
+          respond({ protocolVersion: params.protocolVersion, agentCapabilities: {} });
+        } else if (message.method === "session/new") {
+          respond({ sessionId: "vendor-session", modes: null, configOptions: [] });
+        } else if (message.method === "session/close") {
+          respond({});
+        } else if (message.method === "session/prompt") {
+          promptResponses.push(respond);
+          if (!options.holdPrompts) respond({ stopReason: "end_turn" });
+        }
+      },
+    });
+    instances.push({
+      promptResponses,
+      notify(method, params) {
+        controller.enqueue({ jsonrpc: "2.0", method, params } as AcpStreamMessage);
+      },
+    });
+    return { readable, writable };
+  };
+  return { connector, instances };
+}
+
+test("a vendor turn with no foreground turn becomes an autonomous run", async () => {
+  const logger = createTestLogger();
+  const harness = acpVendorTurnHarness();
+  const registration = runAcpProvider({
+    id: "acp-vendor-turn",
+    label: "ACP vendor turn",
+    connector: harness.connector,
+    transformers: [
+      {
+        notification(notification) {
+          if (notification.method !== "vendor/turn") return null;
+          const params = notification.params as {
+            turnId: string;
+            state: "started" | "completed" | "failed" | "canceled";
+          };
+          return { type: "turn" as const, turnId: params.turnId, state: params.state };
+        },
+      },
+    ],
+  });
+  const registry = new PluginAgentClientRegistry(logger);
+  registry.replace([registration]);
+  const manager = new AgentManager({
+    logger,
+    clients: registry.clients(),
+    providerDefinitions: registry.definitions(),
+  });
+  const trackAutonomousRun = vi.spyOn(AgentRunState.prototype, "trackAutonomousRun");
+  const agent = await manager.createAgent({ provider: registration.id, cwd: tmpdir() }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const live = harness.instances.at(-1);
+    if (!live) throw new Error("ACP connector did not start");
+    live.notify("vendor/turn", { turnId: "peer", state: "started" });
+    await vi.waitFor(() => {
+      expect(manager.getAgent(agent.id)?.lifecycle).toBe("running");
+    });
+    expect(trackAutonomousRun).toHaveBeenCalledWith(agent.id, "acp-vendor:peer");
+    expect(manager.getAgent(agent.id)?.activeTurnId).toBe("acp-vendor:peer");
+
+    live.notify("vendor/turn", { turnId: "peer", state: "completed" });
+    await vi.waitFor(() => {
+      expect(manager.getAgent(agent.id)?.lifecycle).toBe("idle");
+    });
+    expect(manager.getAgent(agent.id)?.activeTurnId).toBeNull();
+  } finally {
+    trackAutonomousRun.mockRestore();
+    await manager.closeAgent(agent.id);
+    await registry.shutdown();
+  }
+});
+
+test("ACP imports and loads preserve native model and thinking while explicit reload overrides apply", async () => {
+  const home = await mkdtemp(join(tmpdir(), "acp-native-selection-"));
+  const logger = createTestLogger();
+  const storage = new AgentStorage(join(home, "agents"), logger);
+  let model = "native-model";
+  let thinking = "high";
+  const writes: unknown[] = [];
+  const configOptions = (currentModel: string) => [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: currentModel,
+      options: ["default-model", "native-model", "external-model", "explicit-model"].map(
+        (value) => ({ value, name: value }),
+      ),
+    },
+    {
+      id: "thinking",
+      name: "Thinking",
+      category: "thought_level",
+      type: "select",
+      currentValue: thinking,
+      options: ["low", "high"].map((value) => ({ value, name: value })),
+    },
+  ];
+  const registration = runAcpProvider({
+    id: "acp-native-selection",
+    label: "ACP native selection",
+    connector() {
+      let controller!: ReadableStreamDefaultController<AcpStreamMessage>;
+      return {
+        readable: new ReadableStream<AcpStreamMessage>({
+          start(value) {
+            controller = value;
+          },
+        }),
+        writable: new WritableStream<AcpStreamMessage>({
+          write(message) {
+            if (!("method" in message) || !("id" in message)) return;
+            const respond = (result: unknown) =>
+              controller.enqueue({ jsonrpc: "2.0", id: message.id, result } as AcpStreamMessage);
+            if (message.method === "initialize")
+              respond({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
+            else if (message.method === "session/new")
+              respond({
+                sessionId: "probe",
+                modes: null,
+                configOptions: configOptions("default-model"),
+              });
+            else if (message.method === "session/load")
+              respond({ modes: null, configOptions: configOptions(model) });
+            else if (message.method === "session/set_config_option") {
+              writes.push(message.params);
+              const params = message.params as { configId: string; value: string };
+              if (params.configId === "model") model = params.value;
+              else if (params.configId === "thinking") thinking = params.value;
+              respond({ configOptions: configOptions(model) });
+            } else respond({});
+          },
+        }),
+      };
+    },
+  });
+  const plugins = new PluginAgentClientRegistry(logger);
+  plugins.replace([registration]);
+  const manager = new AgentManager({
+    clients: plugins.clients(),
+    providerDefinitions: plugins.definitions(),
+    registry: storage,
+    logger,
+  });
+  try {
+    const imported = await manager.importProviderSession({
+      provider: registration.id,
+      providerHandleId: 'plugin:{"version":1,"data":{"sessionId":"native"}}',
+      cwd: home,
+      workspaceId: "workspace",
+    });
+    expect(imported.config).toMatchObject({ model: "native-model", thinkingOptionId: "high" });
+    expect(imported.runtimeInfo).toMatchObject({ model: "native-model", thinkingOptionId: "high" });
+    expect(writes).toEqual([]);
+
+    model = "external-model";
+    thinking = "low";
+    const reloaded = await manager.reloadAgentSession(imported.id);
+    expect(reloaded.config).toMatchObject({ model: "external-model", thinkingOptionId: "low" });
+    expect(writes).toEqual([]);
+
+    const explicit = await manager.reloadAgentSession(imported.id, {
+      model: "explicit-model",
+      thinkingOptionId: "high",
+    });
+    expect(explicit.config).toMatchObject({ model: "explicit-model", thinkingOptionId: "high" });
+    expect(writes).toHaveLength(2);
+
+    await manager.closeAgent(imported.id);
+    model = "native-model";
+    thinking = "low";
+    const loaded = await ensureAgentLoaded(imported.id, {
+      agentManager: manager,
+      agentStorage: storage,
+      logger,
+    });
+    expect(loaded.config).toMatchObject({ model: "native-model", thinkingOptionId: "low" });
+    expect(writes).toHaveLength(2);
+    await manager.flush();
+    expect((await storage.get(imported.id))?.config).toMatchObject({
+      model: "native-model",
+      thinkingOptionId: "low",
+    });
+  } finally {
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    await plugins.shutdown();
+    await storage.flush();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test.each(["rollover", "same-peer"])(
+  "pending accepted ACP steer keeps finish waiters active through %s settlement",
+  async (schedule) => {
+    const logger = createTestLogger();
+    const harness = acpVendorTurnHarness({ holdPrompts: true });
+    const registration = runAcpProvider({
+      id: "acp-pending-steer",
+      label: "ACP pending steer",
+      connector: harness.connector,
+      acpOptions: { vendorTurnsAreNeverForeground: true },
+      transformers: [
+        {
+          initialize: () => ({ steering: true }),
+          attach: () => ({ steering: true }),
+          notification(notification) {
+            if (notification.method !== "vendor/turn") return null;
+            const params = notification.params as {
+              turnId: string;
+              state: "started" | "completed";
+            };
+            return { type: "turn" as const, ...params };
+          },
+        },
+      ],
+    });
+    const registry = new PluginAgentClientRegistry(logger);
+    registry.replace([registration]);
+    const manager = new AgentManager({
+      logger,
+      clients: registry.clients(),
+      providerDefinitions: registry.definitions(),
+    });
+    const agent = await manager.createAgent(
+      { provider: registration.id, cwd: tmpdir() },
+      undefined,
+      { workspaceId: undefined },
+    );
+    let terminalSubmitted = false;
+    const states: { lifecycle: string; terminalSubmitted: boolean }[] = [];
+    const turns: AgentStreamEvent[] = [];
+    const streamTypes: string[] = [];
+    const unsubscribe = manager.subscribe(
+      (event) => {
+        if (event.type === "agent_state")
+          states.push({ lifecycle: event.agent.lifecycle, terminalSubmitted });
+        if (event.type === "agent_stream" && event.event.type.startsWith("turn_"))
+          turns.push(event.event);
+        if (event.type === "agent_stream") streamTypes.push(event.event.type);
+      },
+      { agentId: agent.id, replayState: false },
+    );
+    try {
+      const live = harness.instances.at(-1)!;
+      live.notify("vendor/turn", { turnId: "peer", state: "started" });
+      await vi.waitFor(() => expect(manager.getAgent(agent.id)?.lifecycle).toBe("running"));
+      expect(
+        await manager.steerAgentRun(agent.id, "late steer", { clientMessageId: "late" }),
+      ).toEqual({ status: "accepted" });
+      const activeCatchUp: AgentStreamEvent[] = [];
+      const stopCatchUp = agent.session!.subscribe((event) => activeCatchUp.push(event));
+      expect(activeCatchUp).toEqual([
+        { type: "pending_work", provider: registration.id, pending: true },
+        { type: "turn_started", provider: registration.id, turnId: "acp-vendor:peer" },
+      ]);
+      stopCatchUp();
+      let finished = false;
+      const finish = manager.waitForAgentEvent(agent.id, { waitForActive: true }).then((result) => {
+        finished = true;
+        return result;
+      });
+      if (schedule === "rollover") {
+        live.notify("vendor/turn", { turnId: "peer", state: "completed" });
+        await vi.waitFor(() => expect(manager.getAgent(agent.id)?.activeTurnId).toBeNull());
+        expect(manager.getAgent(agent.id)?.lifecycle).toBe("running");
+        expect(finished).toBe(false);
+        expect(turns.map((event) => event.type)).toEqual(["turn_started", "turn_completed"]);
+        const caughtUp: AgentStreamEvent[] = [];
+        const stop = agent.session!.subscribe((event) => caughtUp.push(event));
+        expect(caughtUp).toEqual([
+          { type: "pending_work", provider: registration.id, pending: true },
+        ]);
+        stop();
+        live.notify("session/update", {
+          sessionId: "vendor-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "late output" },
+          },
+        });
+        await vi.waitFor(() => expect(manager.getAgent(agent.id)?.activeTurnId).toBe("acp:late"));
+        expect(finished).toBe(false);
+        terminalSubmitted = true;
+        live.promptResponses[0]({ stopReason: "end_turn" });
+      } else {
+        live.promptResponses[0]({ stopReason: "end_turn" });
+        await vi.waitFor(() => expect(manager.getAgent(agent.id)?.pendingProviderWork).toBe(false));
+        expect(manager.getAgent(agent.id)?.activeTurnId).toBe("acp-vendor:peer");
+        expect(manager.getAgent(agent.id)?.lifecycle).toBe("running");
+        expect(finished).toBe(false);
+        const caughtUp: AgentStreamEvent[] = [];
+        const stop = agent.session!.subscribe((event) => caughtUp.push(event));
+        expect(caughtUp).toEqual([
+          { type: "turn_started", provider: registration.id, turnId: "acp-vendor:peer" },
+        ]);
+        stop();
+        terminalSubmitted = true;
+        live.notify("vendor/turn", { turnId: "peer", state: "completed" });
+      }
+      expect((await finish).status).toBe("idle");
+      expect(streamTypes).not.toContain("pending_work");
+      expect(manager.getAgent(agent.id)?.lifecycle).toBe("idle");
+      // Metadata can emit additional idle snapshots after the provider terminal.
+      const workingStates = states.filter((state) => !state.terminalSubmitted);
+      expect(workingStates.length).toBeGreaterThan(0);
+      expect(workingStates.filter((state) => state.lifecycle !== "running")).toEqual([]);
+      expect(states.at(-1)?.lifecycle).toBe("idle");
+      expect(
+        turns.map((event) => ({
+          type: event.type,
+          turnId: "turnId" in event ? event.turnId : undefined,
+        })),
+      ).toEqual([
+        { type: "turn_started", turnId: "acp-vendor:peer" },
+        { type: "turn_completed", turnId: "acp-vendor:peer" },
+        ...(schedule === "rollover"
+          ? [
+              { type: "turn_started", turnId: "acp:late" },
+              { type: "turn_completed", turnId: "acp:late" },
+            ]
+          : []),
+      ]);
+    } finally {
+      unsubscribe();
+      await manager.closeAgent(agent.id);
+      await registry.shutdown();
+    }
+  },
+);
+
+test("runtime failure clears pending plugin work without an idle success gap", async () => {
+  const logger = createTestLogger();
+  const harness = createProviderHarness();
+  const registry = new PluginAgentClientRegistry(logger);
+  registry.replace([harness.registration]);
+  const manager = new AgentManager({
+    logger,
+    clients: registry.clients(),
+    providerDefinitions: registry.definitions(),
+  });
+  const agent = await manager.createAgent(
+    { provider: harness.registration.id, cwd: tmpdir() },
+    undefined,
+    { workspaceId: undefined },
+  );
+  const opened = harness.inputs.find((input) => input.type === "session.open")!;
+  if (opened.type !== "session.open") throw new Error("Missing plugin session");
+  try {
+    harness.emit({ type: "session.pending_work", sessionId: opened.sessionId, pending: true });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id)?.lifecycle).toBe("running"));
+    const states: string[] = [];
+    const stop = manager.subscribe(
+      (event) => {
+        if (event.type === "agent_state") states.push(event.agent.lifecycle);
+      },
+      { agentId: agent.id, replayState: false },
+    );
+    const finish = manager.waitForAgentEvent(agent.id, { waitForActive: true });
+    harness.emit({
+      type: "session.runtime_failed",
+      sessionId: opened.sessionId,
+      error: { message: "transport gone" },
+    });
+    expect((await finish).status).toBe("error");
+    expect(manager.getAgent(agent.id)?.pendingProviderWork).toBe(false);
+    expect(states).not.toContain("idle");
+    expect(manager.getAgent(agent.id)?.lastError).toBe("transport gone");
+    stop();
+  } finally {
+    await manager.closeAgent(agent.id);
+    await registry.shutdown();
+  }
+});
+
+test.each(["before", "after"])(
+  "steering turn mismatch %s dispatch never reports delivered work as unavailable",
+  async (mismatch) => {
+    const harness = createProviderHarness({
+      capabilities: [...CAPABILITIES, "prompt.steer"],
+      handleInput: async (input, emit) => {
+        if (input.type !== "session.prompt") return false;
+        emit({
+          type: "session.prompt_result",
+          sessionId: input.sessionId,
+          clientMessageId: input.prompt.clientMessageId,
+          result: { type: "steer", turnId: "successor" },
+        });
+        return true;
+      },
+    });
+    const registry = new PluginAgentClientRegistry(createTestLogger());
+    registry.replace([harness.registration]);
+    const client = registry.clients()[harness.registration.id]!;
+    const session = await client.createSession({ provider: harness.registration.id, cwd: "/tmp" });
+    try {
+      const opened = harness.inputs.find((input) => input.type === "session.open")!;
+      if (opened.type !== "session.open") throw new Error("Expected open");
+      harness.emit({
+        type: "session.turn",
+        sessionId: opened.sessionId,
+        turnId: "current",
+        state: "started",
+      });
+      const result = await session.steerActiveTurn!("follow up", {
+        expectedTurnId: mismatch === "before" ? "previous" : "current",
+      });
+      expect(result).toEqual({ status: mismatch === "before" ? "unavailable" : "accepted" });
+      expect(harness.inputs.filter((input) => input.type === "session.prompt")).toHaveLength(
+        mismatch === "before" ? 0 : 1,
+      );
+    } finally {
+      await session.close();
+      registry.replace([]);
+    }
+  },
+);
+
+test("retains closing bridge events in history while suppressing UI delivery", async () => {
+  let releaseClose!: () => void;
+  let signalClosing!: () => void;
+  const closeAllowed = new Promise<void>((resolve) => {
+    releaseClose = resolve;
+  });
+  const closing = new Promise<void>((resolve) => {
+    signalClosing = resolve;
+  });
+  const harness = createProviderHarness({
+    handleInput: async (input, emit) => {
+      if (input.type !== "session.close") return false;
+      emit({
+        type: "timeline.item",
+        sessionId: input.sessionId,
+        item: { type: "assistant_message", id: "final-close", text: "Final output" },
+      });
+      emit({
+        type: "session.turn",
+        sessionId: input.sessionId,
+        turnId: "closing-turn",
+        state: "completed",
+      });
+      signalClosing();
+      await closeAllowed;
+      emit({ type: "session.closed", sessionId: input.sessionId });
+      emit({ type: "request.completed", requestId: input.requestId });
+      return true;
+    },
+  });
+  const registry = new PluginAgentClientRegistry(createTestLogger());
+  registry.replace([harness.registration]);
+  const client = registry.clients()[harness.registration.id]!;
+  const session = await client.createSession({ provider: harness.registration.id, cwd: "/tmp" });
+  const listener = vi.fn();
+  session.subscribe(listener);
+  const closed = session.close();
+  await closing;
+  const history: AgentStreamEvent[] = [];
+  for await (const event of session.streamHistory()) history.push(event);
+  expect(history).toContainEqual(
+    expect.objectContaining({ type: "turn_completed", turnId: "closing-turn" }),
+  );
+  expect(history).toContainEqual(
+    expect.objectContaining({
+      type: "timeline",
+      item: expect.objectContaining({ text: "Final output" }),
+    }),
+  );
+  expect(listener).not.toHaveBeenCalled();
+  expect(harness.inputs.filter((input) => input.type === "session.interrupt")).toHaveLength(0);
+  releaseClose();
+  await closed;
+  registry.replace([]);
 });
