@@ -520,6 +520,7 @@ export async function withButtonShowcase(
         test.step("compact workspace menu carries header buttons with their actions, menus, and content", async () => {
           await openCompactWorkspaceMenu(page);
           await expectWorkspaceMenuRows(page, [
+            "Scripts",
             "Deploy application",
             "Header checks",
             "Header status",

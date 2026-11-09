@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { inspect } from "node:util";
 import path from "node:path";
 import pino from "pino";
 import { ClaudeAgentClient } from "../agent/providers/claude/agent.js";
@@ -11,12 +12,17 @@ import { DaemonClient } from "../test-utils/daemon-client.js";
 test("changing thinking then mode preserves a foreground Claude command", async () => {
   const logger = pino({ level: "silent" });
   const cwd = await mkdtemp(path.join(tmpdir(), "claude-settings-mid-turn-"));
-  const daemon = await createTestPaseoDaemon({
-    logger,
-    agentClients: { claude: new ClaudeAgentClient({ logger }) },
-  });
-  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  const cleanups: Array<() => Promise<unknown>> = [() => rm(cwd, { recursive: true, force: true })];
+  const cleanupFailures: unknown[] = [];
+  let testFailed = false;
   try {
+    const daemon = await createTestPaseoDaemon({
+      logger,
+      agentClients: { claude: new ClaudeAgentClient({ logger }) },
+    });
+    cleanups.unshift(() => daemon.close());
+    const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+    cleanups.unshift(() => client.close());
     await client.connect();
     await client.fetchAgents({ subscribe: {} });
     const agent = await client.createAgent({
@@ -52,9 +58,23 @@ test("changing thinking then mode preserves a foreground Claude command", async 
         { timeout: 45_000, interval: 100 },
       )
       .toBe(true);
+  } catch (error) {
+    testFailed = true;
+    throw error;
   } finally {
-    await client.close();
-    await daemon.close();
-    await rm(cwd, { recursive: true, force: true });
+    for (const cleanup of cleanups) {
+      try {
+        await cleanup();
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+    if (testFailed && cleanupFailures.length > 0) {
+      const failure = new AggregateError(cleanupFailures, "Claude mid-turn test cleanup failed");
+      process.stderr.write(`${inspect(failure)}\n`);
+    }
+  }
+  if (cleanupFailures.length > 0) {
+    throw new AggregateError(cleanupFailures, "Claude mid-turn test cleanup failed");
   }
 }, 180_000);

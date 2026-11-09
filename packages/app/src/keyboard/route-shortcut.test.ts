@@ -436,3 +436,20 @@ describe("routeKeyboardShortcut — unknown actions", () => {
     ).toEqual<ShortcutAction>({ kind: "none" });
   });
 });
+
+describe("routeKeyboardShortcut — history", () => {
+  it("routes each direction to one history step", () => {
+    expect(
+      routeKeyboardShortcut({ action: "history.back", payload: null }, makeCtx()),
+    ).toEqual<ShortcutAction>({
+      kind: "history-go",
+      delta: -1,
+    });
+    expect(
+      routeKeyboardShortcut({ action: "history.forward", payload: null }, makeCtx()),
+    ).toEqual<ShortcutAction>({
+      kind: "history-go",
+      delta: 1,
+    });
+  });
+});
