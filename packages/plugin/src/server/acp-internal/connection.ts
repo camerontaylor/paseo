@@ -542,8 +542,14 @@ class AcpRuntime {
         this.promptResponses,
       ),
     );
-    if (!child) void this.connection.closed.then(() => this.handleUnexpectedTransportClose());
+    // The SDK rejects in-flight RPCs at EOF before a subprocess emits `close`.
+    // Publish the transport failure before those RPCs clear pending steering work.
+    void this.connection.closed.then(async () => {
+      await this.drainNotifications();
+      this.handleUnexpectedTransportClose();
+    });
     child?.on("error", (error) => {
+      if (this.processFailed) return;
       this.processFailed = true;
       if (!this.closing && this.nativeSessionId) {
         this.emit({
@@ -1075,7 +1081,7 @@ class AcpRuntime {
     this.settlePendingWork();
     await this.closeConnector();
     const child = this.child;
-    if (!child || this.processFailed) return;
+    if (!child) return;
     if (child.exitCode !== null || child.signalCode !== null) return;
     const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
     await terminateProcess(child, "SIGTERM");
