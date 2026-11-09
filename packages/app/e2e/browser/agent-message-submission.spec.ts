@@ -22,6 +22,8 @@ import {
   fillComposerDraft,
   holdSendButton,
   sendDraftToQueue,
+  configureComposerQueueSend,
+  queueComposerWithButton,
   startRunningMockAgent,
   submitMessage,
 } from "../support/helpers/composer";
@@ -72,6 +74,150 @@ const IMAGE = {
     "base64",
   ),
 };
+
+for (const width of [1280, 390]) {
+  baseTest(
+    `U2d durable queue admits, deletes and promotes independent items at ${width}px`,
+    async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 960 });
+      await configureComposerQueueSend(page);
+      const wire = await installDaemonWebSocketGate(page);
+      const agent = await seedRunningMockAgentWorkspaceForQueue(page, width);
+      const receipts = [];
+      try {
+        for (const action of ["delete", "promote"] as const) {
+          const prompt = `U2d ${action} independent item ${width}`;
+          await fillComposerDraft(page, prompt);
+          await queueComposerWithButton(page);
+          await expect
+            .poll(async () =>
+              (await agent.client.listQueuedAgentMessages(agent.agentId)).items.map((item) => ({
+                text: item.text,
+                deliveryState: item.deliveryState,
+              })),
+            )
+            .toEqual([{ text: prompt, deliveryState: "pending" }]);
+          receipts.push(await agent.client.listQueuedAgentMessages(agent.agentId));
+          await expect(page.getByText(prompt, { exact: true })).toBeVisible();
+          await expect(page.getByRole("button", { name: "Send queued message now" })).toBeVisible();
+          await expect(page.getByText("Sending...", { exact: true })).toHaveCount(0);
+          await expect(page.getByText("Unconfirmed", { exact: true })).toHaveCount(0);
+          await page.screenshot({ path: testInfo.outputPath(`queue-${action}-pending.png`) });
+          if (action === "delete") {
+            await page.getByRole("button", { name: "Queued message options" }).click();
+            const confirmation = page.waitForEvent("dialog");
+            const deleting = page.getByText("Delete", { exact: true }).click();
+            const dialog = await confirmation;
+            expect(dialog.type()).toBe("confirm");
+            expect(dialog.message()).toBe(
+              "Delete queued message?\n\nIt will be removed for every device connected to this agent",
+            );
+            await dialog.accept();
+            await deleting;
+            await expect(page.getByText(prompt, { exact: true })).toHaveCount(0);
+            await expect(page.getByTestId("user-message").filter({ hasText: prompt })).toHaveCount(
+              0,
+            );
+          } else {
+            await page.getByRole("button", { name: "Send queued message now" }).click();
+            await expect(
+              page.getByTestId("user-message").filter({ hasText: prompt }),
+            ).toBeVisible();
+          }
+          await expect
+            .poll(async () => (await agent.client.listQueuedAgentMessages(agent.agentId)).items)
+            .toEqual([]);
+          await expect(page.getByRole("button", { name: "Send queued message now" })).toHaveCount(
+            0,
+          );
+          receipts.push(await agent.client.listQueuedAgentMessages(agent.agentId));
+        }
+        expect(wire.getClientRequestCount("agent.queue.enqueue.request")).toBe(2);
+        expect(wire.getClientRequestCount("agent.queue.delete.request")).toBe(2);
+        await testInfo.attach("queue-daemon-and-wire", {
+          body: JSON.stringify({ receipts, requests: wire.getClientRequestCounts() }, null, 2),
+          contentType: "application/json",
+        });
+        await page.screenshot({ path: testInfo.outputPath("queue-promoted.png") });
+      } finally {
+        await agent.cleanup();
+      }
+    },
+  );
+
+  baseTest(
+    `U2d absent queue capability keeps the local queue with zero durable RPC at ${width}px`,
+    async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 960 });
+      await configureComposerQueueSend(page);
+      const wire = await installDaemonWebSocketGate(page);
+      wire.setServerFeaturesStripped(["durableAgentQueueV1"]);
+      const agent = await seedRunningMockAgentWorkspaceForQueue(page, width);
+      try {
+        const prompt = `U2d local queue ${width}`;
+        await fillComposerDraft(page, prompt);
+        await queueComposerWithButton(page);
+        await expect(page.getByText(prompt, { exact: true })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Send queued message now" })).toBeVisible();
+        expect((await agent.client.listQueuedAgentMessages(agent.agentId)).items).toEqual([]);
+        expect(
+          Object.keys(wire.getClientRequestCounts()).filter((type) =>
+            type.startsWith("agent.queue."),
+          ),
+        ).toEqual([]);
+        await page.getByRole("button", { name: "Send queued message now" }).click();
+        await expect(page.getByTestId("user-message").filter({ hasText: prompt })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Send queued message now" })).toHaveCount(0);
+        expect((await agent.client.listQueuedAgentMessages(agent.agentId)).items).toEqual([]);
+        expect(
+          Object.keys(wire.getClientRequestCounts()).filter((type) =>
+            type.startsWith("agent.queue."),
+          ),
+        ).toEqual([]);
+        await testInfo.attach("local-queue-wire", {
+          body: JSON.stringify(wire.getClientRequestCounts(), null, 2),
+          contentType: "application/json",
+        });
+        await page.screenshot({ path: testInfo.outputPath("local-queue-sent.png") });
+      } finally {
+        await agent.cleanup();
+      }
+    },
+  );
+}
+
+async function seedRunningMockAgentWorkspaceForQueue(page: Page, width: number) {
+  const agent = await seedMockAgentWorkspace({
+    repoPrefix: `u2d-queue-${width}-`,
+    title: `U2d queue ${width}`,
+    model: "five-minute-stream",
+    initialPrompt: "Keep running while independent queue items are exercised.",
+  });
+  try {
+    await agent.client.waitForAgentUpsert(
+      agent.agentId,
+      (snapshot) => snapshot.status === "running",
+      15_000,
+    );
+    await openAgentRoute(page, agent);
+    await expectComposerVisible(page);
+    if (width === 390) {
+      await page.getByTestId("workspace-tab-switcher-trigger").click();
+      await expect(page.getByText(`U2d queue ${width}`, { exact: true })).toBeVisible();
+      await expect(page.getByRole("progressbar", { name: "Agent running" })).toBeVisible();
+      await page.mouse.click(width / 2, 24);
+      await expect(page.getByTestId("workspace-tab-switcher-new-agent")).not.toBeVisible();
+      await expect(page.getByRole("button", { name: "Stop agent", exact: true })).toBeVisible();
+      await expectInlineWorkingIndicator(page);
+    } else {
+      await expectRunningAgentChrome(page, `U2d queue ${width}`);
+    }
+    return agent;
+  } catch (error) {
+    await agent.cleanup().catch(() => {});
+    throw error;
+  }
+}
 
 interface SubmissionScenario {
   existingPrompt: string;

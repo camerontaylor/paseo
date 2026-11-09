@@ -1633,19 +1633,68 @@ it.each([1, 4])(
     expect(manager.getTerminal(old.terminalId)).toBeUndefined();
     const workers = await workerRecords(paseoHome);
     expect(workers).toHaveLength(1);
-    expect(workers[0]!.protocolVersion).toBe(5);
+    expect(workers[0]!.protocolVersion).toBe(6);
   },
 );
 
+it("drains protocol 5 while current managed commands survive reattachment", async () => {
+  const paseoHome = createTemporaryHome();
+  const old = await leaveWorkerWithTerminal(paseoHome, 5);
+  manager = await startRealWorkerManager({ paseoHome });
+  const draining = manager.getTerminal(old.terminalId)!;
+  expect(draining.supportsCommandDispatch).toBe(false);
+  expect(isProcessAlive(old.programPid)).toBe(true);
+  expect(() =>
+    draining.send({ type: "command", command: "must-not-run", completion: true }),
+  ).toThrow("current terminal worker");
+  // Existing input remains available to the draining owner, with no restart or cancellation.
+  draining.send({ type: "input", data: "still-connected\r" });
+  const current = await manager.createTerminal({ cwd: old.cwd, workspaceId: "ws-managed" });
+  expect(current.supportsCommandDispatch).toBe(true);
+  await waitForCondition(() => current.hasOutput(), 10000);
+  const completions: Array<number | null> = [];
+  current.onCommandFinished(({ exitCode }) => completions.push(exitCode));
+  current.send({
+    type: "command",
+    command: process.execPath,
+    args: ["-e", "process.exit(0)"],
+    completion: true,
+  });
+  await waitForCondition(() => completions.length === 1, 10000);
+  expect(completions).toEqual([0]);
+  expect((await workerRecords(paseoHome)).map((record) => record.protocolVersion).sort()).toEqual([
+    5, 6,
+  ]);
+  await manager.detach();
+  manager = await startRealWorkerManager({ paseoHome });
+  const reattached = manager.getTerminal(current.id)!;
+  expect(reattached.supportsCommandDispatch).toBe(true);
+  const afterReconnect: Array<number | null> = [];
+  reattached.onCommandFinished(({ exitCode }) => afterReconnect.push(exitCode));
+  reattached.send({
+    type: "command",
+    command: process.execPath,
+    args: ["-e", "process.exit(7)"],
+    completion: true,
+  });
+  await waitForCondition(() => afterReconnect.length === 1, 10000);
+  expect(afterReconnect).toEqual([7]);
+  expect(isProcessAlive(old.programPid)).toBe(true);
+  await manager.closeTerminals();
+  expect(isProcessAlive(old.programPid)).toBe(false);
+  expect(isProcessAlive(old.workerPid)).toBe(false);
+  expect(await workerRecords(paseoHome)).toEqual([]);
+}, 30000);
+
 it("leaves a worker from a newer Paseo running, reports it incompatible, and closes it on a kill stop", async () => {
   const paseoHome = createTemporaryHome();
-  const newer = await leaveWorkerWithTerminal(paseoHome, 6);
+  const newer = await leaveWorkerWithTerminal(paseoHome, 7);
 
   manager = await startRealWorkerManager({ paseoHome });
 
   const unavailable = manager.getUnavailableError?.();
   expect(unavailable).toBeInstanceOf(TerminalWorkerIncompatibleError);
-  expect(unavailable?.message).toContain("worker protocol 6");
+  expect(unavailable?.message).toContain("worker protocol 7");
   await expect(manager.getTerminals(newer.cwd)).rejects.toBeInstanceOf(
     TerminalWorkerIncompatibleError,
   );
@@ -1961,7 +2010,7 @@ it("completes a replay larger than the socket budget while a sibling stays usabl
       completed = message.ok;
   });
   try {
-    framed.send({ type: "hello", secret: record!.secret, protocolVersion: 5 });
+    framed.send({ type: "hello", secret: record!.secret, protocolVersion: 6 });
     await waitForCondition(() => began, 10000);
     framed.send({
       type: "send",

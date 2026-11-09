@@ -2116,8 +2116,20 @@ test(
     await origin.paseo.hosts.add({ connection: `127.0.0.1:${b.port}` });
     const serverId = (await online(origin.paseo)).hosts[0]!.serverId!;
     const remote = await origin.paseo.hosts.client(serverId);
-    const response = await remote.agents.ref(agent.id).timeline.refetch({ limit: 0 });
-    const messages = response.entries.flatMap((row) =>
+    const timeline = remote.agents.ref(agent.id).timeline;
+    let response = await timeline.refetch({ limit: 0 });
+    expect(response.hasOlder).toBe(true);
+    const entries = [...response.entries];
+    while (response.hasOlder) {
+      const cursor = response.startCursor;
+      expect(cursor).not.toBeNull();
+      response = await timeline.refetch({ direction: "before", cursor: cursor!, limit: 0 });
+      expect(response.entries.length).toBeGreaterThan(0);
+      expect(response.startCursor?.seq).toBeLessThan(cursor!.seq);
+      entries.unshift(...response.entries);
+    }
+    expect(new Set(entries.map((row) => row.seqStart)).size).toBe(rowCount);
+    const messages = entries.flatMap((row) =>
       row.item.type === "user_message" ? [row.item.text] : [],
     );
     expect(messages).toHaveLength(rowCount);

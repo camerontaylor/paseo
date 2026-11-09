@@ -18,7 +18,7 @@ import {
   resolveWorktreeRuntimeEnv,
 } from "../utils/worktree.js";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
-import type { TerminalSession } from "../terminal/terminal.js";
+import type { ClientMessage, TerminalSession } from "../terminal/terminal.js";
 
 interface CreateAgentWorktreeTestOptions {
   cwd: string;
@@ -248,11 +248,15 @@ describe("runWorktreeAutoTerminals", () => {
     triggerExit: (exitCode: number) => void;
     triggerCommandFinished: (exitCode: number) => void;
     sentInputs: string[];
+    commands: Extract<ClientMessage, { type: "command" }>[];
+    activity: string[];
+    commandSubscriptions: number;
   }
 
   function createStubTerminalManager(
     createTerminalCalls: CreateTerminalCall[],
     terminalRecords: StubTerminalRecord[] = [],
+    exitDuringBootstrap?: number,
   ): TerminalManager {
     let terminalCounter = 0;
     const sessionsById = new Map<string, TerminalSession>();
@@ -268,9 +272,13 @@ describe("runWorktreeAutoTerminals", () => {
         let exitHandler: ((info: { exitCode: number | null }) => void) | null = null;
         let commandFinishedHandler: ((info: { exitCode: number | null }) => void) | null = null;
         const sentInputs: string[] = [];
-        terminalRecords.push({
+        const activity: string[] = [];
+        const record: StubTerminalRecord = {
+          commandSubscriptions: 0,
           id: terminalId,
           sentInputs,
+          commands: [],
+          activity,
           triggerCommandFinished: (exitCode) => {
             commandFinishedHandler?.({ exitCode });
           },
@@ -279,7 +287,8 @@ describe("runWorktreeAutoTerminals", () => {
               exitHandler({ exitCode });
             }
           },
-        });
+        };
+        terminalRecords.push(record);
 
         const session: TerminalSession = {
           id: terminalId,
@@ -288,9 +297,22 @@ describe("runWorktreeAutoTerminals", () => {
           send: (message) => {
             if (message.type === "input") {
               sentInputs.push(message.data);
+            } else if (message.type === "command") {
+              record.commands.push(message);
+              sentInputs.push(
+                `${message.command}${message.args ? " " + message.args.map((arg) => `'${arg}'`).join(" ") : ""}\r`,
+              );
             }
           },
-          subscribe: () => () => {},
+          subscribe: (listener) => {
+            if (exitDuringBootstrap !== undefined) {
+              queueMicrotask(() => {
+                record.triggerExit(exitDuringBootstrap);
+                listener({ type: "output", data: "shell exited" });
+              });
+            }
+            return () => {};
+          },
           onExit: (handler) => {
             exitHandler = handler;
             return () => {
@@ -300,6 +322,7 @@ describe("runWorktreeAutoTerminals", () => {
             };
           },
           onCommandFinished: (handler) => {
+            record.commandSubscriptions += 1;
             commandFinishedHandler = handler;
             return () => {
               if (commandFinishedHandler === handler) {
@@ -307,15 +330,23 @@ describe("runWorktreeAutoTerminals", () => {
               }
             };
           },
-          hasOutput: () => true,
-
+          hasOutput: () => exitDuringBootstrap === undefined,
+          getState: () => ({
+            rows: 1,
+            cols: 1,
+            grid: [[{ char: exitDuringBootstrap === undefined ? "$" : " " }]],
+            scrollback: [],
+            cursor: { row: 0, col: 0 },
+          }),
           kill: () => {},
           onTitleChange: () => () => {},
           onActivityChange: () => () => {},
           getSize: () => ({ rows: 1, cols: 1 }),
           getTitle: () => undefined,
           getActivity: () => null,
-          setActivity: () => {},
+          setActivity: (state) => {
+            activity.push(state);
+          },
           getExitInfo: () => null,
           killAndWait: async () => {},
         };
@@ -366,6 +397,9 @@ describe("runWorktreeAutoTerminals", () => {
     expect(createTerminalCalls[0]?.cwd).toBe(testRepoDir);
     expect(createTerminalCalls[0]?.name).toBe("api");
     expect(terminalRecords[0]?.sentInputs).toEqual(["npm run api\r"]);
+    expect(terminalRecords[0]?.commands).toEqual([
+      { type: "command", command: "npm run api", completion: false },
+    ]);
     expect(createTerminalCalls[0]?.env).not.toHaveProperty("PORT");
     expect(createTerminalCalls[0]?.env?.PASEO_PORT).toEqual(expect.any(String));
     expect(createTerminalCalls[0]?.env?.HOST).toBe("127.0.0.1");
@@ -468,6 +502,38 @@ describe("runWorktreeAutoTerminals", () => {
     });
   });
 
+  it.each(["script", "service"] as const)(
+    "preserves stopped %s state when its shell exits during bootstrap",
+    async (type) => {
+      commitPaseoScripts({ web: { command: "npm run dev", type } });
+      const routeStore = new ScriptRouteStore();
+      const runtimeStore = new WorkspaceScriptRuntimeStore();
+      const terminalRecords: StubTerminalRecord[] = [];
+      await expect(
+        spawnWorkspaceScript({
+          repoRoot: repoDir,
+          workspaceId: repoDir,
+          projectSlug: "repo",
+          branchName: "feature-socket-service",
+          scriptName: "web",
+          daemonPort: 6767,
+          serviceProxy: routeStore,
+          runtimeStore,
+          terminalManager: createStubTerminalManager([], terminalRecords, 7),
+        }),
+      ).rejects.toThrow("Terminal stopped before script 'web' could start");
+      expect(runtimeStore.get({ workspaceId: repoDir, scriptName: "web" })).toMatchObject({
+        lifecycle: "stopped",
+        terminalId: "term-1",
+        exitCode: 7,
+      });
+      expect(terminalRecords[0].sentInputs).toEqual([]);
+      expect(terminalRecords[0].activity).toEqual([]);
+      expect(terminalRecords[0].commandSubscriptions).toBe(0);
+      expect(routeStore.listRoutes()).toEqual([]);
+    },
+  );
+
   it("records plain script exit codes from shell command completion without terminal exit", async () => {
     commitPaseoScripts(
       {
@@ -505,6 +571,70 @@ describe("runWorktreeAutoTerminals", () => {
       exitCode: 7,
     });
     expect(terminalRecords[0]?.sentInputs).toEqual(['node -e "process.exit(7)"\r']);
+    expect(terminalRecords[0]?.activity).toEqual(["working", "idle"]);
+  });
+
+  it("runs nested package scripts in their package and reports completion activity", async () => {
+    writeFileSync(join(repoDir, "package.json"), "{");
+    const packageDirectory = join(repoDir, "packages", "web");
+    mkdirSync(packageDirectory, { recursive: true });
+    writeFileSync(
+      join(packageDirectory, "package.json"),
+      JSON.stringify({ scripts: { build: "echo built" } }),
+    );
+    const runtimeStore = new WorkspaceScriptRuntimeStore();
+    const records: StubTerminalRecord[] = [];
+    const calls: CreateTerminalCall[] = [];
+    const scriptName = "package.json:packages%2Fweb%2Fpackage.json:build";
+    await spawnWorkspaceScript({
+      repoRoot: repoDir,
+      workspaceId: repoDir,
+      projectSlug: "repo",
+      branchName: "main",
+      scriptName,
+      daemonPort: 6767,
+      serviceProxy: new ScriptRouteStore(),
+      runtimeStore,
+      terminalManager: createStubTerminalManager(calls, records),
+    });
+    expect(calls[0]).toMatchObject({
+      cwd: realpathSync.native(packageDirectory),
+      name: "packages/web: build",
+    });
+    expect(records[0]?.commands).toEqual([
+      {
+        type: "command",
+        command: process.platform === "win32" ? "npm.cmd" : "npm",
+        args: ["run", "build"],
+        cwd: realpathSync.native(packageDirectory),
+        completion: true,
+      },
+    ]);
+    expect(records[0]?.activity).toEqual(["working"]);
+    records[0]?.triggerCommandFinished(1);
+    expect(records[0]?.activity).toEqual(["working", "idle"]);
+    expect(runtimeStore.get({ workspaceId: repoDir, scriptName })).toMatchObject({
+      lifecycle: "stopped",
+      exitCode: 1,
+      packageJson: { path: "packages/web/package.json", script: "build" },
+    });
+    records[0]?.triggerCommandFinished(1);
+    expect(records[0]?.activity).toEqual(["working", "idle"]);
+    writeFileSync(join(packageDirectory, "package.json"), JSON.stringify({ scripts: {} }));
+    await expect(
+      spawnWorkspaceScript({
+        repoRoot: repoDir,
+        workspaceId: repoDir,
+        projectSlug: "repo",
+        branchName: "main",
+        scriptName,
+        daemonPort: 6767,
+        serviceProxy: new ScriptRouteStore(),
+        runtimeStore,
+        terminalManager: createStubTerminalManager(calls, records),
+      }),
+    ).rejects.toThrow(`Script '${scriptName}' is not configured`);
+    expect(calls).toHaveLength(1);
   });
 
   it("reuses a live terminal when rerunning after plain script completion", async () => {
@@ -571,6 +701,24 @@ describe("runWorktreeAutoTerminals", () => {
       terminalId: firstResult.terminalId,
       exitCode: 0,
     });
+    const oldSession = terminalManager.getTerminal(firstResult.terminalId)!;
+    Object.defineProperty(oldSession, "supportsCommandDispatch", { value: false });
+    const currentResult = await spawnWorkspaceScript({
+      repoRoot: repoDir,
+      workspaceId: repoDir,
+      projectSlug: "repo",
+      branchName: "feature-script-rerun",
+      scriptName: "typecheck",
+      daemonPort: null,
+      serviceProxy: routeStore,
+      runtimeStore,
+      terminalManager,
+    });
+    expect(currentResult.terminalId).not.toBe(firstResult.terminalId);
+    expect(createTerminalCalls).toHaveLength(2);
+    expect(terminalManager.getTerminal(firstResult.terminalId)).toBe(oldSession);
+    expect(terminalRecords[0]?.sentInputs).toHaveLength(2);
+    expect(terminalRecords[1]?.sentInputs).toEqual(["npm run typecheck\r"]);
   });
 
   it("tracks command completion when reusing a live terminal from a stopped plain script entry", async () => {
