@@ -1934,6 +1934,36 @@ it.each([false, true])(
   },
 );
 
+// TEMPORARY PR15 diagnostic: remove once Windows command parsing/OSC delivery is localized.
+function traceManagedWindowsSession(session: TerminalSession, shell: string): void {
+  if (!isPlatform("win32")) return;
+  const record = (kind: string, detail: unknown) =>
+    console.info(
+      "MANAGED_WINDOWS_TRACE",
+      JSON.stringify({
+        at: process.hrtime.bigint().toString(),
+        pid: session.pid,
+        shell,
+        kind,
+        detail,
+      }),
+    );
+  record("created", { execPath: process.execPath });
+  session.subscribe((event) => record("pty", event));
+  session.onCommandFinished((event) => record("finished", event));
+  session.onExit((event) => record("exit", event));
+  const send = session.send.bind(session);
+  session.send = (message) => {
+    record(
+      "send",
+      message.type === "command"
+        ? { message, rendered: buildTerminalCommand(message, shell) }
+        : message,
+    );
+    send(message);
+  };
+}
+
 // These are real interactive shells: no synthetic OSC injection or manual completion callbacks.
 describe("managed command dispatch", () => {
   const shells = isPlatform("win32")
@@ -1954,6 +1984,7 @@ describe("managed command dispatch", () => {
         env: { HOME: home, ZDOTDIR: home, PASEO_MANAGED_UNSAFE: "must-not-expand" },
       }),
     );
+    traceManagedWindowsSession(session, shell);
     const completions: Array<number | null> = [];
     session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
     await expect.poll(() => session.hasOutput()).toBe(true);
@@ -2077,6 +2108,7 @@ describe("managed command dispatch", () => {
       const cwd = mkdtempSync(join(tmpdir(), "managed-service-"));
       temporaryDirs.push(cwd);
       const session = trackSession(await createTerminal({ cwd, workspaceId: "ws-service", shell }));
+      traceManagedWindowsSession(session, shell);
       const codes: Array<number | null> = [];
       const output: string[] = [];
       session.onCommandFinished(({ exitCode }) => codes.push(exitCode));
