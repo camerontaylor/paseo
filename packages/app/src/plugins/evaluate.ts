@@ -5,6 +5,7 @@ import * as pluginUiRuntime from "./react-native/ui";
 import { useRevealedText } from "@/hooks/use-revealed-text";
 import { useSettings } from "./settings/use-settings";
 import * as pluginSharedRuntime from "@getpaseo/plugin";
+import { pluginSdkEntry } from "@getpaseo/plugin";
 import * as pluginClientRuntime from "@getpaseo/plugin/client";
 import * as React from "react";
 import * as ReactJsxRuntime from "react/jsx-runtime";
@@ -506,27 +507,31 @@ export function runPluginClientBundle(
       return trackButton(runtime.addHeaderButton(contribution));
     },
   };
+  const clientRuntime = {
+    ...pluginClientRuntime,
+    useSettings,
+    openExternalUrl,
+    getPaseoClient: (serverId: string) => runtime.hosts.getPaseoClient(serverId),
+    useHosts: () =>
+      React.useSyncExternalStore(
+        runtime.hosts.subscribe,
+        runtime.hosts.getSnapshot,
+        runtime.hosts.getSnapshot,
+      ),
+  };
   const runtimeRequire = (name: string): unknown => {
+    const sdkEntry = pluginSdkEntry(name);
     // COMPAT(pluginReactNativeEntrypoint): added in v0.13.0, remove after 2027-04-20
     if (name === "@getpaseo/plugin/client/react-native") return pluginReactNativeCompatRuntime;
-    if (name === "@getpaseo/plugin/client/ui") return pluginUiRuntime;
+    if (sdkEntry === "/client/ui") return pluginUiRuntime;
     if (name === "react") return React;
     if (name === "react/jsx-runtime") return ReactJsxRuntime;
     if (name === "react-native") return ReactNative;
-    if (name === "@getpaseo/plugin") return pluginSharedRuntime;
-    if (name === "@getpaseo/plugin/client")
-      return {
-        ...pluginClientRuntime,
-        useSettings,
-        openExternalUrl,
-        getPaseoClient: (serverId: string) => runtime.hosts.getPaseoClient(serverId),
-        useHosts: () =>
-          React.useSyncExternalStore(
-            runtime.hosts.subscribe,
-            runtime.hosts.getSnapshot,
-            runtime.hosts.getSnapshot,
-          ),
-      };
+    if (sdkEntry === "") return pluginSharedRuntime;
+    if (sdkEntry === "/client") return clientRuntime;
+    if (sdkEntry === "/client/react-native") {
+      return pluginReactNativeCompatRuntime;
+    }
     if (name === "@tanstack/react-query") return ReactQuery;
     if (name === "zod") return Zod;
     throw new Error(`Module "${name}" is not available in plugin client code`);

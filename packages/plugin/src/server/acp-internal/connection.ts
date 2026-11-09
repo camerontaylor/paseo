@@ -9,6 +9,7 @@ import {
   type Client,
   type AgentCapabilities,
   type ContentBlock,
+  type ListSessionsResponse,
   type NewSessionResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
@@ -23,6 +24,8 @@ import { z } from "zod";
 import type {
   AcpConfigAccess,
   AcpConfigChange,
+  AcpConnectionPolicy,
+  AcpSessionPolicy,
   AcpToolCallSnapshot,
   AcpTransformer,
   AcpVendorUpdate,
@@ -39,6 +42,7 @@ import {
   type ProviderConfigState,
   type ProviderConnectRequest,
   type ProviderConnection,
+  type ProviderError,
   type ProviderEvent,
   type ProviderInput,
   type ProviderLaunch,
@@ -48,6 +52,22 @@ import {
   type ProviderSetting,
   type ProviderTimelineItem,
 } from "../provider.js";
+
+/**
+ * How long a cancelled vendor turn may take to report its own terminal before Paseo ends it
+ * locally. The agent aborts the turn and answers `session/cancel` promptly; this only bounds a
+ * daemon that acknowledges the cancel and never reports the end.
+ */
+const VENDOR_TURN_CANCEL_GRACE_MS = 1_000;
+
+function mergePolicy<T extends object>(current: T, next: T | null | undefined): T {
+  if (!next) return current;
+  const merged = { ...current };
+  for (const key of Object.keys(next) as (keyof T)[]) {
+    if (next[key] !== undefined && current[key] !== false) merged[key] = next[key];
+  }
+  return merged;
+}
 
 const ADAPTER_CAPABILITIES = [
   "prompt.message",
@@ -77,6 +97,9 @@ export async function createAcpProviderConnection(
     emit: () => undefined,
   });
   const supportedCapabilities: ProviderCapability[] = [...ADAPTER_CAPABILITIES];
+  if (options.acpOptions?.vendorTurnsAreNeverForeground)
+    supportedCapabilities.push("session.shared_turns");
+  if (probe.connectionPolicy.steering === true) supportedCapabilities.push("prompt.steer");
   if (probe.agentCapabilities.promptCapabilities?.image) {
     supportedCapabilities.push("prompt.image");
   }
@@ -131,12 +154,17 @@ export async function createAcpProviderConnection(
     },
     async close() {
       if (closePromise) return closePromise;
+      // The boundary stops delivering events once it closes, so report the turn this close ends
+      // while listeners still receive them.
+      for (const session of sessions.values()) session.runtime.closeVendorTurn();
       closed = true;
       closePromise = (async () => {
-        await Promise.all(inFlight);
         const active = [...sessions.values()];
         sessions.clear();
         await Promise.all(active.map(({ runtime }) => runtime.closeSession()));
+        // Closing the transports releases admissions waiting on active prompts. Operations that
+        // were still opening a session observe closed and close their own runtime.
+        await Promise.all(inFlight);
         listeners.clear();
       })();
       return closePromise;
@@ -281,8 +309,7 @@ async function listSessions(
     emit: state.emit,
   });
   try {
-    const response = await runtime.listSessions(input.cwd);
-    const selected = input.limit ? response.sessions.slice(0, input.limit) : response.sessions;
+    const selected = await runtime.listSessions(input.cwd, input.limit);
     state.emit({
       type: "sessions",
       requestId: input.requestId,
@@ -354,6 +381,9 @@ interface StartRuntimeOptions {
 class AcpRuntime {
   readonly connection: ClientSideConnection;
   agentCapabilities: AgentCapabilities = {};
+  connectionPolicy: AcpConnectionPolicy = {};
+  private sessionPolicy: AcpSessionPolicy = {};
+  private sharedTurns = false;
   nativeSessionId = "";
   private readonly child: ChildProcessWithoutNullStreams | null;
   private emit: (event: ProviderEvent) => void;
@@ -367,6 +397,7 @@ class AcpRuntime {
     { request: RequestPermissionRequest; resolve(response: RequestPermissionResponse): void }
   >();
   private readonly transformers: readonly AcpTransformer[];
+  private readonly vendorTurnsAreNeverForeground: boolean;
   private configOptions: SessionConfigOption[] = [];
   private modes: NewSessionResponse["modes"] = null;
   private commandWaiter: (() => void) | null = null;
@@ -395,6 +426,28 @@ class AcpRuntime {
   private notificationLane: Promise<void> = Promise.resolve();
   private promptLane: Promise<void> = Promise.resolve();
   private activePrompt: { turnId: string; settled: Promise<void> } | null = null;
+  private readonly outstandingSteers = new Map<
+    string,
+    { attachedTurnId: string; settled: Promise<void> }
+  >();
+  /** A prompt admitted but not sent yet, waiting for an open vendor turn to end. */
+  private parkedAdmission: { cancel(): void } | null = null;
+  private vendorTurnCancelTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Bumped by a user stop; a prompt admitted before it is dropped instead of sent. */
+  private stopGeneration = 0;
+  /**
+   * The vendor turn a transformer reported and Paseo did not prompt. Only one can be
+   * open: the agent runs one turn at a time, so a new start means the old turn is over.
+   */
+  private vendorTurn: { turnId: string; settled: Promise<void>; resolve(): void } | null = null;
+  /** One FIFO slot per inbound session/update, so vendor updates can follow them. */
+  private readonly updateSlots = new UpdateSlots();
+  private readonly promptResponses = new PromptResponseOrder();
+  private readonly steerEchoes = new Map<string, string>();
+  private bufferedUserChunk: Extract<
+    SessionUpdate,
+    { sessionUpdate: "user_message_chunk" }
+  > | null = null;
 
   static async start(options: StartRuntimeOptions): Promise<AcpRuntime> {
     let child: ChildProcessWithoutNullStreams | null = null;
@@ -440,6 +493,14 @@ class AcpRuntime {
         ? await Promise.race([initialize, spawnFailure])
         : await initialize;
       runtime.agentCapabilities = initialized.agentCapabilities ?? {};
+      for (const transformer of runtime.transformers) {
+        runtime.connectionPolicy = mergePolicy(
+          runtime.connectionPolicy,
+          transformer.initialize?.({
+            agentCapabilities: jsonValue(runtime.agentCapabilities),
+          }),
+        );
+      }
       return runtime;
     } catch (error) {
       await runtime.close();
@@ -457,35 +518,49 @@ class AcpRuntime {
     this.closeConnector = closeConnector;
     this.emit = options.emit;
     this.transformers = options.options.transformers ?? [];
+    this.vendorTurnsAreNeverForeground =
+      options.options.acpOptions?.vendorTurnsAreNeverForeground === true;
     const client: Client = {
       requestPermission: (request) => this.requestPermission(request),
       sessionUpdate: (notification) =>
-        this.enqueueNotification(() => this.sessionUpdate(notification)),
+        this.enqueueNotification(() => {
+          try {
+            this.sessionUpdate(notification);
+          } finally {
+            this.updateSlots.settleDelivered(notification);
+          }
+        }),
     };
     this.connection = new ClientSideConnection(
       () => client,
-      routeVendorNotifications(stream, (method, params) => this.vendorNotification(method, params)),
+      routeVendorNotifications(
+        stream,
+        (method, params) => this.vendorNotification(method, params),
+        this.updateSlots,
+        this.promptResponses,
+      ),
     );
     if (!child) void this.connection.closed.then(() => this.handleUnexpectedTransportClose());
     child?.on("error", (error) => {
       this.processFailed = true;
+      if (!this.closing && this.nativeSessionId) {
+        this.emit({
+          type: "session.runtime_failed",
+          sessionId: this.options.boundarySessionId,
+          error: { message: describeError(error) },
+        });
+      }
       this.settlePendingWork();
-      if (this.closing || !this.nativeSessionId) return;
-      this.emit({
-        type: "session.runtime_failed",
-        sessionId: this.options.boundarySessionId,
-        error: { message: describeError(error) },
-      });
     });
     child?.once("close", (code, signal) => {
       if (this.closing || this.processFailed || !this.nativeSessionId) return;
       this.processFailed = true;
-      this.settlePendingWork();
       this.emit({
         type: "session.runtime_failed",
         sessionId: this.options.boundarySessionId,
         error: { message: `ACP process exited (${signal ?? code ?? "unknown"})` },
       });
+      this.settlePendingWork();
     });
   }
 
@@ -493,7 +568,8 @@ class AcpRuntime {
     input: Extract<ProviderInput, { type: "session.open" }>,
     connectionCapabilities: readonly ProviderCapability[],
   ): Promise<readonly ProviderCapability[]> {
-    const mcpServers = toAcpMcpServers(input.config);
+    const mcpServers =
+      this.connectionPolicy.sendSessionMcpServers === false ? [] : toAcpMcpServers(input.config);
     const nativeSessionId = readNativeSessionId(input.persistence);
     const metadata = {
       _paseo: {
@@ -522,6 +598,9 @@ class AcpRuntime {
       } finally {
         this.replayWindow = null;
       }
+      // Replayed chunks leave their fallback ids behind; the live stream that follows starts
+      // its own items even when the agent replays without message ids.
+      this.fallbackChunkIds.clear();
     } else {
       const newSession = await this.call(
         this.connection.newSession({
@@ -535,13 +614,25 @@ class AcpRuntime {
     }
     this.modes = response.modes;
     this.configOptions = response.configOptions ?? [];
+    for (const transformer of this.transformers) {
+      this.sessionPolicy = mergePolicy(
+        this.sessionPolicy,
+        transformer.attach?.(
+          { response: jsonValue(response) },
+          { sessionId: input.sessionId, agentCapabilities: jsonValue(this.agentCapabilities) },
+        ),
+      );
+    }
+    this.sharedTurns = connectionCapabilities.includes("session.shared_turns");
     await this.applyInitialConfig(input.config);
     const sessionCapabilities = connectionCapabilities.filter(
       (capability) =>
-        capability !== "session.configure" ||
-        this.modes !== null ||
-        this.configOptions.length > 0 ||
-        this.transformers.some((transformer) => transformer.configure !== undefined),
+        (capability !== "prompt.steer" ||
+          (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true)) &&
+        (capability !== "session.configure" ||
+          this.modes !== null ||
+          this.configOptions.length > 0 ||
+          this.transformers.some((transformer) => transformer.configure !== undefined)),
     );
     this.emit({
       type: "session.opened",
@@ -553,6 +644,19 @@ class AcpRuntime {
       title: input.config.title,
       cwd: input.config.cwd,
     });
+    const omittedServers = Object.keys(input.config.mcpServers);
+    if (this.connectionPolicy.sendSessionMcpServers === false && omittedServers.length > 0) {
+      this.emit({
+        type: "session.notice",
+        sessionId: input.sessionId,
+        notice: {
+          id: "acp-session-mcp-omitted",
+          severity: "info",
+          title: "Session MCP servers were not sent",
+          description: `${omittedServers.join(", ")}. Configure these servers in the agent's own MCP configuration.`,
+        },
+      });
+    }
     this.emitConfig();
     if (this.options.options.acpOptions?.waitForInitialCommands) {
       await this.waitForInitialCommands();
@@ -575,19 +679,146 @@ class AcpRuntime {
   }
 
   prompt(input: Extract<ProviderInput, { type: "session.prompt" }>): Promise<void> {
-    const admission = this.promptLane.then(() => this.admitPrompt(input));
+    if (input.prompt.delivery === "steer") return this.steer(input);
+    // A stop cancels the prompts waiting when it is pressed, not prompts admitted after it.
+    const stopGeneration = this.stopGeneration;
+    const admission = this.promptLane.then(() => this.admitPrompt(input, stopGeneration));
     this.promptLane = admission.catch(() => undefined);
     return admission;
   }
 
+  private async steer(input: Extract<ProviderInput, { type: "session.prompt" }>): Promise<void> {
+    const turnId = this.activePrompt?.turnId ?? this.vendorTurn?.turnId;
+    const clientMessageId = input.prompt.clientMessageId;
+    if (!turnId) {
+      this.emit({
+        type: "session.prompt_result",
+        sessionId: this.options.boundarySessionId,
+        clientMessageId,
+        result: { type: "failed", error: { message: "No active turn to steer" } },
+      });
+      return;
+    }
+    const prompt = toAcpPrompt(input.prompt);
+    const text = prompt
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    if (text && this.connectionPolicy.echoesUserMessages !== false) {
+      this.steerEchoes.set(clientMessageId, text);
+    }
+    this.emit({
+      type: "timeline.item",
+      sessionId: this.options.boundarySessionId,
+      item: {
+        type: "user_message",
+        id: clientMessageId,
+        clientMessageId,
+        text,
+      },
+    });
+    const rolloverId = `acp:${clientMessageId}`;
+    const releaseResponse = this.promptResponses.register();
+    const settled = this.call(
+      this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
+    ).then(
+      async (response) => {
+        await this.drainNotifications();
+        this.expireSteerEcho(clientMessageId);
+        if (this.activePrompt?.turnId === rolloverId) {
+          this.activePrompt = null;
+          const state = response.stopReason === "cancelled" ? "canceled" : "completed";
+          this.fallbackChunkIds.clear();
+          this.terminalizeTransientItems(state);
+          this.emit({
+            type: "session.turn",
+            sessionId: this.options.boundarySessionId,
+            turnId: rolloverId,
+            state,
+          });
+        }
+        releaseResponse();
+        return undefined;
+      },
+      async (error) => {
+        await this.drainNotifications();
+        this.expireSteerEcho(clientMessageId);
+        const isRollover = this.activePrompt?.turnId === rolloverId;
+        if (isRollover) this.activePrompt = null;
+        if (this.closing || this.processFailed) {
+          releaseResponse();
+          return;
+        }
+        if (isRollover) {
+          this.terminalizeTransientItems("failed");
+          this.emit({
+            type: "session.turn",
+            sessionId: this.options.boundarySessionId,
+            turnId: rolloverId,
+            state: "failed",
+            error: { message: describeError(error) },
+          });
+        }
+        this.emit({
+          type: "session.notice",
+          sessionId: this.options.boundarySessionId,
+          notice: {
+            id: `acp-steer-${clientMessageId}`,
+            severity: "warning",
+            title: "Steering failed",
+            description: describeError(error),
+          },
+        });
+        releaseResponse();
+      },
+    );
+    const wasPending = this.outstandingSteers.size > 0;
+    this.outstandingSteers.set(clientMessageId, { attachedTurnId: turnId, settled });
+    if (!wasPending) this.emitPendingWork(true);
+    void settled.finally(() => {
+      if (this.outstandingSteers.delete(clientMessageId) && this.outstandingSteers.size === 0) {
+        this.emitPendingWork(false);
+      }
+    });
+    this.emit({
+      type: "session.prompt_result",
+      sessionId: this.options.boundarySessionId,
+      clientMessageId,
+      result: { type: "steer", turnId },
+    });
+  }
+
   private async admitPrompt(
     input: Extract<ProviderInput, { type: "session.prompt" }>,
+    stopGeneration: number,
   ): Promise<void> {
-    const active = this.activePrompt;
-    if (active) {
-      await this.interrupt();
+    while (this.activePrompt) {
+      const active = this.activePrompt;
+      // Replacing a foreground prompt is not a user stop of the prompts queued behind it.
+      if (!this.sharedTurns) await this.interruptTurn();
       await active.settled;
     }
+    // A vendor turn belongs to another client attached to the same agent session; the agent
+    // queues this prompt behind it anyway. Waiting keeps the user's message after the peer
+    // output and stops peer chunks from being attributed to the foreground turn. A new vendor
+    // turn can open while the previous one closes, so wait for the chain to drain.
+    let wakeParked!: () => void;
+    const parked = new Promise<void>((resolve) => {
+      wakeParked = resolve;
+    });
+    this.parkedAdmission = { cancel: wakeParked };
+    const stopped = () => stopGeneration < this.stopGeneration;
+    try {
+      while (this.vendorTurn) {
+        if (stopped()) break;
+        const open = this.vendorTurn;
+        await Promise.race([open.settled, parked]);
+        if (stopped()) break;
+      }
+    } finally {
+      this.parkedAdmission = null;
+    }
+    if (this.closing) return;
     const prompt = toAcpPrompt(input.prompt);
     const turnId = `acp:${input.prompt.clientMessageId}`;
     this.fallbackChunkIds.clear();
@@ -616,13 +847,33 @@ class AcpRuntime {
       turnId,
       state: "started",
     });
+    if (stopped()) {
+      // A stop the user asked for: the prompt was admitted but never sent, so it ends the way an
+      // interrupted prompt ends instead of as a failure.
+      this.emit({
+        type: "session.turn",
+        sessionId: this.options.boundarySessionId,
+        turnId,
+        state: "canceled",
+      });
+      return;
+    }
     // The SDK dispatches notifications without awaiting them, so the prompt response can resolve
     // while earlier session updates are still queued. Apply them before the turn ends.
+    const echoText = prompt
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    if (echoText && this.connectionPolicy.echoesUserMessages !== false) {
+      this.steerEchoes.set(input.prompt.clientMessageId, echoText);
+    }
+    const releaseResponse = this.promptResponses.register();
     const settled = this.call(
       this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
     ).then(
       async (response): Promise<void> => {
         await this.drainNotifications();
+        if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
         const state = response.stopReason === "cancelled" ? "canceled" : "completed";
         this.fallbackChunkIds.clear();
         this.terminalizeTransientItems(state);
@@ -632,10 +883,12 @@ class AcpRuntime {
           turnId,
           state,
         });
+        releaseResponse();
         return undefined;
       },
       async (error): Promise<void> => {
         await this.drainNotifications();
+        if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
         this.fallbackChunkIds.clear();
         this.terminalizeTransientItems("failed");
         this.emit({
@@ -645,21 +898,78 @@ class AcpRuntime {
           state: "failed",
           error: { message: describeError(error) },
         });
+        releaseResponse();
         return undefined;
       },
     );
     this.activePrompt = { turnId, settled };
     void settled.finally(() => {
+      this.expireSteerEcho(input.prompt.clientMessageId);
       if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
     });
   }
 
   interrupt(): Promise<void> {
+    // A prompt parked behind a vendor turn has not reached the agent, so a session-wide cancel
+    // would not stop it: drop every prompt admitted before the stop here instead.
+    this.stopGeneration += 1;
+    this.parkedAdmission?.cancel();
+    const cancelled = this.vendorTurn;
+    if (cancelled && !this.activePrompt && this.sessionPolicy.stopObservedTurns === false) {
+      this.emit({
+        type: "session.notice",
+        sessionId: this.options.boundarySessionId,
+        notice: {
+          id: "acp-stop-observed-turn",
+          severity: "warning",
+          title: "Cannot stop another client's turn",
+          description: "This attachment cannot stop another client's turn.",
+        },
+      });
+      return Promise.reject(new Error("This attachment cannot stop another client's turn"));
+    }
+    // Only an agent that reports peer turns as vendor turns is known to stop the peer turn when
+    // it is cancelled; for any other agent the turn may keep running, so do not end it locally.
+    if (cancelled && !this.activePrompt && this.vendorTurnsAreNeverForeground) {
+      this.scheduleVendorTurnCancel(cancelled.turnId);
+    }
+    return this.interruptTurn();
+  }
+
+  private interruptTurn(): Promise<void> {
     return this.call(this.connection.cancel({ sessionId: this.nativeSessionId }));
   }
 
-  listSessions(cwd?: string) {
-    return this.call(this.connection.listSessions({ cwd }));
+  /**
+   * A cancel the agent acknowledges but never reports a terminal for would hold the vendor turn,
+   * and every prompt behind it, forever. End it locally once the grace period passes.
+   */
+  private scheduleVendorTurnCancel(turnId: string): void {
+    if (this.vendorTurnCancelTimer) clearTimeout(this.vendorTurnCancelTimer);
+    this.vendorTurnCancelTimer = setTimeout(() => {
+      this.vendorTurnCancelTimer = null;
+      if (this.vendorTurn?.turnId !== turnId) return;
+      console.warn(`Vendor turn ${turnId} reported no terminal after cancel; ending it locally`);
+      this.endVendorTurn("canceled", { message: "Canceled by Paseo" });
+    }, VENDOR_TURN_CANCEL_GRACE_MS);
+  }
+
+  /** Follows `nextCursor` until the requested limit is reached or the agent has no more pages. */
+  async listSessions(cwd?: string, limit?: number): Promise<ListSessionsResponse["sessions"]> {
+    const sessions: ListSessionsResponse["sessions"] = [];
+    const seen = new Set<string>();
+    let cursor: string | null | undefined;
+    for (;;) {
+      const response = await this.call(this.connection.listSessions({ cwd, cursor }));
+      sessions.push(...response.sessions);
+      cursor = response.nextCursor;
+      if (!cursor) break;
+      // An agent that repeats a cursor would otherwise page forever.
+      if (seen.has(cursor)) break;
+      seen.add(cursor);
+      if (limit !== undefined && sessions.length >= limit) break;
+    }
+    return limit === undefined ? sessions : sessions.slice(0, limit);
   }
 
   async drainNotifications(): Promise<void> {
@@ -740,6 +1050,12 @@ class AcpRuntime {
     this.emitConfigSnapshot(committedConfig);
   }
 
+  /** Ends an open vendor turn before the boundary connection stops delivering events. */
+  closeVendorTurn(): void {
+    this.endVendorTurn("canceled", { message: "Session closed by Paseo" });
+    this.clearOutstandingSteers();
+  }
+
   async closeSession(): Promise<void> {
     if (this.nativeSessionId) {
       await withTimeout(
@@ -769,9 +1085,15 @@ class AcpRuntime {
   }
 
   private async applyInitialConfig(config: ProviderSessionConfig): Promise<void> {
-    if (config.model) await this.applyConfigChange({ target: "model", value: config.model });
-    if (config.mode) await this.applyConfigChange({ target: "mode", value: config.mode });
-    if (config.thinkingOption) {
+    // Reattaching to a shared turn must not send an unchanged configuration mutation:
+    // some daemons serialize that request behind the running provider response.
+    const current = () => toProviderConfigState(this.modes, this.configOptions);
+    if (config.model && config.model !== current().model) {
+      await this.applyConfigChange({ target: "model", value: config.model });
+    }
+    if (config.mode && config.mode !== current().mode)
+      await this.applyConfigChange({ target: "mode", value: config.mode });
+    if (config.thinkingOption && config.thinkingOption !== current().thinkingOption) {
       await this.applyConfigChange({ target: "thinking", value: config.thinkingOption });
     }
     for (const [id, value] of Object.entries(config.settings)) {
@@ -912,7 +1234,36 @@ class AcpRuntime {
 
   private sessionUpdate(notification: SessionNotification): void {
     if (notification.sessionId !== this.nativeSessionId) return;
-    if (this.replayWindow === "skip") return;
+    // A held peer update that follows the vendor turn's `started` is live, not replayed history:
+    // keep it even when the caller asked to skip the loaded history.
+    if (this.replayWindow === "skip" && !this.vendorTurn) return;
+    if (
+      !this.replayWindow &&
+      !this.activePrompt &&
+      !this.vendorTurn &&
+      [
+        "agent_message_chunk",
+        "agent_thought_chunk",
+        "user_message_chunk",
+        "tool_call",
+        "tool_call_update",
+        "plan",
+      ].includes(notification.update.sessionUpdate)
+    ) {
+      const next = this.outstandingSteers.entries().next().value;
+      if (next) {
+        const [clientMessageId, steer] = next;
+        const turnId = `acp:${clientMessageId}`;
+        this.activePrompt = { turnId, settled: steer.settled };
+        this.fallbackChunkIds.clear();
+        this.emit({
+          type: "session.turn",
+          sessionId: this.options.boundarySessionId,
+          turnId,
+          state: "started",
+        });
+      }
+    }
     if (
       this.replayWindow === "replay" &&
       notification.update.sessionUpdate === "user_message_chunk"
@@ -924,13 +1275,14 @@ class AcpRuntime {
   }
 
   private reduceUpdate(update: SessionUpdate): void {
+    if (update.sessionUpdate !== "user_message_chunk") this.flushBufferedUserChunk();
     if (
       update.sessionUpdate === "agent_message_chunk" ||
       update.sessionUpdate === "agent_thought_chunk" ||
       update.sessionUpdate === "user_message_chunk"
     ) {
       if (update.sessionUpdate === "user_message_chunk") {
-        this.fallbackChunkIds.clear();
+        this.reduceLiveUserChunk(update);
         return;
       }
       // A chunk of one kind ends every other kind's open item, whatever its
@@ -966,6 +1318,58 @@ class AcpRuntime {
     }
     if (update.sessionUpdate === "plan") this.fallbackChunkIds.clear();
     this.reduceStateUpdate(update);
+  }
+
+  private reduceLiveUserChunk(
+    update: Extract<SessionUpdate, { sessionUpdate: "user_message_chunk" }>,
+  ): void {
+    if (this.steerEchoes.size > 0) this.reconcileSteerEcho(update);
+    else this.reduceUserMessageChunk(update);
+  }
+
+  private reconcileSteerEcho(
+    update: Extract<SessionUpdate, { sessionUpdate: "user_message_chunk" }>,
+  ): void {
+    if (update.content.type !== "text") {
+      this.flushBufferedUserChunk();
+      this.reduceUserMessageChunk(update);
+      return;
+    }
+    if (this.bufferedUserChunk && this.bufferedUserChunk.messageId !== update.messageId) {
+      this.flushBufferedUserChunk();
+    }
+    const previous = this.bufferedUserChunk;
+    const text =
+      (previous?.content.type === "text" ? previous.content.text : "") + update.content.text;
+    this.bufferedUserChunk = { ...update, content: { type: "text", text } };
+    // ACP native IDs need not equal our local submission IDs. Generic providers
+    // offer no origin correlation, so retain text matching for their own echoes.
+    const echoes = [...this.steerEchoes];
+    const exact = echoes.find(([, echo]) => echo === text);
+    if (exact) {
+      this.fallbackChunkIds.clear();
+      this.steerEchoes.delete(exact[0]);
+      this.bufferedUserChunk = null;
+    } else if (!echoes.some(([, echo]) => echo.startsWith(text))) {
+      this.flushBufferedUserChunk();
+    }
+  }
+
+  private flushBufferedUserChunk(): void {
+    const chunk = this.bufferedUserChunk;
+    this.bufferedUserChunk = null;
+    if (chunk) this.reduceUserMessageChunk(chunk);
+  }
+
+  private expireSteerEcho(clientMessageId: string): void {
+    this.steerEchoes.delete(clientMessageId);
+    const content = this.bufferedUserChunk?.content;
+    if (
+      content?.type === "text" &&
+      ![...this.steerEchoes.values()].some((echo) => echo.startsWith(content.text))
+    ) {
+      this.flushBufferedUserChunk();
+    }
   }
 
   // Historical user messages arrive only as replayed chunks; a live prompt
@@ -1052,6 +1456,7 @@ class AcpRuntime {
       this.emit({
         type: "session.usage",
         sessionId: this.options.boundarySessionId,
+        turnId: this.vendorTurn?.turnId ?? this.activePrompt?.turnId,
         usage: {
           contextWindowUsedTokens: update.used,
           contextWindowMaxTokens: update.size,
@@ -1121,15 +1526,38 @@ class AcpRuntime {
     });
   }
 
-  private vendorNotification(method: string, params: unknown): void {
+  /**
+   * Resolves once the notification's deferred updates are applied. The inbound stream awaits it,
+   * so no later wire message reaches the SDK while this notification waits for earlier updates.
+   */
+  private vendorNotification(method: string, params: unknown): Promise<void> {
     const notification = { method, params: jsonValue(params) };
     const context = { sessionId: this.options.boundarySessionId };
+    const deferred: AcpVendorUpdate[] = [];
     for (const transformer of this.transformers) {
       const transformed = transformer.notification?.(notification, context);
       if (!transformed) continue;
       const updates = Array.isArray(transformed) ? transformed : [transformed];
-      for (const update of updates) this.emitVendorUpdate(update);
+      for (const update of updates) {
+        // Configuration transactions read the transformer's config synchronously.
+        if (update.type === "config") this.emitVendorUpdate(update);
+        else deferred.push(update);
+      }
     }
+    if (deferred.length === 0) return Promise.resolve();
+    // The SDK may have read a session/update from the stream without dispatching it yet, so
+    // join the lane only once every update that arrived before this notification is applied.
+    return this.updateSlots
+      .settled()
+      .then(() => {
+        if (this.closing || this.processFailed) return undefined;
+        return this.enqueueNotification(() => {
+          for (const update of deferred) this.emitVendorUpdate(update);
+        });
+      })
+      .catch((error: unknown) => {
+        console.error("Error applying ACP vendor notification", error);
+      });
   }
 
   private emitVendorUpdate(update: AcpVendorUpdate): void {
@@ -1152,6 +1580,8 @@ class AcpRuntime {
         sessionId: this.options.boundarySessionId,
         item: update.item,
       });
+    } else if (update.type === "turn") {
+      this.reduceVendorTurn(update);
     } else {
       this.emit({
         type: "session.notice",
@@ -1159,6 +1589,65 @@ class AcpRuntime {
         notice: update.notice,
       });
     }
+  }
+
+  private reduceVendorTurn(update: Extract<AcpVendorUpdate, { type: "turn" }>): void {
+    const turnId = `acp-vendor:${update.turnId}`;
+    if (update.state === "started") {
+      // A turn boundary ends the previous turn's open chunk, and a peer turn without user
+      // content would otherwise append its first chunk to the last replayed message.
+      this.fallbackChunkIds.clear();
+      // Unless the provider says every vendor turn is a peer turn, the agent should not report
+      // Paseo's own prompt as one.
+      if (this.activePrompt && !this.vendorTurnsAreNeverForeground) {
+        console.debug(`Ignoring vendor turn ${turnId}: a foreground prompt is active`);
+        return;
+      }
+      if (this.vendorTurn) {
+        const previous = this.vendorTurn.turnId;
+        this.endVendorTurn("completed");
+        console.warn(`Vendor turn ${turnId} started while ${previous} was open`);
+      }
+      let resolve!: () => void;
+      const settled = new Promise<void>((next) => {
+        resolve = next;
+      });
+      this.vendorTurn = { turnId, settled, resolve };
+      this.emit({
+        type: "session.turn",
+        sessionId: this.options.boundarySessionId,
+        turnId,
+        state: "started",
+      });
+      return;
+    }
+    if (this.vendorTurn?.turnId !== turnId) {
+      console.debug(`Ignoring vendor turn ${turnId} ${update.state}: no matching open turn`);
+      return;
+    }
+    this.endVendorTurn(update.state, update.error);
+  }
+
+  private endVendorTurn(state: "completed" | "failed" | "canceled", error?: ProviderError): void {
+    const open = this.vendorTurn;
+    if (!open) return;
+    this.flushBufferedUserChunk();
+    this.steerEchoes.clear();
+    this.vendorTurn = null;
+    if (this.vendorTurnCancelTimer) {
+      clearTimeout(this.vendorTurnCancelTimer);
+      this.vendorTurnCancelTimer = null;
+    }
+    this.fallbackChunkIds.clear();
+    this.terminalizeTransientItems(state);
+    this.emit({
+      type: "session.turn",
+      sessionId: this.options.boundarySessionId,
+      turnId: open.turnId,
+      state,
+      ...(error === undefined ? {} : { error }),
+    });
+    open.resolve();
   }
 
   private call<Value>(operation: Promise<Value>): Promise<Value> {
@@ -1182,16 +1671,37 @@ class AcpRuntime {
   private handleUnexpectedTransportClose(): void {
     if (this.closing || this.processFailed) return;
     this.processFailed = true;
+    this.endVendorTurn("failed", { message: "ACP transport closed" });
+    if (this.nativeSessionId) {
+      this.emit({
+        type: "session.runtime_failed",
+        sessionId: this.options.boundarySessionId,
+        error: { message: "ACP transport closed unexpectedly" },
+      });
+    }
     this.settlePendingWork();
-    if (!this.nativeSessionId) return;
-    this.emit({
-      type: "session.runtime_failed",
-      sessionId: this.options.boundarySessionId,
-      error: { message: "ACP transport closed unexpectedly" },
-    });
+  }
+
+  private emitPendingWork(pending: boolean): void {
+    this.emit({ type: "session.pending_work", sessionId: this.options.boundarySessionId, pending });
+  }
+
+  private clearOutstandingSteers(): void {
+    const wasPending = this.outstandingSteers.size > 0;
+    this.outstandingSteers.clear();
+    if (wasPending) this.emitPendingWork(false);
   }
 
   private settlePendingWork(): void {
+    this.promptResponses.flush();
+    this.clearOutstandingSteers();
+    // A user-initiated close leaves the peer turn running on the agent's side, so it was
+    // canceled rather than failed; only a broken transport fails it.
+    this.endVendorTurn(
+      this.closing ? "canceled" : "failed",
+      this.closing ? { message: "Session closed by Paseo" } : { message: "ACP transport closed" },
+    );
+    this.updateSlots.flush();
     for (const permission of this.permissions.values()) {
       permission.resolve({ outcome: { outcome: "cancelled" } });
     }
@@ -1216,27 +1726,222 @@ class AcpRuntime {
 
 function routeVendorNotifications(
   stream: Stream,
-  receive: (method: string, params: unknown) => void,
+  receive: (method: string, params: unknown) => Promise<void>,
+  updateSlots: UpdateSlots,
+  promptResponses: PromptResponseOrder,
 ): Stream {
   const clientMethods = new Set<string>(Object.values(CLIENT_METHODS));
+  const writer = stream.writable.getWriter();
   return {
-    writable: stream.writable,
+    writable: new WritableStream({
+      write(message) {
+        if ("method" in message && message.method === "session/prompt" && "id" in message) {
+          promptResponses.sent(message.id);
+        }
+        return writer.write(message);
+      },
+      close: () => writer.close(),
+      abort: (reason) => writer.abort(reason),
+    }),
     readable: stream.readable.pipeThrough(
       new TransformStream({
-        transform(message, controller) {
-          if ("method" in message && !("id" in message) && !clientMethods.has(message.method)) {
-            // The SDK dispatches extensions asynchronously and can resolve a later response first.
-            // Run synchronous vendor transforms in wire order, inside the configuration transaction.
-            try {
-              receive(message.method, message.params);
-            } catch (error) {
-              console.error("Error handling ACP vendor notification", error);
+        async transform(message, controller) {
+          if ("method" in message && !("id" in message)) {
+            if (!clientMethods.has(message.method)) {
+              // The SDK dispatches extensions asynchronously and can resolve a later response first.
+              // Run synchronous vendor transforms in wire order, inside the configuration transaction.
+              // Awaiting holds every later message back until this one's updates are applied, so a
+              // session/update that follows it on the wire cannot reach the lane ahead of it.
+              try {
+                await receive(message.method, message.params);
+              } catch (error) {
+                console.error("Error handling ACP vendor notification", error);
+              }
+              return;
             }
-          } else controller.enqueue(message);
+            // Reserve the update's place before it can reach the client, so a vendor notification
+            // that follows it on the wire can wait for it to be applied.
+            if (message.method === CLIENT_METHODS.session_update) {
+              updateSlots.admit(message.params);
+            }
+          }
+          if (!("method" in message) && "id" in message) {
+            const boundary = promptResponses.response(message.id);
+            if (boundary) {
+              await updateSlots.settled();
+              controller.enqueue(message);
+              await boundary;
+              return;
+            }
+          }
+          controller.enqueue(message);
         },
       }),
     ),
   };
+}
+
+class PromptResponseOrder {
+  private readonly pending: Array<{ done: Promise<void>; release(): void }> = [];
+  private readonly sentRequests = new Map<
+    string | number,
+    { done: Promise<void>; release(): void }
+  >();
+
+  register(): () => void {
+    let resolve!: () => void;
+    const done = new Promise<void>((next) => {
+      resolve = next;
+    });
+    const entry = {
+      done,
+      release: () => {
+        const index = this.pending.indexOf(entry);
+        if (index !== -1) this.pending.splice(index, 1);
+        for (const [id, sent] of this.sentRequests) {
+          if (sent === entry) this.sentRequests.delete(id);
+        }
+        resolve();
+      },
+    };
+    this.pending.push(entry);
+    return entry.release;
+  }
+
+  sent(id: string | number | null): void {
+    const entry = this.pending.shift();
+    if (entry && id !== null) this.sentRequests.set(id, entry);
+  }
+
+  response(id: string | number | null): Promise<void> | undefined {
+    if (id === null) return undefined;
+    const entry = this.sentRequests.get(id);
+    this.sentRequests.delete(id);
+    return entry?.done;
+  }
+
+  flush(): void {
+    for (const entry of this.pending.splice(0)) entry.release();
+    for (const entry of this.sentRequests.values()) entry.release();
+    this.sentRequests.clear();
+  }
+}
+
+/**
+ * Bound on how long a vendor update waits for the `session/update`s that preceded it on the wire.
+ * The SDK dispatches a notification in the same read iteration that reads it, so a slot is
+ * normally claimed within microtasks; one still unclaimed this long belongs to an update the SDK
+ * dropped for failing validation. The value only bounds a pathological stall, so it sits far above
+ * any real dispatch delay and far below a user noticing.
+ */
+const SLOT_SETTLE_TIMEOUT_MS = 250;
+
+/**
+ * One slot per inbound session/update, in wire order. The SDK dispatches notifications in
+ * arrival order, but it can read an update from the stream before dispatching the one before it,
+ * so a vendor notification that follows an update on the wire must wait for that update's slot.
+ *
+ * The SDK validates a notification before it reaches the client and drops it when validation
+ * fails, so a delivery is paired with its slot by containment rather than by delivery count: the
+ * validated notification is built from the raw params by stripping unknown keys and filling
+ * defaults, so every value it carries is already present in the payload the slot recorded.
+ */
+interface UpdateSlot {
+  promise: Promise<void>;
+  raw: unknown;
+  resolve(): void;
+  /** A waiter already gave up on this slot; later waiters skip it. */
+  expired: boolean;
+}
+
+class UpdateSlots {
+  private readonly open: UpdateSlot[] = [];
+  admit(raw: unknown): void {
+    let resolve!: () => void;
+    const promise = new Promise<void>((next) => {
+      resolve = next;
+    });
+    this.open.push({ promise, raw, resolve, expired: false });
+  }
+
+  /** Called after the delivered update has been applied. */
+  settleDelivered(notification: SessionNotification): void {
+    const delivered = this.open.findIndex((slot) => containsUpdate(slot.raw, notification));
+    // Resolve the delivered slot and every slot before it: those were dropped by validation, so
+    // they will never be delivered and cannot hold the vendor lane.
+    //
+    // When nothing matches, release the oldest slot instead. The SDK can replace a field it
+    // could not parse (`defaultOnError`), which makes containment miss the real slot; falling
+    // back keeps the lane moving at the cost of possibly releasing a vendor update before the
+    // update it was waiting on. A stall is the worse failure, and the wait is bounded anyway.
+    this.settleThrough(delivered === -1 ? 0 : delivered);
+  }
+
+  /**
+   * Resolves once every update admitted so far has been applied, or after
+   * `SLOT_SETTLE_TIMEOUT_MS`. A slot the SDK never claims belongs to an update it dropped for
+   * failing validation, and nothing else will ever report it; without the bound, a vendor
+   * terminal would wait forever and every later prompt would wait behind that vendor turn.
+   *
+   * When the bound fires, the slots it covered expire, so the next waiter does not pay the bound
+   * again for the same dropped update. Expired slots stay open: a late delivery still pairs with
+   * its own slot by containment instead of falling back to the oldest open one.
+   */
+  settled(): Promise<void> {
+    const last = this.open.findLast((slot) => !slot.expired);
+    if (!last) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        for (const slot of this.open) {
+          slot.expired = true;
+          if (slot === last) break;
+        }
+        finish();
+      }, SLOT_SETTLE_TIMEOUT_MS);
+      void last.promise.then(() => {
+        clearTimeout(timer);
+        finish();
+        return undefined;
+      });
+    });
+  }
+
+  /** Nothing will be dispatched again: release every waiter. */
+  flush(): void {
+    while (this.open.length > 0) this.open.shift()!.resolve();
+  }
+
+  private settleThrough(index: number): void {
+    for (let settled = 0; settled <= index; settled += 1) this.open.shift()?.resolve();
+  }
+}
+
+/**
+ * True when `validated` can be the SDK's parsed form of `raw`: zod strips keys it does not know
+ * and fills defaults, so every value the validated object carries must already be in the raw
+ * payload. A missing key is accepted only for a value zod could have filled in (`undefined`, or
+ * an empty array for the collection defaults).
+ */
+function containsUpdate(raw: unknown, validated: unknown): boolean {
+  if (validated === undefined) return true;
+  if (Array.isArray(validated)) {
+    if (!Array.isArray(raw)) return validated.length === 0;
+    return validated.every((value, index) => containsUpdate(raw[index], value));
+  }
+  if (validated !== null && typeof validated === "object") {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const source = raw as Record<string, unknown>;
+    return Object.entries(validated).every(([key, value]) =>
+      key in source ? containsUpdate(source[key], value) : value === undefined,
+    );
+  }
+  return Object.is(raw, validated);
 }
 
 function selectPermissionOption(

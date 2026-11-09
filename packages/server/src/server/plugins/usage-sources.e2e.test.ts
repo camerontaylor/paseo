@@ -27,7 +27,9 @@ test("lists built-in and subprocess usage; validates input and isolates fetch er
     await client.connect();
     const updates: string[] = [];
     const first = await client.listUsageReports({}, (report) => updates.push(report.id));
-    expect(updates).toEqual(first.reports.map((report) => report.id));
+    // Reports are fetched concurrently and each one streams when its fetch settles, so only the
+    // final response keeps discovery order. Every report streams exactly once.
+    expect([...updates].sort()).toEqual(first.reports.map((report) => report.id).sort());
     await expect(client.listUsageReports({ agentId: "missing-agent" })).rejects.toThrow(
       "Unknown agent",
     );
