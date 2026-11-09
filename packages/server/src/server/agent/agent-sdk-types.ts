@@ -168,6 +168,7 @@ export interface AgentCreateConfigUnattendedInput {
 
 export interface AgentCapabilityFlags {
   [capability: string]: boolean | undefined;
+  supportsSharedTurns?: boolean;
   supportsStreaming: boolean;
   supportsSessionPersistence: boolean;
   supportsSessionListing?: boolean;
@@ -414,6 +415,7 @@ export type AgentTimelineItem =
 
 export type AgentStreamEvent =
   | { type: "thread_started"; sessionId: string; provider: AgentProvider }
+  | { type: "pending_work"; provider: AgentProvider; pending: boolean }
   | { type: "turn_started"; provider: AgentProvider; turnId?: string }
   | { type: "turn_completed"; provider: AgentProvider; usage?: AgentUsage; turnId?: string }
   | { type: "usage_updated"; provider: AgentProvider; usage: AgentUsage; turnId?: string }
@@ -667,6 +669,31 @@ export interface AgentPermissionResult {
   followUpPrompt?: AgentPromptInput;
 }
 
+export type SideConversationThreading = "threaded" | "single_shot";
+
+export interface SideConversationExchange {
+  question: string;
+  answer: string;
+}
+
+/**
+ * Why a side answer is unavailable. `unsupported_provider` is a permanent property of the
+ * provider; `session_closed` means the agent tore down while the question was in flight. Absent
+ * when the caller cannot know more than "unavailable".
+ */
+export type SideAnswerUnavailableReason = "unsupported_provider" | "session_closed";
+
+export type SideAnswer =
+  | {
+      status: "answered";
+      content: string;
+      synthetic: boolean;
+      threading: SideConversationThreading;
+    }
+  | { status: "unavailable"; reason?: SideAnswerUnavailableReason }
+  | { status: "timed_out"; threading: SideConversationThreading }
+  | { status: "failed"; error: string; threading: SideConversationThreading };
+
 export interface AgentUsageSession {
   provider: string;
   model?: string;
@@ -686,6 +713,11 @@ export interface AgentSession {
   run(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<AgentRunResult>;
   startTurn(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<{ turnId: string }>;
   steerActiveTurn?(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult>;
+  askSideQuestion?(
+    question: string,
+    history: readonly SideConversationExchange[],
+    options?: { signal?: AbortSignal },
+  ): Promise<SideAnswer>;
   subscribe(callback: (event: AgentStreamEvent) => void): () => void;
   streamHistory(): AsyncGenerator<AgentStreamEvent>;
   getRuntimeInfo(): Promise<AgentRuntimeInfo>;
@@ -764,6 +796,12 @@ export interface ResolveAgentDefaultModeInput {
 export interface AgentClient {
   readonly provider: AgentProvider;
   readonly capabilities: AgentCapabilityFlags;
+  /**
+   * True when a loaded native session restores its own model and thinking option and
+   * reports them. The manager then sends only explicit overrides on load and adopts what
+   * the session reports. Otherwise the saved selection is sent on every load.
+   */
+  readonly restoresSessionConfig?: boolean;
   createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,

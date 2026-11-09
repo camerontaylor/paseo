@@ -164,6 +164,8 @@ export function createPluginWorker(options: {
       requiresConfiguration: provider.requiresConfiguration,
       hasCatalogCacheKey: provider.getCatalogCacheKey !== undefined,
       hasStatus: provider.status !== undefined,
+      supportsSystemPrompt: provider.supportsSystemPrompt,
+      restoresSessionConfig: provider.restoresSessionConfig,
       command: provider.command,
     };
   }

@@ -69,6 +69,18 @@ export function createProvider(): ProviderRegistration {
 
 把原生 SDK、进程和流保留在连接的实现内部。在发布之前，把它的输出转换为 `ProviderEvent` 对象。
 
+## 系统指令 {#system-instructions}
+
+如果 Provider 的原生 API 无法携带额外的系统指令，把 `ProviderRegistration.supportsSystemPrompt`
+设为 `false`。在打开或恢复该 Provider 的会话之前，Paseo 会拒绝非空的 Agent `systemPrompt` 或
+`daemon.appendSystemPrompt`。它从不丢弃这些指令，也不会把它们转成一条对话消息。已经实现系统提示词约定的现有
+Provider 不要设置这个字段。
+
+列在 `daemon.appendSystemPromptExcludedProviders` 中的 Provider 不会收到 `daemon.appendSystemPrompt`，因此对它只检查非空的 Agent `systemPrompt`。
+
+`ProviderSessionConfig.systemPrompt` 包含合并后的 Agent 指令和 daemon 指令。把它们追加在 Provider
+默认的系统提示词之外。只能替换默认提示词，或者把工作区规则作为用户上下文插入的原生 API，都不满足这个约定。
+
 ## 启动 Provider CLI {#launch-the-provider-cli}
 
 对于进程传输和 CLI 探测，请使用 `@getpaseo/plugin/server` 中的 `spawnProcess` 和 `execCommand`。两者都能处理 Windows 的 `.cmd`/`.bat` 启动器，并为 shell 参数加引号。原生的 Node `spawn` 和 `execFile` 在 Windows 上会拒绝这些启动器。
@@ -399,6 +411,28 @@ export const vendorEdits: AcpTransformer = {
   },
 };
 ```
+
+`notification()` 接收 Agent 的厂商通知，返回一个 `AcpVendorUpdate`、一组 `AcpVendorUpdate`，或 `null`。变体包括 `commands`、`config`、`timeline`、`notice` 和 `turn`。
+
+当 Agent 执行了一段并非由 Paseo 发起的对话轮次（例如另一个客户端连接到同一 Agent 会话后启动的轮次）时，返回 `{ type: "turn", turnId, state }`。Paseo 会把它显示为运行中、随后结束的运行：
+
+```ts
+export const peerTurns: AcpTransformer = {
+  notification(notification) {
+    if (notification.method !== "vendor/turn") return null;
+    const turn = turnSchema.safeParse(notification.params);
+    if (!turn.success) return null;
+    return { type: "turn", turnId: turn.data.turnId, state: turn.data.state };
+  },
+};
+```
+
+- `state` 为 `started`、`completed`、`failed` 或 `canceled`；`error` 可选。
+- `turnId` 在 Agent 范围内唯一。Paseo 会为它加上命名空间，因此不会与提示词的轮次冲突。
+- 同一时间只能有一个厂商轮次处于打开状态。Paseo 自己的提示词进行中时，收到的 `started` 会被忽略；新的 `started` 会把已打开的轮次以 completed 结束。
+- 厂商轮次打开期间，Paseo 发出的提示词会等待该轮次结束，而不是取消它。
+- ACP 传输关闭时，处于打开状态的厂商轮次以 failed 结束。
+- 厂商更新会在其之前到达的每一个 `session/update` 应用之后再应用，因此结束事件不会早于该轮次的最后一段内容。
 
 ## 测试与发布 {#test-and-publish}
 
