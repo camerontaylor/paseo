@@ -2021,6 +2021,10 @@ function decodePersistence(handle: AgentPersistenceHandle): ProviderPersistence 
   if (fromMetadata !== undefined) {
     return ProviderPersistenceSchema.parse(fromMetadata);
   }
+  // Legacy ACP sessions stored the native id before the plugin migration.
+  if (handle.metadata?.provider === "acp" && !handle.sessionId.startsWith("plugin:")) {
+    return { version: 1, data: { sessionId: handle.sessionId } };
+  }
   return decodePersistenceId(handle.sessionId);
 }
 

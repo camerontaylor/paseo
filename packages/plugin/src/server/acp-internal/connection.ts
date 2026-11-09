@@ -399,6 +399,8 @@ class AcpRuntime {
   private readonly transformers: readonly AcpTransformer[];
   private readonly vendorTurnsAreNeverForeground: boolean;
   private configOptions: SessionConfigOption[] = [];
+  private autoAccept = false;
+  private hasToolPolicy = false;
   private modes: NewSessionResponse["modes"] = null;
   private commandWaiter: (() => void) | null = null;
   private messageSequence = 0;
@@ -624,6 +626,7 @@ class AcpRuntime {
       );
     }
     this.sharedTurns = connectionCapabilities.includes("session.shared_turns");
+    this.hasToolPolicy = Boolean(input.config.toolPolicy);
     await this.applyInitialConfig(input.config);
     const sessionCapabilities = connectionCapabilities.filter(
       (capability) =>
@@ -632,6 +635,7 @@ class AcpRuntime {
         (capability !== "session.configure" ||
           this.modes !== null ||
           this.configOptions.length > 0 ||
+          "auto_accept" in input.config.settings ||
           this.transformers.some((transformer) => transformer.configure !== undefined)),
     );
     this.emit({
@@ -1016,6 +1020,7 @@ class AcpRuntime {
     }
     const previousModes = this.modes ? structuredClone(this.modes) : null;
     const previousOptions = structuredClone(this.configOptions);
+    const previousAutoAccept = this.autoAccept;
     this.configTransaction = true;
     this.stagedTransformerConfig = null;
     let committedConfig: ProviderConfigState | null = null;
@@ -1041,6 +1046,7 @@ class AcpRuntime {
       }
       this.modes = previousModes;
       this.configOptions = previousOptions;
+      this.autoAccept = previousAutoAccept;
       this.stagedTransformerConfig = null;
       throw error;
     } finally {
@@ -1102,6 +1108,11 @@ class AcpRuntime {
   }
 
   private async applyConfigChange(change: AcpConfigChange): Promise<void> {
+    // Paseo owns this policy; it is not an agent ACP config option.
+    if (change.target === "setting" && change.id === "auto_accept") {
+      this.autoAccept = !this.hasToolPolicy && change.value === true;
+      return;
+    }
     const access = this.configAccess();
     for (const transformer of this.transformers) {
       if (
@@ -1176,6 +1187,13 @@ class AcpRuntime {
   }
 
   private emitConfigSnapshot(config: ProviderConfigState): void {
+    config = {
+      ...config,
+      settings: [
+        ...config.settings.filter((setting) => setting.id !== "auto_accept"),
+        { type: "toggle", id: "auto_accept", label: "Auto-accept", value: this.autoAccept },
+      ],
+    };
     this.emit({
       type: "session.config",
       sessionId: this.options.boundarySessionId,
@@ -1210,6 +1228,10 @@ class AcpRuntime {
   }
 
   private requestPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    const allows = request.options.filter((option) => option.kind === "allow_once");
+    if (this.autoAccept && allows.length === 1) {
+      return Promise.resolve({ outcome: { outcome: "selected", optionId: allows[0]!.optionId } });
+    }
     const permissionId = `permission:${request.toolCall.toolCallId}`;
     return new Promise((resolve) => {
       this.permissions.set(permissionId, { request, resolve });

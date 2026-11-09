@@ -376,6 +376,128 @@ lines.on("line", (line) => {
     await connection.close();
   });
 
+  it("keeps auto_accept local when opening and configuring an ACP session", async () => {
+    const harness = connectorHarness();
+    const registration = runAcpProvider({
+      id: "sdk-acp",
+      label: "SDK ACP",
+      connector: harness.connector,
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message", "permission", "session.configure"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    const input = openInput();
+    input.config.settings = { auto_accept: true };
+    await connection.send(input);
+    await waitForEvent(events, (event) => event.type === "session.ready");
+    expect(
+      harness.instances[1]!.requests.filter(
+        (request) => request.method === "session/set_config_option",
+      ),
+    ).toEqual([]);
+    await expect(
+      harness.instances[1]!.request("session/request_permission", {
+        sessionId: "connector-session",
+        toolCall: {
+          toolCallId: "auto",
+          title: "Tool",
+          kind: "execute",
+          status: "pending",
+          content: [],
+        },
+        options: [
+          { optionId: "yes", name: "Allow", kind: "allow_once" },
+          { optionId: "no", name: "Reject", kind: "reject_once" },
+        ],
+      }),
+    ).resolves.toEqual({ outcome: { outcome: "selected", optionId: "yes" } });
+    await connection.send({
+      type: "session.configure",
+      requestId: "configure-auto",
+      sessionId: "session-1",
+      changes: { settings: { auto_accept: false } },
+    });
+    expect(
+      harness.instances[1]!.requests.filter(
+        (request) => request.method === "session/set_config_option",
+      ),
+    ).toEqual([]);
+    const latestConfig = () => events.findLast((event) => event.type === "session.config");
+    await expect.poll(latestConfig).toMatchObject({
+      config: {
+        settings: [expect.objectContaining({ id: "auto_accept", value: false })],
+      },
+    });
+    await connection.close();
+  });
+
+  it("rejects unsupported tool policy even with auto_accept enabled", async () => {
+    const harness = connectorHarness();
+    const registration = runAcpProvider({
+      id: "sdk-acp",
+      label: "SDK ACP",
+      connector: harness.connector,
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message", "permission", "session.configure"],
+    });
+    const input = openInput();
+    input.config.settings = { auto_accept: true };
+    input.config.toolPolicy = { preapproved: [] };
+    await expect(connection.send(input)).rejects.toThrow(
+      "Provider does not support permission.tool_policy",
+    );
+    expect(harness.instances).toHaveLength(1);
+    await connection.close();
+  });
+
+  it("keeps ambiguous allow choices in permission mediation", async () => {
+    const harness = connectorHarness();
+    const registration = runAcpProvider({
+      id: "sdk-acp",
+      label: "SDK ACP",
+      connector: harness.connector,
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message", "permission", "session.configure"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    const input = openInput();
+    input.config.settings = { auto_accept: true };
+    await connection.send(input);
+    await waitForEvent(events, (event) => event.type === "session.ready");
+    const result = harness.instances[1]!.request("session/request_permission", {
+      sessionId: "connector-session",
+      toolCall: {
+        toolCallId: "guard",
+        title: "Tool",
+        kind: "execute",
+        status: "pending",
+        content: [],
+        rawInput: {},
+      },
+      options: [
+        { optionId: "a", name: "A", kind: "allow_once" },
+        { optionId: "b", name: "B", kind: "allow_once" },
+      ],
+    });
+    await waitForEvent(events, (event) => event.type === "session.permission");
+    await connection.send({
+      type: "session.permission",
+      sessionId: "session-1",
+      permissionId: "permission:guard",
+      response: { behavior: "deny" },
+    });
+    await expect(result).resolves.toEqual({ outcome: { outcome: "cancelled" } });
+    await connection.close();
+  });
+
   it("maps permission behavior to the first matching ACP option", async () => {
     const harness = connectorHarness();
     const registration = runAcpProvider({
