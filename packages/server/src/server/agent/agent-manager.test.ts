@@ -4911,6 +4911,46 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
   });
 });
 
+test("reloadAgentSession without persistence still resolves the default model for its new session", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-reload-create-default-"));
+  class UnpersistedSession extends TestAgentSession {
+    override describePersistence() {
+      return null;
+    }
+    override async getRuntimeInfo() {
+      return { ...(await super.getRuntimeInfo()), sessionId: null, model: null };
+    }
+  }
+  class FirstCatalogFailsClient extends TestAgentClient {
+    private catalogCalls = 0;
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      this.createdConfigs.push(config);
+      return new UnpersistedSession(config);
+    }
+    override async fetchCatalog() {
+      this.catalogCalls += 1;
+      if (this.catalogCalls === 1) throw new Error("catalog unavailable");
+      return super.fetchCatalog();
+    }
+  }
+  const client = new FirstCatalogFailsClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  try {
+    const snapshot = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    expect(client.createdConfigs[0]?.model).toBeUndefined();
+
+    await manager.reloadAgentSession(snapshot.id);
+
+    expect(client.createdConfigs).toHaveLength(2);
+    expect(client.createdConfigs[1]?.model).toBe("gpt-5.4");
+  } finally {
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("reloadAgentSession preserves timeline and does not force history replay", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-reload-"));
   const storagePath = join(workdir, "agents");

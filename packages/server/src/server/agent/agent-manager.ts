@@ -1808,7 +1808,8 @@ export class AgentManager {
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       refreshConfig,
       agentId,
-      { env: existing.launchEnv, resolveDefaultModel: false },
+      // Without a persistence handle the reload creates a new session, which gets the default.
+      { env: existing.launchEnv, resolveDefaultModel: !handle },
     );
     const hadPreviousPaseoToolPolicy = this.paseoToolPolicies.has(agentId);
     const previousPaseoToolPolicy = this.paseoToolPolicies.get(agentId);
