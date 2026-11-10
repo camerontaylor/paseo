@@ -1,0 +1,14 @@
+{
+  "phase": "queue-free-runtime",
+  "isolatedHome": "/tmp/tmad-port/queue-runtime-custom-copy",
+  "queuePath": "/tmp/tmad-port/queue-runtime-custom-copy/.paseo/queues/12345678-1234-4123-8123-123456789abc.json",
+  "queueSha256Before": "eb0fbafe6d8e339f6bf3d8fdc2f206328935e0405d570827560a6ec3a68b2ae3",
+  "queueSha256WhileRuntimeActive": "eb0fbafe6d8e339f6bf3d8fdc2f206328935e0405d570827560a6ec3a68b2ae3",
+  "queueSha256AfterStop": "eb0fbafe6d8e339f6bf3d8fdc2f206328935e0405d570827560a6ec3a68b2ae3",
+  "pendingIds": [
+    "pending-copy-1"
+  ],
+  "fakeProviderQueuedTurns": 0,
+  "daemonPortWasEphemeralLoopback": true,
+  "agentId": "12345678-1234-4123-8123-123456789abc"
+}

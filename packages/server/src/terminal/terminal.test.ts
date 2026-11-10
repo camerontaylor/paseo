@@ -6,6 +6,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { isPlatform } from "../test-utils/platform.js";
 import {
   buildTerminalEnvironment,
+  buildTerminalCommand,
   assertTerminalCommandCanStart,
   createTerminal,
   ensureNodePtySpawnHelperExecutableForCurrentPlatform,
@@ -23,11 +24,13 @@ import {
   mkdtempSync,
   mkdirSync,
   realpathSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as pty from "node-pty";
 import xterm from "@xterm/headless";
 import { delimiter, join } from "node:path";
@@ -54,6 +57,23 @@ function getRowText(state: TerminalState, rowIndex: number): string {
 // Extract all visible lines as array (trimmed, empty lines included)
 function getLines(state: TerminalState): string[] {
   return state.grid.map(rowToText);
+}
+
+function observePowerShellPrompts(state: TerminalState): { count: number; atCursor: boolean } {
+  const rows = [...state.scrollback, ...state.grid];
+  const wrapped = [...(state.scrollbackWrapped ?? []), ...(state.gridWrapped ?? [])];
+  const cursorRow = state.scrollback.length + state.cursor.row;
+  const lines: string[] = [];
+  let cursorLine = -1;
+  for (const [index, row] of rows.entries()) {
+    if (index === 0 || !wrapped[index - 1]) lines.push("");
+    lines[lines.length - 1] += row.map((cell) => cell.char).join("");
+    if (index === cursorRow) cursorLine = lines.length - 1;
+  }
+  return {
+    count: lines.filter((line) => /^PS .*>/.test(line.trimEnd())).length,
+    atCursor: /^PS .*>$/.test(lines[cursorLine]?.trimEnd() ?? ""),
+  };
 }
 
 function rowHasChar(row: TerminalRow, char: string): boolean {
@@ -129,29 +149,13 @@ const sessions: TerminalSession[] = [];
 const temporaryDirs: string[] = [];
 
 /**
- * `kill()` only signals; the shell exits asynchronously and keeps writing on
- * the way out (zsh drops a history file and a compdump into `$ZDOTDIR`).
- * Deleting its directory before then loses the race as `ENOTEMPTY`: the
- * recursive walk empties the directory, the dying shell recreates a file in it,
- * and the final rmdir fails.
- *
- * Waiting for the exit shrinks that window but does not close it: some of those
- * writes come from processes zsh forked, which outlive the pty and answer to
- * nothing we hold. Retries alone did not close it either.
- *
- * The known post-retry `ENOTEMPTY` race is reported and tolerated because it
- * belongs to a descendant shell outliving the tested terminal. Any other
- * cleanup error still fails the test that owns the directory.
+ * `kill()` publishes a logical exit before the native PTY releases its process.
+ * Wait for native teardown before removing directories held as a shell's cwd.
+ * Descendant zsh writes can still outlive the PTY; the existing post-retry
+ * ENOTEMPTY handling below covers those, while other cleanup errors fail.
  */
 async function waitForSessionExit(session: TerminalSession): Promise<void> {
-  const exited = new Promise<void>((resolve) => {
-    const dispose = session.onExit(() => {
-      dispose();
-      resolve();
-    });
-    session.kill();
-  });
-  await Promise.race([exited, delay(2_000)]);
+  await session.killAndWait({ gracefulTimeoutMs: 1000, forceTimeoutMs: 1000 });
 }
 
 afterEach(async () => {
@@ -414,8 +418,9 @@ describe("createTerminal", () => {
         }),
       );
 
-      const state = await waitForState(session, (s) => getRowText(s, 0).startsWith("["));
-
+      const state = await waitForState(session, (current) =>
+        getRowText(current, 0).startsWith("["),
+      );
       expect(JSON.parse(getRowText(state, 0))).toEqual([nastyPrompt]);
     },
   );
@@ -1129,6 +1134,9 @@ describe.skipIf(isPlatform("win32"))("terminal title", () => {
     const homeDir = mkdtempSync(join(tmpdir(), "terminal-zsh-packaged-home-"));
     temporaryDirs.push(homeDir);
     writeFileSync(join(homeDir, ".zshrc"), "PS1='PASEO_CUSTOM_PROMPT> '\n");
+    const inheritedZdotdir = join(homeDir, "inherited-zdotdir");
+    mkdirSync(inheritedZdotdir);
+    writeFileSync(join(inheritedZdotdir, ".zshrc"), "PS1='INHERITED_PROMPT> '\n");
 
     const fakeAppRoot = join(homeDir, "Paseo.app", "Contents", "Resources");
     const inaccessiblePackagedIntegrationDir = join(
@@ -1161,8 +1169,10 @@ describe.skipIf(isPlatform("win32"))("terminal title", () => {
 
     const env = buildTerminalEnvironment({
       shell: "/bin/zsh",
+      baseEnv: { ...process.env, ZDOTDIR: inheritedZdotdir },
       env: {
         HOME: homeDir,
+        ZDOTDIR: homeDir,
       },
       zshShellIntegrationDir: inaccessiblePackagedIntegrationDir,
     });
@@ -1931,3 +1941,544 @@ it.each([false, true])(
     }
   },
 );
+
+// These are real interactive shells: no synthetic OSC injection or manual completion callbacks.
+describe("managed command dispatch", () => {
+  const shells = isPlatform("win32")
+    ? [resolveDefaultTerminalShell()]
+    : ["/bin/bash", "/bin/sh", ...(existsSync("/bin/zsh") ? ["/bin/zsh"] : [])];
+  it.skipIf(!hasZsh).each([false, true])(
+    "owns managed zsh completion with startup hooks replaced=%s",
+    async (replaceHooks) => {
+      const home = mkdtempSync(join(tmpdir(), "managed-zsh-hooks-"));
+      temporaryDirs.push(home);
+      const cwd = join(home, "space & apostrophe' directory");
+      mkdirSync(cwd);
+      writeFileSync(join(home, ".zshenv"), "");
+      writeFileSync(
+        join(home, ".zshrc"),
+        `PS1='ZSH_PROMPT:%?> '
+export PASEO_PROFILE_ENV='loaded'
+${replaceHooks ? "precmd_functions=()\npreexec_functions=()\n" : ""}`,
+      );
+      const session = trackSession(
+        await createTerminal({
+          workspaceId: "ws-zsh-hooks",
+          cwd: home,
+          shell: "/bin/zsh",
+          env: { HOME: home, ZDOTDIR: home, PASEO_MANAGED_ENV: "preserved" },
+        }),
+      );
+      const completions: Array<number | null> = [];
+      session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
+      let promptCount = 0;
+      const waitForPrompt = async (code: number) => {
+        await waitForState(session, (state) => {
+          let count = 0;
+          for (const row of [...state.scrollback, ...state.grid]) {
+            if (rowToText(row).startsWith("ZSH_PROMPT:")) count++;
+          }
+          if (count <= promptCount || getRowText(state, state.cursor.row) !== `ZSH_PROMPT:${code}>`)
+            return false;
+          promptCount = count;
+          return true;
+        });
+      };
+      await waitForPrompt(0);
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync('marker-0.json', JSON.stringify({cwd:process.cwd(),env:process.env.PASEO_MANAGED_ENV,profile:process.env.PASEO_PROFILE_ENV,args:process.argv.slice(1)}))",
+          "literal & apostrophe' 雪",
+        ],
+        cwd,
+        completion: true,
+      });
+      await waitForPrompt(0);
+      expect(completions).toEqual([0]);
+      expect(JSON.parse(readFileSync(join(cwd, "marker-0.json"), "utf8"))).toEqual({
+        cwd: realpathSync(cwd),
+        env: "preserved",
+        profile: "loaded",
+        args: ["literal & apostrophe' 雪"],
+      });
+      const node = `'${process.execPath.replaceAll("'", "'\\''")}'`;
+      session.send({
+        type: "command",
+        command: `printf '%s' first\nprintf '%s' second\n${node} -e "require('node:fs').writeFileSync('marker-7','done');process.exit(7)" # trailing comment`,
+        completion: true,
+      });
+      await waitForPrompt(7);
+      expect(readFileSync(join(cwd, "marker-7"), "utf8")).toBe("done");
+      expect(completions).toEqual([0, 7]);
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "const fs=require('node:fs');process.stdin.once('data',data=>{fs.writeFileSync('stdin.json',JSON.stringify(data.toString().trim()));process.exit(0)});fs.writeFileSync('stdin-ready','ready')",
+        ],
+        completion: true,
+      });
+      await waitForState(session, () => existsSync(join(cwd, "stdin-ready")));
+      session.send({ type: "input", data: "foreground-input\r" });
+      await waitForPrompt(0);
+      expect(JSON.parse(readFileSync(join(cwd, "stdin.json"), "utf8"))).toBe("foreground-input");
+      expect(completions).toEqual([0, 7, 0]);
+      expect(session.getExitInfo()).toBeNull();
+      session.send({ type: "input", data: "(exit 3)\r" });
+      await waitForPrompt(3);
+      expect(completions).toEqual(replaceHooks ? [0, 7, 0] : [0, 7, 0, 3]);
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "const fs=require('node:fs');process.stdin.once('data',data=>{fs.writeFileSync('service-input.json',JSON.stringify(data.toString().trim()));process.exit(0)});fs.writeFileSync('service-ready','ready')",
+        ],
+        completion: false,
+      });
+      await waitForState(session, () => existsSync(join(cwd, "service-ready")));
+      session.send({ type: "input", data: "service-input\r" });
+      await waitForPrompt(0);
+      expect(JSON.parse(readFileSync(join(cwd, "service-input.json"), "utf8"))).toBe(
+        "service-input",
+      );
+      expect(completions).toEqual(replaceHooks ? [0, 7, 0] : [0, 7, 0, 3, 0]);
+    },
+  );
+  it.each(shells)("reports real success/nonzero and reuses %s", async (shell) => {
+    const home = mkdtempSync(join(tmpdir(), "managed-command-"));
+    temporaryDirs.push(home);
+    const cwd = join(home, "space & apostrophe' %PASEO_MANAGED_UNSAFE% directory");
+    mkdirSync(cwd);
+    writeFileSync(join(home, ".zshenv"), "");
+    writeFileSync(join(home, ".zshrc"), "PS1='$ '\n");
+    const session = trackSession(
+      await createTerminal({
+        workspaceId: "ws-managed",
+        cwd: home,
+        shell,
+        env: { HOME: home, ZDOTDIR: home, PASEO_MANAGED_UNSAFE: "must-not-expand" },
+      }),
+    );
+    const completions: Array<number | null> = [];
+    session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
+    await expect.poll(() => session.hasOutput()).toBe(true);
+    session.send({
+      type: "command",
+      command: process.execPath,
+      args: [
+        "-e",
+        "require('node:fs').writeFileSync('argv.json', JSON.stringify(process.argv.slice(1)))",
+        "space & pipe| dollar$ apostrophe' percent%PASEO_MANAGED_UNSAFE%",
+      ],
+      cwd,
+      completion: true,
+    });
+    await expect.poll(() => completions).toEqual([0]);
+    expect(JSON.parse(readFileSync(join(cwd, "argv.json"), "utf8"))).toEqual([
+      "space & pipe| dollar$ apostrophe' percent%PASEO_MANAGED_UNSAFE%",
+    ]);
+    let failingCommand = "printf '%s' first\nprintf '%s' second; (exit 7) # trailing comment";
+    if (isPlatform("win32")) failingCommand = `"${process.execPath}" -e "process.exit(7)"`;
+    else if (shell.endsWith("zsh")) failingCommand = "(exit 7)";
+    session.send({ type: "command", command: failingCommand, completion: true });
+    await expect.poll(() => completions).toEqual([0, 7]);
+    session.send({
+      type: "command",
+      command: process.execPath,
+      args: ["-e", "require('node:fs').writeFileSync('still-alive', 'yes')"],
+      completion: true,
+    });
+    await expect.poll(() => completions).toEqual([0, 7, 0]);
+    expect(readFileSync(join(cwd, "still-alive"), "utf8")).toBe("yes");
+  });
+  it.each(["powershell.exe", "pwsh.exe"])(
+    "renders one physical PowerShell submission for %s",
+    (shell) => {
+      const decode = (rendered: string) => {
+        const encoded = rendered.match(
+          /^\. \(\[scriptblock\]::Create\(\[Text.Encoding\]::UTF8.GetString\(\[Convert\]::FromBase64String\('([A-Za-z0-9+/=]+)'\)\)\)\)\r$/,
+        )?.[1];
+        expect(encoded).toBeDefined();
+        expect(rendered.slice(0, -1)).not.toMatch(/[\r\n]/);
+        return Buffer.from(encoded!, "base64").toString("utf8");
+      };
+      expect(
+        decode(
+          buildTerminalCommand(
+            {
+              type: "command",
+              command: "npm.cmd",
+              args: ["run", "build"],
+              cwd: "C:/space & apostrophe' [literal]",
+              completion: true,
+            },
+            shell,
+          ),
+        ),
+      ).toBe(
+        "Set-Location -LiteralPath 'C:/space & apostrophe'' [literal]'; if ($?) {\n& 'npm.cmd' 'run' 'build'\n}",
+      );
+      const body =
+        "$scopeValue = '雪 & apostrophe'' ! %PATH%'\r\nWrite-Output $scopeValue\n# trailing comment";
+      expect(
+        decode(buildTerminalCommand({ type: "command", command: body, completion: true }, shell)),
+      ).toBe(body);
+      expect(
+        decode(
+          buildTerminalCommand(
+            { type: "command", command: body, cwd: "C:/literal", completion: true },
+            shell,
+          ),
+        ),
+      ).toBe(`Set-Location -LiteralPath 'C:/literal'; if ($?) {\n${body}\n}`);
+    },
+  );
+  it.runIf(isPlatform("win32")).each(["powershell.exe", "pwsh.exe"])(
+    "preserves supported PowerShell command execution in %s",
+    async (shell) => {
+      const home = mkdtempSync(join(tmpdir(), "managed-powershell-"));
+      temporaryDirs.push(home);
+      const cwd = join(home, "space & apostrophe' [literal] %PATH% directory");
+      mkdirSync(cwd);
+      const script = join(home, "capture.cjs");
+      writeFileSync(
+        script,
+        "require('node:fs').writeFileSync(process.argv[2],JSON.stringify({cwd:process.cwd(),args:process.argv.slice(4)}));process.exit(Number(process.argv[3]))",
+      );
+      const session = trackSession(
+        await createTerminal({ workspaceId: "ws-powershell", cwd: home, shell }),
+      );
+      const completions: Array<number | null> = [];
+      session.onCommandFinished(({ exitCode }) => completions.push(exitCode));
+      const revision = () => session.serializeReplay().metadata.revision;
+      let promptCount = 0;
+      const waitForPrompt = async (afterRevision = -1, completed = () => true) => {
+        const returned = await waitForState(session, (state) => {
+          const prompts = observePowerShellPrompts(state);
+          return (
+            revision() > afterRevision &&
+            completed() &&
+            prompts.count > promptCount &&
+            prompts.atCursor
+          );
+        });
+        promptCount = observePowerShellPrompts(returned).count;
+      };
+      // Banner/mode output precedes readiness. Require a new prompt at the parsed cursor,
+      // not the command's echo or a prompt retained from an earlier invocation.
+      await waitForPrompt();
+      const literal = "雪 space & pipe| dollar$ apostrophe' percent%PATH% bang!";
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+      for (const code of [7, 0]) {
+        const result = join(home, `result-${code}.json`);
+        const status = join(home, `status-${code}.txt`);
+        const commandRevision = revision();
+        session.send({
+          type: "command",
+          command: process.execPath,
+          args: [script, result, String(code), literal],
+          ...(code === 7 ? { cwd } : {}),
+          completion: true,
+        });
+        await waitForPrompt(commandRevision, () => existsSync(result));
+        const statusRevision = revision();
+        session.send({
+          type: "input",
+          data: `[System.IO.File]::WriteAllText(${quote(status)}, [string]$LASTEXITCODE)\r`,
+        });
+        await expect.poll(() => existsSync(status)).toBe(true);
+        expect(readFileSync(status, "utf8")).toBe(String(code));
+        expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({
+          cwd: realpathSync(cwd),
+          args: [literal],
+        });
+        await waitForPrompt(statusRevision);
+      }
+      const scope = join(home, "scope.json");
+      const scopeReady = join(home, "scope-ready");
+      const scopeRevision = revision();
+      session.send({
+        type: "command",
+        command: `$paseoDispatchScope = ${quote(literal)}\r\n$env:PASEO_DISPATCH_SCOPE = 'scoped'\n& ${quote(process.execPath)} -e ${quote(`require('node:fs').writeFileSync(${JSON.stringify(scopeReady)}, 'ready');process.exit(7)`)} # trailing comment`,
+        cwd,
+        completion: true,
+      });
+      await waitForPrompt(scopeRevision, () => existsSync(scopeReady));
+      const scopeStatusRevision = revision();
+      session.send({
+        type: "input",
+        data: `[System.IO.File]::WriteAllText(${quote(scope)}, (ConvertTo-Json @{ value = $paseoDispatchScope; env = $env:PASEO_DISPATCH_SCOPE; code = $LASTEXITCODE }))\r`,
+      });
+      await expect.poll(() => existsSync(scope)).toBe(true);
+      expect(JSON.parse(readFileSync(scope, "utf8"))).toEqual({
+        value: literal,
+        env: "scoped",
+        code: 7,
+      });
+      await waitForPrompt(scopeStatusRevision);
+      const ready = join(home, "stdin-ready");
+      const input = join(home, "stdin.json");
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "const fs=require('node:fs');process.stdin.once('data',data=>{fs.writeFileSync(process.argv[2],JSON.stringify(data.toString().trim()));process.exit(0)});fs.writeFileSync(process.argv[1],'ready')",
+          ready,
+          input,
+        ],
+        completion: false,
+      });
+      await expect.poll(() => existsSync(ready)).toBe(true);
+      const stdinRevision = revision();
+      session.send({ type: "input", data: "foreground-input\r" });
+      await expect.poll(() => existsSync(input)).toBe(true);
+      expect(JSON.parse(readFileSync(input, "utf8"))).toBe("foreground-input");
+      await waitForPrompt(stdinRevision);
+      const forbidden = join(home, "must-not-run.json");
+      const settled = join(home, "guard-settled.txt");
+      const guardRevision = revision();
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [script, forbidden, "0"],
+        cwd: join(home, "missing directory"),
+        completion: true,
+      });
+      await waitForPrompt(guardRevision);
+      session.send({
+        type: "input",
+        data: `[System.IO.File]::WriteAllText(${quote(settled)}, 'settled')\r`,
+      });
+      await expect.poll(() => existsSync(settled)).toBe(true);
+      expect(existsSync(forbidden)).toBe(false);
+      // PowerShell retains its existing lifecycle behavior; dispatch adds no completion hook.
+      expect(completions).toEqual([]);
+    },
+  );
+  it.runIf(isPlatform("win32")).each(["powershell.exe", "pwsh.exe"])(
+    "retains immediate structured PowerShell dispatch in %s",
+    async (shell) => {
+      const home = mkdtempSync(join(tmpdir(), "early-powershell-"));
+      temporaryDirs.push(home);
+      const result = join(home, "early-result.json");
+      const session = trackSession(
+        await createTerminal({ workspaceId: "ws-early-powershell", cwd: home, shell }),
+      );
+      // Product bootstrap accepts first output; callers can dispatch before the shell prompt.
+      // Exercise the stricter immediate-send case without borrowing shell-readiness waits.
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync(process.argv[1], JSON.stringify(process.argv[2]))",
+          result,
+          "early 雪 & literal",
+        ],
+        completion: false,
+      });
+      await waitForState(
+        session,
+        (state) => existsSync(result) && /^PS .*>$/.test(getRowText(state, state.cursor.row)),
+      );
+      expect(JSON.parse(readFileSync(result, "utf8"))).toBe("early 雪 & literal");
+    },
+  );
+  const inputCases = shells
+    .filter((shell) => !shell.endsWith("zsh"))
+    .flatMap(
+      (shell) =>
+        [
+          [shell, false],
+          [shell, true],
+        ] as const,
+    );
+  it.each(inputCases)(
+    "preserves foreground stdin in %s with completion=%s",
+    async (shell, completion) => {
+      const cwd = mkdtempSync(join(tmpdir(), "managed-service-"));
+      temporaryDirs.push(cwd);
+      const session = trackSession(await createTerminal({ cwd, workspaceId: "ws-service", shell }));
+      const codes: Array<number | null> = [];
+      const output: string[] = [];
+      session.onCommandFinished(({ exitCode }) => codes.push(exitCode));
+      session.subscribe((event) => {
+        if (event.type === "output") output.push(event.data);
+      });
+      await expect.poll(() => session.hasOutput()).toBe(true);
+      session.send({
+        type: "command",
+        command: process.execPath,
+        args: [
+          "-e",
+          "console.log('SERVICE_READY');process.stdin.once('data', data => {require('node:fs').writeFileSync('stdin.txt',data);process.exit(0)})",
+        ],
+        completion,
+      });
+      await expect.poll(() => output.join("").includes("SERVICE_READY\r\n")).toBe(true);
+      session.send({ type: "input", data: "foreground-input\r" });
+      await expect.poll(() => existsSync(join(cwd, "stdin.txt"))).toBe(true);
+      expect(readFileSync(join(cwd, "stdin.txt"), "utf8")).toContain("foreground-input");
+      if (completion) await expect.poll(() => codes).toEqual([0]);
+      else expect(codes).toEqual([]);
+    },
+  );
+});
+
+// The native boundary is controlled; the real headless terminal and session lifecycle run.
+describe("native PTY close ownership", () => {
+  async function controlledTerminal(platform: NodeJS.Platform) {
+    const events = new EventEmitter();
+    const nativeKill = vi.fn<(signal?: string) => void>();
+    const nativePty: pty.IPty = {
+      pid: 123456,
+      cols: 80,
+      rows: 24,
+      process: "controlled",
+      handleFlowControl: false,
+      onData: (listener) => {
+        events.on("data", listener);
+        return {
+          dispose: () => {
+            events.off("data", listener);
+          },
+        };
+      },
+      onExit: (listener) => {
+        events.on("exit", listener);
+        return {
+          dispose: () => {
+            events.off("exit", listener);
+          },
+        };
+      },
+      kill: nativeKill,
+      write: vi.fn(),
+      resize: vi.fn(),
+      clear: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+    };
+    const spawn = vi.spyOn(pty, "spawn").mockReturnValue(nativePty);
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    let session: TerminalSession;
+    try {
+      session = await createTerminal({
+        workspaceId: "ws-controlled-close",
+        cwd: realpathSync(tmpdir()),
+        command: process.execPath,
+      });
+    } catch (error) {
+      spawn.mockRestore();
+      throw error;
+    }
+    Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+    const exit = () => {
+      events.emit("exit", { exitCode: 0, signal: 0 });
+    };
+    return {
+      session,
+      nativeKill,
+      exit,
+      output: (data: string) => events.emit("data", data),
+      restore: () => {
+        exit();
+        Object.defineProperty(process, "platform", descriptor);
+        spawn.mockRestore();
+        vi.useRealTimers();
+      },
+    };
+  }
+
+  it("observes PowerShell prompts across cursor wrapping and the scrollback boundary", async () => {
+    const terminal = await controlledTerminal(process.platform);
+    try {
+      const prompt = `PS C:/${"long-directory/".repeat(30)}>`;
+      terminal.output(`PS C:/initial> command\r\n${prompt} `);
+      const state = await waitForState(terminal.session, (current) =>
+        getLines(current).join("\n").includes(">"),
+      );
+      expect(observePowerShellPrompts(state)).toEqual({ count: 2, atCursor: true });
+      const scrolledPrompt = `PS C:/${"long-directory/".repeat(200)}>`;
+      terminal.output(`command\r\n${"padding\r\n".repeat(23)}${scrolledPrompt} `);
+      const scrolled = await waitForState(
+        terminal.session,
+        (current) => current.scrollback.length > 0,
+      );
+      expect(observePowerShellPrompts(scrolled)).toEqual({ count: 3, atCursor: true });
+    } finally {
+      terminal.restore();
+    }
+  });
+
+  it("closes Windows PTY once after kill and concurrent waiters still await native exit", async () => {
+    const terminal = await controlledTerminal("win32");
+    const waits: Promise<void>[] = [];
+    let settled = 0;
+    const waitAndCount = async () => {
+      await terminal.session.killAndWait();
+      settled++;
+    };
+    try {
+      terminal.session.kill();
+      waits.push(waitAndCount(), waitAndCount());
+      await Promise.resolve();
+      expect(terminal.nativeKill).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(0);
+      terminal.exit();
+      await Promise.all(waits);
+      expect(settled).toBe(2);
+      await terminal.session.killAndWait();
+      terminal.session.kill();
+      expect(terminal.nativeKill).toHaveBeenCalledTimes(1);
+    } finally {
+      terminal.restore();
+      await Promise.allSettled(waits);
+    }
+  });
+
+  it("retries a Windows close that threw before a successful request", async () => {
+    const terminal = await controlledTerminal("win32");
+    let wait: Promise<void> | undefined;
+    try {
+      vi.useFakeTimers();
+      terminal.nativeKill
+        .mockImplementationOnce(() => {
+          throw new Error("close unavailable");
+        })
+        .mockImplementationOnce(terminal.exit);
+      wait = terminal.session.killAndWait({ gracefulTimeoutMs: 10, forceTimeoutMs: 10 });
+      expect(terminal.nativeKill).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10);
+      await wait;
+      expect(terminal.nativeKill).toHaveBeenCalledTimes(2);
+    } finally {
+      terminal.restore();
+      await wait;
+    }
+  });
+
+  it("preserves POSIX force escalation while waiting for native exit", async () => {
+    const terminal = await controlledTerminal("linux");
+    let wait: Promise<void> | undefined;
+    try {
+      vi.useFakeTimers();
+      terminal.nativeKill.mockImplementation((signal) => {
+        if (signal === "SIGKILL") terminal.exit();
+      });
+      wait = terminal.session.killAndWait({ gracefulTimeoutMs: 10, forceTimeoutMs: 10 });
+      await vi.advanceTimersByTimeAsync(10);
+      await wait;
+      expect(terminal.nativeKill.mock.calls).toEqual([[undefined], ["SIGKILL"]]);
+    } finally {
+      terminal.restore();
+      await wait;
+    }
+  });
+});

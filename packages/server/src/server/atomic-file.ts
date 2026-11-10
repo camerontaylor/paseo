@@ -20,7 +20,7 @@ const runtime: AtomicFileRuntime = {
 export async function writeFileAtomic(
   filePath: string,
   data: string | NodeJS.ArrayBufferView,
-  operations: AtomicFileRuntime = runtime,
+  options: Partial<AtomicFileRuntime> & { mode?: number } = {},
 ): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = path.join(
@@ -28,8 +28,10 @@ export async function writeFileAtomic(
     `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
   );
   try {
-    await fs.writeFile(tempPath, data, "utf8");
-    await replaceFile(tempPath, filePath, operations);
+    // The mode applies at temp-file creation, so the rename publishes a file
+    // that already carries it; the rename itself never widens permissions.
+    await fs.writeFile(tempPath, data, { encoding: "utf8", mode: options?.mode });
+    await replaceFile(tempPath, filePath, { ...runtime, ...options });
   } catch (error) {
     await fs.rm(tempPath, { force: true });
     throw error;
@@ -70,7 +72,7 @@ async function replaceFile(
 export async function writeJsonFileAtomic(
   filePath: string,
   value: unknown,
-  operations: AtomicFileRuntime = runtime,
+  options: Partial<AtomicFileRuntime> & { mode?: number } = {},
 ): Promise<void> {
-  await writeFileAtomic(filePath, JSON.stringify(value, null, 2), operations);
+  await writeFileAtomic(filePath, JSON.stringify(value, null, 2), options);
 }
