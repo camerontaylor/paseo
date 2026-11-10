@@ -510,9 +510,10 @@ test("Windows units and integration run independently with complete routed cover
   function condition(job) {
     return /    if: \$\{\{ (.+) \}\}/.exec(job)[1];
   }
-  function selected(expression, outputs, cancelled = false) {
+  function selected(expression, outputs, cancelled = false, repository = "getpaseo/paseo") {
     return runInNewContext(expression, {
       needs: { changes: { outputs } },
+      github: { repository },
       cancelled: () => cancelled,
     });
   }
@@ -543,7 +544,44 @@ test("Windows units and integration run independently with complete routed cover
     assert.equal(selected(hubStep, outputs), hub);
     assert.equal(selected(unitCondition, outputs, true), false);
     assert.equal(selected(integrationCondition, outputs, true), false);
+    assert.equal(selected(unitCondition, outputs, false, "camerontaylor/paseo"), false);
+    assert.equal(selected(integrationCondition, outputs, false, "camerontaylor/paseo"), false);
   }
+});
+
+test("Windows jobs skip the custom fork while upstream jobs remain eligible", () => {
+  const windowsJobs = [];
+  for (const file of readdirSync(new URL(".github/workflows/", repoRoot))) {
+    if (!/\.ya?ml$/.test(file)) continue;
+    const source = readFileSync(new URL(`.github/workflows/${file}`, repoRoot), "utf8");
+    for (const [id, lines] of jobBlocks(source)) {
+      const job = lines.join("\n");
+      if (!/^    runs-on: windows-/m.test(job)) continue;
+      windowsJobs.push(`${file}:${id}`);
+      const expression = /    if: \$\{\{ (.+) \}\}/.exec(job)?.[1];
+      assert.ok(expression, `${file}:${id} has job-level gating`);
+      for (const repository of ["camerontaylor/paseo", "getpaseo/paseo"]) {
+        const eligible = runInNewContext(
+          expression.replaceAll("needs.create-release", 'needs["create-release"]'),
+          {
+            github: {
+              repository,
+              event_name: "workflow_dispatch",
+              event: { inputs: { platform: "all" } },
+            },
+            needs: {
+              changes: { outputs: { full: "true" } },
+              "create-release": { result: "success" },
+            },
+            cancelled: () => false,
+            always: () => true,
+          },
+        );
+        assert.equal(eligible, repository === "getpaseo/paseo", `${file}:${id} in ${repository}`);
+      }
+    }
+  }
+  assert.equal(windowsJobs.length, 4, "all Windows test and desktop build jobs are covered");
 });
 
 test("macOS release retries only transient stapling failures without rebuilding the signed app", async (t) => {
