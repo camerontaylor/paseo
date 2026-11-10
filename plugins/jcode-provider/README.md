@@ -89,20 +89,35 @@ Keep provider keys in `config.json` `env`, never in this directory.
    that it cannot, Paseo shows a notice. Older binaries retain their existing Stop behavior.
 
 Closing the attachment sends `session/close` without a preceding cancel. jcode's owner-aware close
-can still stop work started by this attachment. Leaving that work running through an explicit
-detach is not implemented yet.
+can still stop work started by this attachment. To leave the shared session without stopping
+inserted work, use the explicit provider detach (`PaseoAgentHandle.detachProviderSession()`, the
+`agent.provider.detach.request` daemon RPC, or the plugin's `detach_session` RPC). It sends
+`_jcode/detach` when the attachment advertises `sharedControl.detach`; it never replaces
+`session/close`.
 
 When jcode declares session-supplied MCP servers unsupported, Paseo omits them and shows a notice
 naming the configured servers. Configure those servers in jcode itself.
 
-Turn-response correlation, explicit skill selection and clear, and replay of jcode's shared fixture
-corpus remain pending. Skills remain available through jcode slash commands. ACP v2 is out of scope.
+With `turn_correlation`, successful prompt responses name the shared `turnId` and `role`.
+Paseo settles one terminal and one usage report per shared execution, so a steer response never
+duplicates the origin's completion. Without the extension the legacy turn behavior is unchanged.
+
+With `skill_selection`, an explicit skill name is sent as `_meta.jcode.skill`; `null` clears the
+sticky selection and an omitted field leaves it alone. The submitted text is unchanged: an
+explicit `null` or name sends the original slash command so a clear can still run a builtin, while
+only an inferred skill command becomes bare arguments. Skill-classified commands and
+`send_agent_message_request.skill` both reach that path. A busy steer rejects before insertion
+rather than dropping the selection. ACP v2 is out of scope.
 
 ## Tests
 
 ```bash
-nice -n 10 npx vitest run plugins/jcode-provider/server/capabilities.test.ts plugins/jcode-provider/server/peer-turns.test.ts --bail=1
+nice -n 10 npx vitest run plugins/jcode-provider/server/capabilities.test.ts plugins/jcode-provider/server/peer-turns.test.ts plugins/jcode-provider/server/corpus-replay.test.ts --bail=1
 ```
+
+`corpus-replay.test.ts` drives the vendored snapshot of jcode's
+`tests/fixtures/acp` corpus through the real ACP connector, not only through JSON assertions. Set
+`JCODE_ACP_FIXTURE_DIR` to replay a newer corpus.
 
 The end-to-end criteria in `specs/jcode-provider-plugin.md` need a jcode build with shared sessions
 (`docs/ACP_SHARED_SESSIONS.md` in the jcode repo), a jcode TUI and a Paseo daemon from this

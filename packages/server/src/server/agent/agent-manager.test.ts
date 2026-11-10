@@ -394,6 +394,79 @@ class HeldReloadCloseClient extends TestAgentClient {
   }
 }
 
+class DetachLifecycleClient extends TestAgentClient {
+  private readonly closeStarted = deferred<void>();
+  private readonly closeAllowed = deferred<void>();
+  private readonly detachStarted = deferred<void>();
+  private readonly detachAllowed = deferred<void>();
+  originalDetachCalled = false;
+  originalClosed = false;
+  replacementDetachCalled = false;
+  replacementClosed = false;
+  resumeCalls = 0;
+
+  constructor(
+    private readonly options: {
+      holdClose?: boolean;
+      holdDetach?: boolean;
+      detachFailure?: Error;
+      replacementSupportsDetach?: boolean;
+    } = {},
+  ) {
+    super();
+  }
+
+  override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+    const session = await super.createSession(config);
+    session.close = async () => {
+      this.originalClosed = true;
+      this.closeStarted.resolve();
+      if (this.options.holdClose) await this.closeAllowed.promise;
+    };
+    session.detachSharedSession = async () => {
+      this.originalDetachCalled = true;
+      this.detachStarted.resolve();
+      if (this.options.holdDetach) await this.detachAllowed.promise;
+      if (this.options.detachFailure) throw this.options.detachFailure;
+    };
+    return session;
+  }
+
+  override async resumeSession(
+    handle: AgentPersistenceHandle,
+    config?: Partial<AgentSessionConfig>,
+    launchContext?: AgentLaunchContext,
+  ): Promise<AgentSession> {
+    const session = await super.resumeSession(handle, config, launchContext);
+    this.resumeCalls += 1;
+    session.close = async () => {
+      this.replacementClosed = true;
+    };
+    if (this.options.replacementSupportsDetach) {
+      session.detachSharedSession = async () => {
+        this.replacementDetachCalled = true;
+      };
+    }
+    return session;
+  }
+
+  waitForCloseToStart(): Promise<void> {
+    return this.closeStarted.promise;
+  }
+
+  finishClosing(): void {
+    this.closeAllowed.resolve();
+  }
+
+  waitForDetachToStart(): Promise<void> {
+    return this.detachStarted.promise;
+  }
+
+  finishDetaching(): void {
+    this.detachAllowed.resolve();
+  }
+}
+
 class NativeArchiveRecordingClient extends TestAgentClient {
   readonly archivedHandles: AgentPersistenceHandle[] = [];
   readonly unarchivedHandles: AgentPersistenceHandle[] = [];
@@ -2159,6 +2232,117 @@ test("reload does not create a replacement when the closed snapshot cannot be pe
   } finally {
     client.finishClosing();
     await manager.flushForShutdown().catch(() => undefined);
+    await storage.flush().catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("detach queued behind a reload targets the current session, not the stale one", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-detach-reload-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new DetachLifecycleClient({ holdClose: true });
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+  });
+  let agentId: string | undefined;
+
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    const reload = manager.reloadAgentSession(agent.id);
+    await client.waitForCloseToStart();
+    const detach = manager.detachSharedSession(agent.id);
+    client.finishClosing();
+    await reload;
+
+    await expect(detach).rejects.toThrow("does not support shared session detach");
+    expect({
+      originalDetachCalled: client.originalDetachCalled,
+      replacementDetachCalled: client.replacementDetachCalled,
+      replacementClosed: client.replacementClosed,
+      resumeCalls: client.resumeCalls,
+    }).toEqual({
+      originalDetachCalled: false,
+      replacementDetachCalled: false,
+      replacementClosed: false,
+      resumeCalls: 1,
+    });
+    expect(manager.getAgent(agent.id)).not.toBeNull();
+  } finally {
+    client.finishClosing();
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    await manager.flush().catch(() => undefined);
+    await storage.flush().catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("detach closes its own runtime before a following reload can replace it", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-detach-reload-order-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new DetachLifecycleClient({ holdDetach: true, replacementSupportsDetach: true });
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+  });
+
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    const detach = manager.detachSharedSession(agent.id);
+    await client.waitForDetachToStart();
+    const reload = manager
+      .reloadAgentSession(agent.id)
+      .then((reloaded) => ({ reloaded }))
+      .catch((error: unknown) => ({ error }));
+    client.finishDetaching();
+
+    await detach;
+    const following = await reload;
+    expect(following).toHaveProperty("error");
+    expect(client.originalDetachCalled).toBe(true);
+    expect(client.replacementDetachCalled).toBe(false);
+    expect(client.replacementClosed).toBe(false);
+    expect(client.resumeCalls).toBe(0);
+    expect(manager.getAgent(agent.id)).toBeNull();
+  } finally {
+    client.finishDetaching();
+    await manager.flush().catch(() => undefined);
+    await storage.flush().catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a failed shared detach leaves the current runtime open", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-detach-failure-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new DetachLifecycleClient({ detachFailure: new Error("detach failed") });
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+  });
+  let agentId: string | undefined;
+
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+
+    await expect(manager.detachSharedSession(agent.id)).rejects.toThrow("detach failed");
+    expect(client.originalDetachCalled).toBe(true);
+    expect(client.originalClosed).toBe(false);
+    expect(manager.getAgent(agent.id)).not.toBeNull();
+  } finally {
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    await manager.flush().catch(() => undefined);
     await storage.flush().catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });
   }

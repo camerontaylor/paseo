@@ -10,6 +10,7 @@ export const PROVIDER_CAPABILITIES = [
   "prompt.output_schema",
   "prompt.steer",
   "session.can_stop_runtime",
+  "session.detach",
   "session.archive",
   "session.configure",
   "session.list",
@@ -145,6 +146,12 @@ export interface ProviderPrompt {
   input:
     | { type: "message"; content: ProviderContent[] }
     | { type: "command"; name: string; arguments: string };
+  /**
+   * Explicit attachment-local skill selection. `undefined` leaves the selection alone, a name
+   * selects it, and `null` clears it before the prompt text is read. Only providers that
+   * advertise the behavior accept it.
+   */
+  skill?: string | null;
   outputSchema?: JsonValue;
   clearPendingPermissions?: boolean;
 }
@@ -289,6 +296,8 @@ export type ProviderInput =
   | { type: "session.archive"; requestId: string; persistence: ProviderPersistence }
   | { type: "session.unarchive"; requestId: string; persistence: ProviderPersistence }
   | { type: "session.can_stop_runtime"; requestId: string; sessionId: string }
+  /** Leave this attachment without stopping work it inserted into a shared session. */
+  | { type: "session.detach"; requestId: string; sessionId: string }
   | { type: "session.close"; requestId: string; sessionId: string };
 
 export interface ProviderThinkingOption {
@@ -369,6 +378,11 @@ export interface ProviderCommand {
   name: string;
   description: string;
   argumentHint?: string;
+  /**
+   * ACP only describes slash commands. A provider that can distinguish its skills reports them
+   * here so the client can select the skill explicitly instead of relying on textual parsing.
+   */
+  kind?: "command" | "skill";
 }
 
 export interface ProviderError {
@@ -655,6 +669,8 @@ export function requiredProviderCapabilities(input: ProviderInput): readonly Pro
     case "session.interrupt":
     case "session.close":
       return [];
+    case "session.detach":
+      return ["session.detach"];
     case "sessions":
       return ["session.list"];
     case "session.open": {
@@ -891,6 +907,7 @@ const promptSchema = z
       z.object({ type: z.literal("message"), content: z.array(providerContentSchema) }).strict(),
       z.object({ type: z.literal("command"), name: idSchema, arguments: z.string() }).strict(),
     ]),
+    skill: z.string().nullable().optional(),
     outputSchema: z.json().optional(),
     clearPendingPermissions: z.boolean().optional(),
   })
@@ -932,6 +949,9 @@ export const ProviderInputSchema: z.ZodType<ProviderInput> = z.discriminatedUnio
     .strict(),
   z
     .object({ type: z.literal("session.interrupt"), requestId: idSchema, sessionId: idSchema })
+    .strict(),
+  z
+    .object({ type: z.literal("session.detach"), requestId: idSchema, sessionId: idSchema })
     .strict(),
   z
     .object({
@@ -1067,7 +1087,12 @@ const noticeSchema = z
   })
   .strip();
 const commandSchema = z
-  .object({ name: idSchema, description: z.string(), argumentHint: z.string().optional() })
+  .object({
+    name: idSchema,
+    description: z.string(),
+    argumentHint: z.string().optional(),
+    kind: z.enum(["command", "skill"]).optional(),
+  })
   .strip();
 const usageSchema = z
   .object({

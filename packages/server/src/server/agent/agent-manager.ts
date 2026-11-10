@@ -2092,6 +2092,25 @@ export class AgentManager {
     return close;
   }
 
+  /**
+   * Leave a shared provider session while the provider keeps its work. Unlike close, this asks
+   * the provider for an explicit detach first; a provider without that operation is left alone
+   * so a normal close cannot silently gain different semantics.
+   */
+  async detachSharedSession(agentId: string): Promise<void> {
+    await this.runLifecycleMutation(agentId, async () => {
+      // A queued reload or close may already have replaced the runtime while this request was
+      // waiting. Resolve the current session inside the lane so detach never targets a stale one.
+      const agent = this.requireAgent(agentId);
+      const detach = agent.session.detachSharedSession;
+      if (!detach) throw new Error(`${agent.provider} does not support shared session detach`);
+      await detach.call(agent.session);
+      // Close the same captured runtime in this lane. A second public close lane could be
+      // overtaken by a later reload and close that successor instead.
+      await this.closeAgentRuntime(agentId, () => this.agents.get(agentId) === agent);
+    });
+  }
+
   private async closeAgentRuntime(agentId: string, canClose?: () => boolean): Promise<boolean> {
     const agent = this.requireAgent(agentId);
     this.logger.trace(

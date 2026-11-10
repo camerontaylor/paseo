@@ -463,6 +463,105 @@ test("late plugin subscribers adopt only the active bracket without notifying ex
   }
 });
 
+test("detaching a plugin session sends session.detach and leaves session.close to the owner", async () => {
+  const harness = createProviderHarness({
+    capabilities: [...CAPABILITIES, "session.detach"],
+  });
+  const registry = new PluginAgentClientRegistry(createTestLogger());
+  registry.replace([harness.registration]);
+  const client = registry.clients()[harness.registration.id]!;
+  const session = await client.createSession({ provider: harness.registration.id, cwd: tmpdir() });
+  try {
+    await session.detachSharedSession!();
+    expect(harness.inputs.filter((input) => input.type === "session.detach")).toHaveLength(1);
+    expect(harness.inputs.some((input) => input.type === "session.close")).toBe(false);
+    // Detach already closed the local session; a later close is a no-op.
+    await session.close();
+    expect(harness.inputs.some((input) => input.type === "session.close")).toBe(false);
+  } finally {
+    await session.close();
+    await registry.shutdown();
+  }
+});
+
+test("maps skill commands and explicit skill overrides to the provider prompt", async () => {
+  const harness = createProviderHarness({ capabilities: [...CAPABILITIES, "prompt.command"] });
+  const registry = new PluginAgentClientRegistry(createTestLogger());
+  registry.replace([harness.registration]);
+  const client = registry.clients()[harness.registration.id]!;
+  const session = await client.createSession({ provider: harness.registration.id, cwd: tmpdir() });
+  const opened = harness.inputs.find((input) => input.type === "session.open")!;
+  if (opened.type !== "session.open") throw new Error("Missing open request");
+  harness.emit({
+    type: "session.commands",
+    sessionId: opened.sessionId,
+    commands: [
+      { name: "deploy", description: "Deploy", kind: "skill" },
+      { name: "compact", description: "Compact", kind: "command" },
+      { name: "model", description: "Model", kind: "command" },
+    ],
+  });
+  const promptInputs = () =>
+    harness.inputs.filter((input) => input.type === "session.prompt").slice(-1)[0];
+  try {
+    await expect(session.listCommands!()).resolves.toEqual([
+      { name: "deploy", description: "Deploy", argumentHint: "", kind: "skill" },
+      { name: "compact", description: "Compact", argumentHint: "", kind: "command" },
+      { name: "model", description: "Model", argumentHint: "", kind: "command" },
+    ]);
+
+    await session.run("/deploy now");
+    expect(promptInputs()).toMatchObject({
+      prompt: {
+        skill: "deploy",
+        input: { type: "command", name: "deploy", arguments: "now" },
+      },
+    });
+
+    await session.run("/deploy", { skill: null });
+    expect(promptInputs()).toMatchObject({
+      prompt: {
+        skill: null,
+        input: { type: "message", content: [{ type: "text", text: "/deploy" }] },
+      },
+    });
+
+    await session.run("/deploy", { skill: "release" });
+    expect(promptInputs()).toMatchObject({
+      prompt: {
+        skill: "release",
+        input: { type: "message", content: [{ type: "text", text: "/deploy" }] },
+      },
+    });
+
+    await session.run("/compact");
+    expect(promptInputs()).toMatchObject({
+      prompt: { input: { type: "command", name: "compact" } },
+    });
+    expect(promptInputs()).not.toHaveProperty("prompt.skill");
+
+    // A builtin clear still submits the user's original slash command text.
+    await session.run("/model gpt-5.2", { skill: null });
+    expect(promptInputs()).toMatchObject({
+      prompt: {
+        skill: null,
+        input: { type: "message", content: [{ type: "text", text: "/model gpt-5.2" }] },
+      },
+    });
+
+    await session.run("/model gpt-5.2", { skill: "other" });
+    expect(promptInputs()).toMatchObject({
+      prompt: {
+        skill: "other",
+        input: { type: "message", content: [{ type: "text", text: "/model gpt-5.2" }] },
+      },
+    });
+  } finally {
+    await session.close();
+    await registry.shutdown();
+  }
+});
+
 test("file-only plugin rewind preserves the conversation before and after a replacement prompt", async () => {
   await withRewindAgent(async ({ manager, agentId, nativeMessages, messages }) => {
     await manager.rewind(agentId, "user-B", "files");
@@ -2749,6 +2848,75 @@ test("runtime failure clears pending plugin work without an idle success gap", a
     expect(manager.getAgent(agent.id)?.lastError).toBe("transport gone");
     stop();
   } finally {
+    await manager.closeAgent(agent.id);
+    await registry.shutdown();
+  }
+});
+
+test("a shared ACP turn closes balanced without a false runtime failure", async () => {
+  const logger = createTestLogger();
+  const harness = acpVendorTurnHarness({ holdPrompts: true });
+  const registration = runAcpProvider({
+    id: "acp-shared-close",
+    label: "ACP shared close",
+    connector: harness.connector,
+    acpOptions: { vendorTurnsAreNeverForeground: true },
+    transformers: [
+      {
+        initialize: () => ({ turnCorrelation: true }),
+        notification(notification) {
+          if (notification.method !== "vendor/turn") return null;
+          const params = notification.params as { turnId: string; state: string };
+          return { type: "turn" as const, turnId: params.turnId, state: params.state };
+        },
+      },
+    ],
+  });
+  const registry = new PluginAgentClientRegistry(logger);
+  registry.replace([registration]);
+  const manager = new AgentManager({
+    logger,
+    clients: registry.clients(),
+    providerDefinitions: registry.definitions(),
+  });
+  const agent = await manager.createAgent({ provider: registration.id, cwd: tmpdir() }, undefined, {
+    workspaceId: undefined,
+  });
+  const stream: AgentStreamEvent[] = [];
+  const unsubscribe = manager.subscribe(
+    (event) => {
+      if (event.type === "agent_stream") stream.push(event.event);
+    },
+    { agentId: agent.id, replayState: false },
+  );
+  try {
+    const run = manager.runAgent(agent.id, "overlap", { clientMessageId: "overlap" });
+    const live = harness.instances.at(-1)!;
+    await vi.waitFor(() => expect(live.promptResponses.length).toBe(1));
+    // The prompt already published the local start; the vendor bracket is its alias.
+    live.notify("vendor/turn", { turnId: "shared", state: "started" });
+    live.notify("vendor/turn", { turnId: "shared", state: "completed" });
+    await run;
+    live.promptResponses[0]!({
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 2 },
+      _meta: { jcode: { turnId: "shared", role: "steer" } },
+    });
+    await vi.waitFor(() =>
+      expect(
+        stream.filter((event) => event.type === "turn_started" || event.type === "turn_completed"),
+      ).toEqual([
+        { type: "turn_started", provider: registration.id, turnId: "acp:overlap" },
+        { type: "turn_completed", provider: registration.id, turnId: "acp:overlap" },
+      ]),
+    );
+
+    // No leaked started id: closing the provider must not report a failed interrupted turn.
+    await registry.shutdown();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(stream.filter((event) => event.type === "turn_failed")).toEqual([]);
+  } finally {
+    unsubscribe();
     await manager.closeAgent(agent.id);
     await registry.shutdown();
   }

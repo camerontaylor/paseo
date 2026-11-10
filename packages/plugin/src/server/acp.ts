@@ -68,11 +68,31 @@ export interface AcpConnectionPolicy {
   echoesUserMessages?: boolean;
   sendSessionMcpServers?: boolean;
   steering?: boolean;
+  /** Successful prompt responses carry a shared turn id and role under `_meta.jcode`. */
+  turnCorrelation?: boolean;
+  /** Prompts accept an explicit attachment-local skill selection. */
+  skillSelection?: boolean;
 }
 
 export interface AcpSessionPolicy {
   steering?: boolean;
   stopObservedTurns?: boolean;
+  /** `_jcode/detach` is available on this attachment. */
+  detach?: boolean;
+}
+
+/** Prompt state a transformer needs in order to add vendor metadata. */
+export interface AcpPromptInfo {
+  /** `undefined` leaves the selection alone, a name selects, `null` clears. */
+  skill?: string | null;
+}
+
+export interface AcpPromptMetadata {
+  _meta: Record<string, JsonValue>;
+}
+
+export interface AcpPolicyContext extends AcpContext {
+  policy: AcpConnectionPolicy;
 }
 
 export interface AcpConfigAccess {
@@ -121,6 +141,13 @@ export type AcpVendorUpdate =
 export interface AcpTransformer {
   initialize?(info: { agentCapabilities: JsonValue }): AcpConnectionPolicy | null;
   attach?(info: { response: JsonValue }, context: AcpContext): AcpSessionPolicy | null;
+  /** Vendor metadata for a prompt. The shim sends it as `_meta` on `session/prompt`. */
+  prompt?(info: AcpPromptInfo, context: AcpPolicyContext): AcpPromptMetadata | null;
+  /** Classify advertised commands before the shim publishes them. */
+  command?(
+    commands: readonly ProviderCommand[],
+    context: AcpPolicyContext,
+  ): readonly ProviderCommand[] | null;
   discover?(
     catalog: ProviderCatalog,
     context: AcpDiscoveryContext,
