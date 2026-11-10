@@ -2166,6 +2166,21 @@ ${replaceHooks ? "precmd_functions=()\npreexec_functions=()\n" : ""}`,
             prompts.count > promptCount &&
             prompts.atCursor
           );
+        }).catch(async (cause) => {
+          const state = await readTerminalState(session);
+          throw new Error(
+            `PowerShell prompt not ready: ${JSON.stringify({
+              shell,
+              afterRevision,
+              revision: revision(),
+              completed: completed(),
+              promptCount,
+              prompts: observePowerShellPrompts(state),
+              cursor: state.cursor,
+              lines: [...state.scrollback, ...state.grid].slice(-32).map(rowToText),
+            })}`,
+            { cause },
+          );
         });
         promptCount = observePowerShellPrompts(returned).count;
       };
