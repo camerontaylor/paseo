@@ -2887,6 +2887,8 @@ export class Session {
     switch (msg.type) {
       case "agent.detach.request":
         return this.handleDetachAgentRequest(msg.agentId, msg.requestId);
+      case "agent.provider.detach.request":
+        return this.handleProviderDetachRequest(msg.agentId, msg.requestId);
       default:
         return undefined;
     }
@@ -3578,6 +3580,23 @@ export class Session {
           accepted: false,
           error: message,
         },
+      });
+    }
+  }
+
+  private async handleProviderDetachRequest(agentId: string, requestId: string): Promise<void> {
+    try {
+      await this.agentManager.detachSharedSession(agentId);
+      this.emit({
+        type: "agent.provider.detach.response",
+        payload: { requestId, agentId, accepted: true, error: null },
+      });
+    } catch (error) {
+      const message = getErrorMessageOr(error, "Failed to detach provider session");
+      this.sessionLogger.error({ err: error, agentId, requestId }, "Provider detach failed");
+      this.emit({
+        type: "agent.provider.detach.response",
+        payload: { requestId, agentId, accepted: false, error: message },
       });
     }
   }
@@ -8572,6 +8591,7 @@ export class Session {
           agentStorage: this.agentStorage,
           agentId,
           prompt,
+          ...(msg.skill === undefined ? {} : { runOptions: { skill: msg.skill } }),
           messageId: msg.messageId,
           activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
           sessionMode: msg.sessionMode,

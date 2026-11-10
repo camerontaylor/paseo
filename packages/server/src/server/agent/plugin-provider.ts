@@ -14,6 +14,7 @@ import {
   type ProviderLaunch,
   requireProviderCapabilities,
   type ProviderCapability,
+  type ProviderCommand,
   type ProviderConfigChanges,
   type ProviderConfigState,
   type ProviderConnection,
@@ -610,9 +611,10 @@ class ProviderRuntimeSession {
   private readonly activeTurnIds = new Set<string>();
   private pendingWork = false;
   private terminal = false;
+  private detached = false;
   private closePromise: Promise<void> | null = null;
   config: ProviderConfigState = { models: [], modes: [], thinkingOptions: [], settings: [] };
-  commands: Array<{ name: string; description: string; argumentHint?: string }> = [];
+  commands: ProviderCommand[] = [];
   persistence: ProviderPersistence | null = null;
 
   constructor(
@@ -729,6 +731,10 @@ class ProviderRuntimeSession {
 
   async close(): Promise<void> {
     this.history.length = 0;
+    if (this.detached) {
+      this.runtime.removeSession(this.id, this.providerSessionId);
+      return;
+    }
     if (this.restoration === "parent") {
       this.runtime.removeSession(this.id, this.providerSessionId);
       return;
@@ -738,6 +744,22 @@ class ProviderRuntimeSession {
       throw error;
     });
     await this.closePromise;
+  }
+
+  async detachSharedSession(): Promise<void> {
+    this.history.length = 0;
+    if (this.restoration === "parent") {
+      this.runtime.removeSession(this.id, this.providerSessionId);
+      this.detached = true;
+      return;
+    }
+    await this.runtime.complete({
+      type: "session.detach",
+      requestId: randomUUID(),
+      sessionId: this.providerSessionId,
+    });
+    this.runtime.removeSession(this.id, this.providerSessionId);
+    this.detached = true;
   }
 
   private async closeNativeSession(): Promise<void> {
@@ -1288,10 +1310,15 @@ class PluginAgentSession implements AgentSession {
   ): Promise<{ turnId: string }> {
     this.assertReplayComplete();
     const clientMessageId = options.clientMessageId ?? randomUUID();
+    const mapped = mapPromptInput(prompt, this.bridge.commands, {
+      explicitSkill: options.skill !== undefined,
+    });
+    const skill = options.skill === undefined ? mapped.skill : options.skill;
     const result = await this.bridge.prompt({
       clientMessageId,
       delivery: "auto",
-      input: mapPromptInput(prompt, this.bridge.commands),
+      input: mapped.input,
+      ...(skill === undefined ? {} : { skill }),
       ...(options.outputSchema === undefined
         ? {}
         : { outputSchema: toJsonValue(options.outputSchema, "output schema") }),
@@ -1310,6 +1337,8 @@ class PluginAgentSession implements AgentSession {
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
     this.assertReplayComplete();
+    // A busy steer cannot change a sticky skill; reject before insertion instead of dropping it.
+    if (options.skill !== undefined) return { status: "unavailable" };
     if (
       !this.bridge.negotiatedCapabilities.includes("prompt.steer") ||
       this.currentTurnId !== options.expectedTurnId
@@ -1427,11 +1456,18 @@ class PluginAgentSession implements AgentSession {
     }
   }
 
+  async detachSharedSession(): Promise<void> {
+    if (this.closed) return;
+    await this.replaying?.catch(() => undefined);
+    await this.bridge.detachSharedSession();
+    await this.close();
+  }
+
   async listCommands(): Promise<AgentSlashCommand[]> {
     return this.bridge.commands.map((command) => ({
       ...command,
       argumentHint: command.argumentHint ?? "",
-      kind: "command",
+      kind: command.kind ?? "command",
     }));
   }
 
@@ -1922,20 +1958,28 @@ function combineSystemPrompts(
 
 function mapPromptInput(
   prompt: AgentPromptInput,
-  commands: readonly { name: string }[],
-): ProviderPrompt["input"] {
-  if (typeof prompt === "string" && prompt.startsWith("/")) {
+  commands: readonly ProviderCommand[],
+  options: { explicitSkill: boolean } = { explicitSkill: false },
+): { input: ProviderPrompt["input"]; skill?: string } {
+  // Caller-supplied skill metadata is authoritative. Converting a slash command here would
+  // replace the original text with bare arguments, so a clear or an explicit override could
+  // never submit the command the user actually typed.
+  if (!options.explicitSkill && typeof prompt === "string" && prompt.startsWith("/")) {
     const separator = prompt.indexOf(" ");
     const name = prompt.slice(1, separator === -1 ? undefined : separator);
-    if (commands.some((command) => command.name === name)) {
+    const command = commands.find((candidate) => candidate.name === name);
+    if (command) {
       return {
-        type: "command",
-        name,
-        arguments: separator === -1 ? "" : prompt.slice(separator + 1),
+        input: {
+          type: "command",
+          name,
+          arguments: separator === -1 ? "" : prompt.slice(separator + 1),
+        },
+        ...(command.kind === "skill" ? { skill: name } : {}),
       };
     }
   }
-  return { type: "message", content: mapPromptContent(prompt) };
+  return { input: { type: "message", content: mapPromptContent(prompt) } };
 }
 
 function mapPromptContent(prompt: AgentPromptInput): ProviderContent[] {

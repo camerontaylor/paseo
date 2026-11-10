@@ -21,6 +21,7 @@ import {
   type Stream,
 } from "@agentclientprotocol/sdk";
 import { z } from "zod";
+import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import type {
   AcpConfigAccess,
   AcpConfigChange,
@@ -39,6 +40,7 @@ import {
   requireProviderCapabilities,
   type ProviderCatalog,
   type ProviderCapability,
+  type ProviderCommand,
   type ProviderConfigState,
   type ProviderConnectRequest,
   type ProviderConnection,
@@ -48,6 +50,7 @@ import {
   type ProviderLaunch,
   type ProviderPermissionResponse,
   type ProviderPersistence,
+  type ProviderPrompt,
   type ProviderSessionConfig,
   type ProviderSetting,
   type ProviderTimelineItem,
@@ -59,6 +62,18 @@ import {
  * daemon that acknowledges the cancel and never reports the end.
  */
 const VENDOR_TURN_CANCEL_GRACE_MS = 1_000;
+
+// Contract: jcode docs/ACP_FORK_INTERFACE.md, "Turn correlation on prompt responses". Both
+// fields are required together under `_meta.jcode`; anything else is treated as absent
+// correlation, which keeps the legacy behavior instead of guessing an attribution.
+const promptCorrelationSchema = z.object({
+  _meta: z.object({
+    jcode: z.object({
+      turnId: z.string().nullable(),
+      role: z.enum(["origin", "steer", "none"]),
+    }),
+  }),
+});
 
 function mergePolicy<T extends object>(current: T, next: T | null | undefined): T {
   if (!next) return current;
@@ -73,6 +88,7 @@ const ADAPTER_CAPABILITIES = [
   "prompt.message",
   "prompt.command",
   "session.configure",
+  "session.detach",
   "permission",
 ] as const;
 
@@ -195,6 +211,15 @@ function validateAdmission(
     requireProviderCapabilities(state.capabilities, input);
     return;
   }
+  // Close and detach are idempotent: a repeated request for a session this attachment already
+  // released still succeeds without touching the provider.
+  if (
+    (input.type === "session.close" || input.type === "session.detach") &&
+    !state.sessions.has(input.sessionId)
+  ) {
+    requireProviderCapabilities(state.capabilities, input);
+    return;
+  }
   const session = requireSession(state as AcpConnectionState, input.sessionId);
   requireProviderCapabilities(session.capabilities, input);
 }
@@ -241,6 +266,15 @@ async function dispatch(input: ProviderInput, state: AcpConnectionState): Promis
       await requireSession(state, input.sessionId).runtime.interrupt();
       state.emit({ type: "request.completed", requestId: input.requestId });
       return;
+    case "session.detach": {
+      const session = state.sessions.get(input.sessionId);
+      if (session) {
+        await session.runtime.detach();
+        state.sessions.delete(input.sessionId);
+      }
+      state.emit({ type: "request.completed", requestId: input.requestId });
+      return;
+    }
     case "session.permission":
       requireSession(state, input.sessionId).runtime.respondToPermission(
         input.permissionId,
@@ -254,7 +288,11 @@ async function dispatch(input: ProviderInput, state: AcpConnectionState): Promis
       return;
     }
     case "session.close": {
-      const session = requireSession(state, input.sessionId);
+      const session = state.sessions.get(input.sessionId);
+      if (!session) {
+        state.emit({ type: "request.completed", requestId: input.requestId });
+        return;
+      }
       state.sessions.delete(input.sessionId);
       await session.runtime.closeSession();
       state.emit({ type: "session.closed", sessionId: input.sessionId });
@@ -442,11 +480,23 @@ class AcpRuntime {
    * The vendor turn a transformer reported and Paseo did not prompt. Only one can be
    * open: the agent runs one turn at a time, so a new start means the old turn is over.
    */
-  private vendorTurn: { turnId: string; settled: Promise<void>; resolve(): void } | null = null;
+  private vendorTurn: {
+    turnId: string;
+    remoteTurnId: string;
+    settled: Promise<void>;
+    resolve(): void;
+  } | null = null;
   /** One FIFO slot per inbound session/update, so vendor updates can follow them. */
   private readonly updateSlots = new UpdateSlots();
   private readonly promptResponses = new PromptResponseOrder();
   private readonly steerEchoes = new Map<string, string>();
+  private detachPromise: Promise<void> | null = null;
+  private detached = false;
+  /** Shared execution ids whose terminal or usage has already been published. */
+  private readonly settledSharedTurns = new Set<string>();
+  private readonly settledLocalTurns = new Set<string>();
+  private readonly reportedSharedUsage = new Set<string>();
+  private readonly localTurnIds = new Map<string, string>();
   private bufferedUserChunk: Extract<
     SessionUpdate,
     { sessionUpdate: "user_message_chunk" }
@@ -642,9 +692,11 @@ class AcpRuntime {
     // The local auto_accept toggle is configurable even without vendor options.
     const sessionCapabilities = connectionCapabilities.filter(
       (capability) =>
-        capability !== "prompt.steer" ||
-        (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true),
+        capability !== "session.detach" &&
+        (capability !== "prompt.steer" ||
+          (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true)),
     );
+    if (this.sessionPolicy.detach === true) sessionCapabilities.push("session.detach");
     this.emit({
       type: "session.opened",
       requestId: input.requestId,
@@ -690,12 +742,164 @@ class AcpRuntime {
   }
 
   prompt(input: Extract<ProviderInput, { type: "session.prompt" }>): Promise<void> {
+    if (this.detached) return Promise.reject(new Error("Session was detached from the agent"));
+    this.assertPromptSelection(input.prompt);
     if (input.prompt.delivery === "steer") return this.steer(input);
     // A stop cancels the prompts waiting when it is pressed, not prompts admitted after it.
     const stopGeneration = this.stopGeneration;
     const admission = this.promptLane.then(() => this.admitPrompt(input, stopGeneration));
     this.promptLane = admission.catch(() => undefined);
     return admission;
+  }
+
+  /**
+   * Explicit skill selection is an advertised jcode extension. Silent removal would leave the
+   * client believing the selection took effect; a steer cannot carry it either, because the
+   * daemon may insert the prompt into a turn that already started.
+   */
+  private assertPromptSelection(prompt: ProviderPrompt): void {
+    if (prompt.skill === undefined) return;
+    if (this.connectionPolicy.skillSelection !== true) {
+      throw new Error("This agent does not advertise explicit skill selection");
+    }
+    if (prompt.delivery === "steer") {
+      throw new Error("A skill selection needs an idle session");
+    }
+  }
+
+  private promptMetadata(prompt: ProviderPrompt): Record<string, JsonValue> | undefined {
+    let metadata: Record<string, JsonValue> | undefined;
+    for (const transformer of this.transformers) {
+      const transformed = transformer.prompt?.(
+        { skill: prompt.skill },
+        { sessionId: this.options.boundarySessionId, policy: this.connectionPolicy },
+      );
+      if (transformed?._meta) metadata = Object.assign(metadata ?? {}, transformed._meta);
+    }
+    return metadata;
+  }
+
+  private promptParams(prompt: ProviderPrompt) {
+    const metadata = this.promptMetadata(prompt);
+    return {
+      sessionId: this.nativeSessionId,
+      prompt: toAcpPrompt(prompt),
+      ...(metadata === undefined ? {} : { _meta: metadata }),
+    };
+  }
+
+  private classifyCommands(commands: readonly ProviderCommand[]): ProviderCommand[] {
+    let classified: ProviderCommand[] = [...commands];
+    const context = {
+      sessionId: this.options.boundarySessionId,
+      policy: this.connectionPolicy,
+    };
+    for (const transformer of this.transformers) {
+      const next = transformer.command?.(classified, context);
+      if (next) classified = [...next];
+    }
+    return classified;
+  }
+
+  /** Terminal identities are only needed to suppress a late duplicate; bound a long session. */
+  private remember(set: Set<string>, key: string): void {
+    set.add(key);
+    if (set.size > 1_024) {
+      const oldest = set.values().next().value;
+      if (oldest !== undefined) set.delete(oldest);
+    }
+  }
+
+  private rememberTurn(remoteTurnId: string, localTurnId: string): void {
+    this.localTurnIds.set(remoteTurnId, localTurnId);
+    if (this.localTurnIds.size > 1_024) {
+      const oldest = this.localTurnIds.keys().next().value;
+      if (oldest !== undefined) this.localTurnIds.delete(oldest);
+    }
+  }
+
+  private promptCorrelation(
+    response: unknown,
+  ): { turnId: string | null; role: "origin" | "steer" | "none" } | null {
+    if (this.connectionPolicy.turnCorrelation !== true) return null;
+    const parsed = promptCorrelationSchema.safeParse(jsonValue(response));
+    if (!parsed.success) return null;
+    return parsed.data._meta.jcode;
+  }
+
+  /** Emits one terminal for a local turn, so a correlated shared turn cannot complete twice. */
+  private endLocalTurn(
+    turnId: string,
+    state: "completed" | "failed" | "canceled",
+    error?: ProviderError,
+  ): boolean {
+    if (this.settledLocalTurns.has(turnId)) return false;
+    this.remember(this.settledLocalTurns, turnId);
+    this.fallbackChunkIds.clear();
+    this.terminalizeTransientItems(state);
+    this.emit({
+      type: "session.turn",
+      sessionId: this.options.boundarySessionId,
+      turnId,
+      state,
+      ...(error === undefined ? {} : { error }),
+    });
+    return true;
+  }
+
+  /**
+   * Several prompt responses can name one shared execution. The first one settles its terminal;
+   * later responses, including a vendor `_jcode/turn` terminal for the same id, publish nothing.
+   */
+  private finishSharedTurn(
+    remoteTurnId: string,
+    localTurnId: string,
+    state: "completed" | "failed" | "canceled",
+    error?: ProviderError,
+  ): boolean {
+    this.rememberTurn(remoteTurnId, localTurnId);
+    const alreadySettled = this.settledSharedTurns.has(remoteTurnId);
+    if (!alreadySettled) this.remember(this.settledSharedTurns, remoteTurnId);
+    // The prompt owns the visible turn. A peer bracket for the same execution closes without a
+    // second terminal, and its open chunk is flushed by the shutdown below.
+    if (this.vendorTurn?.remoteTurnId === remoteTurnId) {
+      this.endVendorTurn(state, error, { emitTerminal: false });
+    }
+    // A vendor terminal can settle the shared execution before this response arrives. Settle this
+    // local id anyway; `endLocalTurn` deduplicates when the bracket already used the same id.
+    return this.endLocalTurn(localTurnId, state, error);
+  }
+
+  /** Usage belongs to the execution, not to every response that shared it. */
+  private reportPromptUsage(
+    correlation: { turnId: string | null; role: "origin" | "steer" | "none" },
+    localTurnId: string,
+    response: unknown,
+  ): void {
+    if (correlation.role !== "origin" || correlation.turnId === null) return;
+    if (this.reportedSharedUsage.has(correlation.turnId)) return;
+    this.remember(this.reportedSharedUsage, correlation.turnId);
+    const usage = (jsonValue(response) as { usage?: unknown }).usage;
+    if (!usage || typeof usage !== "object" || Array.isArray(usage)) return;
+    const value = usage as Record<string, unknown>;
+    const numeric = (key: string): number | undefined =>
+      typeof value[key] === "number" ? (value[key] as number) : undefined;
+    const inputTokens = numeric("inputTokens");
+    const outputTokens = numeric("outputTokens");
+    const cachedInputTokens = numeric("cachedReadTokens");
+    if (
+      inputTokens === undefined &&
+      outputTokens === undefined &&
+      cachedInputTokens === undefined
+    ) {
+      return;
+    }
+    this.emit({
+      type: "session.usage",
+      sessionId: this.options.boundarySessionId,
+      turnId: localTurnId,
+      usage: { inputTokens, outputTokens, cachedInputTokens },
+    });
   }
 
   private async steer(input: Extract<ProviderInput, { type: "session.prompt" }>): Promise<void> {
@@ -710,11 +914,7 @@ class AcpRuntime {
       });
       return;
     }
-    const prompt = toAcpPrompt(input.prompt);
-    const text = prompt
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
+    const text = promptEchoText(input.prompt);
     if (text && this.connectionPolicy.echoesUserMessages !== false) {
       this.steerEchoes.set(clientMessageId, text);
     }
@@ -730,23 +930,25 @@ class AcpRuntime {
     });
     const rolloverId = `acp:${clientMessageId}`;
     const releaseResponse = this.promptResponses.register();
-    const settled = this.call(
-      this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
-    ).then(
+    const settled = this.call(this.connection.prompt(this.promptParams(input.prompt))).then(
       async (response) => {
         await this.drainNotifications();
         this.expireSteerEcho(clientMessageId);
+        const correlation = this.promptCorrelation(response);
         if (this.activePrompt?.turnId === rolloverId) {
           this.activePrompt = null;
           const state = response.stopReason === "cancelled" ? "canceled" : "completed";
-          this.fallbackChunkIds.clear();
-          this.terminalizeTransientItems(state);
-          this.emit({
-            type: "session.turn",
-            sessionId: this.options.boundarySessionId,
-            turnId: rolloverId,
-            state,
-          });
+          // A steer response names the shared execution but does not own its terminal: the
+          // origin response (or the vendor turn) does. Only an uncorrelated or role-none
+          // response keeps the legacy rollover behavior.
+          if (correlation?.role === "origin" && correlation.turnId !== null) {
+            // A pending steer can become the origin of a new execution. Its local rollover turn
+            // is the visible owner and must settle here even though the request was a steer.
+            this.reportPromptUsage(correlation, rolloverId, response);
+            this.finishSharedTurn(correlation.turnId, rolloverId, state);
+          } else if (correlation === null || correlation.role === "none") {
+            this.endLocalTurn(rolloverId, state);
+          }
         }
         releaseResponse();
         return undefined;
@@ -830,7 +1032,7 @@ class AcpRuntime {
       this.parkedAdmission = null;
     }
     if (this.closing) return;
-    const prompt = toAcpPrompt(input.prompt);
+    const text = promptEchoText(input.prompt);
     const turnId = `acp:${input.prompt.clientMessageId}`;
     this.fallbackChunkIds.clear();
     this.emit({
@@ -839,10 +1041,7 @@ class AcpRuntime {
       item: {
         type: "user_message",
         id: input.prompt.clientMessageId,
-        text: prompt
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("\n"),
+        text,
         clientMessageId: input.prompt.clientMessageId,
       },
     });
@@ -871,44 +1070,30 @@ class AcpRuntime {
     }
     // The SDK dispatches notifications without awaiting them, so the prompt response can resolve
     // while earlier session updates are still queued. Apply them before the turn ends.
-    const echoText = prompt
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
+    const echoText = text;
     if (echoText && this.connectionPolicy.echoesUserMessages !== false) {
       this.steerEchoes.set(input.prompt.clientMessageId, echoText);
     }
     const releaseResponse = this.promptResponses.register();
-    const settled = this.call(
-      this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
-    ).then(
+    const settled = this.call(this.connection.prompt(this.promptParams(input.prompt))).then(
       async (response): Promise<void> => {
         await this.drainNotifications();
         if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
         const state = response.stopReason === "cancelled" ? "canceled" : "completed";
-        this.fallbackChunkIds.clear();
-        this.terminalizeTransientItems(state);
-        this.emit({
-          type: "session.turn",
-          sessionId: this.options.boundarySessionId,
-          turnId,
-          state,
-        });
+        const correlation = this.promptCorrelation(response);
+        if (correlation === null || correlation.role === "none" || correlation.turnId === null) {
+          this.endLocalTurn(turnId, state);
+        } else {
+          this.reportPromptUsage(correlation, turnId, response);
+          this.finishSharedTurn(correlation.turnId, turnId, state);
+        }
         releaseResponse();
         return undefined;
       },
       async (error): Promise<void> => {
         await this.drainNotifications();
         if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
-        this.fallbackChunkIds.clear();
-        this.terminalizeTransientItems("failed");
-        this.emit({
-          type: "session.turn",
-          sessionId: this.options.boundarySessionId,
-          turnId,
-          state: "failed",
-          error: { message: describeError(error) },
-        });
+        this.endLocalTurn(turnId, "failed", { message: describeError(error) });
         releaseResponse();
         return undefined;
       },
@@ -1067,6 +1252,52 @@ class AcpRuntime {
   closeVendorTurn(): void {
     this.endVendorTurn("canceled", { message: "Session closed by Paseo" });
     this.clearOutstandingSteers();
+  }
+
+  /**
+   * Leave the shared agent session without closing it. The agent keeps any inserted work running;
+   * Paseo settles its own waits and drops the attachment. This is deliberately not `session/close`,
+   * which owns the agent-side session and can terminate the work another client owns.
+   */
+  async detach(): Promise<void> {
+    if (this.sessionPolicy.detach !== true) {
+      throw new Error("This agent session does not support detach");
+    }
+    if (!this.detached) {
+      this.detachPromise ??= this.call(
+        this.connection.extMethod("_jcode/detach", { sessionId: this.nativeSessionId }),
+      )
+        .then(() => {
+          this.detached = true;
+          this.settleDetached();
+          return undefined;
+        })
+        .finally(() => {
+          this.detachPromise = null;
+        });
+      await this.detachPromise;
+    }
+    await this.close();
+  }
+
+  /** Settle everything Paseo waits on without publishing a global idle or a failed turn. */
+  private settleDetached(): void {
+    this.promptResponses.flush();
+    this.clearOutstandingSteers();
+    this.endVendorTurn("canceled", { message: "Session detached by Paseo" });
+    if (this.activePrompt) {
+      this.endLocalTurn(this.activePrompt.turnId, "canceled", {
+        message: "Session detached by Paseo",
+      });
+      this.activePrompt = null;
+    }
+    this.updateSlots.flush();
+    for (const permission of this.permissions.values()) {
+      permission.resolve({ outcome: { outcome: "cancelled" } });
+    }
+    this.permissions.clear();
+    this.commandWaiter?.();
+    this.commandWaiter = null;
   }
 
   async closeSession(): Promise<void> {
@@ -1262,6 +1493,9 @@ class AcpRuntime {
   }
 
   private sessionUpdate(notification: SessionNotification): void {
+    // The attachment has been left. Late updates belong to work the agent kept running for
+    // another client and must not be rendered here.
+    if (this.detached) return;
     if (notification.sessionId !== this.nativeSessionId) return;
     // A held peer update that follows the vendor turn's `started` is live, not replayed history:
     // keep it even when the caller asked to skip the loaded history.
@@ -1466,7 +1700,11 @@ class AcpRuntime {
         description: command.description,
         argumentHint: command.input?.hint,
       }));
-      this.emit({ type: "session.commands", sessionId: this.options.boundarySessionId, commands });
+      this.emit({
+        type: "session.commands",
+        sessionId: this.options.boundarySessionId,
+        commands: this.classifyCommands(commands),
+      });
       this.commandWaiter?.();
       this.commandWaiter = null;
       return;
@@ -1594,7 +1832,7 @@ class AcpRuntime {
       this.emit({
         type: "session.commands",
         sessionId: this.options.boundarySessionId,
-        commands: [...update.commands],
+        commands: this.classifyCommands(update.commands),
       });
     } else if (update.type === "config") {
       if (this.configTransaction) this.stagedTransformerConfig = update.config;
@@ -1623,6 +1861,15 @@ class AcpRuntime {
   private reduceVendorTurn(update: Extract<AcpVendorUpdate, { type: "turn" }>): void {
     const turnId = `acp-vendor:${update.turnId}`;
     if (update.state === "started") {
+      // A correlated prompt already owns this execution. Opening a second bracket would show the
+      // same work twice and end it with a second terminal.
+      if (
+        this.connectionPolicy.turnCorrelation === true &&
+        (this.localTurnIds.has(update.turnId) || this.settledSharedTurns.has(update.turnId))
+      ) {
+        console.debug(`Ignoring vendor turn ${turnId}: its shared turn is already settled`);
+        return;
+      }
       // A turn boundary ends the previous turn's open chunk, and a peer turn without user
       // content would otherwise append its first chunk to the last replayed message.
       this.fallbackChunkIds.clear();
@@ -1632,32 +1879,35 @@ class AcpRuntime {
         console.debug(`Ignoring vendor turn ${turnId}: a foreground prompt is active`);
         return;
       }
-      if (this.vendorTurn) {
-        const previous = this.vendorTurn.turnId;
-        this.endVendorTurn("completed");
-        console.warn(`Vendor turn ${turnId} started while ${previous} was open`);
+      // The foreground prompt already published a start for this execution. Adopt the vendor
+      // bracket as an alias of that local id instead of publishing a second started lifecycle.
+      if (
+        this.activePrompt &&
+        this.vendorTurnsAreNeverForeground &&
+        this.connectionPolicy.turnCorrelation === true
+      ) {
+        this.openVendorTurn(this.activePrompt.turnId, update.turnId, false);
+        return;
       }
-      let resolve!: () => void;
-      const settled = new Promise<void>((next) => {
-        resolve = next;
-      });
-      this.vendorTurn = { turnId, settled, resolve };
-      this.emit({
-        type: "session.turn",
-        sessionId: this.options.boundarySessionId,
-        turnId,
-        state: "started",
-      });
+      this.openVendorTurn(turnId, update.turnId, true);
       return;
     }
-    if (this.vendorTurn?.turnId !== turnId) {
+    if (this.vendorTurn?.remoteTurnId !== update.turnId) {
       console.debug(`Ignoring vendor turn ${turnId} ${update.state}: no matching open turn`);
       return;
     }
-    this.endVendorTurn(update.state, update.error);
+    // A correlated prompt response may have settled this execution already.
+    const duplicate =
+      this.connectionPolicy.turnCorrelation === true && this.settledSharedTurns.has(update.turnId);
+    this.endVendorTurn(update.state, update.error, { emitTerminal: !duplicate });
+    if (!duplicate) this.remember(this.settledSharedTurns, update.turnId);
   }
 
-  private endVendorTurn(state: "completed" | "failed" | "canceled", error?: ProviderError): void {
+  private endVendorTurn(
+    state: "completed" | "failed" | "canceled",
+    error?: ProviderError,
+    options: { emitTerminal?: boolean } = {},
+  ): void {
     const open = this.vendorTurn;
     if (!open) return;
     this.flushBufferedUserChunk();
@@ -1667,16 +1917,29 @@ class AcpRuntime {
       clearTimeout(this.vendorTurnCancelTimer);
       this.vendorTurnCancelTimer = null;
     }
-    this.fallbackChunkIds.clear();
-    this.terminalizeTransientItems(state);
-    this.emit({
-      type: "session.turn",
-      sessionId: this.options.boundarySessionId,
-      turnId: open.turnId,
-      state,
-      ...(error === undefined ? {} : { error }),
-    });
+    if (options.emitTerminal !== false) this.endLocalTurn(open.turnId, state, error);
     open.resolve();
+  }
+
+  private openVendorTurn(turnId: string, remoteTurnId: string, emitStart: boolean): void {
+    if (this.vendorTurn) {
+      const previous = this.vendorTurn.turnId;
+      this.endVendorTurn("completed");
+      console.warn(`Vendor turn acp-vendor:${remoteTurnId} started while ${previous} was open`);
+    }
+    let resolve!: () => void;
+    const settled = new Promise<void>((next) => {
+      resolve = next;
+    });
+    this.vendorTurn = { turnId, remoteTurnId, settled, resolve };
+    if (emitStart) {
+      this.emit({
+        type: "session.turn",
+        sessionId: this.options.boundarySessionId,
+        turnId,
+        state: "started",
+      });
+    }
   }
 
   private call<Value>(operation: Promise<Value>): Promise<Value> {
@@ -2079,13 +2342,39 @@ function toAcpPrompt(
   prompt: Extract<ProviderInput, { type: "session.prompt" }>["prompt"],
 ): ContentBlock[] {
   if (prompt.input.type === "command") {
+    // An explicit skill selection is the command. Sending the slash form as well would reach
+    // jcode as literal prompt text, because explicit metadata suppresses textual recognition.
+    if (prompt.skill !== undefined) {
+      // Clearing with no text is a selection-only action; the recorded wire shape is no content.
+      if (prompt.skill === null && prompt.input.arguments === "") return [];
+      return [{ type: "text", text: prompt.input.arguments }];
+    }
     const suffix = prompt.input.arguments ? ` ${prompt.input.arguments}` : "";
     return [{ type: "text", text: `/${prompt.input.name}${suffix}` }];
+  }
+  if (
+    prompt.skill === null &&
+    prompt.input.content.every((content) => content.type === "text" && content.text === "")
+  ) {
+    return [];
   }
   return prompt.input.content.map((content) => {
     if (content.type === "text" || content.type === "image") return content;
     return { type: "text", text: JSON.stringify(content) };
   });
+}
+
+/** The user message Paseo shows. It is the submitted slash form even when the wire omits it. */
+function promptEchoText(
+  prompt: Extract<ProviderInput, { type: "session.prompt" }>["prompt"],
+): string {
+  if (prompt.input.type === "command") {
+    const suffix = prompt.input.arguments ? ` ${prompt.input.arguments}` : "";
+    return `/${prompt.input.name}${suffix}`;
+  }
+  return prompt.input.content
+    .map((content) => (content.type === "text" ? content.text : ""))
+    .join("\n");
 }
 
 function nativePersistence(sessionId: string): ProviderPersistence {

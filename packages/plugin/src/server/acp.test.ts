@@ -119,6 +119,28 @@ function countRequests(instance: ConnectorInstance, method: string): number {
   return instance.requests.filter((request) => request.method === method).length;
 }
 
+function countRequestedMethod(instances: ConnectorInstance[], method: string): number {
+  return instances.reduce((total, instance) => total + countRequests(instance, method), 0);
+}
+
+function countTerminatedTurns(events: ProviderEvent[], turnId: string): number {
+  return events.filter(
+    (event) =>
+      event.type === "session.turn" && event.state !== "started" && event.turnId === turnId,
+  ).length;
+}
+
+function turnLifecycle(events: ProviderEvent[]): { started: string[]; ended: string[] } {
+  const started = new Set<string>();
+  const ended = new Set<string>();
+  for (const event of events) {
+    if (event.type !== "session.turn") continue;
+    if (event.state === "started") started.add(event.turnId);
+    else ended.add(event.turnId);
+  }
+  return { started: [...started].sort(), ended: [...ended].sort() };
+}
+
 function receiveConnectorMessage(
   instance: ConnectorInstance,
   message: AcpStreamMessage,
@@ -129,6 +151,10 @@ function receiveConnectorMessage(
   if (options?.handleMessage?.(instance, message)) return;
   if (!("id" in message)) return;
   const request = message as AcpRequestMessage;
+  if (request.method === "_jcode/detach") {
+    instance.respond(request, {});
+    return;
+  }
   if (options?.handleRequest?.(instance, request)) return;
   respondToConnectorRequest(instance, request, options);
 }
@@ -4331,6 +4357,487 @@ lines.on("line", (line) => {
       );
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       expect(countRequests(agent(), "session/prompt")).toBe(0);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it.each(["steer first", "origin first"])(
+    "settles one shared execution when the %s response arrives",
+    async (order) => {
+      const held: Array<Extract<AcpRequestMessage, { method: "session/prompt" }>> = [];
+      let agent: ConnectorInstance | undefined;
+      const { connector } = connectorHarness({
+        handleRequest(instance, request) {
+          if (request.method !== "session/prompt") return false;
+          agent = instance;
+          held.push(request as Extract<AcpRequestMessage, { method: "session/prompt" }>);
+          return true;
+        },
+      });
+      const registration = runAcpProvider({
+        id: "correlated-acp",
+        label: "Correlated ACP",
+        connector,
+        acpOptions: { vendorTurnsAreNeverForeground: true },
+        transformers: [
+          {
+            initialize: () => ({ turnCorrelation: true, steering: true }),
+            attach: () => ({ steering: true }),
+            notification({ method, params }) {
+              if (method !== "_jcode/turn") return null;
+              const turn = params as { turnId: string; state: string };
+              return { type: "turn", turnId: turn.turnId, state: turn.state };
+            },
+          },
+        ],
+      });
+      const connection = await registration.connect({
+        versions: [1],
+        capabilities: ["prompt.message", "prompt.steer", "session.shared_turns"],
+      });
+      const events: ProviderEvent[] = [];
+      connection.onEvent((event) => events.push(event));
+      try {
+        await connection.send(openInput());
+        await waitForEvent(events, (event) => event.type === "session.ready");
+        await connection.send(promptInput("origin"));
+        await expect.poll(() => held.length).toBe(1);
+        const origin = held[0]!;
+        if (!agent) throw new Error("prompt connector was not captured");
+        agent.notify("_jcode/turn", {
+          sessionId: "connector-session",
+          turnId: "shared-1",
+          state: "started",
+        });
+
+        await connection.send({
+          ...promptInput("steer"),
+          prompt: { ...promptInput("steer").prompt, delivery: "steer" },
+        });
+        await expect.poll(() => held.length).toBe(2);
+        const steer = held[1]!;
+        const respond = (
+          request: Extract<AcpRequestMessage, { method: "session/prompt" }>,
+          role: "origin" | "steer",
+        ) =>
+          agent!.respond(request, {
+            stopReason: "end_turn",
+            ...(role === "origin"
+              ? { usage: { inputTokens: 10, outputTokens: 4, cachedReadTokens: 3 } }
+              : {}),
+            _meta: { jcode: { turnId: "shared-1", role } },
+          });
+
+        if (order === "steer first") {
+          respond(steer, "steer");
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          expect(
+            events.filter(
+              (event) =>
+                event.type === "session.turn" &&
+                event.state !== "started" &&
+                event.turnId === "acp:origin",
+            ),
+          ).toEqual([]);
+          respond(origin, "origin");
+        } else {
+          respond(origin, "origin");
+          respond(steer, "steer");
+        }
+
+        for (const clientMessageId of ["origin", "steer"]) {
+          await waitForEvent(
+            events,
+            (event) =>
+              event.type === "session.prompt_result" && event.clientMessageId === clientMessageId,
+          );
+        }
+        await expect.poll(() => countTerminatedTurns(events, "acp:origin")).toBe(1);
+        expect(
+          events.filter(
+            (event) =>
+              event.type === "session.turn" &&
+              event.state !== "started" &&
+              event.turnId === "acp:steer",
+          ),
+        ).toEqual([]);
+        expect(events.filter((event) => event.type === "session.usage")).toEqual([
+          expect.objectContaining({
+            turnId: "acp:origin",
+            usage: { inputTokens: 10, outputTokens: 4, cachedInputTokens: 3 },
+          }),
+        ]);
+        // Every published start has exactly one terminal, including no abandoned vendor alias.
+        expect(turnLifecycle(events)).toEqual({
+          started: ["acp:origin"],
+          ended: ["acp:origin"],
+        });
+
+        // A late duplicate terminal for the settled shared id must not reopen or re-end it.
+        agent.notify("_jcode/turn", {
+          sessionId: "connector-session",
+          turnId: "shared-1",
+          state: "completed",
+        });
+        // No stranded foreground ownership: the next prompt reaches the connector.
+        await connection.send(promptInput("after"));
+        await expect.poll(() => held.length).toBe(3);
+        agent.respond(held[2]!, { stopReason: "end_turn" });
+        await waitForEvent(
+          events,
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:after" &&
+            event.state === "completed",
+        );
+        expect(turnLifecycle(events)).toEqual({
+          started: ["acp:after", "acp:origin"],
+          ended: ["acp:after", "acp:origin"],
+        });
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
+  it.each(["terminal first", "response first"])(
+    "keeps one shared lifecycle when a foreground prompt is steered into a peer turn (%s)",
+    async (order) => {
+      const held: Array<Extract<AcpRequestMessage, { method: "session/prompt" }>> = [];
+      let agent: ConnectorInstance | undefined;
+      const { connector } = connectorHarness({
+        handleRequest(instance, request) {
+          if (request.method !== "session/prompt") return false;
+          agent = instance;
+          held.push(request as Extract<AcpRequestMessage, { method: "session/prompt" }>);
+          return true;
+        },
+      });
+      const registration = runAcpProvider({
+        id: "steered-acp",
+        label: "Steered ACP",
+        connector,
+        acpOptions: { vendorTurnsAreNeverForeground: true },
+        transformers: [
+          {
+            initialize: () => ({ turnCorrelation: true }),
+            notification({ method, params }) {
+              if (method !== "_jcode/turn") return null;
+              const turn = params as { turnId: string; state: string };
+              return { type: "turn", turnId: turn.turnId, state: turn.state };
+            },
+          },
+        ],
+      });
+      const connection = await registration.connect({
+        versions: [1],
+        capabilities: ["prompt.message", "session.shared_turns"],
+      });
+      const events: ProviderEvent[] = [];
+      connection.onEvent((event) => events.push(event));
+      try {
+        await connection.send(openInput());
+        await waitForEvent(events, (event) => event.type === "session.ready");
+        await connection.send(promptInput("overlap"));
+        await expect.poll(() => held.length).toBe(1);
+        if (!agent) throw new Error("prompt connector was not captured");
+
+        // The agent reports the turn bracket after the foreground prompt already started.
+        agent.notify("_jcode/turn", {
+          sessionId: "connector-session",
+          turnId: "shared-overlap",
+          state: "started",
+        });
+        const respond = () =>
+          agent!.respond(held[0]!, {
+            stopReason: "end_turn",
+            usage: { inputTokens: 9, outputTokens: 3 },
+            _meta: { jcode: { turnId: "shared-overlap", role: "steer" } },
+          });
+
+        if (order === "terminal first") {
+          agent.notify("_jcode/turn", {
+            sessionId: "connector-session",
+            turnId: "shared-overlap",
+            state: "completed",
+          });
+          await waitForEvent(
+            events,
+            (event) =>
+              event.type === "session.turn" &&
+              event.turnId === "acp:overlap" &&
+              event.state === "completed",
+          );
+          respond();
+        } else {
+          respond();
+          await waitForEvent(
+            events,
+            (event) =>
+              event.type === "session.turn" &&
+              event.turnId === "acp:overlap" &&
+              event.state === "completed",
+          );
+          // A terminal after the response must not publish another completion.
+          agent.notify("_jcode/turn", {
+            sessionId: "connector-session",
+            turnId: "shared-overlap",
+            state: "completed",
+          });
+        }
+        await waitForEvent(
+          events,
+          (event) => event.type === "session.prompt_result" && event.clientMessageId === "overlap",
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        expect(turnLifecycle(events)).toEqual({
+          started: ["acp:overlap"],
+          ended: ["acp:overlap"],
+        });
+        expect(events.filter((event) => event.type === "session.usage")).toEqual([]);
+        await connection.send(promptInput("next"));
+        await expect.poll(() => held.length).toBe(2);
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
+  it("settles the rollover turn when a pending steer becomes its origin", async () => {
+    const held: Array<Extract<AcpRequestMessage, { method: "session/prompt" }>> = [];
+    let agent: ConnectorInstance | undefined;
+    const { connector } = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/prompt") return false;
+        agent = instance;
+        held.push(request as Extract<AcpRequestMessage, { method: "session/prompt" }>);
+        return true;
+      },
+    });
+    const registration = runAcpProvider({
+      id: "rollover-acp",
+      label: "Rollover ACP",
+      connector,
+      transformers: [
+        {
+          initialize: () => ({ turnCorrelation: true, steering: true }),
+          attach: () => ({ steering: true }),
+        },
+      ],
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message", "prompt.steer"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send(openInput());
+      await waitForEvent(events, (event) => event.type === "session.ready");
+      await connection.send(promptInput("origin"));
+      await expect.poll(() => held.length).toBe(1);
+      await connection.send({
+        ...promptInput("rollover"),
+        prompt: { ...promptInput("rollover").prompt, delivery: "steer" },
+      });
+      await expect.poll(() => held.length).toBe(2);
+      if (!agent) throw new Error("prompt connector was not captured");
+
+      agent.respond(held[0]!, {
+        stopReason: "end_turn",
+        _meta: { jcode: { turnId: "origin-execution", role: "origin" } },
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:origin" &&
+          event.state === "completed",
+      );
+      // Output after the origin ends promotes the pending steer to a visible rollover turn.
+      agent.notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "rollover output" },
+        },
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:rollover" &&
+          event.state === "started",
+      );
+
+      agent.respond(held[1]!, {
+        stopReason: "end_turn",
+        usage: { inputTokens: 7, outputTokens: 2 },
+        _meta: { jcode: { turnId: "rollover-execution", role: "origin" } },
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:rollover" &&
+          event.state === "completed",
+      );
+      expect(events.filter((event) => event.type === "session.usage")).toEqual([
+        expect.objectContaining({
+          turnId: "acp:rollover",
+          usage: { inputTokens: 7, outputTokens: 2 },
+        }),
+      ]);
+      expect(turnLifecycle(events)).toEqual({
+        started: ["acp:origin", "acp:rollover"],
+        ended: ["acp:origin", "acp:rollover"],
+      });
+      await connection.send(promptInput("after"));
+      await expect.poll(() => held.length).toBe(3);
+      agent.respond(held[2]!, { stopReason: "end_turn" });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:after" &&
+          event.state === "completed",
+      );
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("sends skill metadata, a bare skill prompt, and an empty clear prompt", async () => {
+    const promptBodies: Array<{ skill?: string | null; prompt: unknown }> = [];
+    const { connector } = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/prompt") return false;
+        const params = request.params as {
+          _meta?: { jcode?: { skill?: string | null } };
+          prompt: unknown;
+        };
+        promptBodies.push({
+          ...(params._meta?.jcode?.skill === undefined ? {} : { skill: params._meta.jcode.skill }),
+          prompt: params.prompt,
+        });
+        instance.respond(request, {
+          stopReason: "end_turn",
+          _meta: { jcode: { turnId: null, role: "none" } },
+        });
+        return true;
+      },
+    });
+    const registration = runAcpProvider({
+      id: "skill-acp",
+      label: "Skill ACP",
+      connector,
+      transformers: [
+        {
+          initialize: () => ({ turnCorrelation: true, skillSelection: true }),
+          prompt: ({ skill }) => (skill === undefined ? null : { _meta: { jcode: { skill } } }),
+        },
+      ],
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.command", "prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send(openInput());
+      await waitForEvent(events, (event) => event.type === "session.ready");
+      const command = {
+        type: "session.prompt" as const,
+        sessionId: "session-1",
+        prompt: {
+          clientMessageId: "skill",
+          delivery: "auto" as const,
+          input: { type: "command" as const, name: "interrogate", arguments: "" },
+          skill: "interrogate",
+        },
+      };
+      await connection.send(command);
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "skill",
+      );
+      await connection.send({
+        ...command,
+        prompt: {
+          ...command.prompt,
+          clientMessageId: "clear",
+          input: { type: "command" as const, name: "interrogate", arguments: "" },
+          skill: null,
+        },
+      });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "clear",
+      );
+      await connection.send({
+        ...command,
+        prompt: {
+          clientMessageId: "plain",
+          delivery: "auto",
+          input: { type: "message", content: [{ type: "text", text: "hello" }] },
+        },
+      });
+      await waitForEvent(
+        events,
+        (event) => event.type === "session.prompt_result" && event.clientMessageId === "plain",
+      );
+    } finally {
+      await connection.close();
+    }
+    expect(promptBodies).toEqual([
+      { skill: "interrogate", prompt: [{ type: "text", text: "" }] },
+      { skill: null, prompt: [] },
+      { prompt: [{ type: "text", text: "hello" }] },
+    ]);
+  });
+
+  it("detaches explicitly without closing the agent session", async () => {
+    const { connector, instances } = connectorHarness({});
+    const registration = runAcpProvider({
+      id: "detach-acp",
+      label: "Detach ACP",
+      connector,
+      transformers: [{ attach: () => ({ detach: true }) }],
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message", "session.detach"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send(openInput());
+      await waitForEvent(events, (event) => event.type === "session.ready");
+      const opened = events.find((event) => event.type === "session.opened");
+      expect(opened?.type === "session.opened" && opened.capabilities).toContain("session.detach");
+      await connection.send({
+        type: "session.detach",
+        requestId: "detach-1",
+        sessionId: "session-1",
+      });
+      await waitForEvent(
+        events,
+        (event) => event.type === "request.completed" && event.requestId === "detach-1",
+      );
+      expect(countRequestedMethod(instances, "_jcode/detach")).toBe(1);
+      expect(countRequestedMethod(instances, "session/close")).toBe(0);
+      // Repeated detach is idempotent and does not touch the provider again.
+      await connection.send({
+        type: "session.detach",
+        requestId: "detach-2",
+        sessionId: "session-1",
+      });
+      await waitForEvent(
+        events,
+        (event) => event.type === "request.completed" && event.requestId === "detach-2",
+      );
     } finally {
       await connection.close();
     }

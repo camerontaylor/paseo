@@ -468,6 +468,8 @@ export interface SendMessageOptions {
   sourceAgentServerId?: string;
   sessionMode?: string;
   messageId?: string;
+  /** A name selects an explicit skill, `null` clears it; omission leaves it unchanged. */
+  skill?: string | null;
   /** What happens when the agent is mid-turn. The daemon interrupts the turn when omitted. */
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
@@ -3467,6 +3469,19 @@ export class DaemonClient {
     }
   }
 
+  async detachProviderSession(agentId: string): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.provider.detach.response">({
+        message: {
+          type: "agent.provider.detach.request",
+          agentId,
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "detachProviderSession rejected");
+    }
+  }
+
   async updateAgent(
     agentId: string,
     updates: { name?: string; labels?: Record<string, string> },
@@ -4050,6 +4065,7 @@ export class DaemonClient {
       sourceAgentId: options.sourceAgentId,
       sourceAgentServerId: options.sourceAgentServerId,
       sessionMode: options.sessionMode,
+      ...(options.skill === undefined ? {} : { skill: options.skill }),
       ...(messageId ? { messageId } : {}),
       activeTurnBehavior: options.activeTurnBehavior,
       images: options.images,

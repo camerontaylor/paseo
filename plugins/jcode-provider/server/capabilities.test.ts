@@ -47,10 +47,16 @@ describe("jcodeCapabilities", () => {
     expect(initialize(agentCapabilities)).toEqual({
       echoesUserMessages: false,
       steering: true,
+      turnCorrelation: false,
+      skillSelection: false,
       sendSessionMcpServers: false,
     });
     // The contract deliberately carries no interfaceVersion on the attachment.
-    expect(attach(response)).toEqual({ steering: true, stopObservedTurns: true });
+    expect(attach(response)).toEqual({
+      detach: true,
+      steering: true,
+      stopObservedTurns: true,
+    });
   });
 
   it("ignores unknown keys and extension names", () => {
@@ -66,7 +72,13 @@ describe("jcodeCapabilities", () => {
           },
         },
       }),
-    ).toEqual({ echoesUserMessages: false, steering: true, sendSessionMcpServers: false });
+    ).toEqual({
+      echoesUserMessages: false,
+      steering: true,
+      turnCorrelation: false,
+      skillSelection: false,
+      sendSessionMcpServers: false,
+    });
     expect(
       attach({
         _meta: {
@@ -76,7 +88,7 @@ describe("jcodeCapabilities", () => {
           },
         },
       }),
-    ).toEqual({ steering: true, stopObservedTurns: true });
+    ).toEqual({ detach: false, steering: true, stopObservedTurns: true });
   });
 
   it("requires true capability flags and leaves supported MCP handling alone", () => {
@@ -84,20 +96,61 @@ describe("jcodeCapabilities", () => {
       initialize({
         _meta: { jcode: { interfaceVersion: 1, extensions: [], sessionMcpServers: true } },
       }),
-    ).toEqual({ echoesUserMessages: false, steering: false });
+    ).toEqual({
+      echoesUserMessages: false,
+      steering: false,
+      turnCorrelation: false,
+      skillSelection: false,
+    });
     expect(initialize({ _meta: { jcode: { interfaceVersion: 1 } } })).toEqual({
       echoesUserMessages: false,
       steering: false,
+      turnCorrelation: false,
+      skillSelection: false,
     });
     expect(
       attach({
         _meta: { jcode: { sharedControl: { implicitSteering: false, stopObservedTurn: false } } },
       }),
-    ).toEqual({ steering: false, stopObservedTurns: false });
+    ).toEqual({ detach: false, steering: false, stopObservedTurns: false });
     expect(attach({ _meta: { jcode: {} } })).toEqual({
+      detach: false,
       steering: false,
       stopObservedTurns: false,
     });
+  });
+
+  it("passes explicit skill selection through, preserving omitted versus null", () => {
+    expect(jcodeCapabilities.prompt?.({}, { sessionId: "s", policy: {} })).toBeNull();
+    expect(
+      jcodeCapabilities.prompt?.({ skill: "interrogate" }, { sessionId: "s", policy: {} }),
+    ).toEqual({ _meta: { jcode: { skill: "interrogate" } } });
+    expect(jcodeCapabilities.prompt?.({ skill: null }, { sessionId: "s", policy: {} })).toEqual({
+      _meta: { jcode: { skill: null } },
+    });
+  });
+
+  it("classifies jcode skill commands and leaves built-ins alone", () => {
+    const commands = [
+      { name: "model", description: "Model", argumentHint: "model id (optional)" },
+      {
+        name: "interrogate",
+        description: "Test interrogate",
+        argumentHint: "request for this skill (optional)",
+      },
+      { name: "plain", description: "No hint" },
+    ];
+    const classified = jcodeCapabilities.command?.(commands, {
+      sessionId: "s",
+      policy: { skillSelection: true },
+    });
+    expect(classified).toEqual([commands[0], { ...commands[1], kind: "skill" }, commands[2]]);
+    expect(
+      jcodeCapabilities.command?.(commands, {
+        sessionId: "s",
+        policy: { skillSelection: false },
+      }),
+    ).toBeNull();
   });
 
   it("does not retain initialize state between attachments", () => {
@@ -105,7 +158,11 @@ describe("jcodeCapabilities", () => {
     expect(
       jcodeCapabilities.attach?.({ response }, { sessionId: "old-binary-session" }),
     ).toBeNull();
-    expect(attach(response)).toEqual({ steering: true, stopObservedTurns: true });
+    expect(attach(response)).toEqual({
+      detach: true,
+      steering: true,
+      stopObservedTurns: true,
+    });
   });
 
   const malformedCapabilities: InitializeInfo["agentCapabilities"][] = [

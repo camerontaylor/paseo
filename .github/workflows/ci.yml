@@ -223,13 +223,13 @@ jobs:
         name: Build server dependencies
         run: npm run build:server-deps
 
-      # p199 predates the Stop fix. Use a pinned fixed source until a release
-      # includes it; JCODE_E2E_BINARY also accepts an explicitly pinned release binary.
+      # Pin the shared v1 contract corpus and runtime together. Installed p199
+      # predates the Stop and Desktop tool-capability fixes.
       - uses: actions/checkout@v4
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         with:
           repository: camerontaylor/jcode
-          ref: 39fb7620589835d0c7f1a47653ab74f594b56eaa
+          ref: 40d319863d65aa7eb1d322fb7d7eda37b9ddf979
           path: .jcode-e2e-source
           submodules: recursive
           persist-credentials: false
@@ -240,12 +240,28 @@ jobs:
         with:
           workspaces: .jcode-e2e-source
           key: paseo-jcode-shared-session
-      - name: Build pinned jcode with the Stop fix
+      - name: Build pinned jcode v1 acceptance runtime
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         working-directory: .jcode-e2e-source
         env:
           CARGO_BUILD_RUSTC_WRAPPER: ""
-        run: cargo build --locked --bin jcode -j 2
+        # Build metadata deliberately does not watch HEAD as a Cargo input.
+        run: JCODE_BUILD_GIT_HASH="$(git rev-parse --short=9 HEAD)" cargo build --locked --bin jcode -j 2
+      - name: Replay pinned jcode v1 contract corpus
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        env:
+          JCODE_ACP_FIXTURE_DIR: ${{ github.workspace }}/.jcode-e2e-source/tests/fixtures/acp
+        run: npm run test --workspace=@getpaseo/builtin-plugins -- jcode-provider/server/corpus-replay.test.ts --bail=1
+
+      - name: Run full live jcode v1 acceptance
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        env:
+          JCODE_E2E_BINARY: ${{ github.workspace }}/.jcode-e2e-source/target/debug/jcode
+          JCODE_EXPECTED_PROVENANCE: 40d319863
+          PASEO_CONSUMER_ROOT: ${{ github.workspace }}
+          JCODE_ACCEPTANCE_OUT_DIR: ${{ runner.temp }}/jcode-v1-acceptance
+        run: bash .jcode-e2e-source/scripts/live-acceptance/run-live-acceptance.sh
+
       - name: Run jcode daemon integration
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         env:

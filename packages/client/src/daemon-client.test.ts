@@ -8225,6 +8225,63 @@ test.each([false, true])(
   },
 );
 
+test("sendMessage preserves explicit skill selection and null clears on the wire", async () => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "skill-selection",
+    transportFactory: () => transport.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  transport.triggerOpen({});
+  await connecting;
+
+  const accept = (request: { requestId: string }) =>
+    transport.triggerMessage(
+      wrapSessionMessage({
+        type: "send_agent_message_response",
+        payload: {
+          requestId: request.requestId,
+          agentId: "agent-1",
+          accepted: true,
+          error: null,
+        },
+      }),
+    );
+
+  const cleared = client.sendMessage("agent-1", "/model gpt-5.2", { skill: null });
+  const clearedRequest = parseSentFrame(transport.sent[0]);
+  expect(clearedRequest).toMatchObject({
+    type: "send_agent_message_request",
+    text: "/model gpt-5.2",
+    skill: null,
+  });
+  accept(clearedRequest);
+  await cleared;
+
+  const selected = client.sendMessage("agent-1", "/model gpt-5.2", { skill: "other" });
+  const selectedRequest = parseSentFrame(transport.sent[1]);
+  expect(selectedRequest).toMatchObject({
+    type: "send_agent_message_request",
+    text: "/model gpt-5.2",
+    skill: "other",
+  });
+  accept(selectedRequest);
+  await selected;
+
+  const omitted = client.sendMessage("agent-1", "/model gpt-5.2");
+  const omittedRequest = parseSentFrame(transport.sent[2]);
+  expect(omittedRequest).toMatchObject({
+    type: "send_agent_message_request",
+    text: "/model gpt-5.2",
+  });
+  expect(omittedRequest).not.toHaveProperty("skill");
+  accept(omittedRequest);
+  await omitted;
+});
+
 test("measures an outbound message in UTF-8 bytes against the daemon's message limit", async () => {
   const mock = createMockTransport();
   const client = new DaemonClient({

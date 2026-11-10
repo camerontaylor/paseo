@@ -202,6 +202,11 @@ export interface AgentRunOptions {
   resumeFrom?: AgentPersistenceHandle;
   maxThinkingTokens?: number;
   clientMessageId?: string;
+  /**
+   * Explicit attachment-local skill selection for providers that support it.
+   * `undefined` leaves the current selection alone, `null` clears it.
+   */
+  skill?: string | null;
 }
 
 export interface AgentSteerOptions extends AgentRunOptions {
@@ -743,6 +748,8 @@ export interface AgentSession {
   canStopRuntime?(): Promise<boolean>;
   /** Release live runtime resources without archiving or deleting the durable native session. */
   close(): Promise<void>;
+  /** Leave a shared provider session without closing or cancelling work the provider keeps. */
+  detachSharedSession?(): Promise<void>;
   listCommands?(): Promise<AgentSlashCommand[]>;
   setModel?(modelId: string | null): Promise<void>;
   setThinkingOption?(thinkingOptionId: string | null): Promise<void | AgentProviderNotice>;
