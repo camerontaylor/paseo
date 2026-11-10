@@ -584,6 +584,44 @@ test("Windows jobs skip the custom fork while upstream jobs remain eligible", ()
   assert.equal(windowsJobs.length, 4, "all Windows test and desktop build jobs are covered");
 });
 
+test("fresh fork desktop releases finalize with macOS and Linux manifests", () => {
+  const workflow = readFileSync(new URL(".github/workflows/desktop-release.yml", repoRoot), "utf8");
+  const required = workflow.match(
+    /          expected_manifests=\([\s\S]*?(?=          release_lookup=)/,
+  )?.[0];
+  const validate = workflow.match(
+    /          missing_manifests=\([\s\S]*?(?=          publish_args=)/,
+  )?.[0];
+  assert.ok(required);
+  assert.ok(validate);
+  const directory = mkdtempSync(join(tmpdir(), "release-manifests-"));
+  try {
+    for (const [repository, manifests, expected] of [
+      ["camerontaylor/paseo", ["beta-mac.yml", "beta-linux.yml"], 0],
+      ["getpaseo/paseo", ["beta-mac.yml", "beta-linux.yml"], 1],
+      ["getpaseo/paseo", ["beta-mac.yml", "beta-linux.yml", "beta.yml"], 0],
+      ["camerontaylor/paseo", ["beta-linux.yml"], 1],
+      ["camerontaylor/paseo", ["beta-mac.yml"], 1],
+    ]) {
+      const manifestsDir = mkdtempSync(join(directory, "fresh-"));
+      for (const manifest of manifests) writeFileSync(join(manifestsDir, manifest), "");
+      const script = `${required}\n${validate}`.replaceAll("${{ github.repository }}", repository);
+      const result = spawnSync("bash", ["-c", `set -euo pipefail\n${script}`], {
+        encoding: "utf8",
+        env: { ...process.env, RELEASE_CHANNEL: "beta", manifests_dir: manifestsDir },
+      });
+      assert.equal(
+        result.status,
+        expected,
+        `${repository}: ${manifests.join(", ")}\n${result.stdout}\n${result.stderr}`,
+      );
+      if (expected === 1) assert.match(result.stdout, /Missing updater manifests/);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("macOS release retries only transient stapling failures without rebuilding the signed app", async (t) => {
   const workflow = readFileSync(new URL(".github/workflows/desktop-release.yml", repoRoot), "utf8");
   const wrapper = workflow
