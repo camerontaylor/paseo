@@ -367,7 +367,7 @@ jobs:
 
   publish-windows:
     needs: [create-release]
-    if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-windows-v')))) }}
+    if: ${{ github.repository != 'camerontaylor/paseo' && always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-windows-v')))) }}
     permissions:
       contents: write
       packages: read
@@ -535,8 +535,10 @@ jobs:
           expected_manifests=(
             "${RELEASE_CHANNEL}-mac.yml"
             "${RELEASE_CHANNEL}-linux.yml"
-            "${RELEASE_CHANNEL}.yml"
           )
+          if [[ "${{ github.repository }}" != "camerontaylor/paseo" ]]; then
+            expected_manifests+=( "${RELEASE_CHANNEL}.yml" )
+          fi
           release_lookup="$(node ../scripts/github-release.mjs --repo "${{ github.repository }}" --tag "$RELEASE_TAG" --cleanup-duplicates)"
           existing_assets="$(gh release view "$release_lookup" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')"
           for manifest_name in "${expected_manifests[@]}"; do
