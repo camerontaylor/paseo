@@ -2194,7 +2194,7 @@ ${replaceHooks ? "precmd_functions=()\npreexec_functions=()\n" : ""}`,
         await expect.poll(() => existsSync(status)).toBe(true);
         expect(readFileSync(status, "utf8")).toBe(String(code));
         expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({
-          cwd: realpathSync(cwd),
+          cwd: realpathSync.native(cwd),
           args: [literal],
         });
         await waitForPrompt(statusRevision);
