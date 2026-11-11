@@ -229,7 +229,7 @@ jobs:
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         with:
           repository: camerontaylor/jcode
-          ref: 17ae0cb66c993c8edd997f6035c479ae687699d7
+          ref: 8c79c1d29c5bf53784511df61e258dadae46a4e8
           path: .jcode-e2e-source
           submodules: recursive
           persist-credentials: false
@@ -257,8 +257,9 @@ jobs:
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         env:
           JCODE_E2E_BINARY: ${{ github.workspace }}/.jcode-e2e-source/target/debug/jcode
-          JCODE_EXPECTED_PROVENANCE: 17ae0cb66
-          PASEO_CONSUMER_ROOT: ${{ github.workspace }}
+          JCODE_EXPECTED_PROVENANCE: 8c79c1d29
+          # Exercise explicit relative-root resolution as well as the full runner.
+          PASEO_CONSUMER_ROOT: .
           JCODE_ACCEPTANCE_OUT_DIR: ${{ runner.temp }}/jcode-v1-acceptance
         run: bash .jcode-e2e-source/scripts/live-acceptance/run-live-acceptance.sh
 
