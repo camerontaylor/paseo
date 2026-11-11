@@ -25,7 +25,7 @@ import {
   findExecutable,
   findExecutableWithoutProbing,
 } from "../executable-resolution/executable-resolution.js";
-import { createHeadlessTerminal } from "./headless-terminal.js";
+import { createHeadlessTerminal, flushHeadlessTerminal } from "./headless-terminal.js";
 import { createTerminalSerializer } from "./terminal-serializer.js";
 import {
   captureTerminalLines,
@@ -1023,6 +1023,10 @@ export async function createTerminal(
     disposeTitleChangeSubscription();
     disposeCommandLifecycleSubscription.dispose();
     activityTracker.dispose();
+    // Output that arrived in the same tick as the pty exit is still queued in
+    // xterm's write buffer. Parsing it here keeps the last output in the model
+    // that `serializeReplay` serves; `dispose()` would drop the queue.
+    flushHeadlessTerminal(terminal);
     terminal.dispose();
     listeners.clear();
     exitListeners.clear();
