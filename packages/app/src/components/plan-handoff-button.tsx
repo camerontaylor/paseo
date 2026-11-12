@@ -51,9 +51,7 @@ export function PlanHandoffButton({ source, text }: { source: AgentDeepLinkTarge
             model: agent.model,
             thinkingOptionId: agent.thinkingOptionId ?? null,
             modeId: null,
-            featureValues: Object.fromEntries(
-              (agent.features ?? []).map((feature) => [feature.id, feature.value]),
-            ),
+            providerOptions: agent.options ?? {},
           },
         },
       });

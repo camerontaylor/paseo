@@ -476,7 +476,13 @@ describe("WorkspaceScriptsButton", () => {
     });
     expect(requireRow("web-build").textContent).toContain("build");
     expect(requireRow("web-build").textContent).not.toContain("web-build");
-    startWorkspaceScriptMock.mockResolvedValue({ terminalId: "terminal-script-1" });
+    startWorkspaceScriptMock.mockResolvedValue({
+      terminalId: "terminal-script-1",
+      requestId: "start-web-build",
+      workspaceId: "workspace-1",
+      scriptName: "web-build",
+      error: null,
+    });
     await act(async () => {
       fireEvent.click(document.querySelector('[data-testid="workspace-scripts-start-web-build"]')!);
     });

@@ -3522,6 +3522,8 @@ function WorkspaceScreenContent({
           onCloseTabsAbove={actions.closeAbove}
           onCloseTabsBelow={actions.closeBelow}
           onCloseOtherTabs={actions.closeOthers}
+          onViewArtifacts={handleViewArtifacts}
+          onFindInChat={handleFindInChat}
         />
       );
     },
@@ -3539,6 +3541,8 @@ function WorkspaceScreenContent({
       handleReloadAgent,
       handleRenameTab,
       handleCloseTabById,
+      handleViewArtifacts,
+      handleFindInChat,
     ],
   );
   // Without a pane's tabs (above a split) the header carries workspace controls only: split panes

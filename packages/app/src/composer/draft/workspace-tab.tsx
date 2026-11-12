@@ -10,8 +10,6 @@ import { Composer } from "@/composer";
 import { type ComposerEditingSession, useComposerFullscreen } from "@/composer/editing-session";
 import { ComposerImportPill } from "@/composer/draft/import-pill";
 import { COMPOSER_PILL_CLEARANCE } from "@/composer/pill-styles";
-import { AgentViewSwitcher } from "@/components/agent-view-switcher";
-import { AgentStreamView } from "@/agent-stream/view";
 import { composerWorkspaceAttachment } from "@/composer/attachments/workspace";
 import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import type { CreateAgentInitialValues } from "@/hooks/use-agent-form-state";
@@ -49,17 +47,6 @@ import {
 } from "@/workspace-tabs/model";
 import { openWorkspaceChanges } from "@/workspace-tabs/open-supporting-view";
 import { useSettings } from "@/hooks/use-settings";
-
-const EMPTY_PENDING_PERMISSIONS = new Map();
-const ignorePendingViewChange = () => {};
-const DRAFT_CAPABILITIES: AgentCapabilityFlags = {
-  supportsStreaming: true,
-  supportsSessionPersistence: false,
-  supportsDynamicModes: false,
-  supportsMcpServers: false,
-  supportsReasoningStream: false,
-  supportsToolInvocations: false,
-};
 
 interface AutoSubmitConfig {
   provider: string;
@@ -584,38 +571,6 @@ export function WorkspaceDraftComposer({
     }),
     [composerState.agentControls, handleDropdownCloseFocus, isSubmitting],
   );
-  const dockContent = (
-    <View style={styles.contentContainer}>
-      {isSubmitting && draftAgent ? (
-        <>
-          <AgentViewSwitcher value="chat" onValueChange={ignorePendingViewChange} disabled />
-          <View style={styles.streamContainer}>
-            <AgentStreamView
-              agentId={tabId}
-              serverId={serverId}
-              context={draftAgent}
-              streamItems={submittedStreamItems}
-              pendingMessageSubmissions={pendingMessageSubmissions}
-              turnPresentation={turnPresentation}
-              pendingPermissions={EMPTY_PENDING_PERMISSIONS}
-              onOpenWorkspaceFile={onOpenWorkspaceFile}
-            />
-          </View>
-        </>
-      ) : (
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.configScrollContent}>
-          <View style={styles.configSection}>
-            {formErrorMessage ? (
-              <View style={styles.errorContainer}>
-                <Text style={styles.errorText}>{formErrorMessage}</Text>
-              </View>
-            ) : null}
-          </View>
-        </ScrollView>
-      )}
-    </View>
-  );
-
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
       {formErrorMessage ? (
