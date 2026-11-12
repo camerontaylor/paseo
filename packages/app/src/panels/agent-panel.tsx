@@ -1241,11 +1241,11 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
             draft={draft}
             routeBottomAnchorRequest={routeBottomAnchorRequest}
             hasAppliedAuthoritativeHistory={hasAppliedAuthoritativeHistory}
-            isInitialHistoryLoading={
-              routeBottomAnchorRequest?.reason === "initial-entry" &&
-              !hasCachedHistory &&
-              !showHistorySyncError
-            }
+            isInitialHistoryLoading={computeInitialHistoryLoading(
+              routeBottomAnchorRequest,
+              hasCachedHistory,
+              showHistorySyncError,
+            )}
             revealInitialHistory={hasCachedHistory || showHistorySyncError}
             hasActiveComposer={hasActiveComposer}
             toast={toastApi}
@@ -1265,40 +1265,35 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   );
 
   const dockContent = (
-    <View style={styles.contentContainer}>
-      <AgentViewSwitcher value={selectedView} onValueChange={handleSetSelectedView} />
-      {streamContent}
-      {!isChatVisible ? (
-        <CompanionFeed
-          serverId={serverId}
-          agentId={agentId}
-          cwd={cwd}
-          entries={agentState.companionEntries ?? EMPTY_COMPANION_ENTRIES}
-          artifacts={agentState.artifacts ?? []}
-          isSupported={companionStreamSupported}
-          onOpenWorkspaceFile={onOpenWorkspaceFile}
-          onReturnToChat={handleReturnToChat}
-          onReplyInChat={handleReplyInChat}
-          toast={toastApi}
-        />
-      ) : null}
-
-      {showHistorySyncError && isChatVisible ? (
-        <TimelineSyncErrorCallout isRetrying={isRetryingHistorySync} onRetry={retryTimelineSync} />
-      ) : null}
-    </View>
+    <ChatAgentDockContent
+      selectedView={selectedView}
+      onSelectView={handleSetSelectedView}
+      streamContent={streamContent}
+      isChatVisible={isChatVisible}
+      serverId={serverId}
+      agentId={agentId}
+      cwd={cwd}
+      companionEntries={agentState.companionEntries}
+      artifacts={agentState.artifacts}
+      companionStreamSupported={companionStreamSupported}
+      onOpenWorkspaceFile={onOpenWorkspaceFile}
+      onReturnToChat={handleReturnToChat}
+      onReplyInChat={handleReplyInChat}
+      toast={toastApi}
+      showHistorySyncError={showHistorySyncError}
+      isRetryingHistorySync={isRetryingHistorySync}
+      retryTimelineSync={retryTimelineSync}
+    />
   );
 
   const dockOverlay = (
-    <>
-      {showHistorySyncOverlay && isChatVisible ? (
-        <View style={styles.historySyncOverlay} testID="agent-history-overlay">
-          <ThemedLoadingSpinner size="large" uniProps={foregroundMutedColorMapping} />
-        </View>
-      ) : null}
-
-      <TimelineSyncStatus sync={timelineSync} toast={toast} onDismiss={dismiss} />
-    </>
+    <ChatAgentDockOverlay
+      isChatVisible={isChatVisible}
+      showHistorySyncOverlay={showHistorySyncOverlay}
+      timelineSync={timelineSync}
+      toast={toast}
+      dismiss={dismiss}
+    />
   );
 
   const composerSlot = (
@@ -1342,6 +1337,106 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     editingSession: composerEditingSession,
     children: content,
   });
+});
+
+function computeInitialHistoryLoading(
+  routeBottomAnchorRequest: RouteBottomAnchorRequest,
+  hasCachedHistory: boolean,
+  showHistorySyncError: boolean,
+): boolean {
+  return (
+    routeBottomAnchorRequest?.reason === "initial-entry" &&
+    !hasCachedHistory &&
+    !showHistorySyncError
+  );
+}
+
+const ChatAgentDockContent = memo(function ChatAgentDockContent({
+  selectedView,
+  onSelectView,
+  streamContent,
+  isChatVisible,
+  serverId,
+  agentId,
+  cwd,
+  companionEntries,
+  artifacts,
+  companionStreamSupported,
+  onOpenWorkspaceFile,
+  onReturnToChat,
+  onReplyInChat,
+  toast,
+  showHistorySyncError,
+  isRetryingHistorySync,
+  retryTimelineSync,
+}: {
+  selectedView: React.ComponentProps<typeof AgentViewSwitcher>["value"];
+  onSelectView: React.ComponentProps<typeof AgentViewSwitcher>["onValueChange"];
+  streamContent: ReactNode;
+  isChatVisible: boolean;
+  serverId: string;
+  agentId: string;
+  cwd: string;
+  companionEntries?: readonly CompanionEntry[];
+  artifacts?: React.ComponentProps<typeof CompanionFeed>["artifacts"];
+  companionStreamSupported: boolean;
+  onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
+  onReturnToChat: () => void;
+  onReplyInChat: () => void;
+  toast: ToastApi;
+  showHistorySyncError: boolean;
+  isRetryingHistorySync: boolean;
+  retryTimelineSync: () => void;
+}) {
+  return (
+    <View style={styles.contentContainer}>
+      <AgentViewSwitcher value={selectedView} onValueChange={onSelectView} />
+      {streamContent}
+      {isChatVisible ? null : (
+        <CompanionFeed
+          serverId={serverId}
+          agentId={agentId}
+          cwd={cwd}
+          entries={companionEntries ?? EMPTY_COMPANION_ENTRIES}
+          artifacts={artifacts ?? []}
+          isSupported={companionStreamSupported}
+          onOpenWorkspaceFile={onOpenWorkspaceFile}
+          onReturnToChat={onReturnToChat}
+          onReplyInChat={onReplyInChat}
+          toast={toast}
+        />
+      )}
+      {showHistorySyncError && isChatVisible ? (
+        <TimelineSyncErrorCallout isRetrying={isRetryingHistorySync} onRetry={retryTimelineSync} />
+      ) : null}
+    </View>
+  );
+});
+
+const ChatAgentDockOverlay = memo(function ChatAgentDockOverlay({
+  isChatVisible,
+  showHistorySyncOverlay,
+  timelineSync,
+  toast,
+  dismiss,
+}: {
+  isChatVisible: boolean;
+  showHistorySyncOverlay: boolean;
+  timelineSync: AgentScreenReadySyncState | null;
+  toast: ToastState | null;
+  dismiss: () => void;
+}) {
+  return (
+    <>
+      {showHistorySyncOverlay && isChatVisible ? (
+        <View style={styles.historySyncOverlay} testID="agent-history-overlay">
+          <ThemedLoadingSpinner size="large" uniProps={foregroundMutedColorMapping} />
+        </View>
+      ) : null}
+
+      <TimelineSyncStatus sync={timelineSync} toast={toast} onDismiss={dismiss} />
+    </>
+  );
 });
 
 function wrapAgentCommandProvider({

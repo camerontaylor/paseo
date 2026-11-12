@@ -1665,18 +1665,18 @@ function usePluginSetup(input: {
   // Both are stable for the life of the screen: preferences write through the query client, and
   // the draft is keyed per mount. A command and a pick run the same effects.
   const [setup] = useState(() => {
-    const setup = createNewWorkspaceSetup(inputs, {
+    const created = createNewWorkspaceSetup(inputs, {
       persistIsolation: (isolation) => void updatePreferences({ isolation }),
       syncBaseAttachment: (item) =>
         setAttachments((attachments) => syncPickerPrAttachment({ attachments, item })),
     });
     if (input.initialChangeRequest) {
-      setup.dispatchPicker({
+      created.dispatchPicker({
         type: "picker-selected",
         item: { kind: "github-pr", item: input.initialChangeRequest },
       });
     }
-    return setup;
+    return created;
   });
   useLayoutEffect(() => setup.syncInputs(inputs));
   return { setup, pluginProject, canCreateWorktree, isPending: locked };

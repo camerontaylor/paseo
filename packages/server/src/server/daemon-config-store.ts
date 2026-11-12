@@ -537,14 +537,7 @@ export class DaemonConfigStore {
     });
   }
 
-  private async applySupportedPatch(
-    parsedPatch: SupportedMutableConfigPatch,
-  ): Promise<MutableDaemonConfig> {
-    if (parsedPatch.relay?.enabled !== undefined && !this.relayEnabledMutable) {
-      throw new Error(
-        "Relay is controlled by a daemon launch override. Remove PASEO_RELAY_ENABLED or the relay CLI flag before changing it here.",
-      );
-    }
+  private prepareSupportedPatch(parsedPatch: SupportedMutableConfigPatch) {
     const {
       removeProviders = [],
       replaceProviders = {},
@@ -590,6 +583,26 @@ export class DaemonConfigStore {
         removedProviders,
       ),
     );
+    return { patch, mergePatch, removedProviders, replacedProviders, renamedProviders, speechPatch, next };
+  }
+
+  private async applySupportedPatch(
+    parsedPatch: SupportedMutableConfigPatch,
+  ): Promise<MutableDaemonConfig> {
+    if (parsedPatch.relay?.enabled !== undefined && !this.relayEnabledMutable) {
+      throw new Error(
+        "Relay is controlled by a daemon launch override. Remove PASEO_RELAY_ENABLED or the relay CLI flag before changing it here.",
+      );
+    }
+    const {
+      patch,
+      mergePatch,
+      removedProviders,
+      replacedProviders,
+      renamedProviders,
+      speechPatch,
+      next,
+    } = this.prepareSupportedPatch(parsedPatch);
 
     const configChanged = !isEqualValue(this.current, next);
 

@@ -2984,42 +2984,66 @@ async function resolveCurrentPullRequestView(options: {
   if (viewMatch?.status.state === "open") {
     return viewMatch.status;
   }
-
-  let headRepositoryOwner = options.headRepositoryOwner;
-
-  if (!headRepositoryOwner) {
-    const repo = await getGitHubRepoView(options);
-    const forkOwner = repo?.owner?.login;
-    const forkName = repo?.name;
-    const parentOwner = repo?.parent?.owner?.login;
-    const parentName = repo?.parent?.name;
-    if (!forkOwner) {
-      return viewMatch?.status ?? null;
-    }
-    if (parentOwner && parentName) {
-      // gh resolves a fork's base to its parent. Query the fork explicitly
-      // before looking for a PR opened against the parent.
-      const forkMatch = forkName
-        ? await resolveForkLocalPullRequestView({
-            ...options,
-            forkOwner,
-            viewMatch,
-            repo: `${forkOwner}/${forkName}`,
-          })
-        : null;
-      if (forkMatch) {
-        return forkMatch;
-      }
-      return resolveForkPullRequestView({
-        ...options,
-        forkOwner,
-        viewMatch,
-        repo: `${parentOwner}/${parentName}`,
-      });
-    }
-    headRepositoryOwner = forkOwner;
+  if (!options.headRepositoryOwner) {
+    return resolvePullRequestViewWithoutHeadOwner(options, viewMatch);
   }
+  return resolveListedPullRequestStatus(options, viewMatch, options.headRepositoryOwner);
+}
 
+async function resolvePullRequestViewWithoutHeadOwner(
+  options: Parameters<typeof resolveCurrentPullRequestView>[0],
+  viewMatch: ResolvedPullRequestCandidate | null,
+): Promise<CurrentPullRequestStatus | null> {
+  const repo = await getGitHubRepoView(options);
+  const forkOwner = repo?.owner?.login;
+  const forkName = repo?.name;
+  const parentOwner = repo?.parent?.owner?.login;
+  const parentName = repo?.parent?.name;
+  if (!forkOwner) {
+    return viewMatch?.status ?? null;
+  }
+  if (parentOwner && parentName) {
+    return resolveParentForkPullRequestView(options, viewMatch, {
+      forkOwner,
+      forkName,
+      parentOwner,
+      parentName,
+    });
+  }
+  return resolveListedPullRequestStatus(options, viewMatch, forkOwner);
+}
+
+async function resolveParentForkPullRequestView(
+  options: Parameters<typeof resolveCurrentPullRequestView>[0],
+  viewMatch: ResolvedPullRequestCandidate | null,
+  owners: { forkOwner: string; forkName?: string; parentOwner: string; parentName: string },
+): Promise<CurrentPullRequestStatus | null> {
+  // gh resolves a fork's base to its parent. Query the fork explicitly before
+  // looking for a PR opened against the parent.
+  const forkMatch = owners.forkName
+    ? await resolveForkLocalPullRequestView({
+        ...options,
+        forkOwner: owners.forkOwner,
+        viewMatch,
+        repo: `${owners.forkOwner}/${owners.forkName}`,
+      })
+    : null;
+  if (forkMatch) {
+    return forkMatch;
+  }
+  return resolveForkPullRequestView({
+    ...options,
+    forkOwner: owners.forkOwner,
+    viewMatch,
+    repo: `${owners.parentOwner}/${owners.parentName}`,
+  });
+}
+
+async function resolveListedPullRequestStatus(
+  options: Parameters<typeof resolveCurrentPullRequestView>[0],
+  viewMatch: ResolvedPullRequestCandidate | null,
+  headRepositoryOwner: string,
+): Promise<CurrentPullRequestStatus | null> {
   const candidates = await listCurrentPullRequestCandidates({
     cwd: options.cwd,
     headRef: options.headRef,
