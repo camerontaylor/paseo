@@ -7,12 +7,32 @@ import {
   CheckoutGithubSetAutoMergeResponseSchema,
   CheckoutPrMergeRequestSchema,
   CheckoutPrStatusSchema,
+  ForgeSearchItemSchema,
   ForgeSearchResponseSchema,
   GitHubSearchResponseSchema,
   ServerInfoStatusPayloadSchema,
 } from "./messages.js";
 
 describe("checkout PR schemas", () => {
+  test("accepts optional neutral checks on search items", () => {
+    const item = {
+      kind: "change_request",
+      number: 42,
+      title: "CI facts",
+      url: "https://github.com/acme/repo/pull/42",
+      state: "open",
+      body: null,
+      labels: [],
+    };
+    expect(ForgeSearchItemSchema.parse(item).checks).toBeUndefined();
+    expect(
+      ForgeSearchItemSchema.parse({
+        ...item,
+        checks: [{ name: "lint", status: "failure", url: null, workflow: "CI" }],
+      }).checks,
+    ).toEqual([{ name: "lint", status: "failure", url: null, workflow: "CI" }]);
+  });
+
   test("defaults missing forge identity for old daemon payloads", () => {
     const parsed = CheckoutPrStatusSchema.parse({
       url: "https://github.com/getpaseo/paseo/pull/42",

@@ -98,6 +98,18 @@ function runtimeName(input: {
 }): string {
   const hash = createHash("sha256");
   hash.update(readFileSync(path.join(input.bundleDirectory, TERMINAL_WORKER_BUNDLE_NAME)));
+  const integrationRoot = path.join(input.bundleDirectory, "shell-integration");
+  const hashIntegration = (relativePath: string): void => {
+    const target = path.join(integrationRoot, relativePath);
+    if (statSync(target).isDirectory()) {
+      for (const name of readdirSync(target).sort()) hashIntegration(path.join(relativePath, name));
+    } else {
+      const bytes = readFileSync(target);
+      hash.update(JSON.stringify([relativePath, bytes.length]));
+      hash.update(bytes);
+    }
+  };
+  hashIntegration("");
   hash.update(readFileSync(path.join(input.nodePtyDirectory, "package.json")));
   hash.update(`${process.platform}-${process.arch}`);
   const version = input.paseoVersion.replace(/[^A-Za-z0-9._-]/g, "_");

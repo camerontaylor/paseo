@@ -1289,6 +1289,9 @@ test.each(["reject", "stall"] as const)(
       }
       if (!stopped) await handle.daemon.stop();
       await Promise.all([run, peerRun]);
+      // Releasing the injected streams can enqueue persistence after stop's earlier flush.
+      await handle.daemon.agentManager.flush();
+      await handle.daemon.agentStorage.flush();
       await rm(path.dirname(handle.paseoHome), { recursive: true, force: true });
       await rm(handle.staticDir, { recursive: true, force: true });
     }

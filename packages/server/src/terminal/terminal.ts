@@ -74,6 +74,7 @@ export interface TerminalCommandFinishedInfo {
 
 export type ClientMessage =
   | { type: "input"; data: string }
+  | { type: "command"; command: string; args?: string[]; cwd?: string; completion: boolean }
   | { type: "resize"; rows: number; cols: number }
   | { type: "mouse"; row: number; col: number; button: number; action: "down" | "up" | "move" };
 
@@ -94,6 +95,7 @@ export interface TerminalSession {
   name: string;
   cwd: string;
   workspaceId: string;
+  readonly supportsCommandDispatch?: boolean;
   send(msg: ClientMessage): void;
   subscribe(listener: (msg: ServerMessage) => void): () => void;
   onExit(listener: (info: TerminalExitInfo) => void): () => void;
@@ -345,14 +347,78 @@ function escapeCmdExeMetaChars(text: string): string {
  * just without the original line breaks, instead of cmd.exe splitting the
  * prompt into multiple commands.
  */
-function escapeCmdExeArgument(rawArg: string): string {
+function escapeCmdExeArgument(rawArg: string, shim = true): string {
   const arg = rawArg.replace(/\r\n|\r|\n/g, " ");
 
   let escaped = arg.replace(/(\\*)"/g, '$1$1\\"');
   escaped = escaped.replace(/(\\*)$/, "$1$1");
   escaped = `"${escaped}"`;
 
-  return escapeCmdExeMetaChars(escapeCmdExeMetaChars(escaped));
+  const once = escapeCmdExeMetaChars(escaped);
+  return shim ? escapeCmdExeMetaChars(once) : once;
+}
+
+/** Render managed commands in the shell that owns this PTY, including after reattachment. */
+export function buildTerminalCommand(
+  message: Extract<ClientMessage, { type: "command" }>,
+  shell: string,
+): string {
+  const family = basename(shell).toLowerCase();
+  const cmd = family === "cmd.exe" || family === "cmd";
+  const powershell = ["powershell", "powershell.exe", "pwsh", "pwsh.exe"].includes(family);
+  const quote = (value: string) => {
+    if (powershell) return `'${value.replaceAll("'", "''")}'`;
+    if (cmd) return escapeCmdExeMetaChars(value);
+    return `'${value.replaceAll("'", "'\\''")}'`;
+  };
+  let invocation = message.command;
+  if (message.args) {
+    if (cmd) {
+      const shim = /\.(cmd|bat)$/i.test(message.command);
+      invocation = [
+        escapeCmdExeMetaChars(message.command),
+        ...message.args.map((argument) => escapeCmdExeArgument(argument, shim)),
+      ].join(" ");
+    } else {
+      invocation = `${powershell ? "& " : ""}${[message.command, ...message.args].map(quote).join(" ")}`;
+    }
+  }
+  let command = invocation;
+  if (message.cwd) {
+    if (powershell) {
+      command = `Set-Location -LiteralPath ${quote(message.cwd)}; if ($?) {\n${invocation}\n}`;
+    } else {
+      command = `${cmd ? "cd /d" : "cd --"} ${quote(message.cwd)} && ${invocation}`;
+    }
+  }
+  if (powershell) {
+    // Submit one complete expression instead of exposing intermediate multiline prefixes
+    // to PSReadLine. Dot sourcing retains the interactive scope, cwd and native exit code.
+    const encoded = Buffer.from(command, "utf8").toString("base64");
+    return `. ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))))\r`;
+  }
+  if (!message.completion) return `${command}\r`;
+  if (["bash", "sh", "dash", "zsh"].includes(family)) {
+    // Newlines keep a trailing comment from eating the status capture. A subshell restores
+    // the command status without terminating the interactive parent or losing its cwd/env.
+    // Managed zsh commands own completion even if user startup replaced its hook arrays.
+    // Capture status first; clear only our active marker so an intact precmd adds no second D.
+    const resetZshActive = family === "zsh" ? "_PASEO_ZSH_COMMAND_ACTIVE=0; " : "";
+    return `{\n${command}\n_paseo_script_status=$?; ${resetZshActive}printf '\\033]633;D;%s\\007' "$_paseo_script_status"; (exit "$_paseo_script_status")\n}\r`;
+  }
+  if (cmd) {
+    // The batch reporter gets a fresh parse after the command finishes. Its first line
+    // expands ERRORLEVEL before SETLOCAL changes it and scopes Electron's Node mode.
+    // Keep the user's command outside CALL's additional expansion pass.
+    const reporter = resolveExternalProcessPath(
+      fileURLToPath(
+        new URL("./shell-integration/cmd/report-command-finished.cmd", import.meta.url),
+      ),
+    );
+    return `(\r${command}\rcall "${reporter}" "${process.execPath}"\r)\r`;
+  }
+  // Explicit shell profiles retain their existing completion behavior.
+  return `${command}\r`;
 }
 
 /**
@@ -408,7 +474,7 @@ export async function resolveTerminalSpawnCommand(
       "/d",
       "/s",
       "/c",
-      `"${[escapeCmdExeMetaChars(resolved), ...args.map(escapeCmdExeArgument)].join(" ")}"`,
+      `"${[escapeCmdExeMetaChars(resolved), ...args.map((argument) => escapeCmdExeArgument(argument))].join(" ")}"`,
     ].join(" ");
     return { command: comSpec, args: commandLine };
   }
@@ -778,6 +844,7 @@ export async function createTerminal(
   let disposed = false;
   let exitEmitted = false;
   let processExited = false;
+  let windowsCloseRequested = false;
   const processExitWaiters = new Set<() => void>();
   let exitInfo: TerminalExitInfo | null = null;
   // Recent output is retained as whole chunks plus a running char length so we
@@ -1166,6 +1233,10 @@ export async function createTerminal(
     if (killed) return;
 
     switch (msg.type) {
+      case "command":
+        pendingInput += buildTerminalCommand(msg, spawnCommand);
+        scheduleInputFlush();
+        break;
       case "input": {
         if (isTerminalActivityInterruptInput(msg.data)) {
           activityTracker.interrupt();
@@ -1315,7 +1386,11 @@ export async function createTerminal(
 
   function killPtyProcess(signal?: NodeJS.Signals): void {
     if (process.platform === "win32") {
+      // Closing ConPTY is a one-way request, including while native exit is pending.
+      // A throwing request may be retried; POSIX still supports signal escalation.
+      if (windowsCloseRequested) return;
       ptyProcess.kill();
+      windowsCloseRequested = true;
       return;
     }
     ptyProcess.kill(signal);
@@ -1389,6 +1464,7 @@ export async function createTerminal(
     name,
     cwd,
     workspaceId,
+    supportsCommandDispatch: true,
     send,
     subscribe,
     onExit,

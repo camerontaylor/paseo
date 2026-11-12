@@ -11,6 +11,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { builtinModules } from "node:module";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -129,6 +131,43 @@ describe("terminal worker runtime copy", () => {
     expect(rebuilt.runtime).not.toBe(first.runtime);
   });
 
+  it("selects new integration bytes without disturbing a live record-owned runtime", async () => {
+    const home = makeDir("tw-runtime-home-");
+    const sources = makeSources("setInterval(() => {}, 1000);\n");
+    const first = prepareTerminalWorkerRuntime({
+      paseoHome: home,
+      paseoVersion: "1.0.0",
+      ...sources,
+    });
+    // A real child holds the old record; this tests asset identity/pruning, not the worker wire.
+    const worker = spawn(process.execPath, [first.scriptPath], { stdio: "ignore" });
+    await once(worker, "spawn");
+    try {
+      writeTerminalWorkerRecord(home, recordNaming(first.runtime, worker.pid!));
+      const asset = path.join("shell-integration", "zsh", ".zshenv");
+      writeFileSync(path.join(sources.bundleDirectory, asset), "# updated integration\n");
+      const next = prepareTerminalWorkerRuntime({
+        paseoHome: home,
+        paseoVersion: "1.0.0",
+        ...sources,
+      });
+      expect(next.runtime).not.toBe(first.runtime);
+      expect(readFileSync(path.join(path.dirname(first.scriptPath), asset), "utf8")).toBe(
+        "# zsh\n",
+      );
+      expect(readFileSync(path.join(path.dirname(next.scriptPath), asset), "utf8")).toBe(
+        "# updated integration\n",
+      );
+      await pruneTerminalWorkerRuntimes(home);
+      expect(existsSync(first.scriptPath)).toBe(true);
+      expect(() => process.kill(worker.pid!, 0)).not.toThrow();
+    } finally {
+      const exited = once(worker, "exit");
+      worker.kill();
+      await exited;
+    }
+  });
+
   it("replaces a copy an earlier run left unfinished", () => {
     const home = makeDir("tw-runtime-home-");
     const sources = makeSources();
@@ -220,5 +259,8 @@ describe("terminal worker bundle", () => {
       packages.map(() => "node-pty"),
     );
     expect(existsSync(path.join(outDir, "shell-integration", "zsh"))).toBe(true);
+    expect(
+      existsSync(path.join(outDir, "shell-integration", "cmd", "report-command-finished.cmd")),
+    ).toBe(true);
   });
 });

@@ -8,6 +8,14 @@ import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import { applyRecordPatch } from "../record-patch.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
+import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
+import {
+  appendManualCompanionEntry,
+  CompanionStreamCollector,
+  restoreCompanionEntries,
+} from "./companion-stream.js";
+import { AgentArtifactCollector } from "./artifacts/collector.js";
+import type { AgentArtifact } from "@getpaseo/protocol/agent-types";
 import { randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { stat } from "node:fs/promises";
@@ -111,7 +119,8 @@ import {
 } from "./runtime-mcp-config.js";
 import { resolveCreateAgentTitles } from "./create-agent-title.js";
 import type { PaseoToolCatalogFactory } from "./tools/types.js";
-import { isPaseoToolPolicyEnabled } from "./paseo-tool-policy.js";
+import { isPaseoToolPolicyEnabled, isPaseoToolEnabled } from "./paseo-tool-policy.js";
+import { stripVoiceModeSystemPrompt, VOICE_AVAILABLE_INSTRUCTION } from "../voice-config.js";
 import {
   ProviderSubagentStore,
   type ProviderSubagentDescriptor,
@@ -159,6 +168,16 @@ export class PeerTurnActiveError extends Error {
   constructor(readonly agentId: string) {
     super("A turn from another client is running. Wait for it or press Stop.");
     this.name = "PeerTurnActiveError";
+  }
+}
+
+/** The run reservation rejected a competing prompt before the provider saw it. */
+export class AgentRunBusyError extends Error {
+  readonly code = "AGENT_RUN_BUSY";
+
+  constructor(agentId: string) {
+    super(`Agent ${agentId} already has an active run`);
+    this.name = "AgentRunBusyError";
   }
 }
 
@@ -380,6 +399,8 @@ export interface CreateAgentOptions {
   owner?: AgentOwner;
   /** Background agents stay out of discovery, tabs, tracks and attention. Fixed at creation. */
   background?: boolean;
+  artifacts?: AgentArtifact[];
+  companionEntries?: CompanionEntry[];
 }
 
 export interface AgentManagerOptions {
@@ -467,6 +488,10 @@ function resolveInitialAttention(input: AttentionState | undefined): AttentionSt
   };
 }
 
+function resolveInitialArtifacts(artifacts: AgentArtifact[] | undefined): AgentArtifact[] {
+  return artifacts ? [...artifacts] : [];
+}
+
 interface StreamEventFlags {
   shouldDispatchEvent: boolean;
   shouldNotifyWaiters: boolean;
@@ -536,6 +561,8 @@ interface ManagedAgentBase {
   labels: Record<string, string>;
   /** Plugin-owned data. Paseo persists and forwards it and never reads a key. */
   metadata: AgentMetadata;
+  artifacts: AgentArtifact[];
+  companionEntries?: CompanionEntry[];
 }
 
 type ManagedAgentWithSession = ManagedAgentBase & {
@@ -644,6 +671,7 @@ interface AgentMetadataPatch {
   title?: string;
   labels?: AgentLabelPatch;
   metadata?: Record<string, JsonValue | null>;
+  companionEntries?: CompanionEntry[];
 }
 
 const SYSTEM_ERROR_PREFIX = "[System Error]";
@@ -903,6 +931,8 @@ export class AgentManager {
   private readonly rescueTimeouts: Required<AgentManagerRescueTimeouts>;
   private readonly beforeSteerUnavailableFallback?: AgentManagerOptions["beforeSteerUnavailableFallback"];
   private acceptingAgentRegistrations = true;
+  private readonly artifactCollector = new AgentArtifactCollector();
+  private readonly companionCollector = new CompanionStreamCollector();
 
   constructor(options: AgentManagerOptions) {
     this.pluginLifecycle = options.pluginLifecycle;
@@ -931,8 +961,23 @@ export class AgentManager {
       windowMs: options.agentStreamCoalesceWindowMs ?? AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS,
       timers: { setTimeout, clearTimeout },
       onFlush: ({ agentId, item, provider, turnId }) => {
-        const event = this.recordAndDispatchTimelineItem(agentId, item, provider, turnId);
-        this.notifyForegroundTurnWaiters(agentId, event);
+        // This runs off a deferred timer (see AgentStreamCoalescer.scheduleFlush),
+        // so the agent's in-memory state can already be torn down by the time it
+        // fires — archived, closed, or otherwise removed between the event being
+        // buffered and the coalescing window elapsing. recordAndDispatchTimelineItem
+        // throws in that case ("Unknown agent"), and an uncaught throw out of a
+        // setTimeout callback takes the whole daemon down with it. The flush is
+        // best-effort against a live agent; drop it and move on if the agent is
+        // already gone rather than crashing every other agent's session with it.
+        try {
+          const event = this.recordAndDispatchTimelineItem(agentId, item, provider, turnId);
+          this.notifyForegroundTurnWaiters(agentId, event);
+        } catch (error) {
+          this.logger.warn(
+            { err: error, agentId },
+            "Dropped a coalesced timeline flush for an agent that is no longer tracked",
+          );
+        }
       },
     });
     this.updateProviderRegistry({
@@ -980,6 +1025,25 @@ export class AgentManager {
             "Failed to close agent after provider retirement",
           );
         });
+      }
+    }
+  }
+
+  /**
+   * Repoints live agents at a renamed provider id. Must run after the registry rebuild so the
+   * new id already has a client, and before storage migration so the next persistence flush
+   * doesn't write the old id back over the migrated record.
+   */
+  renameProviderOnLiveAgents(fromProviderId: string, toProviderId: string): void {
+    for (const agent of this.agents.values()) {
+      if (agent.provider === fromProviderId) {
+        agent.provider = toProviderId;
+      }
+      if (agent.runtimeInfo?.provider === fromProviderId) {
+        agent.runtimeInfo = { ...agent.runtimeInfo, provider: toProviderId };
+      }
+      if (agent.persistence?.provider === fromProviderId) {
+        agent.persistence = { ...agent.persistence, provider: toProviderId };
       }
     }
   }
@@ -1644,6 +1708,8 @@ export class AgentManager {
           owner: record.owner,
           background: record.background,
           env: record.launchEnv,
+          artifacts: record.artifacts,
+          companionEntries: record.companionEntries,
         });
       }),
     );
@@ -1716,6 +1782,8 @@ export class AgentManager {
       owner: options.owner,
       background: options.background,
       launchEnv: options.env ? { ...options.env } : undefined,
+      artifacts: options.artifacts,
+      companionEntries: options.companionEntries,
       historyPrimed: true,
     });
     if (!agent.internal) {
@@ -1749,6 +1817,8 @@ export class AgentManager {
       workspaceId?: string;
       owner?: AgentOwner;
       background?: boolean;
+      artifacts?: AgentArtifact[];
+      companionEntries?: CompanionEntry[];
       attention?: AttentionState;
     },
     resumeOptions?: AgentResumeSessionOptions,
@@ -1783,6 +1853,8 @@ export class AgentManager {
       workspaceId?: string;
       owner?: AgentOwner;
       background?: boolean;
+      artifacts?: AgentArtifact[];
+      companionEntries?: CompanionEntry[];
       attention?: AttentionState;
     },
     resumeOptions?: AgentResumeSessionOptions,
@@ -1833,7 +1905,7 @@ export class AgentManager {
         purpose,
         workspaceId,
         title: record?.title ?? mergedConfig.title ?? null,
-        background: options?.background,
+        background: record?.background ?? options?.background,
         ...agentEntityData(record ?? options),
       },
     );
@@ -1859,7 +1931,16 @@ export class AgentManager {
         ...options,
         // The caller read its metadata before this turn in the lane; a setMetadata queued ahead of
         // it has saved a newer record, the one the open hooks saw.
-        ...(record ? { metadata: record.metadata } : {}),
+        ...(record
+          ? {
+              labels: record.labels,
+              metadata: record.metadata,
+              background: record.background,
+              owner: record.owner,
+              artifacts: record.artifacts,
+              companionEntries: record.companionEntries,
+            }
+          : {}),
         workspaceId,
         launchEnv,
         persistence: handle,
@@ -2084,6 +2165,8 @@ export class AgentManager {
         historyPrimed: rehydrateFromDisk ? false : preservedHistoryPrimed,
         lastUsage: preservedLastUsage,
         lastError: preservedLastError,
+        artifacts: existing.artifacts,
+        companionEntries: existing.companionEntries,
         attention: preservedAttention,
         restoring: true,
       });
@@ -2091,10 +2174,7 @@ export class AgentManager {
       if (closedExisting) {
         this.emitClosedAgent(closedExisting, { persist: false });
       } else if (this.agents.get(agentId) === existing) {
-        existing.lifecycle = "error";
-        existing.lastError = error instanceof Error ? error.message : String(error);
-        this.raiseErrorAttention(existing);
-        this.emitState(existing);
+        this.handleReloadFailure(existing, error);
       }
       throw error;
     } finally {
@@ -2124,6 +2204,20 @@ export class AgentManager {
     for (const event of this.providerSubagents.deleteParent(agentId)) {
       this.dispatch({ type: "provider_subagent", event });
     }
+  }
+
+  // Extracted from reloadAgentSessionInternal to keep that method under the complexity ceiling.
+  private handleReloadFailure(existing: ManagedAgent, error: unknown): void {
+    // emitState's status transition raises attention for a fresh failure. A reload that fails
+    // while the lifecycle is already "error" has no transition left, so it raises here to keep
+    // every retry legible as a new failure.
+    const wasError = existing.lifecycle === "error";
+    existing.lifecycle = "error";
+    existing.lastError = error instanceof Error ? error.message : String(error);
+    if (wasError) {
+      this.raiseErrorAttention(existing);
+    }
+    this.emitState(existing);
   }
 
   private async closeReloadedSession(session: AgentSession, agentId: string): Promise<void> {
@@ -2580,6 +2674,8 @@ export class AgentManager {
         background: record.background,
         labels: record.labels,
         metadata: record.metadata,
+        artifacts: record.artifacts ?? [],
+        companionEntries: restoreCompanionEntries(record),
       },
     });
   }
@@ -2870,10 +2966,80 @@ export class AgentManager {
       ...(patch.title ? { title: patch.title } : {}),
       ...(patch.labels ? { labels: applyRecordPatch(record.labels, patch.labels) } : {}),
       ...(patch.metadata ? { metadata: applyRecordPatch(record.metadata, patch.metadata) } : {}),
+      ...(patch.companionEntries ? { companionEntries: patch.companionEntries } : {}),
       updatedAt: this.nextStoredUpdatedAt(record),
     };
     await registry.upsert(nextRecord);
     return nextRecord;
+  }
+
+  async updateCompanionEntry(input: {
+    agentId: string;
+    entryId?: string;
+    action: "update_status" | "add_pin" | "remove_pin" | "add_q_and_a";
+    status?: "open" | "reviewed" | "done";
+    text?: string;
+    answerText?: string;
+    sourceId?: string;
+  }): Promise<void> {
+    const liveAgent = this.getAgent(input.agentId);
+    let entries = liveAgent?.companionEntries;
+    if (!liveAgent) {
+      if (!this.registry) return;
+      const stored = await this.registry.get(input.agentId);
+      if (!stored) return;
+      entries = restoreCompanionEntries({ companionEntries: stored.companionEntries });
+    } else {
+      entries = entries ?? [];
+    }
+
+    if (!entries) return;
+    let next = [...entries];
+
+    if (input.action === "update_status" && input.entryId && input.status) {
+      next = next.map((e) =>
+        e.id === input.entryId && (e.kind === "question" || e.kind === "feature_request")
+          ? { ...e, status: input.status as "open" | "reviewed" | "done" }
+          : e,
+      );
+    } else if (input.action === "add_pin") {
+      const pinId = `pin:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      const appended = appendManualCompanionEntry(next, {
+        id: pinId,
+        kind: "pin",
+        timestamp: new Date().toISOString(),
+        text: input.text ?? "",
+        truncated: false,
+        sourceId: input.sourceId,
+      });
+      if (appended.error) {
+        throw new Error(appended.error);
+      }
+      next = appended.entries;
+    } else if (input.action === "remove_pin" && input.entryId) {
+      next = next.filter((e) => !(e.id === input.entryId && e.kind === "pin"));
+    } else if (input.action === "add_q_and_a") {
+      const qnaId = `qa:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      const appended = appendManualCompanionEntry(next, {
+        id: qnaId,
+        kind: "q_and_a",
+        timestamp: new Date().toISOString(),
+        text: input.text ?? "",
+        answer: input.answerText,
+        truncated: false,
+      });
+      if (appended.error) {
+        throw new Error(appended.error);
+      }
+      next = appended.entries;
+    }
+
+    if (liveAgent) {
+      liveAgent.companionEntries = next;
+      this.emitState(liveAgent, { persist: true });
+    } else {
+      await this.writeStoredMetadata(input.agentId, { companionEntries: next });
+    }
   }
 
   async detachAgent(agentId: string): Promise<{
@@ -3260,6 +3426,9 @@ export class AgentManager {
     item = limitAgentTimelineItemContent(item);
     this.touchUpdatedAt(agent);
     const row = this.recordTimeline(agentId, item);
+    if (item.type === "user_message") {
+      this.collectCompanionEvent(agent, { type: "timeline", item, provider: agent.provider });
+    }
     this.dispatchStream(
       agentId,
       {
@@ -3335,6 +3504,7 @@ export class AgentManager {
         this.runs.settleForegroundRun(agentId, pendingRun.token);
         throw error;
       }
+      this.artifactCollector.cancelTurn(agent.id);
       agent.pendingReplacement = false;
       const errorMsg = error instanceof Error ? error.message : "Failed to start turn";
       this.runs.settleForegroundStart(pendingRun, { status: "failed", error: errorMsg });
@@ -3428,7 +3598,11 @@ export class AgentManager {
       },
       "agent.manager.stream.request",
     );
-    if (existingAgent.activeForegroundTurnId || this.runs.hasRun(agentId)) {
+    if (
+      existingAgent.activeForegroundTurnId ||
+      this.runs.hasRun(agentId) ||
+      (options?.requireNoPendingPermissions && existingAgent.pendingPermissions.size > 0)
+    ) {
       this.logger.trace(
         {
           agentId,
@@ -3440,7 +3614,7 @@ export class AgentManager {
         },
         "agent.manager.stream.reject",
       );
-      throw new Error(`Agent ${agentId} already has an active run`);
+      throw new AgentRunBusyError(agentId);
     }
 
     const agent = existingAgent;
@@ -3452,6 +3626,7 @@ export class AgentManager {
     const streamForwarder = async function* streamForwarder(this: AgentManager) {
       let turnId: string;
       let turnStream: ReturnType<AgentRunState["createTurnStream"]> | null = null;
+      this.artifactCollector.beginTurn(agent.id, agent.cwd);
       turnId = await this.startPendingForegroundTurn({
         agent,
         agentId,
@@ -4497,6 +4672,8 @@ export class AgentManager {
       owner?: AgentOwner;
       background?: boolean;
       launchEnv?: Record<string, string>;
+      artifacts?: AgentArtifact[];
+      companionEntries?: CompanionEntry[];
     },
   ): Promise<ManagedAgent> {
     let registered = false;
@@ -4669,6 +4846,44 @@ export class AgentManager {
     return { durableTimelineHasRows };
   }
 
+  private static initialRecordFields(params: {
+    session: AgentSession;
+    config: AgentSessionConfig;
+    now: Date;
+    durableTimelineHasRows: boolean;
+    options?:
+      | {
+          createdAt?: Date;
+          lastUserMessageAt?: Date | null;
+          historyPrimed?: boolean;
+          lastUsage?: AgentUsage;
+          lastError?: string;
+          attention?: AttentionState;
+          persistence?: AgentPersistenceHandle;
+          labels?: Record<string, string>;
+          artifacts?: AgentArtifact[];
+          companionEntries?: CompanionEntry[];
+        }
+      | undefined;
+  }) {
+    const { session, config, durableTimelineHasRows, options } = params;
+    return {
+      persistence: normalizePersistenceForConfig(
+        options?.persistence ?? session.describePersistence(),
+        config,
+      ),
+      historyPrimed: options?.historyPrimed ?? durableTimelineHasRows,
+      lastUserMessageAt: options?.lastUserMessageAt ?? null,
+      lastUsage: options?.lastUsage,
+      lastError: options?.lastError,
+      attention: resolveInitialAttention(options?.attention),
+      internal: config.internal ?? false,
+      labels: options?.labels ?? {},
+      artifacts: resolveInitialArtifacts(options?.artifacts),
+      companionEntries: restoreCompanionEntries(options),
+    };
+  }
+
   private buildManagedAgentForRegister(params: {
     resolvedAgentId: string;
     session: AgentSession;
@@ -4692,18 +4907,12 @@ export class AgentManager {
           workspaceId?: string;
           owner?: AgentOwner;
           launchEnv?: Record<string, string>;
+          artifacts?: AgentArtifact[];
+          companionEntries?: CompanionEntry[];
         }
       | undefined;
   }): ActiveManagedAgent {
-    const {
-      resolvedAgentId,
-      session,
-      config,
-      effectiveOptions,
-      now,
-      durableTimelineHasRows,
-      options,
-    } = params;
+    const { resolvedAgentId, session, config, effectiveOptions, now, options } = params;
     return {
       id: resolvedAgentId,
       provider: config.provider,
@@ -4732,16 +4941,7 @@ export class AgentManager {
       foregroundTurnWaiters: new Set<ForegroundTurnWaiter>(),
       finalizedForegroundTurnIds: new Set<string>(),
       unsubscribeSession: null,
-      persistence: normalizePersistenceForConfig(
-        options?.persistence ?? session.describePersistence(),
-        config,
-      ),
-      historyPrimed: options?.historyPrimed ?? durableTimelineHasRows,
-      lastUserMessageAt: options?.lastUserMessageAt ?? null,
-      lastUsage: options?.lastUsage,
-      lastError: options?.lastError,
-      attention: resolveInitialAttention(options?.attention),
-      internal: config.internal ?? false,
+      ...AgentManager.initialRecordFields(params),
       background: params.background,
       ...agentEntityData(options),
     } as ActiveManagedAgent;
@@ -4764,6 +4964,7 @@ export class AgentManager {
     agent: LiveManagedAgent,
     cancelReason: string,
   ): ManagedAgentClosed {
+    this.artifactCollector.cancelTurn(agent.id);
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
     this.agents.delete(agent.id);
     this.previousStatuses.delete(agent.id);
@@ -4796,6 +4997,8 @@ export class AgentManager {
   }
 
   private discardRetainedAgentState(agentId: string): void {
+    this.artifactCollector.cancelTurn(agentId);
+    this.companionCollector.clear(agentId);
     this.timelineStore.delete(agentId);
     this.paseoToolPolicies.delete(agentId);
     for (const event of this.sideConversations.deleteParent(agentId)) {
@@ -4938,6 +5141,13 @@ export class AgentManager {
     );
 
     const shouldNotifyWaiters = await this.handleStreamEvent(agent, event);
+
+    if (isTurnTerminalEvent(event)) {
+      // Artifact collection walks the working directory. Never hold the turn's waiters
+      // on it: upstream settles and notifies at the terminal event, and a steer or
+      // replace admitted during the walk must see the run already settled.
+      void this.collectArtifactsForTurn(agent);
+    }
 
     if (!shouldNotifyWaiters) {
       return;
@@ -5322,6 +5532,10 @@ export class AgentManager {
     });
     if (dispatchPromise) {
       await dispatchPromise;
+    }
+
+    if (!options?.fromHistory && event.type !== "timeline") {
+      this.collectCompanionEvent(agent, event);
     }
 
     if (!options?.fromHistory) {
@@ -5709,6 +5923,81 @@ export class AgentManager {
     }
   }
 
+  private collectCompanionEvent(agent: ManagedAgent, event: AgentStreamEvent): void {
+    const previous = agent.companionEntries ?? [];
+    const next = this.companionCollector.observe(
+      agent.id,
+      previous,
+      event,
+      new Date().toISOString(),
+    );
+    if (next !== previous) {
+      agent.companionEntries = next;
+      this.emitState(agent);
+    }
+  }
+
+  /**
+   * Backfills an agent's artifact feed from what is already on disk.
+   *
+   * Turn-scoped collection cannot see work an agent did before this feature
+   * existed, so without this every pre-existing agent shows an empty feed
+   * forever. Explicit rather than automatic: a full walk of a large working
+   * directory is not something to do on every agent load.
+   */
+  async scanAgentArtifacts(
+    agentId: string,
+    options?: { limit?: number },
+  ): Promise<{ addedOrUpdated: number; total: number }> {
+    const agent = this.agents.get(agentId);
+    if (!agent) {
+      throw new Error(`Agent ${agentId} not found`);
+    }
+    const collection = await this.artifactCollector.scanExisting(
+      agent.cwd,
+      agent.artifacts,
+      options?.limit !== undefined ? { limit: options.limit } : {},
+    );
+    if (!collection) {
+      return { addedOrUpdated: 0, total: agent.artifacts?.length ?? 0 };
+    }
+    agent.artifacts = collection.artifacts;
+    this.touchUpdatedAt(agent);
+    this.emitState(agent);
+    this.logger.info(
+      {
+        agentId,
+        cwd: agent.cwd,
+        addedOrUpdated: collection.addedOrUpdated,
+        artifactCount: collection.artifacts.length,
+      },
+      "Backfilled agent artifacts",
+    );
+    return { addedOrUpdated: collection.addedOrUpdated, total: collection.artifacts.length };
+  }
+
+  private async collectArtifactsForTurn(agent: ActiveManagedAgent): Promise<void> {
+    try {
+      const collection = await this.artifactCollector.finishTurn(agent.id, agent.artifacts);
+      if (!collection) {
+        return;
+      }
+      agent.artifacts = collection.artifacts;
+      this.touchUpdatedAt(agent);
+      this.emitState(agent);
+      this.logger.info(
+        {
+          agentId: agent.id,
+          addedOrUpdated: collection.addedOrUpdated,
+          artifactCount: collection.artifacts.length,
+        },
+        "Collected agent artifacts",
+      );
+    } catch (error) {
+      this.logger.warn({ err: error, agentId: agent.id }, "Failed to collect agent artifacts");
+    }
+  }
+
   private onStreamTurnStarted(params: {
     agent: ActiveManagedAgent;
     eventTurnId: string | undefined;
@@ -5716,6 +6005,7 @@ export class AgentManager {
     flags: StreamEventFlags;
   }): void {
     const { agent, eventTurnId, isForegroundEvent, flags } = params;
+    this.artifactCollector.beginTurn(agent.id, agent.cwd);
     this.logger.trace(
       {
         agentId: agent.id,
@@ -5803,6 +6093,9 @@ export class AgentManager {
     turnId?: string,
     options?: { providerMessageId?: string },
   ): AgentStreamEvent {
+    if (item.type === "tool_call") {
+      this.artifactCollector.observeToolCall(agentId, item);
+    }
     const row = this.recordTimeline(agentId, item, { ...options, turnId });
     const event: AgentStreamEvent = {
       type: "timeline",
@@ -5810,6 +6103,8 @@ export class AgentManager {
       provider,
       ...(turnId !== undefined ? { turnId } : {}),
     };
+    const timelineAgent = this.agents.get(agentId);
+    if (timelineAgent) this.collectCompanionEvent(timelineAgent, event);
     this.dispatchStream(agentId, event, {
       seq: row.seq,
       epoch: this.timelineStore.getEpoch(agentId),
@@ -6018,7 +6313,7 @@ export class AgentManager {
       return;
     }
 
-    if (agent.attention.requiresAttention) {
+    if (agent.attention.requiresAttention && agent.attention.attentionReason === "permission") {
       return;
     }
 
@@ -6039,7 +6334,7 @@ export class AgentManager {
     if (!raisesAttention(agent)) {
       return;
     }
-    if (agent.attention.requiresAttention && agent.attention.attentionReason !== "finished") {
+    if (agent.attention.requiresAttention && agent.attention.attentionReason === "permission") {
       return;
     }
     agent.attention = {
@@ -6430,6 +6725,11 @@ export class AgentManager {
       purpose: options.purpose,
       resolveDefaultModel: options.resolveDefaultModel,
     });
+    // Older voice toggles persisted a speech-only prompt block. Remove it only
+    // when a provider is naturally created or resumed.
+    const systemPrompt = stripVoiceModeSystemPrompt(storedConfig.systemPrompt);
+    if (systemPrompt) storedConfig.systemPrompt = systemPrompt;
+    else delete storedConfig.systemPrompt;
     const paseoToolPolicy = this.paseoToolsEnabled
       ? this.resolvePaseoToolPolicy(storedConfig.provider)
       : { enabled: false };
@@ -6444,6 +6744,22 @@ export class AgentManager {
         mcpAuthToken: this.mcpAuthToken,
       }),
     );
+    const capabilities = this.clients.get(storedConfig.provider)?.capabilities;
+    const hasSpeakTransport =
+      (capabilities?.supportsNativePaseoTools && !!this.paseoToolCatalogFactory) ||
+      (capabilities?.supportsMcpServers && !!this.mcpBaseUrl);
+    if (
+      hasSpeakTransport &&
+      this.paseoToolsEnabled &&
+      isPaseoToolEnabled(paseoToolPolicy, "speak")
+    ) {
+      launchConfig.daemonAppendSystemPrompt = [
+        launchConfig.daemonAppendSystemPrompt,
+        VOICE_AVAILABLE_INSTRUCTION,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+    }
     return { storedConfig, launchConfig, paseoToolPolicy };
   }
 

@@ -2383,8 +2383,20 @@ test(
     await origin.paseo.hosts.add({ connection: `127.0.0.1:${b.port}` });
     const serverId = (await online(origin.paseo)).hosts[0]!.serverId!;
     const remote = await origin.paseo.hosts.client(serverId);
-    const response = await remote.agents.ref(agent.id).timeline.refetch({ limit: 0 });
-    const messages = response.entries.flatMap((row) =>
+    const timeline = remote.agents.ref(agent.id).timeline;
+    let response = await timeline.refetch({ limit: 0 });
+    expect(response.hasOlder).toBe(true);
+    const entries = [...response.entries];
+    while (response.hasOlder) {
+      const cursor = response.startCursor;
+      expect(cursor).not.toBeNull();
+      response = await timeline.refetch({ direction: "before", cursor: cursor!, limit: 0 });
+      expect(response.entries.length).toBeGreaterThan(0);
+      expect(response.startCursor?.seq).toBeLessThan(cursor!.seq);
+      entries.unshift(...response.entries);
+    }
+    expect(new Set(entries.map((row) => row.seqStart)).size).toBe(rowCount);
+    const messages = entries.flatMap((row) =>
       row.item.type === "user_message" ? [row.item.text] : [],
     );
     expect(messages).toHaveLength(rowCount);
@@ -2420,10 +2432,10 @@ test("a host channel waits for its downstream consumer without blocking sibling 
   )({ url: "ws://host-link/ws" });
   const received = Promise.withResolvers<void>();
   const forward = Promise.withResolvers<void>();
-  let binaryFrames = 0;
-  channel.onMessage((_data, binary) => {
-    if (!binary) return;
-    binaryFrames++;
+  channel.onMessage((data, binary) => {
+    // The daemon budgets a timeline page, so this history arrives as bounded text pages rather
+    // than one oversized binary chunk. Hold the first page either way.
+    if (!binary && !String(data).includes('"fetch_agent_timeline_response"')) return;
     received.resolve();
     return forward.promise;
   });
@@ -2445,10 +2457,21 @@ test("a host channel waits for its downstream consumer without blocking sibling 
   await received.promise;
   // A round trip on the same physical link must progress while this channel is held.
   await destination.client.ping();
-  expect(binaryFrames).toBe(1);
   forward.resolve();
-  const response = await history;
-  const messages = response.entries.flatMap((row) =>
+  let response = await history;
+  const entries = [...response.entries];
+  while (response.hasOlder) {
+    const cursor = response.startCursor;
+    expect(cursor).not.toBeNull();
+    response = await remote.agents.ref(agent.id).timeline.refetch({
+      direction: "before",
+      cursor: cursor!,
+      limit: 0,
+    });
+    expect(response.entries.length).toBeGreaterThan(0);
+    entries.unshift(...response.entries);
+  }
+  const messages = entries.flatMap((row) =>
     row.item.type === "user_message" ? [row.item.text] : [],
   );
   expect(messages).toHaveLength(50);

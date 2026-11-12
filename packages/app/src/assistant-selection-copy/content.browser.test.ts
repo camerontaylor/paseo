@@ -815,3 +815,14 @@ it("copies a workspace image path instead of its temporary display URL", () => {
     "![chart](assets/chart.png)",
   );
 });
+
+it("copies a non-Latin selection without dropping wide characters", () => {
+  const message = mountFixture();
+  const korean = "통합 구현은 전체 테스트를 통과했습니다";
+  message.innerHTML = `<p>${korean}</p>`;
+  const paragraph = fixtureElement(message, "p");
+  const through = korean.indexOf(" 전체");
+  expect(
+    createAssistantSelectionClipboardContent(selectText(paragraph, 0, through))?.plainText,
+  ).toBe(korean.slice(0, through));
+});
