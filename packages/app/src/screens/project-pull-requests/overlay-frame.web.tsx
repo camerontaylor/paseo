@@ -2,11 +2,7 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import {
-  getOverlayRoot,
-  OverlayLayerProvider,
-  useGlobalOverlayLayer,
-} from "@/lib/overlay-root";
+import { getOverlayRoot, OverlayLayerProvider, useGlobalOverlayLayer } from "@/lib/overlay-root";
 import { useOverlayRegistration, type KeyboardInputEvent } from "@/keyboard";
 
 export function OverlayFrame({ children, onClose }: { children: ReactNode; onClose: () => void }) {

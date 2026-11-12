@@ -7783,6 +7783,57 @@ test("runAgent refreshes runtimeInfo after completion", async () => {
   expect(refreshed?.runtimeInfo?.model).toBe("gpt-5.2-codex");
 });
 
+test("refresh keeps a nonrestoring provider's requested alias until the observed model changes", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-refresh-alias-"));
+  class AliasSession extends TestAgentSession {
+    observedModel: string | null = "canonical-alias";
+    override async getRuntimeInfo() {
+      return { ...(await super.getRuntimeInfo()), model: this.observedModel };
+    }
+  }
+  class AliasClient extends TestAgentClient {
+    session: AliasSession | null = null;
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      this.session = new AliasSession(config);
+      return this.session;
+    }
+  }
+  const client = new AliasClient();
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    idFactory: () => "00000000-0000-4000-8000-000000000105",
+  });
+  try {
+    const snapshot = await manager.createAgent(
+      { provider: "codex", cwd: workdir, model: "requested-alias" },
+      undefined,
+      { workspaceId: undefined },
+    );
+
+    // The first observation adopts runtimeInfo but not the requested preference.
+    expect(manager.getAgent(snapshot.id)?.config.model).toBe("requested-alias");
+    expect(manager.getAgent(snapshot.id)?.runtimeInfo?.model).toBe("canonical-alias");
+
+    // Unchanged canonical name across a refresh keeps the requested alias.
+    await manager.runAgent(snapshot.id, "hello");
+    expect(manager.getAgent(snapshot.id)?.config.model).toBe("requested-alias");
+    expect(manager.getAgent(snapshot.id)?.runtimeInfo?.model).toBe("canonical-alias");
+
+    // A genuine observed change is adopted.
+    client.session!.observedModel = "canonical-next";
+    await manager.runAgent(snapshot.id, "again");
+    expect(manager.getAgent(snapshot.id)?.config.model).toBe("canonical-next");
+    expect(manager.getAgent(snapshot.id)?.runtimeInfo?.model).toBe("canonical-next");
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("waitForAgentEvent does not resolve idle until foreground turn is finalized", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-wait-coherence-"));
   const storagePath = join(workdir, "agents");

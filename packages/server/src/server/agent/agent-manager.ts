@@ -4901,14 +4901,7 @@ export class AgentManager {
         }
       | undefined;
   }): ActiveManagedAgent {
-    const {
-      resolvedAgentId,
-      session,
-      config,
-      effectiveOptions,
-      now,
-      options,
-    } = params;
+    const { resolvedAgentId, session, config, effectiveOptions, now, options } = params;
     return {
       id: resolvedAgentId,
       provider: config.provider,
