@@ -583,7 +583,15 @@ export class DaemonConfigStore {
         removedProviders,
       ),
     );
-    return { patch, mergePatch, removedProviders, replacedProviders, renamedProviders, speechPatch, next };
+    return {
+      patch,
+      mergePatch,
+      removedProviders,
+      replacedProviders,
+      renamedProviders,
+      speechPatch,
+      next,
+    };
   }
 
   private async applySupportedPatch(
