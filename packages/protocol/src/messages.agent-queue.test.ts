@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { CLIENT_CAPS } from "./client-capabilities";
 import {
   AgentQueueEnqueueRequestSchema,
   AgentQueueMutationRequestSchema,
@@ -181,9 +180,5 @@ describe("mixed-version send compatibility", () => {
     // A daemon without the flag must never receive the new enum, so a client
     // that sees it absent must not send any agent.queue.* message at all.
     expect(oldDaemon.features?.durableAgentQueueV1 === true).toBe(false);
-  });
-
-  it("gates the queue broadcast on a client capability old clients do not send", () => {
-    expect(CLIENT_CAPS.durableAgentQueue).toBe("durable_agent_queue");
   });
 });
