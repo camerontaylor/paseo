@@ -7,6 +7,7 @@ import type { KeyboardInputEvent } from "./internal/overlays";
 import { hasActiveOverlay } from "./internal/overlay-dispatch";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { usePathname, useRouter } from "expo-router";
+import { goHistory } from "@/navigation/history/replay";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import { useKeyboardActionDispatcher } from "@/keyboard/keyboard-action-dispatcher-context";
@@ -139,6 +140,8 @@ export function useKeyboardShortcuts({
       case "router-back":
         router.back();
         return true;
+      case "history-go":
+        return goHistory(action.delta);
       case "router-push":
         router.push(action.route as Parameters<typeof router.push>[0]);
         return true;

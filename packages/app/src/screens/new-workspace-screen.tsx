@@ -175,6 +175,7 @@ function buildFirstAgentContext(input: {
 }
 
 interface NewWorkspaceScreenProps {
+  initialChangeRequest?: ForgeSearchItem;
   serverId: string;
   sourceDirectory?: string;
   projectId?: string;
@@ -205,6 +206,7 @@ function useWorkspaceIsolation(input: {
   setup: NewWorkspaceSetup;
   supportsMultiplicity: boolean;
   canCreateWorktree: boolean;
+  initialWorktree?: boolean;
 }): WorkspaceIsolationState {
   const { setup, supportsMultiplicity, canCreateWorktree } = input;
   // The last isolation choice is remembered alongside the other New Workspace
@@ -212,7 +214,7 @@ function useWorkspaceIsolation(input: {
   // the remembered default until the screen remounts.
   const { preferences } = useFormPreferences();
   const { manualIsolation } = useNewWorkspaceSetupState(setup);
-  const isolation = manualIsolation ?? preferences.isolation ?? "local";
+  const isolation = manualIsolation ?? (input.initialWorktree ? "worktree" : preferences.isolation ?? "local");
   const isWorktree = isolation === "worktree" && canCreateWorktree;
 
   return {
@@ -856,6 +858,7 @@ export function NewWorkspaceScreen({
   projectId,
   displayName: displayNameProp,
   draftId,
+  initialChangeRequest,
 }: NewWorkspaceScreenProps) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
@@ -1013,6 +1016,7 @@ export function NewWorkspaceScreen({
     isDraftHandoffActive,
     updatePreferences: updateFormPreferences,
     setAttachments: chatDraft.setAttachments,
+    initialChangeRequest,
   });
   const dispatchPickerSelection = setup.dispatchPicker;
   const selectedItem = useNewWorkspaceSetupState(setup).pickerSelection.selectedItem;
@@ -1052,6 +1056,7 @@ export function NewWorkspaceScreen({
     setup,
     supportsMultiplicity: supportsWorkspaceMultiplicity,
     canCreateWorktree,
+    initialWorktree: Boolean(initialChangeRequest),
   });
 
   const branchSuggestionsQuery = useQuery({
@@ -1126,6 +1131,13 @@ export function NewWorkspaceScreen({
     () => ({ project: pluginProject, isolation: effectiveIsolation, baseItem, locked: isPending }),
     [baseItem, effectiveIsolation, isPending, pluginProject],
   );
+
+  const initialRequestAttached = useRef(false);
+  useEffect(() => {
+    if (!initialChangeRequest || initialRequestAttached.current) return;
+    initialRequestAttached.current = true;
+    selectPickerItem({ kind: "github-pr", item: initialChangeRequest });
+  }, [initialChangeRequest, selectPickerItem]);
 
   const handleSelectOption = useCallback(
     (id: string) => {
@@ -1625,6 +1637,7 @@ function usePluginSetup(input: {
   isDraftHandoffActive: boolean;
   updatePreferences: ReturnType<typeof useFormPreferences>["updatePreferences"];
   setAttachments: ReturnType<typeof useAgentInputDraft>["setAttachments"];
+  initialChangeRequest?: ForgeSearchItem;
 }) {
   const {
     serverId,
@@ -1650,13 +1663,17 @@ function usePluginSetup(input: {
   const inputs = { serverId, locked, project: pluginProject, canCreateWorktree, supportsMetadata };
   // Both are stable for the life of the screen: preferences write through the query client, and
   // the draft is keyed per mount. A command and a pick run the same effects.
-  const [setup] = useState(() =>
-    createNewWorkspaceSetup(inputs, {
+  const [setup] = useState(() => {
+    const setup = createNewWorkspaceSetup(inputs, {
       persistIsolation: (isolation) => void updatePreferences({ isolation }),
       syncBaseAttachment: (item) =>
         setAttachments((attachments) => syncPickerPrAttachment({ attachments, item })),
-    }),
-  );
+    });
+    if (input.initialChangeRequest) {
+      setup.dispatchPicker({ type: "picker-selected", item: { kind: "github-pr", item: input.initialChangeRequest } });
+    }
+    return setup;
+  });
   useLayoutEffect(() => setup.syncInputs(inputs));
   return { setup, pluginProject, canCreateWorktree, isPending: locked };
 }

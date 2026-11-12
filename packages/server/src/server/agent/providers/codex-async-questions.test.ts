@@ -9,6 +9,7 @@ import {
 import { createTestLogger } from "../../../test-utils/test-logger.js";
 import type { AgentStreamEvent } from "../agent-sdk-types.js";
 import { AgentManager } from "../agent-manager.js";
+import { toAgentPayload } from "../agent-projections.js";
 
 const questionItem = {
   type: "agentMessage",
@@ -226,6 +227,9 @@ test("manager snapshots capture pending and answered question state before the t
   try {
     await ask();
     const [permission] = session.getPendingPermissions();
+    const pending = manager.getAgent(agent.id)!;
+    expect(toAgentPayload(pending).pendingPermissions).toEqual([permission]);
+    expect(toAgentPayload(pending).persistence?.metadata).not.toHaveProperty("asyncQuestions");
     expect(manager.getAgent(agent.id)?.persistence?.metadata?.asyncQuestions).toEqual([
       {
         item: {
@@ -237,6 +241,10 @@ test("manager snapshots capture pending and answered question state before the t
       },
     ]);
     await manager.respondToPermission(agent.id, permission.id, answer);
+    const answered = manager.getAgent(agent.id)!;
+    expect(session.getPendingPermissions()).toEqual([]);
+    expect(toAgentPayload(answered).pendingPermissions).toEqual([]);
+    expect(toAgentPayload(answered).persistence?.metadata).not.toHaveProperty("asyncQuestions");
     expect(manager.getAgent(agent.id)?.persistence?.metadata?.asyncQuestions).toEqual([
       {
         item: {

@@ -367,6 +367,101 @@ describe("createWebStreamStrategy", () => {
     expect(scrollContainer?.dataset.overlayScrollbar).toBe("true");
   });
 
+  it("ignores decorative mutations while following but tracks actual content and viewport growth", async () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    const resize = () => {
+      for (const callback of callbacks) callback([], {} as ResizeObserver);
+    };
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      value: class {
+        constructor(callback: ResizeObserverCallback) {
+          callbacks.push(callback);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    });
+    const scrollTo = vi.fn(function (
+      this: HTMLElement,
+      options?: ScrollToOptions | number,
+      y?: number,
+    ) {
+      const top = typeof options === "object" ? (options.top ?? 0) : (y ?? 0);
+      this.scrollTop = Math.max(0, Math.min(top, this.scrollHeight - this.clientHeight));
+    });
+    HTMLElement.prototype.scrollTo = scrollTo;
+    const strategy = createWebStreamStrategy({ isMobileBreakpoint: false });
+    const viewportRef = React.createRef<StreamViewportHandle>();
+    const input: StreamRenderInput = {
+      agentId: "agent",
+      segments: { historyVirtualized: [], historyMounted: [], liveHead: [userMessage(1)] },
+      boundary: { hasVirtualizedHistory: false, hasMountedHistory: false, hasLiveHead: true },
+      renderers: {
+        ...createRenderers(vi.fn()),
+        renderLiveHeadRow: () => (
+          <button type="button" data-testid="decorative-control">
+            <span>summary</span>
+          </button>
+        ),
+      },
+      listEmptyComponent: null,
+      viewportRef,
+      routeBottomAnchorRequest: null,
+      isAuthoritativeHistoryReady: true,
+      onNearBottomChange: vi.fn(),
+      onNearHistoryStart: vi.fn().mockReturnValue(true),
+      isLoadingOlderHistory: false,
+      hasOlderHistory: false,
+      olderHistoryProgressKey: null,
+      scrollEnabled: true,
+      listStyle: null,
+      baseListContentContainerStyle: null,
+      forwardListContentContainerStyle: null,
+      contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+    };
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root!.render(strategy.render(input)));
+    const viewport = container.querySelector<HTMLElement>('[data-testid="agent-chat-scroll"]')!;
+    let contentHeight = 669;
+    let viewportHeight = 600;
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, get: () => viewportHeight },
+      scrollHeight: { configurable: true, get: () => contentHeight },
+      clientWidth: { configurable: true, value: 900 },
+      scrollWidth: { configurable: true, value: 900 },
+    });
+    act(resize);
+    await act(async () => {
+      await new Promise(requestAnimationFrame);
+    });
+    viewport.scrollTop = 48;
+    scrollTo.mockClear();
+    const control = container.querySelector('[data-testid="decorative-control"]')!;
+    await act(async () => {
+      control.replaceChildren(document.createElement("svg"));
+    });
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(viewport.scrollTop).toBe(48);
+    // Paced text and async image layout can grow below the reader without rerendering the viewport.
+    contentHeight = 690;
+    await act(async () => {
+      control.appendChild(document.createTextNode("grown content"));
+    });
+    expect(viewport.scrollTop).toBe(90);
+    contentHeight = 730;
+    act(resize);
+    expect(viewport.scrollTop).toBe(130);
+    viewportHeight = 580;
+    scrollTo.mockClear();
+    act(resize);
+    expect(scrollTo).toHaveBeenCalled();
+    expect(viewport.scrollTop).toBe(150);
+  });
+
   it("rerenders a stable live-head row when its revision changes", () => {
     const strategy = createWebStreamStrategy({ isMobileBreakpoint: false });
     const viewportRef = React.createRef<StreamViewportHandle>();

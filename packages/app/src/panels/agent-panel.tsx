@@ -23,10 +23,17 @@ import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useAgentStreamTail } from "@/agent-stream/use-agent-stream-tail";
 import { AgentStreamView, type AgentStreamViewHandle } from "@/agent-stream/view";
 import { ArchivedAgentCallout } from "@/components/archived-agent-callout";
+import { CompanionFeed } from "@/companion-stream/feed";
+import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
-import { useRetainedPanelActive } from "@/components/retained-panel";
+import {
+  RetainedPanel,
+  RetainedPanelActivity,
+  useRetainedPanelActive,
+} from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
+import { AgentViewSwitcher } from "@/components/agent-view-switcher";
 import { Composer } from "@/composer";
 import { AgentCommandsProvider } from "@/agent-commands";
 import {
@@ -66,6 +73,7 @@ import { PaneSubtitle } from "@/panels/pane-subtitle";
 import { definePanel } from "@/panels/panel-registry";
 import { RenderProfile } from "@/utils/render-profiler";
 import { buildDraftPanelDescriptor } from "@/panels/draft-panel-descriptor";
+import { useHostFeature } from "@/runtime/host-features";
 import {
   type HostRuntimeConnectionStatus,
   useHostRuntimeClient,
@@ -83,6 +91,7 @@ import { type DraftConversation, useDraftTimeline } from "@/composer/draft/timel
 import { AgentTracks } from "@/panels/agent-tracks";
 import { OverlayDismissalScope } from "@/components/ui/overlay-dismissal";
 import { ParentAgentCallout, useParentAgentId } from "@/subagents/parent";
+import { useAgentViewStore } from "@/stores/agent-view-store";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import {
@@ -120,6 +129,8 @@ interface ChatAgentStateShape {
   options?: Agent["options"];
   controls?: Agent["controls"];
   lastError?: Agent["lastError"] | null;
+  artifacts?: Agent["artifacts"];
+  companionEntries?: Agent["companionEntries"];
 }
 
 interface ChatAgentSelectedState extends ChatAgentStateShape {
@@ -180,6 +191,8 @@ function selectChatAgentState(
     options: agent.options,
     controls: agent.controls,
     lastError: agent.lastError ?? null,
+    artifacts: agent.artifacts,
+    companionEntries: agent.companionEntries,
     archivedAt: agent.archivedAt ?? null,
     requiresAttention: agent.requiresAttention ?? false,
     attentionReason: agent.attentionReason ?? null,
@@ -1036,6 +1049,8 @@ function ChatAgentContent({
   );
 }
 
+const EMPTY_COMPANION_ENTRIES: readonly CompanionEntry[] = [];
+
 const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   serverId,
   workspaceId,
@@ -1094,13 +1109,34 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   onAttentionPromptSend: () => void;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
-  const { t } = useTranslation();
   // The workspace sheet is for looking; Open as tab brings the agent back with its composer.
   const paneHost = usePaneContext().host;
   const showsComposer = draft !== null || paneHost !== "sheet";
   // The dock lays out fullscreen for the same session the composer edits in.
   const composerEditingSession = useComposerEditingSession("chat");
   const isComposerFullscreen = useComposerFullscreen(composerEditingSession);
+  const selectedView = useAgentViewStore(
+    (state) => state.selectedViews[`${serverId}:${agentId}`] || "chat",
+  );
+  const setSelectedView = useAgentViewStore((state) => state.setSelectedView);
+  const isChatVisible = selectedView !== "artifacts";
+  const handleSetSelectedView = useCallback(
+    (view: "chat" | "artifacts") => {
+      setSelectedView(serverId, agentId, view);
+    },
+    [serverId, agentId, setSelectedView],
+  );
+  const handleReturnToChat = useCallback(() => {
+    handleSetSelectedView("chat");
+  }, [handleSetSelectedView]);
+  const handleReplyInChat = useCallback(() => {
+    handleReturnToChat();
+    streamViewRef.current?.scrollToBottom("jump-to-bottom");
+  }, [handleReturnToChat, streamViewRef]);
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  // Gate companion controls and mutations once. Supplied file snapshots remain
+  // readable on older hosts without reconstructing a companion stream.
+  const companionStreamSupported = useHostFeature(serverId, "companionStreamPortV1");
   const hasActiveComposer = !agentState.archivedAt && !isArchivingCurrentAgent;
   const parentAgentId = useParentAgentId(serverId, agentId);
   // With a composer the parent is a pill above it; without one, the box takes the composer's place.
@@ -1159,7 +1195,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       <AgentComposerSection
         agentId={agentId}
         serverId={serverId}
-        isPaneFocused={isPaneFocused}
+        isPaneFocused={isPaneFocused && isChatVisible}
         isArchivingCurrentAgent={isArchivingCurrentAgent}
         archivedAt={agentState.archivedAt}
         cwd={cwd}
@@ -1190,47 +1226,64 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     return false;
   }, [onAttentionInputFocus]);
   const streamContent = (
-    <View
-      style={animatedStaticStyles.content}
-      onStartShouldSetResponderCapture={handleAttentionInteraction}
-    >
-      {showsComposer ? null : <SheetAgentFacts serverId={serverId} agentId={agentId} />}
-      <RenderProfile id={`AgentStreamSection:${agentId}`}>
-        <AgentStreamSection
-          streamViewRef={streamViewRef}
-          serverId={serverId}
-          agentId={agentId}
-          agent={effectiveAgent}
-          draft={draft}
-          routeBottomAnchorRequest={routeBottomAnchorRequest}
-          hasAppliedAuthoritativeHistory={hasAppliedAuthoritativeHistory}
-          isInitialHistoryLoading={
-            routeBottomAnchorRequest?.reason === "initial-entry" &&
-            !hasCachedHistory &&
-            !showHistorySyncError
-          }
-          revealInitialHistory={hasCachedHistory || showHistorySyncError}
-          hasActiveComposer={hasActiveComposer}
-          toast={toastApi}
-          onOpenWorkspaceFile={onOpenWorkspaceFile}
-        />
-      </RenderProfile>
-      {hasActiveComposer && !draft ? (
-        <AgentTracks
-          serverId={serverId}
-          workspaceId={workspaceId}
-          agentId={agentId}
-          parentAgentId={parentPillAgentId}
-        />
-      ) : null}
-    </View>
+    <RetainedPanel active={isChatVisible}>
+      <View
+        style={animatedStaticStyles.content}
+        onStartShouldSetResponderCapture={handleAttentionInteraction}
+      >
+        {showsComposer ? null : <SheetAgentFacts serverId={serverId} agentId={agentId} />}
+        <RenderProfile id={`AgentStreamSection:${agentId}`}>
+          <AgentStreamSection
+            streamViewRef={streamViewRef}
+            serverId={serverId}
+            agentId={agentId}
+            agent={effectiveAgent}
+            draft={draft}
+            routeBottomAnchorRequest={routeBottomAnchorRequest}
+            hasAppliedAuthoritativeHistory={hasAppliedAuthoritativeHistory}
+            isInitialHistoryLoading={
+              routeBottomAnchorRequest?.reason === "initial-entry" &&
+              !hasCachedHistory &&
+              !showHistorySyncError
+            }
+            revealInitialHistory={hasCachedHistory || showHistorySyncError}
+            hasActiveComposer={hasActiveComposer}
+            toast={toastApi}
+            onOpenWorkspaceFile={onOpenWorkspaceFile}
+          />
+        </RenderProfile>
+        {hasActiveComposer && !draft ? (
+          <AgentTracks
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={agentId}
+            parentAgentId={parentPillAgentId}
+          />
+        ) : null}
+      </View>
+    </RetainedPanel>
   );
 
   const dockContent = (
     <View style={styles.contentContainer}>
+      <AgentViewSwitcher value={selectedView} onValueChange={handleSetSelectedView} />
       {streamContent}
+      {!isChatVisible ? (
+        <CompanionFeed
+          serverId={serverId}
+          agentId={agentId}
+          cwd={cwd}
+          entries={agentState.companionEntries ?? EMPTY_COMPANION_ENTRIES}
+          artifacts={agentState.artifacts ?? []}
+          isSupported={companionStreamSupported}
+          onOpenWorkspaceFile={onOpenWorkspaceFile}
+          onReturnToChat={handleReturnToChat}
+          onReplyInChat={handleReplyInChat}
+          toast={toastApi}
+        />
+      ) : null}
 
-      {showHistorySyncError ? (
+      {showHistorySyncError && isChatVisible ? (
         <TimelineSyncErrorCallout isRetrying={isRetryingHistorySync} onRetry={retryTimelineSync} />
       ) : null}
     </View>
@@ -1238,7 +1291,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
 
   const dockOverlay = (
     <>
-      {showHistorySyncOverlay ? (
+      {showHistorySyncOverlay && isChatVisible ? (
         <View style={styles.historySyncOverlay} testID="agent-history-overlay">
           <ThemedLoadingSpinner size="large" uniProps={foregroundMutedColorMapping} />
         </View>
@@ -1248,10 +1301,24 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     </>
   );
 
+  const composerSlot = (
+    <RetainedPanelActivity active={isChatVisible}>
+      <View
+        collapsable={false}
+        style={[
+          isComposerFullscreen && styles.fullscreenComposer,
+          !isChatVisible && styles.hiddenPane,
+        ]}
+      >
+        {composerSection}
+      </View>
+    </RetainedPanelActivity>
+  );
+
   const dock = (
     <ChatSurface disabled={isArchivingCurrentAgent} fullscreen={isComposerFullscreen}>
       {dockContent}
-      {composerSection}
+      {composerSlot}
       {dockOverlay}
     </ChatSurface>
   );
@@ -1264,14 +1331,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     >
       <View style={styles.root}>
         {dock}
-
-        {isArchivingCurrentAgent ? (
-          <View style={styles.archivingOverlay} testID="agent-archiving-overlay">
-            <ThemedLoadingSpinner size="large" uniProps={foregroundColorMapping} />
-            <Text style={styles.archivingTitle}>{t("agentPanel.states.archivingTitle")}</Text>
-            <Text style={styles.archivingSubtitle}>{t("agentPanel.states.archivingSubtitle")}</Text>
-          </View>
-        ) : null}
+        <ArchivingOverlay isArchivingCurrentAgent={isArchivingCurrentAgent} />
       </View>
     </RewindComposerRestoreProvider>
   );
@@ -1306,6 +1366,20 @@ function wrapAgentCommandProvider({
     >
       {children}
     </AgentCommandsProvider>
+  );
+}
+
+function ArchivingOverlay({ isArchivingCurrentAgent }: { isArchivingCurrentAgent: boolean }) {
+  const { t } = useTranslation();
+  if (!isArchivingCurrentAgent) {
+    return null;
+  }
+  return (
+    <View style={styles.archivingOverlay} testID="agent-archiving-overlay">
+      <ThemedLoadingSpinner size="large" uniProps={foregroundColorMapping} />
+      <Text style={styles.archivingTitle}>{t("agentPanel.states.archivingTitle")}</Text>
+      <Text style={styles.archivingSubtitle}>{t("agentPanel.states.archivingSubtitle")}</Text>
+    </View>
   );
 }
 
@@ -1813,6 +1887,8 @@ const styles = StyleSheet.create((theme) => ({
     overflow: "hidden",
     ...(isWeb ? { userSelect: "none" as const } : {}),
   },
+  fullscreenComposer: { flex: 1, minHeight: 0 },
+  hiddenPane: { display: "none" },
   timelineSyncCalloutRail: {
     width: "100%",
     alignItems: "center",
