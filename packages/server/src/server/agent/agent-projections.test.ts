@@ -452,27 +452,6 @@ describe("toAgentPayload", () => {
           unrelated: { retained: true },
         },
       },
-      artifacts: [
-        {
-          path: "/tmp/report.md",
-          name: "report.md",
-          kind: "markdown",
-          mimeType: "text/markdown",
-          size: 12,
-          createdAt: "2025-01-01T00:00:00.000Z",
-          updatedAt: "2025-01-01T00:00:00.000Z",
-        },
-      ],
-      companionEntries: [
-        {
-          id: "question:retained",
-          kind: "question",
-          text: "Keep this question?",
-          status: "open",
-          timestamp: "2025-01-01T00:00:00.000Z",
-          truncated: false,
-        },
-      ],
     });
     const originalPersistence = structuredClone(agent.persistence);
     const record = toStoredAgentRecord(agent);
@@ -496,12 +475,6 @@ describe("toAgentPayload", () => {
       },
     ]);
     expect(storedPayload.pendingPermissions).toEqual([]);
-    expect(payload.artifacts).toEqual(agent.artifacts);
-    expect(storedPayload.artifacts).toEqual(agent.artifacts);
-    expect(payload.companionEntries).toEqual(agent.companionEntries);
-    expect(storedPayload.companionEntries).toEqual(agent.companionEntries);
-    expect(record.artifacts).toEqual(agent.artifacts);
-    expect(record.companionEntries).toEqual(agent.companionEntries);
     expect(agent.persistence).toEqual(originalPersistence);
     expect(record).toEqual(originalRecord);
     payload.persistence!.metadata!.conversationId = "wire-mutation";

@@ -1,7 +1,6 @@
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import type { TerminalActivity } from "@getpaseo/protocol/terminal-activity";
-import type { AgentQueueSnapshot } from "@getpaseo/protocol/messages";
 import { connectDaemonClient } from "./daemon-client-loader";
 import { withProjectOwnership } from "./project-ownership";
 import { createTempDirectory, createTempGitRepo } from "./workspace";
@@ -33,8 +32,6 @@ export interface SeedDaemonClient {
     config: import("@getpaseo/protocol/messages").MutableDaemonConfigPatch,
   ): Promise<{ config: import("@getpaseo/protocol/messages").MutableDaemonConfig }>;
   getDaemonConfig(): Promise<{ config: import("@getpaseo/protocol/messages").MutableDaemonConfig }>;
-  listQueuedAgentMessages(agentId: string): Promise<AgentQueueSnapshot>;
-  scanAgentArtifacts(agentId: string): Promise<{ addedOrUpdated: number; total: number }>;
   connect(): Promise<void>;
   close(): Promise<void>;
   addProject(cwd: string): Promise<{

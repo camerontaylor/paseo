@@ -27,7 +27,6 @@ import {
   resolveStoredAgentUpdatedAt,
   toAgentPersistenceHandle,
 } from "../persistence-hooks.js";
-import { restoreCompanionEntries } from "./companion-stream.js";
 export type { ManagedAgent };
 
 interface ProjectionOptions {
@@ -112,8 +111,6 @@ export function toStoredAgentRecord(
     internal: options?.internal,
     ...(agent.background ? { background: true } : {}),
     owner: agent.owner,
-    artifacts: agent.artifacts ?? [],
-    companionEntries: agent.companionEntries ?? [],
   } satisfies StoredAgentRecord;
 }
 
@@ -169,8 +166,6 @@ export function toAgentPayload(
     metadata: agent.metadata,
     archivedAt: options?.archivedAt ?? null,
     ...visibilityFlags(agent),
-    artifacts: agent.artifacts ?? [],
-    companionEntries: agent.companionEntries ?? [],
   };
 
   const usageScopeKey = projectUsageScopeKey(agent);
@@ -265,16 +260,6 @@ function buildStoredOptionControls(
   };
 }
 
-/** Stream facts a stored record carries: artifacts always, companion entries when present. */
-function buildStoredStreamFacts(
-  record: StoredAgentRecord,
-): Pick<AgentSnapshotPayload, "artifacts" | "companionEntries"> {
-  return {
-    artifacts: record.artifacts ?? [],
-    companionEntries: restoreCompanionEntries(record),
-  };
-}
-
 export function buildStoredAgentPayload(
   record: StoredAgentRecord,
   validProviders: Iterable<AgentProvider>,
@@ -334,7 +319,6 @@ export function buildStoredAgentPayload(
     labels: normalizeLabels(record.labels),
     metadata: record.metadata,
     ...(typeof record.lastError === "string" ? { lastError: record.lastError } : {}),
-    ...buildStoredStreamFacts(record),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
   };
 }

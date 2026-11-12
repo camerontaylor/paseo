@@ -30,17 +30,6 @@ type PreparedSegmentResult =
 const MAX_TTS_SEGMENT_CHARS = 260;
 const TTS_PREFETCH_SEGMENTS = 2;
 const CLOSED_AUDIO_ID_TTL_MS = 10_000;
-const PLAYBACK_CONFIRMATION_TIMEOUT_MS = 120_000;
-
-export class AudioPlaybackError extends Error {
-  constructor(
-    public readonly reason: "interrupted" | "timeout" | "client_error",
-    message: string,
-  ) {
-    super(message);
-    this.name = "AudioPlaybackError";
-  }
-}
 
 function splitOversizedFragment(fragment: string, maxChars: number): string[] {
   const trimmed = fragment.trim();
@@ -203,7 +192,8 @@ export class TTSManager {
     try {
       for (const segment of segments) {
         if (abortSignal.aborted) {
-          throw new AudioPlaybackError("interrupted", "Speech playback interrupted");
+          this.logger.debug("Aborted before emitting segmented audio");
+          return;
         }
 
         const synthWaitStart = Date.now();
@@ -213,7 +203,7 @@ export class TTSManager {
         scheduleNextSegments();
 
         if (result.kind === "aborted") {
-          throw new AudioPlaybackError("interrupted", "Speech playback interrupted");
+          return;
         }
 
         if (result.kind === "error") {
@@ -369,9 +359,6 @@ export class TTSManager {
       playbackResolve = resolve;
       playbackReject = reject;
     });
-    // Cancellation/cleanup can reject while we are still collecting the stream.
-    // The rejection is rethrown by the await below once collection finishes.
-    void playbackPromise.catch(() => undefined);
 
     const pendingPlayback: PendingPlayback = {
       resolve: playbackResolve,
@@ -383,7 +370,6 @@ export class TTSManager {
     this.pendingPlaybacks.set(audioId, pendingPlayback);
 
     let onAbort: (() => void) | undefined;
-    let playbackTimeout: ReturnType<typeof setTimeout> | undefined;
 
     onAbort = () => {
       this.logger.debug("Aborted while waiting for playback");
@@ -391,12 +377,11 @@ export class TTSManager {
       pendingPlayback.pendingChunks = 0;
       this.pendingPlaybacks.delete(audioId);
       this.rememberClosedAudioId(audioId);
-      playbackReject(new AudioPlaybackError("interrupted", "Speech playback interrupted"));
+      playbackResolve();
       this.destroySpeechStream(stream);
     };
 
     abortSignal.addEventListener("abort", onAbort, { once: true });
-    if (abortSignal.aborted) onAbort();
 
     try {
       const buffers: Buffer[] = [];
@@ -412,18 +397,6 @@ export class TTSManager {
         const fullBuffer = Buffer.concat(buffers);
         const chunkId = `${audioId}:0`;
         pendingPlayback.pendingChunks = 1;
-        playbackTimeout = setTimeout(() => {
-          playbackReject(
-            new AudioPlaybackError(
-              "timeout",
-              "Audio playback confirmation timed out; the client did not confirm audio output",
-            ),
-          );
-        }, PLAYBACK_CONFIRMATION_TIMEOUT_MS);
-        this.logger.info(
-          { audioId, chunkId, audioBytes: fullBuffer.length, format },
-          "Emitting TTS audio; waiting for playback confirmation",
-        );
 
         emitMessage({
           type: "audio_output",
@@ -450,18 +423,21 @@ export class TTSManager {
       await playbackPromise;
     } catch (error) {
       if (abortSignal.aborted) {
-        throw new AudioPlaybackError("interrupted", "Speech playback interrupted");
+        this.logger.debug("Audio stream closed after abort");
+      } else {
+        this.logger.error({ err: error }, "Error streaming audio");
+        this.pendingPlaybacks.delete(audioId);
+        throw error;
       }
-      this.logger.error({ err: error, audioId }, "Audio output failed");
-      throw error;
     } finally {
-      clearTimeout(playbackTimeout);
-      this.pendingPlaybacks.delete(audioId);
-      this.rememberClosedAudioId(audioId);
       if (onAbort) {
         abortSignal.removeEventListener("abort", onAbort);
       }
       this.destroySpeechStream(stream);
+    }
+
+    if (abortSignal.aborted) {
+      return;
     }
 
     this.logger.debug({ audioId, textLength: text.length }, "Audio playback confirmed");
@@ -471,7 +447,7 @@ export class TTSManager {
    * Called when client confirms audio playback completed
    * Resolves the corresponding promise
    */
-  public confirmAudioPlayed(chunkId: string, error?: string): void {
+  public confirmAudioPlayed(chunkId: string): void {
     const [audioId] = chunkId.includes(":") ? chunkId.split(":") : [chunkId];
     const pending = this.pendingPlaybacks.get(audioId);
 
@@ -484,13 +460,6 @@ export class TTSManager {
         return;
       }
       this.logger.warn({ chunkId }, "Received confirmation for unknown audio ID");
-      return;
-    }
-
-    if (error !== undefined) {
-      pending.reject(new AudioPlaybackError("client_error", `Audio playback failed: ${error}`));
-      this.pendingPlaybacks.delete(audioId);
-      this.rememberClosedAudioId(audioId);
       return;
     }
 
@@ -517,9 +486,7 @@ export class TTSManager {
     );
 
     for (const [audioId, pending] of this.pendingPlaybacks.entries()) {
-      pending.reject(
-        new AudioPlaybackError("interrupted", `Speech playback interrupted: ${reason}`),
-      );
+      pending.resolve();
       this.pendingPlaybacks.delete(audioId);
       this.rememberClosedAudioId(audioId);
       this.logger.debug({ audioId }, "Cleared pending playback");

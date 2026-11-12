@@ -33,7 +33,6 @@ import type { Theme } from "@/styles/theme";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { shouldAnimateNativeScrollToBottom } from "./native-scroll-animation";
 import { useRevisedHistoryRows } from "./history-row-revision";
-import { createNativeMessageScroller } from "./native-message-scroll";
 import { useBottomAnchorController } from "./bottom-anchor-controller";
 import { useScrollKeyboardDismiss } from "./scroll-keyboard-dismiss/use-scroll-keyboard-dismiss";
 import {
@@ -205,9 +204,6 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     return nextRows;
   }, [newRowEstimates, historyRows, liveRows]);
   const getEstimatedItemSize = useStableEvent((item: StreamItem) => newRowEstimates.estimate(item));
-  // Chat find addresses the same combined rows that LegendList renders.
-  const rowsRef = useRef(rows);
-  rowsRef.current = rows;
   const getHistoryStartPaginationInput = useStableEvent((): HistoryStartPaginationInput => {
     const metrics = streamViewportMetricsRef.current;
     const hasMeasuredViewport =
@@ -452,23 +448,6 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     };
   }, [clearPendingUserScrollEnd, disposeHistoryStart, evaluateHistoryStart]);
 
-  const detachForMessageScroll = useStableEvent(() => {
-    cancelDisclosureHold();
-    bottomAnchorController.detachByUser();
-  });
-  const [messageScroller] = useState(() =>
-    createNativeMessageScroller({
-      getRows: () => rowsRef.current,
-      detach: detachForMessageScroll,
-      scrollToIndex: (index) => {
-        void listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
-      },
-      requestFrame: requestAnimationFrame,
-      cancelFrame: cancelAnimationFrame,
-    }),
-  );
-  useEffect(() => () => messageScroller.dispose(), [messageScroller]);
-
   useEffect(() => {
     const handle: StreamViewportHandle = {
       scrollToBottom: (reason = "jump-to-bottom") => {
@@ -481,7 +460,6 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
         bottomAnchorController.prepareForStickyViewportChange();
       },
       holdRow,
-      scrollToMessage: messageScroller.scrollToMessage,
     };
     viewportRef.current = handle;
     return () => {
@@ -489,7 +467,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
         viewportRef.current = null;
       }
     };
-  }, [agentId, bottomAnchorController, holdRow, messageScroller, viewportRef]);
+  }, [agentId, bottomAnchorController, holdRow, viewportRef]);
 
   // The scroll-to-bottom button shows whenever following would not resume on its own. A detached
   // list resumes only from the end, so the button shows anywhere short of it. While following, the

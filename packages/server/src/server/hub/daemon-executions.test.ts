@@ -260,9 +260,7 @@ test("a failed Hub create removes its auto-created worktree", async () => {
 
 test("failed Hub creates release their lifecycle subscriptions", async () => {
   const hub = await launchRelationship();
-  // Closed setup clients may expire during the test. Track the new lifecycle
-  // subscriptions directly so unrelated WebSocket cleanup cannot hide a leak.
-  const activeNewSubscriptions = hub.trackNewAgentSubscriptions();
+  const subscriptionBaseline = hub.agentSubscriptionCount();
 
   hub.failProviderPromptStart();
   hub.beginOwnedCreate("failed-prompt-create-1", "failed-prompt-execution-1", {
@@ -277,7 +275,7 @@ test("failed Hub creates release their lifecycle subscriptions", async () => {
   expect(hub.activeOwnedAgentIds()).toEqual([]);
   expect(await hub.durableOwnedAgentIds()).toEqual([]);
   expect(await hub.listedWorktrees()).toHaveLength(1);
-  expect(activeNewSubscriptions()).toBe(0);
+  expect(hub.agentSubscriptionCount()).toBe(subscriptionBaseline);
 
   hub.failProviderPromptStart();
   hub.beginOwnedCreate("failed-prompt-create-2", "failed-prompt-execution-2");
@@ -290,7 +288,7 @@ test("failed Hub creates release their lifecycle subscriptions", async () => {
   expect(hub.activeOwnedAgentIds()).toEqual([]);
   expect(await hub.durableOwnedAgentIds()).toEqual([]);
   expect(await hub.listedWorktrees()).toHaveLength(1);
-  expect(activeNewSubscriptions()).toBe(0);
+  expect(hub.agentSubscriptionCount()).toBe(subscriptionBaseline);
 });
 
 test("failed Hub create cleans durable state when provider close rejects", async () => {

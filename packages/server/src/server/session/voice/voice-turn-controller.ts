@@ -71,24 +71,17 @@ interface TranscriptSegmentMeta {
 }
 
 interface VoiceFinalTranscript {
-  /** Controller-owned identity survives provider segment reuse and finalization retries. */
-  utteranceId: string;
   segmentId: string;
   transcript: string;
   language?: string;
   avgLogprob?: number;
   isLowConfidence?: boolean;
   durationMs: number;
-  /** Time between the detector's speech start and speech stop, excluding recognition latency. */
-  speechMs: number;
-  /** The recognizer returned no final result before the deadline, so the transcript is partial or empty. */
-  timedOut: boolean;
 }
 
 interface FinalizingVoiceTurn {
   turnId: string;
   startedAt: number;
-  speechMs: number;
   committedSegmentIds: string[];
   transcriptsBySegmentId: Map<string, string>;
   finalTranscriptSegmentIds: Set<string>;
@@ -172,10 +165,7 @@ export function createVoiceTurnController(params: {
     );
   }
 
-  function assembleFinalTranscript(
-    turn: FinalizingVoiceTurn,
-    reason: "complete" | "timeout",
-  ): VoiceFinalTranscript {
+  function assembleFinalTranscript(turn: FinalizingVoiceTurn): VoiceFinalTranscript {
     const orderedFinalSegmentIds = getOrderedFinalSegmentIds(turn);
     const transcript = orderedFinalSegmentIds
       .map((segmentId) => turn.transcriptsBySegmentId.get(segmentId)?.trim() ?? "")
@@ -192,7 +182,6 @@ export function createVoiceTurnController(params: {
       orderedFinalMeta.every((meta) => meta.isLowConfidence === true);
 
     return {
-      utteranceId: turn.turnId,
       segmentId: turn.committedSegmentIds[0] ?? orderedFinalSegmentIds[0] ?? turn.turnId,
       transcript,
       ...(language ? { language } : {}),
@@ -201,8 +190,6 @@ export function createVoiceTurnController(params: {
         : {}),
       ...(allLowConfidence ? { isLowConfidence: true } : {}),
       durationMs: Math.max(0, Date.now() - turn.startedAt),
-      speechMs: turn.speechMs,
-      timedOut: reason === "timeout",
     };
   }
 
@@ -215,7 +202,7 @@ export function createVoiceTurnController(params: {
     clearTimeout(turn.timeout);
     currentFinalizingTurn = null;
 
-    const finalTranscript = assembleFinalTranscript(turn, reason);
+    const finalTranscript = assembleFinalTranscript(turn);
     if (reason === "timeout") {
       params.logger.warn(
         {
@@ -451,7 +438,6 @@ export function createVoiceTurnController(params: {
     const finalizingTurn: FinalizingVoiceTurn = {
       turnId,
       startedAt,
-      speechMs: Math.max(0, endedAt - startedAt),
       committedSegmentIds: [],
       transcriptsBySegmentId: new Map(),
       finalTranscriptSegmentIds: new Set(),

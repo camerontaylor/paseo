@@ -320,26 +320,6 @@ describe("AgentStorage", () => {
         metadata,
       },
     });
-    agent.artifacts = [
-      {
-        path: "/tmp/report.md",
-        name: "report.md",
-        kind: "markdown",
-        mimeType: "text/markdown",
-        size: 12,
-        createdAt: "2025-01-01T00:00:00.000Z",
-        updatedAt: "2025-01-01T00:00:00.000Z",
-      },
-    ];
-    agent.companionEntries = [
-      {
-        id: "pin:disk",
-        kind: "pin",
-        text: "Retained context",
-        truncated: false,
-        timestamp: "2025-01-01T00:00:00.000Z",
-      },
-    ];
     await storage.applySnapshot(agent);
     const file = path.join(storagePath, "tmp-project", "disk-resume.json");
     const originalBytes = await fs.readFile(file, "utf8");
@@ -356,8 +336,6 @@ describe("AgentStorage", () => {
       nativeHandle: "native-disk",
       metadata: { conversationId: "disk-conversation" },
     });
-    expect(payload.artifacts).toEqual(agent.artifacts);
-    expect(payload.companionEntries).toEqual(agent.companionEntries);
     expect(record.persistence).toEqual(agent.persistence);
 
     const secondReload = new AgentStorage(storagePath, logger);
