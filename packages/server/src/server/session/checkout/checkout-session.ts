@@ -52,7 +52,6 @@ import {
   pullCurrentBranch,
   pushCurrentBranch,
   listCheckoutCommits,
-  getCommitFileDiff,
   setCheckoutBaseRef,
 } from "../../../utils/checkout-git.js";
 import { runGitCommand } from "../../../utils/run-git-command.js";

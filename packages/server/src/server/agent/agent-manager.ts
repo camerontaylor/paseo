@@ -4907,7 +4907,6 @@ export class AgentManager {
       config,
       effectiveOptions,
       now,
-      durableTimelineHasRows,
       options,
     } = params;
     return {

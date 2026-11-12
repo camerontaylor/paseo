@@ -3003,6 +3003,7 @@ async function resolveCurrentPullRequestView(options: {
         ? await resolveForkLocalPullRequestView({
             ...options,
             forkOwner,
+            viewMatch,
             repo: `${forkOwner}/${forkName}`,
           })
         : null;
