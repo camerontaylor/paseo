@@ -529,17 +529,44 @@ describe("resolveMessageInputEnterAction", () => {
 });
 
 describe("stopRealtimeVoice", () => {
-  it("stops voice mode without cancelling the running agent", async () => {
-    const cancelAgent = vi.fn().mockResolvedValue(undefined);
+  it("keeps voice mode active when the running agent refuses cancellation", async () => {
+    const cancellationError = new Error("active run cancellation was not acknowledged");
+    const cancelAgent = vi.fn().mockRejectedValue(cancellationError);
     const stopVoice = vi.fn().mockResolvedValue(undefined);
 
+    await expect(
+      stopRealtimeVoice({
+        voice: { stopVoice },
+        isRealtimeVoiceForCurrentAgent: true,
+        isAgentRunning: true,
+        client: { cancelAgent },
+        voiceAgentId: "agent-1",
+      }),
+    ).rejects.toBe(cancellationError);
+
+    expect(stopVoice).not.toHaveBeenCalled();
+  });
+
+  it("stops voice mode after the running agent acknowledges cancellation", async () => {
+    const calls: string[] = [];
+
     await stopRealtimeVoice({
-      voice: { stopVoice },
+      voice: {
+        stopVoice: async () => {
+          calls.push("stop voice");
+        },
+      },
       isRealtimeVoiceForCurrentAgent: true,
+      isAgentRunning: true,
+      client: {
+        cancelAgent: async () => {
+          calls.push("cancel agent");
+        },
+      },
+      voiceAgentId: "agent-1",
     });
 
-    expect(stopVoice).toHaveBeenCalled();
-    expect(cancelAgent).not.toHaveBeenCalled();
+    expect(calls).toEqual(["cancel agent", "stop voice"]);
   });
 });
 

@@ -17,8 +17,6 @@ import {
   expectComposerDraftSelection,
   expectComposerFullscreenControls,
   sendComposerWithButton,
-  queueComposerWithButton,
-  configureComposerQueueSend,
   activateRetainedComposerTab,
   switchComposerTabWithKeyboard,
   expectWorkspaceHeaderHidden,
@@ -26,8 +24,6 @@ import {
   recordVisibleComposerGeometry,
   expectNoCollapsedVisibleComposer,
   expectAttachmentPill,
-  expectQueuedMessageButton,
-  startRunningMockAgent,
   composerLocator,
   expectComposerVisible,
   expectComposerFullscreenFitsVisibleViewport,
@@ -422,29 +418,6 @@ test("the reserved band beside the inline editor focuses it", async ({ page }) =
         await expect(exitButton).toHaveCount(0);
       }
     });
-  } finally {
-    await agent.cleanup();
-  }
-});
-
-test("fullscreen Send keeps the configured queue behavior while an agent runs", async ({
-  page,
-}) => {
-  await configureComposerQueueSend(page);
-  await resizeComposerViewport(page, "portrait");
-  const agent = await startRunningMockAgent(page, {
-    prefix: "composer-fullscreen-queue-",
-    model: "one-minute-stream",
-    prompt: "Stay running for fullscreen queue test.",
-  });
-  try {
-    await writeCompactDraft(page, "Queued first line\nSecond line\nThird line");
-    await enterComposerFullscreen(page);
-    await expectComposerFullscreenControls(page);
-    await queueComposerWithButton(page);
-    await expect(composerLocator(page)).toHaveValue("");
-    await expectWorkspaceHeaderVisible(page);
-    await expectQueuedMessageButton(page);
   } finally {
     await agent.cleanup();
   }

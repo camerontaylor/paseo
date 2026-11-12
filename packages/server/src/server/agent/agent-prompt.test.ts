@@ -1016,41 +1016,6 @@ test("queue acceptance waits on its own reserved provider run", async () => {
   }
 });
 
-test("queue reservation preserves a pending permission without a foreground run", async () => {
-  const workdir = mkdtempSync(join(tmpdir(), "queued-permission-reservation-"));
-  const client = new SlowStartAgentClient(null);
-  const manager = new AgentManager({ clients: { codex: client }, logger: createTestLogger() });
-  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
-    workspaceId: undefined,
-  });
-  try {
-    client.sessions[0].pushEvent({
-      type: "permission_requested",
-      provider: "codex",
-      request: {
-        id: "approval-key",
-        provider: "codex",
-        kind: "tool",
-        name: "shell",
-        input: { command: "controlled" },
-      },
-    });
-    await vi.waitFor(() => expect(manager.getPendingPermissions(agent.id)).toHaveLength(1));
-    expect(manager.hasInFlightRun(agent.id)).toBe(false);
-    expect(() =>
-      manager.streamAgent(agent.id, "yes", { requireNoPendingPermissions: true }),
-    ).toThrow(/active run/);
-    expect(manager.getPendingPermissions(agent.id).map((request) => request.id)).toEqual([
-      "approval-key",
-    ]);
-    await manager.respondToPermission(agent.id, "approval-key", { behavior: "deny" });
-    expect(manager.getPendingPermissions(agent.id)).toEqual([]);
-  } finally {
-    await manager.closeAgent(agent.id).catch(() => undefined);
-    rmSync(workdir, { recursive: true, force: true });
-  }
-});
-
 test("queued dispatch cannot claim a turn when an agent became archived", async () => {
   const streamAgent = vi.fn();
   await expect(

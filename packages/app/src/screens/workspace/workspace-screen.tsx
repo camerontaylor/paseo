@@ -147,7 +147,6 @@ import { createWorkspaceBrowser, useBrowserStore } from "@/desktop/browser/store
 import { getDesktopHost } from "@/desktop/host";
 import { buildProviderCommand } from "@/utils/provider-command-templates";
 import { generateDraftId } from "@/stores/draft-keys";
-import { useAgentViewStore } from "@/stores/agent-view-store";
 import { resolveWorkspaceRouteId } from "@/utils/workspace-identity";
 import { useOpenAgentTabLabels } from "@/subagents/use-open-agent-tab-labels";
 import { WorkspaceTabPresentationResolver } from "@/screens/workspace/workspace-tab-presentation";
@@ -2198,42 +2197,6 @@ function WorkspaceScreenContent({
     [toast, t],
   );
 
-  const setFindOpen = useAgentViewStore((state) => state.setFindOpen);
-  const handleFindInChat = useCallback(
-    (agentId: string) => {
-      setFindOpen(normalizedServerId, agentId, true);
-      if (persistenceKey) {
-        const tabTarget = { kind: "agent", agentId } as WorkspaceTabTarget;
-        const tabId = openWorkspaceTabFocused(persistenceKey, tabTarget);
-        if (tabId) {
-          navigateToTabId(tabId);
-        }
-      }
-    },
-    [normalizedServerId, persistenceKey, openWorkspaceTabFocused, navigateToTabId, setFindOpen],
-  );
-
-  const setAgentSelectedView = useAgentViewStore((state) => state.setSelectedView);
-  const handleViewArtifacts = useCallback(
-    (agentId: string) => {
-      setAgentSelectedView(normalizedServerId, agentId, "artifacts");
-      if (persistenceKey) {
-        const tabTarget = { kind: "agent", agentId } as WorkspaceTabTarget;
-        const tabId = openWorkspaceTabFocused(persistenceKey, tabTarget);
-        if (tabId) {
-          navigateToTabId(tabId);
-        }
-      }
-    },
-    [
-      normalizedServerId,
-      persistenceKey,
-      openWorkspaceTabFocused,
-      navigateToTabId,
-      setAgentSelectedView,
-    ],
-  );
-
   const handleCopyFilePath = useCallback(
     async (path: string) => {
       if (!path) return;
@@ -3522,8 +3485,6 @@ function WorkspaceScreenContent({
           onCloseTabsAbove={actions.closeAbove}
           onCloseTabsBelow={actions.closeBelow}
           onCloseOtherTabs={actions.closeOthers}
-          onViewArtifacts={handleViewArtifacts}
-          onFindInChat={handleFindInChat}
         />
       );
     },
@@ -3541,8 +3502,6 @@ function WorkspaceScreenContent({
       handleReloadAgent,
       handleRenameTab,
       handleCloseTabById,
-      handleViewArtifacts,
-      handleFindInChat,
     ],
   );
   // Without a pane's tabs (above a split) the header carries workspace controls only: split panes

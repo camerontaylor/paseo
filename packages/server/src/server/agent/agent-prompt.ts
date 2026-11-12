@@ -412,9 +412,7 @@ export async function sendPreparedPromptToAgent(
     onDispatch: params.onDispatch,
     activeTurnBehavior: params.activeTurnBehavior,
     clearPendingPermissions: params.clearPendingPermissions,
-    runOptions: params.blockPendingPermissions
-      ? { ...runOptions, requireNoPendingPermissions: true }
-      : runOptions,
+    runOptions,
   });
 }
 

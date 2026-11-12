@@ -23,8 +23,6 @@ import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useAgentStreamTail } from "@/agent-stream/use-agent-stream-tail";
 import { AgentStreamView, type AgentStreamViewHandle } from "@/agent-stream/view";
 import { ArchivedAgentCallout } from "@/components/archived-agent-callout";
-import { CompanionFeed } from "@/companion-stream/feed";
-import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import {
@@ -33,7 +31,6 @@ import {
   useRetainedPanelActive,
 } from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
-import { AgentViewSwitcher } from "@/components/agent-view-switcher";
 import { Composer } from "@/composer";
 import { AgentCommandsProvider } from "@/agent-commands";
 import {
@@ -73,7 +70,6 @@ import { PaneSubtitle } from "@/panels/pane-subtitle";
 import { definePanel } from "@/panels/panel-registry";
 import { RenderProfile } from "@/utils/render-profiler";
 import { buildDraftPanelDescriptor } from "@/panels/draft-panel-descriptor";
-import { useHostFeature } from "@/runtime/host-features";
 import {
   type HostRuntimeConnectionStatus,
   useHostRuntimeClient,
@@ -91,7 +87,6 @@ import { type DraftConversation, useDraftTimeline } from "@/composer/draft/timel
 import { AgentTracks } from "@/panels/agent-tracks";
 import { OverlayDismissalScope } from "@/components/ui/overlay-dismissal";
 import { ParentAgentCallout, useParentAgentId } from "@/subagents/parent";
-import { useAgentViewStore } from "@/stores/agent-view-store";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import {
@@ -129,8 +124,6 @@ interface ChatAgentStateShape {
   options?: Agent["options"];
   controls?: Agent["controls"];
   lastError?: Agent["lastError"] | null;
-  artifacts?: Agent["artifacts"];
-  companionEntries?: Agent["companionEntries"];
 }
 
 interface ChatAgentSelectedState extends ChatAgentStateShape {
@@ -191,8 +184,6 @@ function selectChatAgentState(
     options: agent.options,
     controls: agent.controls,
     lastError: agent.lastError ?? null,
-    artifacts: agent.artifacts,
-    companionEntries: agent.companionEntries,
     archivedAt: agent.archivedAt ?? null,
     requiresAttention: agent.requiresAttention ?? false,
     attentionReason: agent.attentionReason ?? null,
@@ -1049,8 +1040,6 @@ function ChatAgentContent({
   );
 }
 
-const EMPTY_COMPANION_ENTRIES: readonly CompanionEntry[] = [];
-
 const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   serverId,
   workspaceId,
@@ -1115,28 +1104,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   // The dock lays out fullscreen for the same session the composer edits in.
   const composerEditingSession = useComposerEditingSession("chat");
   const isComposerFullscreen = useComposerFullscreen(composerEditingSession);
-  const selectedView = useAgentViewStore(
-    (state) => state.selectedViews[`${serverId}:${agentId}`] || "chat",
-  );
-  const setSelectedView = useAgentViewStore((state) => state.setSelectedView);
-  const isChatVisible = selectedView !== "artifacts";
-  const handleSetSelectedView = useCallback(
-    (view: "chat" | "artifacts") => {
-      setSelectedView(serverId, agentId, view);
-    },
-    [serverId, agentId, setSelectedView],
-  );
-  const handleReturnToChat = useCallback(() => {
-    handleSetSelectedView("chat");
-  }, [handleSetSelectedView]);
-  const handleReplyInChat = useCallback(() => {
-    handleReturnToChat();
-    streamViewRef.current?.scrollToBottom("jump-to-bottom");
-  }, [handleReturnToChat, streamViewRef]);
-  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
-  // Gate companion controls and mutations once. Supplied file snapshots remain
-  // readable on older hosts without reconstructing a companion stream.
-  const companionStreamSupported = useHostFeature(serverId, "companionStreamPortV1");
   const hasActiveComposer = !agentState.archivedAt && !isArchivingCurrentAgent;
   const parentAgentId = useParentAgentId(serverId, agentId);
   // With a composer the parent is a pill above it; without one, the box takes the composer's place.
@@ -1195,7 +1162,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       <AgentComposerSection
         agentId={agentId}
         serverId={serverId}
-        isPaneFocused={isPaneFocused && isChatVisible}
+        isPaneFocused={isPaneFocused}
         isArchivingCurrentAgent={isArchivingCurrentAgent}
         archivedAt={agentState.archivedAt}
         cwd={cwd}
@@ -1226,7 +1193,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     return false;
   }, [onAttentionInputFocus]);
   const streamContent = (
-    <RetainedPanel active={isChatVisible}>
+    <RetainedPanel active>
       <View
         style={animatedStaticStyles.content}
         onStartShouldSetResponderCapture={handleAttentionInteraction}
@@ -1266,19 +1233,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
 
   const dockContent = (
     <ChatAgentDockContent
-      selectedView={selectedView}
-      onSelectView={handleSetSelectedView}
-      isChatVisible={isChatVisible}
-      serverId={serverId}
-      agentId={agentId}
-      cwd={cwd}
-      companionEntries={agentState.companionEntries}
-      artifacts={agentState.artifacts}
-      companionStreamSupported={companionStreamSupported}
-      onOpenWorkspaceFile={onOpenWorkspaceFile}
-      onReturnToChat={handleReturnToChat}
-      onReplyInChat={handleReplyInChat}
-      toast={toastApi}
       showHistorySyncError={showHistorySyncError}
       isRetryingHistorySync={isRetryingHistorySync}
       retryTimelineSync={retryTimelineSync}
@@ -1289,7 +1243,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
 
   const dockOverlay = (
     <ChatAgentDockOverlay
-      isChatVisible={isChatVisible}
       showHistorySyncOverlay={showHistorySyncOverlay}
       timelineSync={timelineSync}
       toast={toast}
@@ -1298,13 +1251,10 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   );
 
   const composerSlot = (
-    <RetainedPanelActivity active={isChatVisible}>
+    <RetainedPanelActivity active>
       <View
         collapsable={false}
-        style={[
-          isComposerFullscreen && styles.fullscreenComposer,
-          !isChatVisible && styles.hiddenPane,
-        ]}
+        style={isComposerFullscreen ? styles.fullscreenComposer : undefined}
       >
         {composerSection}
       </View>
@@ -1353,61 +1303,20 @@ function computeInitialHistoryLoading(
 }
 
 const ChatAgentDockContent = memo(function ChatAgentDockContent({
-  selectedView,
-  onSelectView,
   children,
-  isChatVisible,
-  serverId,
-  agentId,
-  cwd,
-  companionEntries,
-  artifacts,
-  companionStreamSupported,
-  onOpenWorkspaceFile,
-  onReturnToChat,
-  onReplyInChat,
-  toast,
   showHistorySyncError,
   isRetryingHistorySync,
   retryTimelineSync,
 }: {
-  selectedView: React.ComponentProps<typeof AgentViewSwitcher>["value"];
-  onSelectView: React.ComponentProps<typeof AgentViewSwitcher>["onValueChange"];
   children: ReactNode;
-  isChatVisible: boolean;
-  serverId: string;
-  agentId: string;
-  cwd: string;
-  companionEntries?: readonly CompanionEntry[];
-  artifacts?: React.ComponentProps<typeof CompanionFeed>["artifacts"];
-  companionStreamSupported: boolean;
-  onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
-  onReturnToChat: () => void;
-  onReplyInChat: () => void;
-  toast: ToastApi;
   showHistorySyncError: boolean;
   isRetryingHistorySync: boolean;
   retryTimelineSync: () => void;
 }) {
   return (
     <View style={styles.contentContainer}>
-      <AgentViewSwitcher value={selectedView} onValueChange={onSelectView} />
       {children}
-      {isChatVisible ? null : (
-        <CompanionFeed
-          serverId={serverId}
-          agentId={agentId}
-          cwd={cwd}
-          entries={companionEntries ?? EMPTY_COMPANION_ENTRIES}
-          artifacts={artifacts ?? []}
-          isSupported={companionStreamSupported}
-          onOpenWorkspaceFile={onOpenWorkspaceFile}
-          onReturnToChat={onReturnToChat}
-          onReplyInChat={onReplyInChat}
-          toast={toast}
-        />
-      )}
-      {showHistorySyncError && isChatVisible ? (
+      {showHistorySyncError ? (
         <TimelineSyncErrorCallout isRetrying={isRetryingHistorySync} onRetry={retryTimelineSync} />
       ) : null}
     </View>
@@ -1415,13 +1324,11 @@ const ChatAgentDockContent = memo(function ChatAgentDockContent({
 });
 
 const ChatAgentDockOverlay = memo(function ChatAgentDockOverlay({
-  isChatVisible,
   showHistorySyncOverlay,
   timelineSync,
   toast,
   dismiss,
 }: {
-  isChatVisible: boolean;
   showHistorySyncOverlay: boolean;
   timelineSync: AgentScreenReadySyncState | null;
   toast: ToastState | null;
@@ -1429,7 +1336,7 @@ const ChatAgentDockOverlay = memo(function ChatAgentDockOverlay({
 }) {
   return (
     <>
-      {showHistorySyncOverlay && isChatVisible ? (
+      {showHistorySyncOverlay ? (
         <View style={styles.historySyncOverlay} testID="agent-history-overlay">
           <ThemedLoadingSpinner size="large" uniProps={foregroundMutedColorMapping} />
         </View>
@@ -1984,7 +1891,6 @@ const styles = StyleSheet.create((theme) => ({
     ...(isWeb ? { userSelect: "none" as const } : {}),
   },
   fullscreenComposer: { flex: 1, minHeight: 0 },
-  hiddenPane: { display: "none" },
   timelineSyncCalloutRail: {
     width: "100%",
     alignItems: "center",

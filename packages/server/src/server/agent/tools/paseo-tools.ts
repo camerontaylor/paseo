@@ -1362,27 +1362,20 @@ function createToolCatalog(
       },
       async (args, context) => {
         if (!callerAgentId) {
-          throw new PaseoToolInputError("speak is only available to agent-scoped tool sessions");
+          throw new Error("speak is only available to agent-scoped tool sessions");
         }
         const handler = resolveSpeakHandler?.(callerAgentId) ?? null;
         if (!handler) {
-          // Voice can detach while the agent works; the tool call settles
-          // instead of failing so the turn keeps its visible reply in chat.
-          return {
-            content: [{ type: "text", text: "Voice is not attached. Continue in the chat." }],
-            structuredContent: ensureValidJson({ ok: false }),
-          };
+          throw new Error(`No speak handler registered for your session '${callerAgentId}'`);
         }
-        const outcome = await handler({
+        await handler({
           text: args.text,
           callerAgentId,
           signal: context?.signal,
         });
         return {
-          content: outcome
-            ? [{ type: "text", text: `Audio ${outcome.reason}. Continue in the chat.` }]
-            : [],
-          structuredContent: ensureValidJson({ ok: !outcome }),
+          content: [],
+          structuredContent: ensureValidJson({ ok: true }),
         };
       },
     );

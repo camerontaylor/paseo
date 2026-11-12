@@ -458,15 +458,6 @@ export async function expectComposerFullscreenFitsVisibleViewport(
 export async function sendComposerWithButton(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Send message", exact: true }).click();
 }
-export async function queueComposerWithButton(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Queue message", exact: true }).click();
-}
-export async function configureComposerQueueSend(page: Page): Promise<void> {
-  await page.addInitScript(() =>
-    localStorage.setItem("@paseo:app-settings", JSON.stringify({ sendBehavior: "queue" })),
-  );
-}
-
 /** Drive the real tab chooser's commands even when fullscreen covers its pointer surface.
  * This exercises retained activity changes, not a claim that covered chrome is clickable.
  */

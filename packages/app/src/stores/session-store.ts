@@ -22,8 +22,8 @@ import {
   type MessageSubmissionRejectionOutcome,
 } from "@/composer/submission/model";
 import type { PendingPermission } from "@/types/shared";
+import type { ComposerAttachment } from "@/attachments/types";
 import type { AgentLifecycleStatus } from "@getpaseo/protocol/agent-lifecycle";
-import type { CompanionEntry } from "@getpaseo/protocol/companion-stream";
 import type {
   AgentPermissionRequest,
   AgentOptionControl,
@@ -33,7 +33,6 @@ import type {
   AgentMode,
   AgentCapabilityFlags,
   AgentUsage,
-  AgentArtifact,
   AgentPersistenceHandle,
 } from "@getpaseo/protocol/agent-types";
 import type {
@@ -42,20 +41,12 @@ import type {
   ServerCapabilities,
   WorkspaceDescriptorPayload,
   WorkspaceProjectDescriptorPayload,
-  AgentQueueSnapshot,
 } from "@getpaseo/protocol/messages";
 import {
   normalizeWorkspaceOpaqueId,
   normalizeWorkspacePath,
   resolveWorkspaceMapKeyByIdentity,
 } from "@/utils/workspace-identity";
-import type { QueuedComposerMessage } from "@/composer/actions";
-import {
-  appendPendingQueueRows,
-  shouldApplyAgentQueueSnapshot,
-  toQueuedComposerMessages,
-} from "@/composer/queue-sync";
-import { useQueueOutboxStore } from "@/stores/queue-outbox-store";
 import {
   createAgentLastActivityCoalescer,
   type AgentLastActivityCommitter,
@@ -119,8 +110,6 @@ export interface Agent {
   labels: Record<string, string>;
   metadata?: Record<string, JsonValue>;
   projectPlacement?: ProjectPlacementPayload | null;
-  artifacts?: AgentArtifact[];
-  companionEntries?: CompanionEntry[];
 }
 
 export interface WorkspaceDescriptor {
@@ -527,12 +516,10 @@ export interface SessionState {
   fileExplorer: Map<string, AgentFileExplorerState>;
 
   // Queued messages
-  queuedMessages: Map<string, QueuedComposerMessage[]>;
-  /**
-   * Last daemon queue revision applied per agent, so an out-of-order broadcast
-   * cannot erase a newer state. See docs/queue-mirroring.md.
-   */
-  queuedMessageRevisions: Map<string, number>;
+  queuedMessages: Map<
+    string,
+    Array<{ id: string; text: string; attachments: ComposerAttachment[] }>
+  >;
 }
 
 // Global store state
@@ -713,11 +700,11 @@ interface SessionStoreActions {
   setQueuedMessages: (
     serverId: string,
     value:
-      | Map<string, QueuedComposerMessage[]>
-      | ((prev: Map<string, QueuedComposerMessage[]>) => Map<string, QueuedComposerMessage[]>),
+      | Map<string, Array<{ id: string; text: string; attachments: ComposerAttachment[] }>>
+      | ((
+          prev: Map<string, Array<{ id: string; text: string; attachments: ComposerAttachment[] }>>,
+        ) => Map<string, Array<{ id: string; text: string; attachments: ComposerAttachment[] }>>),
   ) => void;
-  /** Applies a daemon queue snapshot, dropping it if it is older than what is shown. */
-  applyAgentQueueSnapshot: (serverId: string, snapshot: AgentQueueSnapshot) => void;
 
   // Hydration
   setHasHydratedAgents: (serverId: string, hydrated: boolean) => void;
@@ -772,7 +759,6 @@ function createInitialSessionState(
     pendingPermissions: new Map(),
     fileExplorer: new Map(),
     queuedMessages: new Map(),
-    queuedMessageRevisions: new Map(),
   };
 }
 
@@ -1938,40 +1924,6 @@ export const useSessionStore = create<SessionStore>()(
             sessions: {
               ...prev.sessions,
               [serverId]: { ...session, queuedMessages: nextValue },
-            },
-          };
-        });
-      },
-
-      applyAgentQueueSnapshot: (serverId, snapshot) => {
-        set((prev) => {
-          const session = prev.sessions[serverId];
-          if (!session) {
-            return prev;
-          }
-          if (
-            !shouldApplyAgentQueueSnapshot({
-              incomingRevision: snapshot.revision,
-              appliedRevision: session.queuedMessageRevisions.get(snapshot.agentId),
-            })
-          ) {
-            return prev;
-          }
-          const queuedMessages = new Map(session.queuedMessages);
-          queuedMessages.set(
-            snapshot.agentId,
-            appendPendingQueueRows(
-              toQueuedComposerMessages(snapshot),
-              useQueueOutboxStore.getState().entriesForAgent(serverId, snapshot.agentId),
-            ),
-          );
-          const queuedMessageRevisions = new Map(session.queuedMessageRevisions);
-          queuedMessageRevisions.set(snapshot.agentId, snapshot.revision);
-          return {
-            ...prev,
-            sessions: {
-              ...prev.sessions,
-              [serverId]: { ...session, queuedMessages, queuedMessageRevisions },
             },
           };
         });

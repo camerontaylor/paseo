@@ -42,6 +42,9 @@ export function resolveComposerSurfacePresentation(
 interface StopRealtimeVoiceContext {
   voice: { stopVoice: () => Promise<unknown> } | null | undefined;
   isRealtimeVoiceForCurrentAgent: boolean;
+  isAgentRunning: boolean;
+  client: { cancelAgent: (agentId: string) => Promise<unknown> } | null;
+  voiceAgentId: string | undefined;
 }
 
 interface SendActionContext {
@@ -220,9 +223,13 @@ export function runMessageInputKeyboardAction(
 export async function stopRealtimeVoice(ctx: StopRealtimeVoiceContext): Promise<void> {
   if (!ctx.voice || !ctx.isRealtimeVoiceForCurrentAgent) return;
 
-  // Stop voice detaches the microphone and playback only. The agent, its pending
-  // permissions, and its children keep running; interruption is the overlay's
-  // explicit Interrupt agent control.
+  if (ctx.isAgentRunning) {
+    if (!ctx.client || !ctx.voiceAgentId) {
+      throw new Error("Cannot stop the running voice agent while the host is unavailable");
+    }
+    await ctx.client.cancelAgent(ctx.voiceAgentId);
+  }
+
   await ctx.voice.stopVoice();
 }
 
