@@ -461,6 +461,8 @@ export interface PaseoAgentHandle {
   commands(options?: PaseoAgentCommandsOptions): Promise<PaseoAgentCommandsResult>;
   archive(): Promise<{ archivedAt: string }>;
   detach(): Promise<void>;
+  /** Leave the provider's shared session; the provider keeps work started on it. */
+  detachProviderSession(): Promise<void>;
   subscribe(handler: (update: PaseoAgentUpdate) => void): () => void;
 }
 
@@ -1189,6 +1191,9 @@ function createAgentHandleFactory(
       },
       detach: async () => {
         await daemonClient.detachAgent(id);
+      },
+      detachProviderSession: async () => {
+        await daemonClient.detachProviderSession(id);
       },
       subscribe: (handler) =>
         listen((update) => {

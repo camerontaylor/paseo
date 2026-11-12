@@ -1,0 +1,6 @@
+{
+  "id": "jcode-provider",
+  "requirements": {
+    "paseo": ">=0.15.0"
+  }
+}

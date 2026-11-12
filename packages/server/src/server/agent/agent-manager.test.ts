@@ -1,20 +1,28 @@
+import { afterEach, describe, expect, beforeEach, test, vi, onTestFinished } from "vitest";
 import { createIdleRuntimeCleanup } from "./idle-runtime-cleanup/index.js";
 import {
   prepareAgentMessage,
   formatAgentMessage,
   formatSystemNotificationPrompt,
 } from "./agent-messages/index.js";
-import { expect, test, vi, onTestFinished } from "vitest";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import type { PromptResponse } from "@agentclientprotocol/sdk";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
+import { asInternals } from "../test-utils/class-mocks.js";
+import { ACPAgentSession, type ACPAdmissionState } from "./providers/acp-agent.js";
+import { ClaudeAgentClient } from "./providers/claude/agent.js";
+import type { ClaudeQueryInput } from "./providers/claude/query.js";
+import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   AgentManager,
   AgentManagerShuttingDownError,
+  AgentRunCancellationError,
+  PeerTurnActiveError,
   commandMayHaveChangedExternalState,
   type AgentManagerEvent,
   type ManagedAgent,
@@ -55,7 +63,10 @@ import type {
   AgentTimelineItem,
   ImportProviderSessionInput,
   ImportProviderSessionContext,
+  ProviderCatalog,
   ResolveAgentDefaultModeInput,
+  SideAnswer,
+  SideConversationExchange,
 } from "./agent-sdk-types.js";
 import type { PaseoToolCatalog } from "./tools/types.js";
 import type { ProviderDefinition } from "./provider-registry.js";
@@ -386,6 +397,79 @@ class HeldReloadCloseClient extends TestAgentClient {
   }
 }
 
+class DetachLifecycleClient extends TestAgentClient {
+  private readonly closeStarted = deferred<void>();
+  private readonly closeAllowed = deferred<void>();
+  private readonly detachStarted = deferred<void>();
+  private readonly detachAllowed = deferred<void>();
+  originalDetachCalled = false;
+  originalClosed = false;
+  replacementDetachCalled = false;
+  replacementClosed = false;
+  resumeCalls = 0;
+
+  constructor(
+    private readonly options: {
+      holdClose?: boolean;
+      holdDetach?: boolean;
+      detachFailure?: Error;
+      replacementSupportsDetach?: boolean;
+    } = {},
+  ) {
+    super();
+  }
+
+  override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+    const session = await super.createSession(config);
+    session.close = async () => {
+      this.originalClosed = true;
+      this.closeStarted.resolve();
+      if (this.options.holdClose) await this.closeAllowed.promise;
+    };
+    session.detachSharedSession = async () => {
+      this.originalDetachCalled = true;
+      this.detachStarted.resolve();
+      if (this.options.holdDetach) await this.detachAllowed.promise;
+      if (this.options.detachFailure) throw this.options.detachFailure;
+    };
+    return session;
+  }
+
+  override async resumeSession(
+    handle: AgentPersistenceHandle,
+    config?: Partial<AgentSessionConfig>,
+    launchContext?: AgentLaunchContext,
+  ): Promise<AgentSession> {
+    const session = await super.resumeSession(handle, config, launchContext);
+    this.resumeCalls += 1;
+    session.close = async () => {
+      this.replacementClosed = true;
+    };
+    if (this.options.replacementSupportsDetach) {
+      session.detachSharedSession = async () => {
+        this.replacementDetachCalled = true;
+      };
+    }
+    return session;
+  }
+
+  waitForCloseToStart(): Promise<void> {
+    return this.closeStarted.promise;
+  }
+
+  finishClosing(): void {
+    this.closeAllowed.resolve();
+  }
+
+  waitForDetachToStart(): Promise<void> {
+    return this.detachStarted.promise;
+  }
+
+  finishDetaching(): void {
+    this.detachAllowed.resolve();
+  }
+}
+
 class NativeArchiveRecordingClient extends TestAgentClient {
   readonly archivedHandles: AgentPersistenceHandle[] = [];
   readonly unarchivedHandles: AgentPersistenceHandle[] = [];
@@ -535,6 +619,52 @@ class TestAgentSession implements AgentSession {
   }
 
   async close(): Promise<void> {}
+}
+
+class SideQuestionTestSession extends TestAgentSession {
+  private pending: Deferred<SideAnswer> | null = null;
+  readonly signals: Array<AbortSignal | undefined> = [];
+
+  async askSideQuestion(
+    question: string,
+    history: readonly SideConversationExchange[],
+    options?: { signal?: AbortSignal },
+  ): Promise<SideAnswer> {
+    this.signals.push(options?.signal);
+    if (question === "remember") {
+      return { status: "answered", content: "orchid-731", synthetic: false, threading: "threaded" };
+    }
+    if (question === "recall") {
+      return {
+        status: "answered",
+        content: history[0]?.answer ?? "missing",
+        synthetic: false,
+        threading: "threaded",
+      };
+    }
+    this.pending = deferred();
+    return await this.pending.promise;
+  }
+
+  resolvePending(answer: SideAnswer): void {
+    this.pending?.resolve(answer);
+  }
+
+  rejectPending(error: Error): void {
+    this.pending?.reject(error);
+  }
+
+  override async close(): Promise<void> {
+    this.pending?.reject(new Error("Side question session closed"));
+  }
+}
+
+class SideQuestionTestClient extends TestAgentClient {
+  readonly session = new SideQuestionTestSession({ provider: "codex", cwd: process.cwd() });
+
+  override async createSession(): Promise<AgentSession> {
+    return this.session;
+  }
 }
 
 class ResumeTrackingTestAgentClient extends TestAgentClient {
@@ -2202,6 +2332,117 @@ test("reload does not create a replacement when the closed snapshot cannot be pe
   }
 });
 
+test("detach queued behind a reload targets the current session, not the stale one", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-detach-reload-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new DetachLifecycleClient({ holdClose: true });
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+  });
+  let agentId: string | undefined;
+
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    const reload = manager.reloadAgentSession(agent.id);
+    await client.waitForCloseToStart();
+    const detach = manager.detachSharedSession(agent.id);
+    client.finishClosing();
+    await reload;
+
+    await expect(detach).rejects.toThrow("does not support shared session detach");
+    expect({
+      originalDetachCalled: client.originalDetachCalled,
+      replacementDetachCalled: client.replacementDetachCalled,
+      replacementClosed: client.replacementClosed,
+      resumeCalls: client.resumeCalls,
+    }).toEqual({
+      originalDetachCalled: false,
+      replacementDetachCalled: false,
+      replacementClosed: false,
+      resumeCalls: 1,
+    });
+    expect(manager.getAgent(agent.id)).not.toBeNull();
+  } finally {
+    client.finishClosing();
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    await manager.flush().catch(() => undefined);
+    await storage.flush().catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("detach closes its own runtime before a following reload can replace it", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-detach-reload-order-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new DetachLifecycleClient({ holdDetach: true, replacementSupportsDetach: true });
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+  });
+
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    const detach = manager.detachSharedSession(agent.id);
+    await client.waitForDetachToStart();
+    const reload = manager
+      .reloadAgentSession(agent.id)
+      .then((reloaded) => ({ reloaded }))
+      .catch((error: unknown) => ({ error }));
+    client.finishDetaching();
+
+    await detach;
+    const following = await reload;
+    expect(following).toHaveProperty("error");
+    expect(client.originalDetachCalled).toBe(true);
+    expect(client.replacementDetachCalled).toBe(false);
+    expect(client.replacementClosed).toBe(false);
+    expect(client.resumeCalls).toBe(0);
+    expect(manager.getAgent(agent.id)).toBeNull();
+  } finally {
+    client.finishDetaching();
+    await manager.flush().catch(() => undefined);
+    await storage.flush().catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a failed shared detach leaves the current runtime open", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-detach-failure-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new DetachLifecycleClient({ detachFailure: new Error("detach failed") });
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+  });
+  let agentId: string | undefined;
+
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+
+    await expect(manager.detachSharedSession(agent.id)).rejects.toThrow("detach failed");
+    expect(client.originalDetachCalled).toBe(true);
+    expect(client.originalClosed).toBe(false);
+    expect(manager.getAgent(agent.id)).not.toBeNull();
+  } finally {
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    await manager.flush().catch(() => undefined);
+    await storage.flush().catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("normalizeConfig injects the provider default model while leaving mode omitted", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
   const storagePath = join(workdir, "agents");
@@ -2679,6 +2920,41 @@ test("createAgent injects daemon append system prompt at runtime only", async ()
   expect(snapshot.config).not.toHaveProperty("daemonAppendSystemPrompt");
   expect(record?.config?.systemPrompt).toBe("Agent instructions.");
   expect(record?.config).not.toHaveProperty("daemonAppendSystemPrompt");
+});
+
+test("provider policy exclusions preserve explicit prompts across create, reload and cold resume", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-policy-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new TestAgentClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    appendSystemPrompt: "Daemon policy",
+    appendSystemPromptExcludedProviders: ["codex"],
+  });
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: workdir, systemPrompt: "Explicit policy" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    expect(client.createdConfigs[0]?.daemonAppendSystemPrompt).toBeUndefined();
+    expect(client.createdConfigs[0]?.systemPrompt).toBe("Explicit policy");
+    await manager.reloadAgentSession(agent.id);
+    expect(client.resumeOverrides.at(-1)?.daemonAppendSystemPrompt).toBeUndefined();
+    expect(client.resumeOverrides.at(-1)?.systemPrompt).toBe("Explicit policy");
+    manager.setAppendSystemPromptExcludedProviders([]);
+    await manager.reloadAgentSession(agent.id, undefined, { rehydrateFromDisk: true });
+    expect(client.resumeOverrides.at(-1)?.daemonAppendSystemPrompt).toBe("Daemon policy");
+    manager.setAppendSystemPromptExcludedProviders(["zcode"]);
+    await manager.reloadAgentSession(agent.id);
+    expect(client.resumeOverrides.at(-1)?.daemonAppendSystemPrompt).toBe("Daemon policy");
+    await manager.closeAgent(agent.id);
+  } finally {
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test("daemon append system prompt is injected into Pi configs", async () => {
@@ -4922,6 +5198,188 @@ test("importProviderSession preserves the native model instead of applying the n
   expect(client.resumeOverrides.at(-1)?.model).toBe(nativeModel);
   await manager.getAgent(imported.id)?.session?.close();
 });
+// Answers every prompt with one completed turn, so a test can read the options of each SDK query.
+class CompletingClaudeQuery {
+  private readonly output: AsyncGenerator<SDKMessage>;
+
+  constructor(input: ClaudeQueryInput) {
+    this.output = this.events(input);
+  }
+
+  private async *events(input: ClaudeQueryInput): AsyncGenerator<SDKMessage> {
+    if (typeof input.prompt === "string") throw new Error("Expected streaming input");
+    for await (const _prompt of input.prompt) {
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: "claude-saved-selection",
+        model: input.options.model ?? "claude-sonnet-5-5",
+        permissionMode: "default",
+      } as SDKMessage;
+      yield { type: "assistant", message: { content: "DONE" } } as SDKMessage;
+      yield {
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 },
+        total_cost_usd: 0,
+      } as SDKMessage;
+    }
+  }
+
+  next() {
+    return this.output.next();
+  }
+  return() {
+    return this.output.return();
+  }
+  close() {}
+  async interrupt() {}
+  async setPermissionMode() {}
+  async setModel() {}
+  async supportedCommands() {
+    return [];
+  }
+  [Symbol.asyncIterator]() {
+    return this;
+  }
+}
+
+test("Claude reloads and storage loads keep sending the saved model and thinking level", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-claude-saved-selection-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const queries: Array<Pick<ClaudeQueryInput["options"], "model" | "effort" | "thinking">> = [];
+  const client = new ClaudeAgentClient({
+    logger,
+    resolveBinary: async () => "/test/claude",
+    queryFactory: (input) => {
+      const { model, effort, thinking } = input.options;
+      queries.push({ model, effort, thinking });
+      return new CompletingClaudeQuery(input) as unknown as Query;
+    },
+  });
+  const manager = new AgentManager({ clients: { claude: client }, registry: storage, logger });
+  const lastQuery = () => queries.at(-1);
+  try {
+    const created = await manager.createAgent(
+      { provider: "claude", cwd: workdir, model: "claude-haiku-5-5", thinkingOptionId: "low" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    await manager.runAgent(created.id, "first");
+    expect(lastQuery()).toMatchObject({ model: "claude-haiku-5-5", effort: "low" });
+
+    // Voice mode reloads with only a system prompt.
+    await manager.reloadAgentSession(created.id, { systemPrompt: "voice" });
+    await manager.runAgent(created.id, "after reload");
+    expect(lastQuery()).toMatchObject({ model: "claude-haiku-5-5", effort: "low" });
+
+    await manager.flush();
+    await manager.closeAgent(created.id);
+    const loaded = await ensureAgentLoaded(created.id, {
+      agentManager: manager,
+      agentStorage: storage,
+      logger,
+    });
+    await manager.runAgent(loaded.id, "after storage load");
+    expect(lastQuery()).toMatchObject({ model: "claude-haiku-5-5", effort: "low" });
+    expect(loaded.config).toMatchObject({ model: "claude-haiku-5-5", thinkingOptionId: "low" });
+  } finally {
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("resume keeps applying the saved permission mode when the native session reports another", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-resume-mode-"));
+  class BuildModeSession extends TestAgentSession {
+    override async getRuntimeInfo() {
+      return { ...(await super.getRuntimeInfo()), modeId: "build" };
+    }
+  }
+  class BuildModeClient extends TestAgentClient {
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      this.resumeOverrides.push(config);
+      return new BuildModeSession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  }
+  const client = new BuildModeClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  try {
+    const resumed = await manager.resumeAgentFromPersistence(
+      {
+        provider: "codex",
+        sessionId: "resume-mode-session",
+        metadata: { provider: "codex", cwd: workdir, modeId: "plan" },
+      },
+      { cwd: workdir },
+    );
+    expect(client.resumeOverrides.at(-1)?.modeId).toBe("plan");
+    expect(resumed.config.modeId).toBe("plan");
+  } finally {
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test.each(["native-model", null])(
+  "import uses reported model %s before resolving a default",
+  async (model) => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-import-model-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    class NativeSession extends TestAgentSession {
+      override async getRuntimeInfo() {
+        return {
+          ...(await super.getRuntimeInfo()),
+          model,
+          thinkingOptionId: "high",
+          modeId: "build",
+        };
+      }
+    }
+    class ImportClient extends TestAgentClient {
+      async importSession(
+        _input: ImportProviderSessionInput,
+        context: ImportProviderSessionContext,
+      ) {
+        expect(context.config.model).toBeUndefined();
+        expect(context.storedConfig.model).toBeUndefined();
+        return {
+          session: new NativeSession(context.config),
+          config: context.storedConfig,
+          persistence: { provider: "codex", sessionId: "native-session" },
+          timeline: [],
+        };
+      }
+    }
+    const manager = new AgentManager({
+      clients: { codex: new ImportClient() },
+      registry: storage,
+      logger,
+    });
+    try {
+      const imported = await manager.importProviderSession({
+        provider: "codex",
+        providerHandleId: "native-session",
+        cwd: workdir,
+        workspaceId: "workspace",
+      });
+      expect(imported.config.model).toBe(model ?? "gpt-5.4");
+      expect(imported.config.thinkingOptionId).toBe("high");
+      expect(imported.config.modeId).toBe("build");
+      await manager.flush();
+      expect((await storage.get(imported.id))?.config?.model).toBe(model ?? "gpt-5.4");
+      expect((await storage.get(imported.id))?.config?.modeId).toBe("build");
+    } finally {
+      await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+      await storage.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("importProviderSession imports the selected session without listing and publishes ready state", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-import-session-"));
@@ -5145,6 +5603,46 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
       PASEO_AGENT_CWD: workdir,
     },
   });
+});
+
+test("reloadAgentSession without persistence still resolves the default model for its new session", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-reload-create-default-"));
+  class UnpersistedSession extends TestAgentSession {
+    override describePersistence() {
+      return null;
+    }
+    override async getRuntimeInfo() {
+      return { ...(await super.getRuntimeInfo()), sessionId: null, model: null };
+    }
+  }
+  class FirstCatalogFailsClient extends TestAgentClient {
+    private catalogCalls = 0;
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      this.createdConfigs.push(config);
+      return new UnpersistedSession(config);
+    }
+    override async fetchCatalog() {
+      this.catalogCalls += 1;
+      if (this.catalogCalls === 1) throw new Error("catalog unavailable");
+      return super.fetchCatalog();
+    }
+  }
+  const client = new FirstCatalogFailsClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  try {
+    const snapshot = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    expect(client.createdConfigs[0]?.model).toBeUndefined();
+
+    await manager.reloadAgentSession(snapshot.id);
+
+    expect(client.createdConfigs).toHaveLength(2);
+    expect(client.createdConfigs[1]?.model).toBe("gpt-5.4");
+  } finally {
+    await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test("reloadAgentSession preserves timeline and does not force history replay", async () => {
@@ -5934,6 +6432,7 @@ test("session config drift events update state through the stream channel", asyn
   expect(agent?.currentModeId).toBe("build");
   expect(agent?.config.modeId).toBe("build");
   expect(agent?.config.thinkingOptionId).toBe("high");
+  expect(agent?.config.model).toBe("gpt-5.4");
   expect(agent?.availableModes).toEqual([
     { id: "plan", label: "Plan" },
     { id: "build", label: "Build" },
@@ -5948,6 +6447,8 @@ test("session config drift events update state through the stream channel", asyn
   const persisted = await storage.get(snapshot.id);
   expect(persisted?.lastModeId).toBe("build");
   expect(persisted?.config?.modeId).toBe("build");
+  expect(persisted?.config?.model).toBe("gpt-5.4");
+  expect(persisted?.config?.thinkingOptionId).toBe("high");
 });
 
 test("setLabels merges and persists labels", async () => {
@@ -8059,6 +8560,64 @@ test("cancelAgentRun waits for an acknowledged autonomous interrupt to settle", 
 
   await expect(cancelPromise).resolves.toEqual({ status: "settled" });
   expect(manager.getAgent(snapshot.id)?.lifecycle).toBe("idle");
+});
+
+test("cancelAgentRun refuses a rejected shared-turn interrupt without force-settling the peer run", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-shared-stop-refused-"));
+  class RefusingSharedSession extends TestAgentSession {
+    override readonly capabilities = { ...TEST_CAPABILITIES, supportsSharedTurns: true };
+    override readonly interrupt = vi.fn(async () => {
+      throw new Error("This attachment cannot stop another client's turn");
+    });
+  }
+  class RefusingSharedClient extends TestAgentClient {
+    readonly session = new RefusingSharedSession({ provider: "codex", cwd: workdir });
+    override async createSession(): Promise<AgentSession> {
+      return this.session;
+    }
+  }
+  const client = new RefusingSharedClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: new AgentStorage(join(workdir, "agents"), logger),
+    logger,
+    rescueTimeouts: { interruptSessionMs: 10 },
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    const running = waitForAgentLifecycle(manager, agent.id, "running");
+    client.session.pushEvent({
+      type: "turn_started",
+      provider: "codex",
+      turnId: "peer-stop-refused",
+    });
+    await running;
+    const cancellationEvents: AgentStreamEvent[] = [];
+    const unsubscribe = manager.subscribe(
+      (event) => {
+        if (event.type === "agent_stream") cancellationEvents.push(event.event);
+      },
+      { agentId: agent.id, replayState: false },
+    );
+    try {
+      await expect(manager.cancelAgentRun(agent.id)).resolves.toEqual({ status: "refused" });
+      expect(client.session.interrupt).toHaveBeenCalledTimes(1);
+      expect(manager.getAgent(agent.id)).toMatchObject({
+        lifecycle: "running",
+        activeForegroundTurnId: null,
+        activeTurnId: "peer-stop-refused",
+      });
+      expect(manager.hasInFlightRun(agent.id)).toBe(true);
+      expect(manager.isPeerRun(agent.id)).toBe(true);
+      expect(cancellationEvents).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test("failed replacement cancellation preserves an autonomous running state", async () => {
@@ -11125,6 +11684,44 @@ test("closeAgent persists one final closed snapshot", async () => {
   }
 });
 
+test("idle runtime cleanup leaves pending side conversations running", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-idle-side-question-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const answer = deferred<SideAnswer>();
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      const session = await super.createSession(config);
+      session.canStopRuntime = async () => true;
+      session.askSideQuestion = () => answer.promise;
+      return session;
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  const collect = runtimeCleanup(manager);
+  let agentId: string | undefined;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    const now = new Date(Date.now() + 61 * 60_000);
+    const pending = manager.askSideQuestion(agent.id, "thread", "Keep answering");
+    expect(await collect({ now })).toEqual({ collected: [], failures: [] });
+    expect(await collect({ now: new Date(now.getTime() + 61 * 60_000) })).toEqual({
+      collected: [],
+      failures: [],
+    });
+    expect(manager.getAgent(agent.id)?.id).toBe(agent.id);
+    answer.resolve({ status: "answered", content: "Still here", threading: "single_shot" });
+    await expect(pending).resolves.toMatchObject({ status: "answered", content: "Still here" });
+  } finally {
+    answer.resolve({ status: "unavailable" });
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("idle runtime cleanup honors a provider veto and resumes the saved conversation", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-idle-cleanup-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);
@@ -12205,11 +12802,19 @@ test("tryRunOutOfBand gives providers the command another agent sent, not its en
   }
 });
 
-test("replaceAgentRun succeeds when foreground turn terminal event is never delivered", async () => {
+// Plan item 8 (manager integration list): this fixture survives the stop
+// boundary only because its fake provider is already terminal/fenced at the
+// adapter the moment interrupt() returns. Nothing adapter-side is still owed
+// for the stopped turn, so the manager's 2s force settlement cannot race a
+// pending replacement start. The ACP boundary variant of this scenario — where
+// the provider owes terminal proof and a settled cancel write — is covered by
+// the "AgentManager ACP cancellation boundary" block below.
+test("replaceAgentRun force-settles a provider that is already fenced when interrupt returns and never emits a terminal event", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stale-fg-"));
   const storagePath = join(workdir, "agents");
   const storage = new AgentStorage(storagePath, logger);
   const allowSecondRunToEnd = deferred<void>();
+  const fenceOrder: string[] = [];
 
   // Session where the first foreground turn never emits a terminal event
   // (simulates the claude-agent pendingInterruptAbort suppression bug),
@@ -12219,6 +12824,7 @@ test("replaceAgentRun succeeds when foreground turn terminal event is never deli
       this.interrupted = false;
       const turnId = `turn-${++this.turnIdCounter}`;
       const turnNum = this.turnIdCounter;
+      fenceOrder.push(`startTurn:${turnNum}`);
 
       setTimeout(async () => {
         this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
@@ -12236,7 +12842,10 @@ test("replaceAgentRun succeeds when foreground turn terminal event is never deli
 
     override async interrupt(): Promise<void> {
       this.interrupted = true;
-      // No events produced — the terminal event was suppressed
+      // No events produced — the terminal event was suppressed. The fence is
+      // already in place when this returns: no adapter-side stop work is left
+      // for the manager's force settlement to race.
+      fenceOrder.push("interrupt-returned-fenced");
     }
   }
 
@@ -12291,6 +12900,10 @@ test("replaceAgentRun succeeds when foreground turn terminal event is never deli
   expect(collectedEvents.some((e) => e.type === "turn_completed")).toBe(true);
   expect(manager.getAgent(snapshot.id)?.lifecycle).toBe("idle");
   expect(manager.getAgent(snapshot.id)?.activeForegroundTurnId).toBeNull();
+
+  // The replacement turn started only after interrupt() had already returned
+  // with the fence in place — the precondition this fixture depends on.
+  expect(fenceOrder).toEqual(["startTurn:1", "interrupt-returned-fenced", "startTurn:2"]);
 }, 10_000);
 
 class RecordingPersistedAgentsClient implements AgentClient {
@@ -12812,6 +13425,981 @@ test("concurrent native restores run once before resuming the same agent", async
     await storage.flush();
     rmSync(workdir, { recursive: true, force: true });
   }
+});
+
+test("side-question follow-ups receive answered history without polluting the main timeline", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-threading-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await expect(manager.askSideQuestion(agent.id, "thread", "remember")).resolves.toMatchObject({
+      status: "answered",
+      content: "orchid-731",
+      threading: "threaded",
+    });
+    await expect(manager.askSideQuestion(agent.id, "thread", "recall")).resolves.toMatchObject({
+      status: "answered",
+      content: "orchid-731",
+      threading: "threaded",
+    });
+    expect(manager.getTimeline(agent.id)).toEqual([]);
+    expect(manager.getSideConversation(agent.id, "thread")?.items).toEqual([
+      { type: "user_message", text: "remember" },
+      { type: "assistant_message", text: "orchid-731" },
+      { type: "user_message", text: "recall" },
+      { type: "assistant_message", text: "orchid-731" },
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("closing an agent fails its pending side question without hanging or leaking a rejection", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-close-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const answer = manager.askSideQuestion(agent.id, "thread", "pending", 1_000);
+    await manager.closeAgent(agent.id);
+    await expect(answer).resolves.toMatchObject({
+      status: "failed",
+      error: "Side question session closed",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a side question survives its record being wiped mid-flight", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-wiped-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const answered = manager.askSideQuestion(agent.id, "thread", "pending", 1_000);
+    await manager.deleteAgentState(agent.id);
+    client.session.resolvePending({
+      status: "answered",
+      content: "late",
+      synthetic: false,
+      threading: "threaded",
+    });
+    await expect(answered).resolves.toMatchObject({ status: "answered", content: "late" });
+    expect(manager.getSideConversation(agent.id, "thread")).toBeNull();
+
+    const failed = manager.askSideQuestion(agent.id, "thread", "pending", 1_000);
+    await manager.deleteAgentState(agent.id);
+    client.session.rejectPending(new Error("provider exploded"));
+    await expect(failed).resolves.toEqual({
+      status: "failed",
+      error: "provider exploded",
+      threading: "single_shot",
+    });
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("side questions are refused for internal agents before any provider work", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-internal-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, internal: true },
+    undefined,
+    { workspaceId: undefined },
+  );
+  try {
+    await expect(manager.askSideQuestion(agent.id, "thread", "remember")).rejects.toThrow(
+      `Unknown agent '${agent.id}'`,
+    );
+    expect(client.session.signals).toEqual([]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("side-conversation changes broadcast to every subscriber and report removals", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-broadcast-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const first: AgentManagerEvent[] = [];
+  const second: AgentManagerEvent[] = [];
+  manager.subscribe((event) => first.push(event), { replayState: false });
+  manager.subscribe((event) => second.push(event), { replayState: false });
+  try {
+    await manager.askSideQuestion(agent.id, "thread", "remember");
+
+    const sideEvents = (events: AgentManagerEvent[]) =>
+      events.filter((event) => event.type === "side_conversation").map((event) => event.event);
+    const expectedAsk = [
+      {
+        type: "update",
+        record: expect.objectContaining({
+          threadId: "thread",
+          pendingQuestion: "remember",
+          items: [{ type: "user_message", text: "remember" }],
+        }),
+      },
+      {
+        type: "update",
+        record: expect.objectContaining({
+          threadId: "thread",
+          pendingQuestion: null,
+          items: [
+            { type: "user_message", text: "remember" },
+            { type: "assistant_message", text: "orchid-731" },
+          ],
+        }),
+      },
+    ];
+    expect(sideEvents(first)).toEqual(expectedAsk);
+    expect(sideEvents(second)).toEqual(expectedAsk);
+
+    await manager.deleteAgentState(agent.id);
+    expect(sideEvents(first).at(-1)).toEqual({
+      type: "remove",
+      parentAgentId: agent.id,
+      threadId: "thread",
+    });
+    expect(sideEvents(second).at(-1)).toEqual({
+      type: "remove",
+      parentAgentId: agent.id,
+      threadId: "thread",
+    });
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("listSideConversations returns every thread for a public parent", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-list-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await manager.askSideQuestion(agent.id, "one", "remember");
+    await manager.askSideQuestion(agent.id, "two", "remember");
+    expect(manager.listSideConversations(agent.id).map((record) => record.threadId)).toEqual([
+      "one",
+      "two",
+    ]);
+    await manager.deleteAgentState(agent.id);
+    expect(manager.listSideConversations(agent.id)).toEqual([]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a provider with no side-question seam still records the thread and answers unavailable", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-no-seam-"));
+  // TestAgentClient's session has no askSideQuestion, which is the shape Codex, Copilot, Pi and
+  // every ACP provider really have. Claude and OpenCode are the only two that implement it.
+  const client = new TestAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const events: AgentManagerEvent[] = [];
+  manager.subscribe((event) => events.push(event), { replayState: false });
+  try {
+    await expect(manager.askSideQuestion(agent.id, "thread", "what changed?")).resolves.toEqual({
+      status: "unavailable",
+      reason: "unsupported_provider",
+    });
+
+    // The question is kept even though nothing could answer it. The app's track row is named by
+    // the first question, so dropping the record here would leave the thread invisible.
+    expect(manager.getSideConversation(agent.id, "thread")).toMatchObject({
+      threadId: "thread",
+      items: [{ type: "user_message", text: "what changed?" }],
+      exchanges: [],
+      pendingQuestion: null,
+      lastAnswer: { status: "unavailable", reason: "unsupported_provider" },
+    });
+    expect(manager.listSideConversations(agent.id).map((record) => record.threadId)).toEqual([
+      "thread",
+    ]);
+    expect(manager.getTimeline(agent.id)).toEqual([]);
+    // Both halves of the exchange are broadcast, so a client that was already subscribed sees the
+    // thread appear and settle without re-listing.
+    expect(
+      events.filter((event) => event.type === "side_conversation").map((event) => event.event),
+    ).toEqual([
+      {
+        type: "update",
+        record: expect.objectContaining({ pendingQuestion: "what changed?", lastAnswer: null }),
+      },
+      {
+        type: "update",
+        record: expect.objectContaining({
+          pendingQuestion: null,
+          lastAnswer: { status: "unavailable", reason: "unsupported_provider" },
+        }),
+      },
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+// `unavailable` is also what a torn-down Claude or OpenCode session returns, so the status alone
+// never says which happened (fork/side-conversations-follow-ups.md, follow-up 5). What separates
+// them here is that the agent is still live and its thread survives: a torn-down session has
+// neither. Assert those, not the status, when you need to tell the two apart.
+test("an unavailable answer from a seam-less provider leaves the agent and its thread live", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-no-seam-live-"));
+  const client = new TestAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await manager.askSideQuestion(agent.id, "thread", "first?");
+    await expect(manager.askSideQuestion(agent.id, "thread", "second?")).resolves.toEqual({
+      status: "unavailable",
+      reason: "unsupported_provider",
+    });
+
+    // A torn-down session has neither of these: the manager drops the agent and wipes its threads.
+    expect(manager.getAgent(agent.id)?.session).toBeDefined();
+    expect(manager.getSideConversation(agent.id, "thread")?.items).toEqual([
+      { type: "user_message", text: "first?" },
+      { type: "user_message", text: "second?" },
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a timed-out side question aborts the provider instead of leaving it running", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-side-question-abort-"));
+  const client = new SideQuestionTestClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await expect(manager.askSideQuestion(agent.id, "thread", "pending", 0)).resolves.toEqual({
+      status: "timed_out",
+      threading: "single_shot",
+    });
+    expect(client.session.signals).toHaveLength(1);
+    expect(client.session.signals[0]?.aborted).toBe(true);
+  } finally {
+    client.session.resolvePending({ status: "unavailable" });
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Manager integration coverage for the ACP cancellation boundary.
+//
+// Each test drives the real ACPAgentSession through AgentManager, so the fence
+// under test is the generic ACP stop boundary itself rather than a fake that
+// re-implements it. The session's ACP connection is a stub whose prompt and
+// cancel writes settle on test-controlled deferred promises. Fake timers move
+// the manager's 2s settlement window and the adapter's 10s admission deadline;
+// nothing sleeps.
+//
+// Readiness and admission invariants are documented in docs/providers.md.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface CapturedLog {
+  source: "manager" | "acp";
+  msg: string;
+  data: Record<string, unknown> | undefined;
+}
+
+function createCapturingLogger(
+  source: CapturedLog["source"],
+  sink: CapturedLog[],
+): ReturnType<typeof createTestLogger> {
+  const capturing = createTestLogger();
+  for (const level of ["info", "warn", "error"] as const) {
+    vi.spyOn(capturing, level).mockImplementation((data: unknown, msg?: string) => {
+      sink.push({
+        source,
+        msg: msg ?? "",
+        data:
+          typeof data === "object" && data !== null ? (data as Record<string, unknown>) : undefined,
+      });
+      return capturing;
+    });
+  }
+  return capturing;
+}
+
+interface DeferredCalls<T> {
+  fn: (input: unknown) => Promise<T>;
+  calls: Array<{
+    promise: Promise<T>;
+    resolve: (value: T) => void;
+    reject: (error: Error) => void;
+  }>;
+}
+
+function createDeferredCalls<T>(): DeferredCalls<T> {
+  const calls: DeferredCalls<T>["calls"] = [];
+  const fn = (input: unknown) => {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    calls.push({ promise, resolve, reject });
+    void input;
+    return promise;
+  };
+  return { fn, calls };
+}
+
+interface ManagedAcpStop {
+  stopId: string;
+  stoppedTurnId: string;
+  kind: string;
+  terminalObserved: boolean;
+  cancelIssuedRevision: number;
+  cancelAttempts: Array<{ revision: number; settled: boolean; outcome: string }>;
+  stagedSuccessor: { token: string } | null;
+}
+
+interface ManagedAcpInternals {
+  sessionId: string | null;
+  connection: {
+    prompt: (input: {
+      sessionId: string;
+      messageId: string;
+      prompt: unknown;
+    }) => Promise<PromptResponse>;
+    cancel: (input: { sessionId: string }) => Promise<void>;
+  } | null;
+  connectionRevision: number;
+  activeForegroundTurnId: string | null;
+  admissionState: ACPAdmissionState;
+  stop: ManagedAcpStop | null;
+}
+
+const MANAGED_ACP_PROVIDER = "claude-acp";
+const MANAGED_ACP_SESSION_ID = "acp-session-1";
+
+function createManagedAcpSession(sessionLogger: ReturnType<typeof createTestLogger>): {
+  session: ACPAgentSession;
+  prompt: DeferredCalls<PromptResponse>;
+  cancel: DeferredCalls<void>;
+  internals: ManagedAcpInternals;
+} {
+  const session = new ACPAgentSession(
+    { provider: MANAGED_ACP_PROVIDER, cwd: "/tmp/paseo-acp-manager-test" },
+    {
+      provider: MANAGED_ACP_PROVIDER,
+      logger: sessionLogger,
+      defaultCommand: ["claude", "--acp"],
+      defaultModes: [],
+      capabilities: {
+        supportsStreaming: true,
+        supportsSessionPersistence: true,
+        supportsDynamicModes: true,
+        supportsMcpServers: true,
+        supportsReasoningStream: true,
+        supportsToolInvocations: true,
+      },
+    },
+  );
+
+  const prompt = createDeferredCalls<PromptResponse>();
+  const cancel = createDeferredCalls<void>();
+  const internals = asInternals<ManagedAcpInternals>(session);
+  internals.sessionId = MANAGED_ACP_SESSION_ID;
+  internals.connection = { prompt: prompt.fn, cancel: cancel.fn };
+  internals.connectionRevision = 1;
+  return { session, prompt, cancel, internals };
+}
+
+class ManagedAcpClient {
+  readonly provider = MANAGED_ACP_PROVIDER;
+  readonly capabilities = TEST_CAPABILITIES;
+
+  constructor(private readonly session: ACPAgentSession) {}
+
+  async isAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  async createSession(): Promise<AgentSession> {
+    return this.session;
+  }
+
+  async resumeSession(): Promise<AgentSession> {
+    throw new Error("resumeSession is not used by the ACP manager harness");
+  }
+
+  async fetchCatalog(): Promise<ProviderCatalog> {
+    return { models: [], modes: [] };
+  }
+}
+
+interface ManagedAcpHarness {
+  manager: AgentManager;
+  agentId: string;
+  prompt: DeferredCalls<PromptResponse>;
+  cancel: DeferredCalls<void>;
+  internals: ManagedAcpInternals;
+  logs: CapturedLog[];
+}
+
+async function createManagedAcpHarness(): Promise<ManagedAcpHarness> {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-acp-stop-"));
+  const logs: CapturedLog[] = [];
+  const { session, prompt, cancel, internals } = createManagedAcpSession(
+    createCapturingLogger("acp", logs),
+  );
+  const manager = new AgentManager({
+    clients: { [MANAGED_ACP_PROVIDER]: new ManagedAcpClient(session) },
+    logger: createCapturingLogger("manager", logs),
+  });
+  const snapshot = await manager.createAgent(
+    { provider: MANAGED_ACP_PROVIDER, cwd: workdir },
+    undefined,
+    { workspaceId: undefined },
+  );
+  return { manager, agentId: snapshot.id, prompt, cancel, internals, logs };
+}
+
+/** Iterates a run, collecting events, and reports the error that ended it (if any). */
+function collectAgentStream(iterator: AsyncGenerator<AgentStreamEvent>): {
+  events: AgentStreamEvent[];
+  done: Promise<Error | null>;
+} {
+  const events: AgentStreamEvent[] = [];
+  const done = (async () => {
+    for await (const event of iterator) {
+      events.push(event);
+    }
+    return null;
+  })().catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+  return { events, done };
+}
+
+/** Drains promise microtasks without touching the fake clock. */
+async function flushMicrotasks(count = 10): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+/** Waits until the manager has issued cancellation write `index`, leaving it pending. */
+async function waitForCancelWrite(harness: ManagedAcpHarness, index: number): Promise<void> {
+  for (let attempt = 0; attempt < 1_000 && harness.cancel.calls.length <= index; attempt += 1) {
+    await Promise.resolve();
+  }
+  if (!harness.cancel.calls[index]) {
+    throw new Error(`ACP cancellation write ${index} was never issued`);
+  }
+}
+
+/**
+ * Settles the ACP cancellation write at `index` once it has been issued. The
+ * manager reaches `interrupt()` a few microtasks after the call that asked for
+ * it, so the write is never available to the test synchronously.
+ */
+async function settleCancelWrite(
+  harness: ManagedAcpHarness,
+  index: number,
+  outcome: { ok: true } | { ok: false; error: Error },
+): Promise<void> {
+  for (let attempt = 0; attempt < 1_000 && harness.cancel.calls.length <= index; attempt += 1) {
+    await Promise.resolve();
+  }
+  const call = harness.cancel.calls[index];
+  if (!call) {
+    throw new Error(`ACP cancellation write ${index} was never issued`);
+  }
+  if (outcome.ok) {
+    call.resolve(undefined);
+    return;
+  }
+  call.reject(outcome.error);
+}
+
+function managerLogs(logs: CapturedLog[]): CapturedLog[] {
+  return logs.filter((entry) => entry.source === "manager");
+}
+
+function logsWithMessage(logs: CapturedLog[], msg: string): CapturedLog[] {
+  return logs.filter((entry) => entry.msg === msg);
+}
+
+const MANAGER_FORCE_SETTLE_MSG =
+  "cancelAgentRun: manager settlement wait timed out; force-settling the manager-owned run";
+const MANAGER_REPLACE_INVOKED_MSG = "agent.replace.start_turn_invoked";
+const MANAGER_REPLACE_RESOLVED_MSG = "agent.replace.start_turn_resolved";
+
+describe("AgentManager ACP cancellation boundary", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // Plan: manager integration test 1 — the 1,500/5,000 ms reproduction.
+  test("1. a 5,000ms ACP prompt is still untouched at 1,500ms: no force settlement, no replacement prompt", async () => {
+    const harness = await createManagedAcpHarness();
+    const original = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    expect(harness.prompt.calls).toHaveLength(1);
+    const originalTurnId = harness.internals.activeForegroundTurnId;
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    // The cancellation notification write settles at once; the prompt does not.
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    // The manager has not force-settled, and the replacement has no prompt.
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_FORCE_SETTLE_MSG)).toHaveLength(0);
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.manager.getAgent(harness.agentId)?.activeForegroundTurnId).toBe(originalTurnId);
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+    expect(harness.internals.admissionState).toBe("stopping");
+
+    // The manager's own 2s window closes; the adapter still holds the turn.
+    await vi.advanceTimersByTimeAsync(500);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.stop?.stagedSuccessor).not.toBeNull();
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_REPLACE_INVOKED_MSG)).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(harness.internals.stop).toBeNull();
+    expect(harness.internals.admissionState).toBe("running");
+    expect(harness.internals.activeForegroundTurnId).not.toBe(originalTurnId);
+    expect(await original.done).toBeNull();
+    // The staged replacement arrives late and still runs to its own terminal.
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    expect(await replacement.done).toBeNull();
+  });
+
+  // Plan: manager integration test 2 — the 2,000/5,000 ms production race.
+  test("2. the 2s manager force settlement stages the replacement of a 5s ACP prompt without sending it", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    const originalTurnId = harness.internals.activeForegroundTurnId;
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+
+    // Manager-owned record of what it did, carrying the ids it owns.
+    const [forceSettled] = logsWithMessage(managerLogs(harness.logs), MANAGER_FORCE_SETTLE_MSG);
+    expect(forceSettled?.data).toMatchObject({
+      agentId: harness.agentId,
+      turnId: originalTurnId,
+      sessionId: MANAGED_ACP_SESSION_ID,
+    });
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_REPLACE_INVOKED_MSG)).toHaveLength(1);
+
+    // The adapter stages the replacement and sends nothing at or after 2s.
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.stagedSuccessor).not.toBeNull();
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+
+    const stopId = harness.internals.stop?.stopId;
+    const [staged] = logsWithMessage(harness.logs, "provider.acp.successor_staged");
+    expect(staged?.data).toMatchObject({
+      stopId,
+      stoppedTurnId: originalTurnId,
+      sessionId: MANAGED_ACP_SESSION_ID,
+    });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    // The original prompt terminalizes at 5,000ms: admission opens and the
+    // staged replacement is the prompt that goes out.
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(logsWithMessage(harness.logs, "provider.acp.admission_released")).toMatchObject([
+      { data: { stopId } },
+    ]);
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_REPLACE_RESOLVED_MSG)).toHaveLength(
+      1,
+    );
+    // Both runs close clean: the original ended with the manager's forced
+    // cancellation, not an error, and the replacement runs to its own terminal.
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    const [firstResult, replacementResult] = await Promise.all([first.done, replacement.done]);
+    expect(firstResult).toBeNull();
+    expect(replacementResult).toBeNull();
+    expect(harness.internals.stop).toBeNull();
+  });
+
+  // Plan: manager integration test 3.
+  test("3. terminal plus every cancel write settled sends the single staged replacement exactly once", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    const originalTurnId = harness.internals.activeForegroundTurnId;
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(1);
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(2);
+    const successorTurnId = harness.internals.activeForegroundTurnId;
+    expect(successorTurnId).not.toBe(originalTurnId);
+
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    const [firstResult, replacementResult] = await Promise.all([first.done, replacement.done]);
+    expect(firstResult).toBeNull();
+    expect(replacementResult).toBeNull();
+
+    // One successor, one prompt, and no foreground-active or busy failure anywhere.
+    expect(harness.internals.stop).toBeNull();
+    expect(harness.internals.admissionState).toBe("idle");
+    const agent = harness.manager.getAgent(harness.agentId);
+    expect(agent?.lifecycle).toBe("idle");
+    expect(agent?.lastError).toBeUndefined();
+    expect(
+      harness.logs.some((entry) => entry.msg.includes("A foreground turn is already active")),
+    ).toBe(false);
+    expect(JSON.stringify(harness.logs)).not.toContain("A foreground turn is already active");
+  });
+
+  // Plan: manager integration test 4.
+  test("4. a settled cancel notification does not release the replacement while the terminal is missing", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    expect(logsWithMessage(harness.logs, "provider.acp.cancel_attempt_settled")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: true, outcome: "success" },
+    ]);
+    expect(harness.internals.stop?.stagedSuccessor).not.toBeNull();
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(2);
+    // The staged replacement runs to its own terminal and both streams close.
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    const [firstResult, replacementResult] = await Promise.all([first.done, replacement.done]);
+    expect(firstResult).toBeNull();
+    expect(replacementResult).toBeNull();
+  });
+
+  // Plan: manager integration test 5.
+  test("5. an observed terminal does not release the replacement while a cancel write is delayed or rejected", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    // Delayed write: the terminal arrives first, the manager settles its run on
+    // its own, and the successor still waits for the cancellation ledger.
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await waitForCancelWrite(harness, 0);
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+    expect(await first.done).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    // Drain the replacement stream concurrently: phase B cancels the run this
+    // stream started, and the manager settles that run without a provider
+    // terminal, so the stream has no end to assert on here.
+    const replacementEvents: AgentStreamEvent[] = [];
+    const replacementDrain = (async () => {
+      for await (const event of await replacementPromise) {
+        replacementEvents.push(event);
+      }
+    })();
+    replacementDrain.catch(() => undefined);
+    await flushMicrotasks();
+
+    expect(logsWithMessage(managerLogs(harness.logs), MANAGER_FORCE_SETTLE_MSG)).toHaveLength(0);
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.stop?.terminalObserved).toBe(true);
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: false, outcome: "pending" },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    // The delayed write finally settles and only then does admission open.
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    expect(replacementEvents.some((event) => event.type === "turn_started")).toBe(true);
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(harness.internals.stop).toBeNull();
+
+    // Rejected write: the manager refuses the next replacement and the session
+    // stays stopping with nothing sent behind it.
+    const secondReplacement = harness.manager.replaceAgentRun(harness.agentId, "third");
+    // Attach the rejection handler now: the promise settles while the fake
+    // clock advances, before the assertion below runs.
+    const secondFailure = secondReplacement.catch((error: unknown) => error);
+    await settleCancelWrite(harness, 1, { ok: false, error: new Error("cancel write rejected") });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await secondFailure).toBeInstanceOf(AgentRunCancellationError);
+
+    expect(harness.prompt.calls).toHaveLength(2);
+    expect(harness.internals.admissionState).toBe("stopping");
+    // A rejected newest write keeps the session stopping: the ledger never
+    // reads as satisfied, so the rejected replacement sends nothing.
+    expect(harness.internals.stop?.cancelAttempts).toEqual([
+      { revision: 1, settled: true, outcome: "rejected" },
+    ]);
+    expect(harness.internals.stop?.stagedSuccessor).toBeNull();
+  });
+
+  // Plan: manager integration test 6.
+  test("6. stop invalidates a staged replacement and the eventual terminal sends nothing", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    expect(harness.internals.stop?.stagedSuccessor).not.toBeNull();
+
+    // A plain Stop repeats the stop: the staged successor is invalidated and a
+    // fresh cancellation write is issued for the same stop.
+    const stopPromise = harness.manager.cancelAgentRun(harness.agentId);
+    await settleCancelWrite(harness, 1, { ok: true });
+    await flushMicrotasks();
+    expect(await stopPromise).toEqual({ status: "settled" });
+
+    const replacementFailure = await replacement.done;
+    expect(replacementFailure?.message).toContain("staged replacement was invalidated");
+
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.stop?.stagedSuccessor).toBeNull();
+    expect(harness.internals.stop?.terminalObserved).toBe(true);
+    expect(logsWithMessage(harness.logs, "provider.acp.successor_invalidated")).toMatchObject([
+      { data: { reason: "interrupt" } },
+    ]);
+    expect(await first.done).toBeNull();
+  });
+
+  // Plan: manager integration test 7.
+  test("7. the 10s admission deadline rejects the replacement without sending a prompt or reporting readiness", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const replacementFailure = await replacement.done;
+    expect(replacementFailure?.message).toContain("was not admitted within 10000ms");
+
+    // The deadline rejected the caller and nothing else: no prompt, no turn, and
+    // no manager claim that the adapter became ready.
+    expect(harness.prompt.calls).toHaveLength(1);
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+    expect(harness.internals.stop?.stagedSuccessor).toBeNull();
+    const agent = harness.manager.getAgent(harness.agentId);
+    expect(agent?.lifecycle).toBe("error");
+    expect(agent?.lastError).toContain("was not admitted within 10000ms");
+    // The manager settled the original run on its own schedule even though the
+    // adapter never saw a terminal for it.
+    expect(await first.done).toBeNull();
+    expect(
+      managerLogs(harness.logs).some((entry) =>
+        /acknowledg|ready|admission|gated|provider\.acp\./i.test(entry.msg),
+      ),
+    ).toBe(false);
+    expect(logsWithMessage(harness.logs, "provider.acp.admission_deadline")).toMatchObject([
+      { data: { unresolved: { terminal: true, cancelWrites: false } } },
+    ]);
+  });
+
+  // Plan: manager integration test 9. Recovery after a force settlement is
+  // session close/recreate: the plan promises no repeated-Stop retry.
+  test("9. after a force settlement repeated stop reports not_running and close is the recovery", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+
+    const stopPromise = harness.manager.cancelAgentRun(harness.agentId);
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await stopPromise).toEqual({ status: "settled" });
+    expect(harness.manager.getAgent(harness.agentId)?.lifecycle).toBe("idle");
+    expect(await first.done).toBeNull();
+
+    // The manager no longer addresses the run, and the adapter is still stopping:
+    // a repeated Stop cannot retry it.
+    expect(await harness.manager.cancelAgentRun(harness.agentId)).toEqual({
+      status: "not_running",
+    });
+    expect(harness.internals.admissionState).toBe("stopping");
+    expect(harness.internals.stop?.terminalObserved).toBe(false);
+    expect(harness.prompt.calls).toHaveLength(1);
+
+    // Close/recreate is the recovery: the boundary is dropped and the pending
+    // prompt never crosses.
+    const closing = harness.manager.closeAgent(harness.agentId);
+    await settleCancelWrite(harness, 1, { ok: true });
+    await flushMicrotasks();
+    await closing;
+    expect(harness.internals.stop).toBeNull();
+    expect(harness.internals.admissionState).toBe("idle");
+
+    // A late terminal after close emits nothing and starts nothing.
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(1);
+  });
+
+  // Plan: manager integration test 10.
+  test("10. manager and adapter logs correlate by session and turn id without the manager claiming gate state", async () => {
+    const harness = await createManagedAcpHarness();
+    const first = collectAgentStream(harness.manager.streamAgent(harness.agentId, "original"));
+    await harness.manager.waitForAgentRunStart(harness.agentId);
+    const originalTurnId = harness.internals.activeForegroundTurnId;
+
+    const replacementPromise = harness.manager.replaceAgentRun(harness.agentId, "replacement");
+    await settleCancelWrite(harness, 0, { ok: true });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const replacement = collectAgentStream(await replacementPromise);
+    await flushMicrotasks();
+    harness.prompt.calls[0]?.resolve({ stopReason: "cancelled" });
+    await flushMicrotasks();
+    expect(harness.prompt.calls).toHaveLength(2);
+    // Run the replacement to its own terminal so both streams close.
+    harness.prompt.calls[1]?.resolve({ stopReason: "end_turn" });
+    const [firstResult, replacementResult] = await Promise.all([first.done, replacement.done]);
+    expect(firstResult).toBeNull();
+    expect(replacementResult).toBeNull();
+
+    const manager = managerLogs(harness.logs);
+    const [forceSettled] = logsWithMessage(manager, MANAGER_FORCE_SETTLE_MSG);
+    const [installed] = logsWithMessage(harness.logs, "provider.acp.stop_installed");
+    const [staged] = logsWithMessage(harness.logs, "provider.acp.successor_staged");
+    const [released] = logsWithMessage(harness.logs, "provider.acp.admission_released");
+
+    // manager force-settled → replacement start invoked → adapter successor
+    // staged → adapter admission released, one id chain.
+    expect(forceSettled?.data).toMatchObject({
+      agentId: harness.agentId,
+      turnId: originalTurnId,
+      sessionId: MANAGED_ACP_SESSION_ID,
+    });
+    expect(installed?.data).toMatchObject({
+      sessionId: MANAGED_ACP_SESSION_ID,
+      stoppedTurnId: originalTurnId,
+    });
+    const stopId = installed?.data?.stopId;
+    expect(staged?.data).toMatchObject({ stopId, stoppedTurnId: originalTurnId });
+    expect(released?.data).toMatchObject({ stopId });
+    expect(logsWithMessage(manager, MANAGER_REPLACE_INVOKED_MSG)).toHaveLength(1);
+    expect(logsWithMessage(manager, MANAGER_REPLACE_RESOLVED_MSG)).toHaveLength(1);
+    expect(logsWithMessage(manager, "interruptSession: interrupt call returned")).toHaveLength(1);
+
+    // Every manager line states a manager-owned fact: what it called, what it
+    // waited for, what it force-settled. Gate state belongs to the adapter.
+    const managerVocabulary = new Set(manager.map((entry) => entry.msg));
+    expect(
+      [...managerVocabulary].every((msg) => /agent\.|cancelAgentRun|interruptSession/.test(msg)),
+    ).toBe(true);
+    expect(
+      manager.some(
+        (entry) =>
+          /acknowledg|admission|successor|stop[ _]|ready|gated|unblocked|terminal/i.test(
+            entry.msg,
+          ) ||
+          /acknowledg|admission|stopId|terminal|successor|staged/i.test(
+            JSON.stringify(entry.data ?? {}),
+          ),
+      ),
+    ).toBe(false);
+  });
 });
 
 test("commits startup notices once on create and after restored history", async () => {
@@ -14313,6 +15901,121 @@ test("workspace archive preserves a loaded history agent stamp and stamps cascad
     expect((await storage.get(parent.id))?.updatedAt).toBe("2026-11-09T01:00:00.000Z");
   } finally {
     await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test.each([true, false])(
+  "shared-turn protection leaves explicit Stop available (shared=%s)",
+  async (shared) => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-shared-turn-"));
+    class SharedSession extends TestAgentSession {
+      override readonly capabilities = { ...TEST_CAPABILITIES, supportsSharedTurns: shared };
+      interrupts = 0;
+      override async interrupt(): Promise<void> {
+        this.interrupts += 1;
+        this.pushEvent({
+          type: "turn_canceled",
+          provider: "codex",
+          turnId: "peer-turn",
+          reason: "Stopped",
+        });
+      }
+    }
+    class SharedClient extends TestAgentClient {
+      readonly session = new SharedSession({ provider: "codex", cwd: workdir });
+      override async createSession(): Promise<AgentSession> {
+        return this.session;
+      }
+    }
+    const client = new SharedClient();
+    const manager = new AgentManager({
+      clients: { codex: client },
+      registry: new AgentStorage(join(workdir, "agents"), logger),
+      logger,
+    });
+    try {
+      const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+        workspaceId: undefined,
+      });
+      const running = waitForAgentLifecycle(manager, agent.id, "running");
+      client.session.pushEvent({ type: "turn_started", provider: "codex", turnId: "peer-turn" });
+      await running;
+      expect(manager.isPeerRun(agent.id)).toBe(shared);
+      if (shared) {
+        await expect(
+          startAgentRun(manager, agent.id, "replacement", logger, {
+            replaceRunning: true,
+            runOptions: { clientMessageId: "rejected-replace" },
+          }),
+        ).rejects.toBeInstanceOf(PeerTurnActiveError);
+        await expect(
+          startAgentRun(manager, agent.id, "follow up", logger, {
+            replaceRunning: true,
+            activeTurnBehavior: "steer",
+            runOptions: { clientMessageId: "rejected-steer" },
+          }),
+        ).rejects.toBeInstanceOf(PeerTurnActiveError);
+        await expect(
+          manager.rewind(agent.id, "previous-message", "conversation"),
+        ).rejects.toBeInstanceOf(PeerTurnActiveError);
+        expect(manager.getTimeline(agent.id)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "user_message",
+              clientMessageId: "rejected-replace",
+              text: "replacement",
+            }),
+            expect.objectContaining({
+              type: "user_message",
+              clientMessageId: "rejected-steer",
+              text: "follow up",
+            }),
+          ]),
+        );
+        expect(client.session.interrupts).toBe(0);
+        expect(manager.getAgent(agent.id)?.lifecycle).toBe("running");
+        await manager.cancelAgentRun(agent.id);
+        expect(client.session.interrupts).toBe(1);
+      } else {
+        await startAgentRun(manager, agent.id, "replacement", logger, { replaceRunning: true });
+        expect(client.session.interrupts).toBe(1);
+      }
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);
+
+test("reload settles an observed shared turn without interrupting its provider", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-shared-reload-"));
+  class SharedSession extends TestAgentSession {
+    override readonly capabilities = { ...TEST_CAPABILITIES, supportsSharedTurns: true };
+    readonly interrupt = vi.fn(async () => undefined);
+  }
+  class SharedClient extends TestAgentClient {
+    readonly session = new SharedSession({ provider: "codex", cwd: workdir });
+    override async createSession(): Promise<AgentSession> {
+      return this.session;
+    }
+  }
+  const client = new SharedClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: new AgentStorage(join(workdir, "agents"), logger),
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    const running = waitForAgentLifecycle(manager, agent.id, "running");
+    client.session.pushEvent({ type: "turn_started", provider: "codex", turnId: "peer-turn" });
+    await running;
+    await manager.reloadAgentSession(agent.id);
+    expect(client.session.interrupt).not.toHaveBeenCalled();
+    expect(manager.hasInFlightRun(agent.id)).toBe(false);
+  } finally {
     rmSync(workdir, { recursive: true, force: true });
   }
 });
