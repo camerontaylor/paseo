@@ -1268,7 +1268,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     <ChatAgentDockContent
       selectedView={selectedView}
       onSelectView={handleSetSelectedView}
-      streamContent={streamContent}
       isChatVisible={isChatVisible}
       serverId={serverId}
       agentId={agentId}
@@ -1283,7 +1282,9 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       showHistorySyncError={showHistorySyncError}
       isRetryingHistorySync={isRetryingHistorySync}
       retryTimelineSync={retryTimelineSync}
-    />
+    >
+      {streamContent}
+    </ChatAgentDockContent>
   );
 
   const dockOverlay = (
@@ -1354,7 +1355,7 @@ function computeInitialHistoryLoading(
 const ChatAgentDockContent = memo(function ChatAgentDockContent({
   selectedView,
   onSelectView,
-  streamContent,
+  children,
   isChatVisible,
   serverId,
   agentId,
@@ -1372,7 +1373,7 @@ const ChatAgentDockContent = memo(function ChatAgentDockContent({
 }: {
   selectedView: React.ComponentProps<typeof AgentViewSwitcher>["value"];
   onSelectView: React.ComponentProps<typeof AgentViewSwitcher>["onValueChange"];
-  streamContent: ReactNode;
+  children: ReactNode;
   isChatVisible: boolean;
   serverId: string;
   agentId: string;
@@ -1391,7 +1392,7 @@ const ChatAgentDockContent = memo(function ChatAgentDockContent({
   return (
     <View style={styles.contentContainer}>
       <AgentViewSwitcher value={selectedView} onValueChange={onSelectView} />
-      {streamContent}
+      {children}
       {isChatVisible ? null : (
         <CompanionFeed
           serverId={serverId}
