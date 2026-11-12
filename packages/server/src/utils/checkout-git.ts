@@ -916,6 +916,13 @@ export type CheckoutStatusGit = CheckoutStatusGitNonPaseo | CheckoutStatusGitPas
 
 export type CheckoutStatusResult = CheckoutStatus | CheckoutStatusGit;
 
+export type CheckoutPlacement =
+  | CheckoutStatus
+  | Pick<
+      CheckoutStatusGit,
+      "isGit" | "repoRoot" | "mainRepoRoot" | "currentBranch" | "remoteUrl" | "isPaseoOwnedWorktree"
+    >;
+
 export type CheckoutDiffResult =
   | { diff: string; structured?: ParsedDiffFile[]; diffTooLarge?: false }
   | { diff: ""; structured: []; diffTooLarge: true };
@@ -2326,6 +2333,41 @@ async function getUntrackedDiffText(
     text: result.stdout,
     truncated: result.truncated,
     stat: { additions: 0, deletions: 0, isBinary: false },
+  };
+}
+
+// Reconciliation needs identity and placement, not diff/upstream/comparison state.
+// Full status fans those extra Git processes out across every workspace on each rescan.
+export async function getCheckoutPlacement(
+  cwd: string,
+  context?: CheckoutContext,
+): Promise<CheckoutPlacement> {
+  const inspected = await inspectCheckoutContext(cwd, context);
+  if (!inspected) return { isGit: false };
+  const mainRepoRoot = await getMainRepoRootFromCommonDir(
+    cwd,
+    inspected.gitCommonDir,
+    context,
+  ).catch(() => null);
+  const baseRef = inspected.paseoWorktree.isPaseoOwnedWorktree
+    ? (storedBaseRefFromMetadata(
+        await readPaseoWorktreeMetadata(inspected.paseoWorktree.worktreeRoot),
+      ) ?? (await resolveBaseRef(cwd, context)))
+    : null;
+  const isPaseoOwnedWorktree = inspected.paseoWorktree.isPaseoOwnedWorktree && baseRef !== null;
+  let placementMainRepoRoot = mainRepoRoot;
+  if (isPaseoOwnedWorktree) {
+    placementMainRepoRoot ??= inspected.worktreeRoot;
+  } else if (mainRepoRoot && resolve(mainRepoRoot) === resolve(inspected.worktreeRoot)) {
+    placementMainRepoRoot = null;
+  }
+  return {
+    isGit: true,
+    repoRoot: inspected.worktreeRoot,
+    currentBranch: inspected.currentBranch,
+    remoteUrl: inspected.remoteUrl,
+    isPaseoOwnedWorktree,
+    mainRepoRoot: placementMainRepoRoot,
   };
 }
 

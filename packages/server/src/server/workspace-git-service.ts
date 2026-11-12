@@ -19,6 +19,7 @@ import {
   getCheckoutSnapshotFacts,
   getCheckoutShortstat,
   getCheckoutStatus,
+  getCheckoutPlacement,
   getCheckoutWorktreeState,
   getPullRequestStatus,
   forgeAuthStateFromError,
@@ -360,6 +361,7 @@ interface WorkspaceGitServiceDependencies {
   getCheckoutSnapshotFacts: typeof getCheckoutSnapshotFacts;
   getCheckoutRefDerivedState: typeof getCheckoutRefDerivedState;
   getCheckoutStatus: typeof getCheckoutStatus;
+  getCheckoutPlacement: typeof getCheckoutPlacement;
   getCheckoutShortstat: typeof getCheckoutShortstat;
   getCheckoutWorktreeState: typeof getCheckoutWorktreeState;
   getCheckoutDiff: typeof getCheckoutDiff;
@@ -557,6 +559,7 @@ function buildDefaultWorkspaceGitServiceDeps(
     getCheckoutSnapshotFacts,
     getCheckoutRefDerivedState,
     getCheckoutStatus,
+    getCheckoutPlacement,
     getCheckoutShortstat,
     getCheckoutWorktreeState,
     getCheckoutDiff,
@@ -758,7 +761,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   async getCheckout(cwd: string): Promise<ProjectCheckoutLitePayload> {
     this.assertNotDisposed();
     const normalizedCwd = resolve(cwd);
-    const status = await this.deps.getCheckoutStatus(normalizedCwd, {
+    const status = await this.deps.getCheckoutPlacement(normalizedCwd, {
       paseoHome: this.paseoHome,
       worktreesRoot: this.worktreesRoot,
       logger: this.logger,
