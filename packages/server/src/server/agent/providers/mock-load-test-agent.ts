@@ -848,13 +848,12 @@ export class MockLoadTestAgentSession implements AgentSession {
         ? options.config.providerOptions.mockRewindError
         : null;
     this.remainingPromptRejections = getPositiveFeatureInteger(
-      options.config.providerOptions?.mockPromptRejections ??
-        options.config.featureValues?.mockPromptRejections,
+      options.config.providerOptions?.mockPromptRejections,
     );
     this.remainingSteerFailures = getPositiveFeatureInteger(
       options.config.providerOptions?.mockSteerAmbiguousFailures,
     );
-    if (options.config.featureValues?.mockSideQuestions === true) {
+    if (options.config.providerOptions?.mockSideQuestions === true) {
       // Answers name the exchanges the daemon handed back, so a caller can prove a follow-up was
       // threaded rather than asked cold. Nothing is emitted on the stream: a side question that
       // reached the main timeline would be the bug this seam exists to avoid.

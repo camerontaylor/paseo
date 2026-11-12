@@ -81,6 +81,32 @@ describe("MockLoadTestAgentClient", () => {
     await session.interrupt();
   });
 
+  test("answers side questions enabled through provider options without emitting main-turn events", async () => {
+    const client = new MockLoadTestAgentClient();
+    const session = await client.createSession({
+      provider: "mock",
+      cwd: process.cwd(),
+      providerOptions: { mockSideQuestions: true },
+    });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    const before = [...events];
+    try {
+      const answer = await session.askSideQuestion?.("Current?", [
+        { question: "Earlier?", answer: "Earlier." },
+      ]);
+      expect(answer).toEqual({
+        status: "answered",
+        content: "mock-side-answer 1: Current?",
+        synthetic: false,
+        threading: "threaded",
+      });
+      expect(events).toEqual(before);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("streams a configured assistant response through the normal timeline", async () => {
     vi.useFakeTimers();
     const response = [

@@ -2028,7 +2028,7 @@ describe("PiRpcAgentSession", () => {
     runtime.setThinkingLevel = async () => {
       runtime.state = { ...runtime.state, thinkingLevel: "low" };
     };
-    runtime.getMessages = async () => {
+    runtime.getHistory = async () => {
       throw new Error("history unavailable");
     };
 
@@ -2048,7 +2048,7 @@ describe("PiRpcAgentSession", () => {
       model: { provider: "opencode-go", id: "space-bunny-free" },
       messageCount: 2,
     };
-    runtime.getMessages = async () => {
+    runtime.getHistory = async () => {
       throw new Error("should not fetch history");
     };
     await expect(session.setThinkingOption("low")).resolves.toBeUndefined();

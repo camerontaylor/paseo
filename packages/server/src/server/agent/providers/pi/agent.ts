@@ -1739,7 +1739,7 @@ export class PiRpcAgentSession implements AgentSession {
       return;
     }
     try {
-      change.messages = await this.runtimeSession.getMessages();
+      change.messages = (await this.runtimeSession.getHistory()).messages;
     } catch (error) {
       // The change has already succeeded. Missing telemetry must not turn it into a failed update.
       this.logger.debug({ err: error }, "Pi effort cache sample unavailable");
