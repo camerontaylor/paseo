@@ -379,7 +379,7 @@ describe("AgentStorage", () => {
     };
     await fs.writeFile(path.join(projectDir, `${saved.id}.json`), JSON.stringify(saved), "utf8");
 
-    const records = await storage.list();
+    const records = await storage.listAll();
     expect(records.map(({ id, provider, persistence }) => ({ id, provider, persistence }))).toEqual(
       [{ id: saved.id, provider: saved.provider, persistence: saved.persistence }],
     );
