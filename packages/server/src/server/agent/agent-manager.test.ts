@@ -5326,7 +5326,7 @@ test("resume keeps applying the saved permission mode when the native session re
 });
 
 test.each(["native-model", null])(
-  "import uses reported model %s before resolving a default",
+  "import preserves reported model %s without selecting a default",
   async (model) => {
     const workdir = mkdtempSync(join(tmpdir(), "agent-manager-import-model-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
@@ -5367,11 +5367,11 @@ test.each(["native-model", null])(
         cwd: workdir,
         workspaceId: "workspace",
       });
-      expect(imported.config.model).toBe(model ?? "gpt-5.4");
+      expect(imported.config.model).toBe(model ?? undefined);
       expect(imported.config.thinkingOptionId).toBe("high");
       expect(imported.config.modeId).toBe("build");
       await manager.flush();
-      expect((await storage.get(imported.id))?.config?.model).toBe(model ?? "gpt-5.4");
+      expect((await storage.get(imported.id))?.config?.model).toBe(model ?? undefined);
       expect((await storage.get(imported.id))?.config?.modeId).toBe("build");
     } finally {
       await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
@@ -13796,6 +13796,7 @@ interface ManagedAcpStop {
 interface ManagedAcpInternals {
   sessionId: string | null;
   connection: {
+    signal: AbortSignal;
     prompt: (input: {
       sessionId: string;
       messageId: string;
@@ -13840,7 +13841,11 @@ function createManagedAcpSession(sessionLogger: ReturnType<typeof createTestLogg
   const cancel = createDeferredCalls<void>();
   const internals = asInternals<ManagedAcpInternals>(session);
   internals.sessionId = MANAGED_ACP_SESSION_ID;
-  internals.connection = { prompt: prompt.fn, cancel: cancel.fn };
+  internals.connection = {
+    prompt: prompt.fn,
+    cancel: cancel.fn,
+    signal: new AbortController().signal,
+  };
   internals.connectionRevision = 1;
   return { session, prompt, cancel, internals };
 }

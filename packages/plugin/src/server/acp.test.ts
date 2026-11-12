@@ -1034,7 +1034,7 @@ lines.on("line", (line) => {
       context: true,
       expected: [
         {
-          turnId: undefined,
+          turnId: "acp:first",
           usage: { contextWindowUsedTokens: 42, contextWindowMaxTokens: 100, totalCostUsd: 0.25 },
         },
         {
@@ -1638,7 +1638,11 @@ lines.on("line", (line) => {
     const config = events.findLast((event) => event.type === "session.config");
     expect(config).toMatchObject({ config: { model: "large" } });
     if (config?.type !== "session.config") throw new Error("Expected session.config");
-    expect(config.config.settings?.map((setting) => setting.id)).toEqual(["provider", "fast"]);
+    expect(config.config.settings?.map((setting) => setting.id)).toEqual([
+      "provider",
+      "fast",
+      "auto_accept",
+    ]);
     await connection.close();
   });
 

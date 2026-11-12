@@ -5680,8 +5680,7 @@ describe("ACPAgentSession stop boundary", () => {
       expect(harness.prompt.calls).toHaveLength(1);
     }
 
-    // Deny after the permission's own turn already terminalized: the same
-    // branch, and the correlation still names the turn the request was raised on.
+    // A terminal cancels its abandoned permission before a late denial can arrive.
     {
       const harness = createStopBoundarySession();
       const turnId = await startForegroundTurn(harness, "first");
@@ -5691,29 +5690,19 @@ describe("ACPAgentSession stop boundary", () => {
       await flushMicrotasks();
       expect(harness.internals.admissionState).toBe("idle");
 
-      const denying = harness.session.respondToPermission(permission.id, {
-        behavior: "deny",
-        interrupt: true,
-      });
-      await denying;
+      await expect(
+        harness.session.respondToPermission(permission.id, { behavior: "deny", interrupt: true }),
+      ).rejects.toThrow("No pending permission request");
 
+      expect(harness.session.getPendingPermissions()).toEqual([]);
       expect(harness.cancel.calls).toHaveLength(0);
       expect(harness.internals.stop).toBeNull();
       expect(harness.internals.admissionState).toBe("idle");
-      await expect(permission.promise).resolves.toEqual({
-        outcome: { outcome: "selected", optionId: "reject-once" },
-      });
-      expect(denySuppressedLogs(harness)).toEqual([
-        {
-          msg: "provider.acp.deny_cancel_suppressed",
-          data: {
-            permissionRequestId: permission.id,
-            turnId,
-            sessionId: "session-1",
-            reason: "no_active_turn",
-          },
-        },
-      ]);
+      await expect(permission.promise).resolves.toEqual({ outcome: { outcome: "cancelled" } });
+      expect(harness.events).toContainEqual(
+        expect.objectContaining({ type: "permission_resolved", requestId: permission.id, turnId }),
+      );
+      expect(denySuppressedLogs(harness)).toEqual([]);
     }
 
     // The not-initialized variant is a distinguishable fact, not the same

@@ -5038,9 +5038,13 @@ export class AgentManager {
     await this.refreshRuntimeInfo(agent, options);
   }
 
-  private applyObservedRuntimeInfo(agent: ActiveManagedAgent, runtimeInfo: AgentRuntimeInfo): void {
+  private applyObservedRuntimeInfo(
+    agent: ActiveManagedAgent,
+    runtimeInfo: AgentRuntimeInfo,
+    adoptModel = true,
+  ): void {
     agent.runtimeInfo = runtimeInfo;
-    if (runtimeInfo.model) agent.config.model = runtimeInfo.model;
+    if (adoptModel && runtimeInfo.model) agent.config.model = runtimeInfo.model;
     if (runtimeInfo.thinkingOptionId !== undefined) {
       agent.config.thinkingOptionId = runtimeInfo.thinkingOptionId ?? undefined;
     }
@@ -5057,7 +5061,12 @@ export class AgentManager {
         newInfo.thinkingOptionId !== agent.runtimeInfo?.thinkingOptionId ||
         newInfo.sessionId !== agent.runtimeInfo?.sessionId ||
         newInfo.modeId !== agent.runtimeInfo?.modeId;
-      this.applyObservedRuntimeInfo(agent, newInfo);
+      // A nonrestoring provider may report a canonical name for the requested alias.
+      // Keep that preference unless the observed model actually changes after opening.
+      const adoptModel =
+        this.restoresSessionConfig(agent.provider) ||
+        (agent.runtimeInfo != null && newInfo.model !== agent.runtimeInfo.model);
+      this.applyObservedRuntimeInfo(agent, newInfo, adoptModel);
       if (!agent.persistence && newInfo.sessionId) {
         agent.persistence = normalizePersistenceForConfig(
           { provider: agent.provider, sessionId: newInfo.sessionId },

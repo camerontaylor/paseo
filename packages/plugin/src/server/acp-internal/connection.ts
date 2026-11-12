@@ -1080,7 +1080,9 @@ class AcpRuntime {
     const settled = this.call(this.connection.prompt(this.promptParams(input.prompt))).then(
       async (response): Promise<void> => {
         await this.drainNotifications();
-        if (response.usage) {
+        const correlation = this.promptCorrelation(response);
+        const sharedExecution = correlation?.turnId != null && correlation.role !== "none";
+        if (response.usage && !sharedExecution) {
           this.lastUsage = {
             ...this.lastUsage,
             inputTokens: response.usage.inputTokens,
@@ -1096,7 +1098,6 @@ class AcpRuntime {
         }
         if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
         const state = response.stopReason === "cancelled" ? "canceled" : "completed";
-        const correlation = this.promptCorrelation(response);
         if (correlation === null || correlation.role === "none" || correlation.turnId === null) {
           this.endLocalTurn(turnId, state);
         } else {
