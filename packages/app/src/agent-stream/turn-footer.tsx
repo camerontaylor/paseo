@@ -250,7 +250,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     paddingBottom: TURN_FOOTER_BOTTOM_SPACING,
   },
   turnFooterContent: {
-    height: TURN_FOOTER_CONTENT_HEIGHT,
+    minHeight: TURN_FOOTER_CONTENT_HEIGHT,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-start",
