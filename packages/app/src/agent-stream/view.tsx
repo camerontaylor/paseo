@@ -829,7 +829,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [context.capabilities, agentId, client, pendingClientMessageIds, resolvedServerId, handlePin, handleQAndA],
+      [
+        context.capabilities,
+        agentId,
+        client,
+        pendingClientMessageIds,
+        resolvedServerId,
+        handlePin,
+        handleQAndA,
+      ],
     );
 
     const renderAssistantMessageItem = useCallback(

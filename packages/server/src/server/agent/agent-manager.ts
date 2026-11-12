@@ -1931,7 +1931,16 @@ export class AgentManager {
         ...options,
         // The caller read its metadata before this turn in the lane; a setMetadata queued ahead of
         // it has saved a newer record, the one the open hooks saw.
-        ...(record ? { labels: record.labels, metadata: record.metadata, background: record.background, owner: record.owner, artifacts: record.artifacts, companionEntries: record.companionEntries } : {}),
+        ...(record
+          ? {
+              labels: record.labels,
+              metadata: record.metadata,
+              background: record.background,
+              owner: record.owner,
+              artifacts: record.artifacts,
+              companionEntries: record.companionEntries,
+            }
+          : {}),
         workspaceId,
         launchEnv,
         persistence: handle,

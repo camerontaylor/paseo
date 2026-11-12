@@ -214,7 +214,8 @@ function useWorkspaceIsolation(input: {
   // the remembered default until the screen remounts.
   const { preferences } = useFormPreferences();
   const { manualIsolation } = useNewWorkspaceSetupState(setup);
-  const isolation = manualIsolation ?? (input.initialWorktree ? "worktree" : preferences.isolation ?? "local");
+  const isolation =
+    manualIsolation ?? (input.initialWorktree ? "worktree" : (preferences.isolation ?? "local"));
   const isWorktree = isolation === "worktree" && canCreateWorktree;
 
   return {
@@ -1670,7 +1671,10 @@ function usePluginSetup(input: {
         setAttachments((attachments) => syncPickerPrAttachment({ attachments, item })),
     });
     if (input.initialChangeRequest) {
-      setup.dispatchPicker({ type: "picker-selected", item: { kind: "github-pr", item: input.initialChangeRequest } });
+      setup.dispatchPicker({
+        type: "picker-selected",
+        item: { kind: "github-pr", item: input.initialChangeRequest },
+      });
     }
     return setup;
   });

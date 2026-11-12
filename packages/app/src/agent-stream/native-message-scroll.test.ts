@@ -20,11 +20,18 @@ function harness(initialRows: StreamItem[]) {
       frames.set(frame, callback);
       return frame;
     },
-    cancelFrame: (frame) => { frames.delete(frame); },
+    cancelFrame: (frame) => {
+      frames.delete(frame);
+    },
   });
   return {
-    ...scroller, detach, scrollToIndex, order,
-    setRows: (next: StreamItem[]) => { rows = next; },
+    ...scroller,
+    detach,
+    scrollToIndex,
+    order,
+    setRows: (next: StreamItem[]) => {
+      rows = next;
+    },
     flush: () => {
       const pending = [...frames.values()];
       frames.clear();
@@ -34,20 +41,21 @@ function harness(initialRows: StreamItem[]) {
 }
 
 describe("native message scrolling", () => {
-  it.each([["history", 0], ["live", 2], ["source", 1]] as const)(
-    "addresses %s in forward combined list order",
-    (id, index) => {
-      const h = harness([
-        message("history"),
-        { kind: "plugin", id: "replacement", sourceId: "source" } as StreamItem,
-        message("live"),
-      ]);
-      h.scrollToMessage(id);
-      expect(h.order).toEqual(["detach"]);
-      h.flush();
-      expect(h.order).toEqual(["detach", `scroll:${index}`]);
-    },
-  );
+  it.each([
+    ["history", 0],
+    ["live", 2],
+    ["source", 1],
+  ] as const)("addresses %s in forward combined list order", (id, index) => {
+    const h = harness([
+      message("history"),
+      { kind: "plugin", id: "replacement", sourceId: "source" } as StreamItem,
+      message("live"),
+    ]);
+    h.scrollToMessage(id);
+    expect(h.order).toEqual(["detach"]);
+    h.flush();
+    expect(h.order).toEqual(["detach", `scroll:${index}`]);
+  });
 
   it("resolves the latest row index after the pin release commits", () => {
     const h = harness([message("first"), message("target")]);

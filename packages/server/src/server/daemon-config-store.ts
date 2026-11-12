@@ -545,7 +545,12 @@ export class DaemonConfigStore {
         "Relay is controlled by a daemon launch override. Remove PASEO_RELAY_ENABLED or the relay CLI flag before changing it here.",
       );
     }
-    const { removeProviders = [], replaceProviders = {}, renameProviders = {}, ...submittedPatch } = parsedPatch;
+    const {
+      removeProviders = [],
+      replaceProviders = {},
+      renameProviders = {},
+      ...submittedPatch
+    } = parsedPatch;
     const patch = this.foldPatchProfiles(submittedPatch);
     const { features: speechPatch, ...configPatch } = patch;
     const removedProviders = Array.from(new Set(removeProviders));

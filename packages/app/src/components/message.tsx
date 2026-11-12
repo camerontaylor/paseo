@@ -695,8 +695,18 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
     <View style={assistantTurnFooterStylesheet.container}>
       {onPin || getContent || canFork ? (
         <View style={assistantTurnFooterStylesheet.actions}>
-          {onPin ? <TurnPinButton onPin={handlePin} containerStyle={assistantTurnFooterStylesheet.copyButton} /> : null}
-          {getContent ? <TurnCopyButton getContent={getContent} containerStyle={assistantTurnFooterStylesheet.copyButton} /> : null}
+          {onPin ? (
+            <TurnPinButton
+              onPin={handlePin}
+              containerStyle={assistantTurnFooterStylesheet.copyButton}
+            />
+          ) : null}
+          {getContent ? (
+            <TurnCopyButton
+              getContent={getContent}
+              containerStyle={assistantTurnFooterStylesheet.copyButton}
+            />
+          ) : null}
           {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
         </View>
       ) : null}

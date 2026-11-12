@@ -1350,7 +1350,12 @@ function offersVoiceMode(input: {
   supportsVoiceConcurrentInput: boolean;
   showVoice: boolean;
 }): boolean {
-  return input.showVoice && !input.isVoiceModeForAgent && input.hasAgent && (!input.isAgentRunning || input.supportsVoiceConcurrentInput);
+  return (
+    input.showVoice &&
+    !input.isVoiceModeForAgent &&
+    input.hasAgent &&
+    (!input.isAgentRunning || input.supportsVoiceConcurrentInput)
+  );
 }
 
 function ComposerVoiceModeButton({

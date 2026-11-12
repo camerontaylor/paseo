@@ -6,7 +6,12 @@ import type { JsonValue } from "@getpaseo/protocol/agent-types";
 
 import { writeJsonFileAtomic } from "../atomic-file.js";
 import { CompanionEntrySchema } from "@getpaseo/protocol/companion-stream";
-import { AgentArtifactSchema, AgentFeatureSchema, AgentOptionControlSchema, AgentStatusSchema } from "../messages.js";
+import {
+  AgentArtifactSchema,
+  AgentFeatureSchema,
+  AgentOptionControlSchema,
+  AgentStatusSchema,
+} from "../messages.js";
 import { toStoredAgentRecord } from "./agent-projections.js";
 import type { ManagedAgent } from "./agent-manager.js";
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
