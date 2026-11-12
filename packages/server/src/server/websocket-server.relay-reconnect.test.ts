@@ -1345,3 +1345,45 @@ describe("relay external socket reconnect behavior", () => {
     await server.close();
   });
 });
+
+function findRpcError(socket: MockSocket): z.infer<typeof WireEnvelopeSchema> | undefined {
+  return sentEnvelopes(socket).find((envelope) => envelope.message?.type === "rpc_error");
+}
+
+describe("legacy session RPC compatibility", () => {
+  test("answers a removed TMAD RPC with rpc_error instead of dropping it", async () => {
+    const server = createServer();
+    const socket = new MockSocket();
+    try {
+      await attachDirectAndHello({ server, socket, clientId: "legacy-rpc-client" });
+
+      // A 0.16.0-beta.2 app still sends this after the durable queue was removed.
+      socket.emit(
+        "message",
+        JSON.stringify({
+          type: "session",
+          message: {
+            type: "agent.queue.enqueue.request",
+            requestId: "legacy-queue-1",
+            agentId: "agent-legacy",
+            text: "queued while the daemon still served the durable queue",
+          },
+        }),
+      );
+
+      await vi.waitFor(() =>
+        expect(findRpcError(socket)).toMatchObject({
+          message: {
+            payload: {
+              requestId: "legacy-queue-1",
+              requestType: "agent.queue.enqueue.request",
+              code: "unknown_schema",
+            },
+          },
+        }),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+});
