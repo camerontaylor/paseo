@@ -2174,9 +2174,15 @@ export class AgentManager {
       if (closedExisting) {
         this.emitClosedAgent(closedExisting, { persist: false });
       } else if (this.agents.get(agentId) === existing) {
+        // emitState's status transition raises attention for a fresh failure. A reload that
+        // fails while the lifecycle is already "error" has no transition left, so it raises
+        // here to keep every retry legible as a new failure.
+        const wasError = existing.lifecycle === "error";
         existing.lifecycle = "error";
         existing.lastError = error instanceof Error ? error.message : String(error);
-        this.raiseErrorAttention(existing);
+        if (wasError) {
+          this.raiseErrorAttention(existing);
+        }
         this.emitState(existing);
       }
       throw error;
