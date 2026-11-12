@@ -295,7 +295,7 @@ function buildAgentManagerSpies() {
     cancelAgentRun: vi.fn(),
     getPendingPermissions: vi.fn(),
     getRegisteredProviderIds: vi.fn().mockReturnValue(["claude"]),
-    listDraftControls: vi.fn(),
+    listDraftControls: vi.fn().mockResolvedValue({ controls: [], options: {} }),
   };
 }
 

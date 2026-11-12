@@ -3614,6 +3614,7 @@ describe("ForgeService", () => {
           name: "app",
           parent: { owner: { login: "acme" }, name: "app" },
         }),
+        "[]",
         JSON.stringify([{ number: 8 }]),
         JSON.stringify(parent),
       ]);
