@@ -2174,16 +2174,7 @@ export class AgentManager {
       if (closedExisting) {
         this.emitClosedAgent(closedExisting, { persist: false });
       } else if (this.agents.get(agentId) === existing) {
-        // emitState's status transition raises attention for a fresh failure. A reload that
-        // fails while the lifecycle is already "error" has no transition left, so it raises
-        // here to keep every retry legible as a new failure.
-        const wasError = existing.lifecycle === "error";
-        existing.lifecycle = "error";
-        existing.lastError = error instanceof Error ? error.message : String(error);
-        if (wasError) {
-          this.raiseErrorAttention(existing);
-        }
-        this.emitState(existing);
+        this.handleReloadFailure(existing, error);
       }
       throw error;
     } finally {
@@ -2213,6 +2204,20 @@ export class AgentManager {
     for (const event of this.providerSubagents.deleteParent(agentId)) {
       this.dispatch({ type: "provider_subagent", event });
     }
+  }
+
+  // Extracted from reloadAgentSessionInternal to keep that method under the complexity ceiling.
+  private handleReloadFailure(existing: ManagedAgent, error: unknown): void {
+    // emitState's status transition raises attention for a fresh failure. A reload that fails
+    // while the lifecycle is already "error" has no transition left, so it raises here to keep
+    // every retry legible as a new failure.
+    const wasError = existing.lifecycle === "error";
+    existing.lifecycle = "error";
+    existing.lastError = error instanceof Error ? error.message : String(error);
+    if (wasError) {
+      this.raiseErrorAttention(existing);
+    }
+    this.emitState(existing);
   }
 
   private async closeReloadedSession(session: AgentSession, agentId: string): Promise<void> {
