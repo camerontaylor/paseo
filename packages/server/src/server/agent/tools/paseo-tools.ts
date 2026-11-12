@@ -1337,12 +1337,7 @@ function createToolCatalog(
   type TopLevelCreateAgentArgs = z.infer<typeof canonicalTopLevelCreateAgentArgsSchema>;
   type LegacyTopLevelCreateAgentArgs = z.infer<typeof legacyTopLevelCreateAgentArgsSchema>;
 
-  if (
-    options.voiceOnly ||
-    scope === "agent" ||
-    options.enableVoiceTools ||
-    callerContext?.enableVoiceTools
-  ) {
+  if (options.voiceOnly || options.enableVoiceTools || callerContext?.enableVoiceTools) {
     registerTool(
       "speak",
       {
