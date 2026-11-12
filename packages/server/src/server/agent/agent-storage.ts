@@ -5,13 +5,7 @@ import type { Logger } from "pino";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 
 import { writeJsonFileAtomic } from "../atomic-file.js";
-import { CompanionEntrySchema } from "@getpaseo/protocol/companion-stream";
-import {
-  AgentArtifactSchema,
-  AgentFeatureSchema,
-  AgentOptionControlSchema,
-  AgentStatusSchema,
-} from "../messages.js";
+import { AgentFeatureSchema, AgentOptionControlSchema, AgentStatusSchema } from "../messages.js";
 import { toStoredAgentRecord } from "./agent-projections.js";
 import type { ManagedAgent } from "./agent-manager.js";
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
@@ -91,8 +85,6 @@ const RAW_STORED_AGENT_SCHEMA = z.object({
   background: z.boolean().optional(),
   archivedAt: z.string().nullable().optional(),
   owner: AgentOwnerSchema.optional(),
-  artifacts: z.array(AgentArtifactSchema).optional(),
-  companionEntries: z.array(CompanionEntrySchema).optional(),
 });
 
 export type SerializableAgentConfig = Pick<

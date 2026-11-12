@@ -911,20 +911,8 @@ export class HubRelationshipHarness {
     return this.daemon!.agentManager.getAgent(agentId) !== null && !record?.archivedAt;
   }
 
-  trackNewAgentSubscriptions(): () => number {
-    const manager = this.daemon!.agentManager;
-    const subscribe = manager.subscribe.bind(manager);
-    const active = new Set<object>();
-    manager.subscribe = (listener, options) => {
-      const token = {};
-      active.add(token);
-      const release = subscribe(listener, options);
-      return () => {
-        active.delete(token);
-        release();
-      };
-    };
-    return () => active.size;
+  agentSubscriptionCount(): number {
+    return this.daemon!.agentManager.subscriptionCount();
   }
 
   async hubExecutionIntentFiles(): Promise<string[]> {

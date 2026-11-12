@@ -2,7 +2,7 @@ export type VoiceSpeakHandler = (params: {
   text: string;
   callerAgentId: string;
   signal?: AbortSignal;
-}) => Promise<void | { ok: false; reason: "interrupted" | "unavailable" }>;
+}) => Promise<void>;
 
 export interface VoiceCallerContext {
   childAgentDefaultLabels?: Record<string, string>;

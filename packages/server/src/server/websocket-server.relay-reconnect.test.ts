@@ -709,41 +709,6 @@ describe("relay external socket reconnect behavior", () => {
     await server.close();
   });
 
-  test("voice output fails while detached and uses the replacement relay socket", async () => {
-    const server = createServer();
-    const clientId = "cid-voice-reconnect";
-    const oldSocket = new MockSocket();
-    await attachRelayAndHello({ server, socket: oldSocket, clientId });
-    const session = sessionMock.instances[0];
-    const { onMessage } = session.args;
-    if (typeof onMessage !== "function") throw new Error("Missing session emitter");
-    const audio = {
-      type: "audio_output",
-      payload: {
-        id: "speech:0",
-        groupId: "speech",
-        chunkIndex: 0,
-        isLastChunk: true,
-        audio: "YQ==",
-        format: "pcm",
-        isVoiceMode: true,
-      },
-    };
-    onMessage(audio);
-    oldSocket.sent.length = 0;
-    oldSocket.emit("close", 1006, "");
-    expect(() => onMessage(audio)).toThrow("Voice output has no connected client");
-
-    const liveSocket = new MockSocket();
-    await attachRelayAndHello({ server, socket: liveSocket, clientId });
-    liveSocket.sent.length = 0;
-    onMessage(audio);
-    expect(sessionMock.instances).toHaveLength(1);
-    expect(oldSocket.sent).toEqual([]);
-    expect(sentEnvelopes(liveSocket).map((envelope) => envelope.message)).toEqual([audio]);
-    await server.close();
-  });
-
   test("rejects sockets attached after shutdown begins", async () => {
     const server = createServer();
     const existingSocket = new MockSocket();
@@ -1378,5 +1343,47 @@ describe("relay external socket reconnect behavior", () => {
     expect(new TextDecoder().decode(frame.payload ?? new Uint8Array())).toBe("ok");
 
     await server.close();
+  });
+});
+
+function findRpcError(socket: MockSocket): z.infer<typeof WireEnvelopeSchema> | undefined {
+  return sentEnvelopes(socket).find((envelope) => envelope.message?.type === "rpc_error");
+}
+
+describe("legacy session RPC compatibility", () => {
+  test("answers a removed TMAD RPC with rpc_error instead of dropping it", async () => {
+    const server = createServer();
+    const socket = new MockSocket();
+    try {
+      await attachDirectAndHello({ server, socket, clientId: "legacy-rpc-client" });
+
+      // A 0.16.0-beta.2 app still sends this after the durable queue was removed.
+      socket.emit(
+        "message",
+        JSON.stringify({
+          type: "session",
+          message: {
+            type: "agent.queue.enqueue.request",
+            requestId: "legacy-queue-1",
+            agentId: "agent-legacy",
+            text: "queued while the daemon still served the durable queue",
+          },
+        }),
+      );
+
+      await vi.waitFor(() =>
+        expect(findRpcError(socket)).toMatchObject({
+          message: {
+            payload: {
+              requestId: "legacy-queue-1",
+              requestType: "agent.queue.enqueue.request",
+              code: "unknown_schema",
+            },
+          },
+        }),
+      );
+    } finally {
+      await server.close();
+    }
   });
 });
