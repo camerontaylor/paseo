@@ -409,7 +409,9 @@ describe("toAgentPayload", () => {
 
     const record = toStoredAgentRecord(agent);
     expect(record.persistence?.metadata?.asyncQuestions).toEqual(questions);
-    expect(buildStoredAgentPayload(record, ["codex"], ownOptionsOnly).persistence?.metadata).toEqual({
+    expect(
+      buildStoredAgentPayload(record, ["codex"], ownOptionsOnly).persistence?.metadata,
+    ).toEqual({
       conversationId: "conversation-questions",
     });
   });
