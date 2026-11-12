@@ -1,3 +1,4 @@
+import { useDisclosureHold } from "@/agent-stream/disclosure";
 import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
 import { PlanCopyActions } from "@/components/plan-copy-actions";
 import { PlanHandoffButton } from "@/components/plan-handoff-button";
@@ -55,7 +56,8 @@ function PlanCardContent({
     () => (isWeb ? ({ "aria-expanded": expanded } as const) : null),
     [expanded],
   );
-  const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
+  const hold = useDisclosureHold();
+  const toggleExpanded = useCallback(() => hold(() => setExpanded((value) => !value)), [hold]);
   const containerStyle = useMemo(
     () => [styles.container, disableOuterSpacing && styles.containerCompact],
     [disableOuterSpacing],

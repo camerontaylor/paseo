@@ -1,7 +1,15 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { defineRpc } from "@getpaseo/plugin";
 import { runAcpProvider } from "@getpaseo/plugin/server/acp";
+import { z } from "zod";
 import { jcodeCapabilities } from "./server/capabilities.js";
 import { jcodePeerTurns } from "./server/peer-turns.js";
+
+const detach = defineRpc({
+  name: "detach_session",
+  input: z.object({ agentId: z.string().min(1) }),
+  output: z.object({}),
+});
 
 export default function contribute(server: PluginServerContext) {
   server.registerProvider(
@@ -21,5 +29,9 @@ export default function contribute(server: PluginServerContext) {
       transformers: [jcodePeerTurns, jcodeCapabilities],
     }),
   );
+  server.handle(detach, async ({ agentId }, { paseo }) => {
+    await paseo.agents.ref(agentId).detachProviderSession();
+    return {};
+  });
   return () => {};
 }

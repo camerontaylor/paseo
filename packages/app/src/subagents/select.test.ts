@@ -43,7 +43,6 @@ const AGENT_DEFAULTS: Agent = {
   title: "Agent",
   cwd: "/tmp/project",
   model: null,
-  features: undefined,
   thinkingOptionId: undefined,
   requiresAttention: false,
   attentionReason: null,
@@ -354,6 +353,22 @@ describe("selectSubagentsForParent", () => {
     expect(rows.map((row) => row.id)).toEqual(["child-a"]);
   });
 
+  it("excludes background children from the track", () => {
+    setAgents([
+      makeAgent({ id: "parent-a" }),
+      makeAgent({ id: "child-a", parentAgentId: "parent-a" }),
+      makeAgent({ id: "background-child", parentAgentId: "parent-a", background: true }),
+    ]);
+
+    const rows = selectSubagentsForParent(
+      useSessionStore.getState(),
+      { serverId: SERVER_ID, parentAgentId: "parent-a" },
+      EMPTY_PENDING_ARCHIVE_IDS,
+    );
+
+    expect(rows.map((row) => row.id)).toEqual(["child-a"]);
+  });
+
   it("excludes siblings, unrelated agents, and grandchildren", () => {
     setAgents([
       makeAgent({ id: "parent-a" }),
@@ -446,6 +461,7 @@ describe("selectSubagentsForParent", () => {
         provider: "claude",
         title: "Review child",
         status: "running",
+        backgroundWork: { count: 1 },
         requiresAttention: true,
         createdAt,
         model: "should-not-leak",
@@ -472,6 +488,7 @@ describe("selectSubagentsForParent", () => {
         description: null,
         subtitle: null,
         status: "running",
+        backgroundWork: { count: 1 },
         turn: { phase: "idle", cancellationRequestId: null },
         requiresAttention: true,
         createdAt,
@@ -479,6 +496,7 @@ describe("selectSubagentsForParent", () => {
     ]);
     expect(Object.keys(rows[0] ?? {}).sort()).toEqual([
       "address",
+      "backgroundWork",
       "createdAt",
       "description",
       "id",

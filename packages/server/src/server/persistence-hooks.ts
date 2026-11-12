@@ -18,7 +18,7 @@ function getLogger(logger: LoggerLike): LoggerLike {
   return logger.child({ module: "persistence" });
 }
 
-type AgentStoragePersistence = Pick<AgentStorage, "applySnapshot" | "list">;
+type AgentStoragePersistence = Pick<AgentStorage, "applySnapshot">;
 type AgentManagerStateSource = Pick<AgentManager, "subscribe">;
 
 interface BuildSessionConfigOptions {
@@ -73,7 +73,6 @@ export function buildConfigOverrides(record: StoredAgentRecord): Partial<AgentSe
     modeId: record.lastModeId ?? record.config?.modeId ?? undefined,
     model: record.config?.model ?? undefined,
     thinkingOptionId: record.config?.thinkingOptionId ?? undefined,
-    featureValues: record.config?.featureValues ?? undefined,
     providerOptions: record.config?.providerOptions ?? undefined,
     toolPolicy: record.config?.toolPolicy ?? undefined,
     systemPrompt: record.config?.systemPrompt ?? undefined,
@@ -95,7 +94,6 @@ export function buildSessionConfig(
     modeId: overrides.modeId,
     model: overrides.model,
     thinkingOptionId: overrides.thinkingOptionId,
-    featureValues: overrides.featureValues,
     providerOptions: overrides.providerOptions,
     toolPolicy: overrides.toolPolicy,
     systemPrompt: overrides.systemPrompt,
@@ -139,8 +137,10 @@ export function extractTimestamps(record: StoredAgentRecord): {
   updatedAt: Date;
   lastUserMessageAt: Date | null;
   labels?: Record<string, string>;
+  metadata?: StoredAgentRecord["metadata"];
   workspaceId?: string;
   owner?: StoredAgentRecord["owner"];
+  background?: boolean;
   artifacts?: StoredAgentRecord["artifacts"];
   companionEntries?: StoredAgentRecord["companionEntries"];
 } {
@@ -149,8 +149,10 @@ export function extractTimestamps(record: StoredAgentRecord): {
     updatedAt: new Date(resolveStoredAgentUpdatedAt(record)),
     lastUserMessageAt: record.lastUserMessageAt ? new Date(record.lastUserMessageAt) : null,
     labels: record.labels,
+    metadata: record.metadata,
     workspaceId: record.workspaceId,
     owner: record.owner,
+    background: record.background,
     artifacts: record.artifacts,
     companionEntries: record.companionEntries,
   };

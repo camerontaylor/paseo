@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { createHeadlessTerminal } from "./headless-terminal.js";
+import { createHeadlessTerminal, flushHeadlessTerminal } from "./headless-terminal.js";
 
 const EMOJI_ROW = "A😀👍❤️👋🏽🇰🇷👨‍👩‍👧B";
 // A, six two-column emoji clusters, B.
@@ -20,6 +20,20 @@ async function cursorColAfter(text: string): Promise<number> {
 describe("createHeadlessTerminal", () => {
   it("gives each emoji cluster one two-column cell", async () => {
     expect(await cursorColAfter(EMOJI_ROW)).toBe(EMOJI_ROW_END_COL);
+  });
+
+  it("keeps queued output when the terminal is disposed right after the write", () => {
+    const terminal = createHeadlessTerminal({ rows: 2, cols: 40 });
+    // xterm parses writes on a timer, so the buffer is still empty here. A
+    // process that writes and exits in the same tick hits this exact state,
+    // and disposing without draining would lose its final output.
+    terminal.write("late-output");
+    expect(terminal.buffer.active.getLine(0)?.translateToString(true)).toBe("");
+
+    flushHeadlessTerminal(terminal);
+    terminal.dispose();
+
+    expect(terminal.buffer.active.getLine(0)?.translateToString(true)).toBe("late-output");
   });
 
   it("keeps ASCII and CJK widths", async () => {

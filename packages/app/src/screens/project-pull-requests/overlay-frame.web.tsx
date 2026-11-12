@@ -2,17 +2,13 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import {
-  getOverlayRoot,
-  OverlayLayerProvider,
-  useGlobalWebOverlayLayer,
-  useWebOverlayRegistration,
-} from "@/lib/overlay-root";
+import { getOverlayRoot, OverlayLayerProvider, useGlobalOverlayLayer } from "@/lib/overlay-root";
+import { useOverlayRegistration, type KeyboardInputEvent } from "@/keyboard";
 
 export function OverlayFrame({ children, onClose }: { children: ReactNode; onClose: () => void }) {
-  const layer = useGlobalWebOverlayLayer("modal", true);
+  const layer = useGlobalOverlayLayer("modal", true);
   const onKeyDown = useCallback(
-    (event: KeyboardEvent) => {
+    (event: KeyboardInputEvent) => {
       if (event.key !== "Escape") return false;
       event.preventDefault();
       event.stopPropagation();
@@ -21,7 +17,7 @@ export function OverlayFrame({ children, onClose }: { children: ReactNode; onClo
     },
     [onClose],
   );
-  const scopeRef = useWebOverlayRegistration({ active: true, layer, onKeyDown });
+  const scopeRef = useOverlayRegistration({ active: true, layer, keys: ["Escape"], onKeyDown });
   const frameStyle = useMemo(() => [styles.frame, { zIndex: layer }], [layer]);
   return createPortal(
     <OverlayLayerProvider layer={layer}>

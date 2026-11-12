@@ -8,6 +8,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorkspaceScriptPayload } from "@getpaseo/protocol/messages";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot } from "react-dom/client";
+import { ToastApiProvider } from "@/contexts/toast-api-context";
+import { useWorkspaceScriptActions } from "./use-workspace-script-actions";
 import { WorkspaceScriptsButton } from "./workspace-scripts-button";
 
 void testI18n;
@@ -54,7 +56,13 @@ const {
     packageFeatures: { packageJsonScripts: false },
     listWorkspaceScriptsMock: vi.fn(),
     theme: hoistedTheme,
-    startWorkspaceScriptMock: vi.fn(async () => ({ terminalId: "terminal-script-1" })),
+    startWorkspaceScriptMock: vi.fn(async () => ({
+      terminalId: "terminal-script-1",
+      requestId: "start-1",
+      workspaceId: "workspace-1",
+      scriptName: "dev",
+      error: null,
+    })),
     killTerminalMock: vi.fn(async () => ({
       terminalId: "terminal-script-1",
       success: true,
@@ -273,6 +281,36 @@ interface RenderScriptsOptions {
   hideLabels?: boolean;
 }
 
+const testToast = { show: () => () => {}, error: () => {}, copied: copiedToastMock };
+const scriptClient = {
+  startWorkspaceScript: startWorkspaceScriptMock,
+  killTerminal: killTerminalMock,
+};
+function ScriptsOwner({
+  scripts,
+  hideLabels,
+}: {
+  scripts: WorkspaceScriptPayload[];
+  hideLabels?: boolean;
+}) {
+  const actions = useWorkspaceScriptActions({
+    client: scriptClient,
+    serverId: "test-server",
+    workspaceId: "workspace-1",
+    scripts,
+  });
+  return (
+    <WorkspaceScriptsButton
+      serverId="test-server"
+      workspaceId="workspace-1"
+      actions={actions}
+      scripts={scripts}
+      liveTerminalIds={LIVE_TERMINAL_IDS}
+      hideLabels={hideLabels}
+    />
+  );
+}
+
 function renderScripts(
   scripts: WorkspaceScriptPayload[],
   options: RenderScriptsOptions = {},
@@ -293,13 +331,9 @@ function renderScripts(
   function element(nextScripts: WorkspaceScriptPayload[]): ReactElement {
     return (
       <QueryClientProvider client={queryClient}>
-        <WorkspaceScriptsButton
-          serverId="test-server"
-          workspaceId="workspace-1"
-          scripts={nextScripts}
-          liveTerminalIds={LIVE_TERMINAL_IDS}
-          hideLabels={options.hideLabels}
-        />
+        <ToastApiProvider api={testToast}>
+          <ScriptsOwner scripts={nextScripts} hideLabels={options.hideLabels} />
+        </ToastApiProvider>
       </QueryClientProvider>
     );
   }
@@ -442,7 +476,13 @@ describe("WorkspaceScriptsButton", () => {
     });
     expect(requireRow("web-build").textContent).toContain("build");
     expect(requireRow("web-build").textContent).not.toContain("web-build");
-    startWorkspaceScriptMock.mockResolvedValue({ terminalId: "terminal-script-1" });
+    startWorkspaceScriptMock.mockResolvedValue({
+      terminalId: "terminal-script-1",
+      requestId: "start-web-build",
+      workspaceId: "workspace-1",
+      scriptName: "web-build",
+      error: null,
+    });
     await act(async () => {
       fireEvent.click(document.querySelector('[data-testid="workspace-scripts-start-web-build"]')!);
     });

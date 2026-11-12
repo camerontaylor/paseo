@@ -68,7 +68,7 @@ describe("MockLoadTestAgentClient", () => {
       provider: "mock",
       cwd: process.cwd(),
       model: "ten-second-stream",
-      featureValues: { mockPromptRejections: 1 },
+      providerOptions: { mockPromptRejections: 1 },
     });
 
     await expect(session.startTurn("Reject this prompt.")).rejects.toThrow(
@@ -79,6 +79,32 @@ describe("MockLoadTestAgentClient", () => {
       turnId: expect.any(String),
     });
     await session.interrupt();
+  });
+
+  test("answers side questions enabled through provider options without emitting main-turn events", async () => {
+    const client = new MockLoadTestAgentClient();
+    const session = await client.createSession({
+      provider: "mock",
+      cwd: process.cwd(),
+      providerOptions: { mockSideQuestions: true },
+    });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    const before = [...events];
+    try {
+      const answer = await session.askSideQuestion?.("Current?", [
+        { question: "Earlier?", answer: "Earlier." },
+      ]);
+      expect(answer).toEqual({
+        status: "answered",
+        content: "mock-side-answer 1: Current?",
+        synthetic: false,
+        threading: "threaded",
+      });
+      expect(events).toEqual(before);
+    } finally {
+      await session.close();
+    }
   });
 
   test("streams a configured assistant response through the normal timeline", async () => {
@@ -95,7 +121,7 @@ describe("MockLoadTestAgentClient", () => {
       provider: "mock",
       cwd: process.cwd(),
       model: "ten-second-stream",
-      featureValues: {
+      providerOptions: {
         mockStreamingAssistantResponse: response,
         mockStreamingAssistantIntervalMs: 20,
       },
@@ -467,7 +493,7 @@ describe("MockLoadTestAgentClient", () => {
       provider: "mock",
       cwd: process.cwd(),
       model: "e2e-fast-stream",
-      featureValues: { mockAssistantResponses: ["First response", "![Second](second.png)"] },
+      providerOptions: { mockAssistantResponses: ["First response", "![Second](second.png)"] },
     });
     await session.run("Emit a synthetic turn failure.");
     expect((await session.run("First prompt")).finalText).toBe("First response");

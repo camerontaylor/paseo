@@ -4,6 +4,26 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 [the archived release-channel plan](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
 
+## 0.16.0-beta.2 base decision — 2026-11-12
+
+Advance custom to upstream `v0.16.0-beta.2`
+(source commit `23bae61535542a45ade7196a7b3c152705f16de3`), retaining merged PR27's
+lean checkout-placement lookup. Keep the existing TMAD-derived carry for
+this release; its removal is a separate task after fleet activation.
+
+The beta and stable branches diverged before 0.15.3. Where custom was
+byte-identical to that stable tag, use the beta's updated owner, including
+responsive control sizing. Preserve fork-specific changes at the shared
+provider, side-conversation, plugin and protocol seams.
+
+ACP disconnect failure and abandoned-approval cleanup now share the fork's
+stop/successor admission path. The reservation rechecks transport death
+after queued admission, and terminal delivery leaves slot ownership to the
+identity-checked settlement path. Merge the enriched-markdown patches on
+their applied package sources, retaining Android table selection and copy
+alongside the beta's web inline-image fixes. Regenerate dependency metadata
+and the Nix hash from the merged manifests.
+
 ## 0.15.2 build and deploy — 2026-11-06
 
 Built `0.15.2-fork.261106-2234.gae9279071e78` from

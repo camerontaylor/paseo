@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { PluginSessionHistory } from "./plugin-session-history.js";
 import { resolve as resolvePath } from "node:path";
 import type { Logger } from "pino";
-import type { JsonValue } from "@getpaseo/protocol/agent-types";
+import type { JsonValue, ProviderOptions } from "@getpaseo/protocol/agent-types";
 import { z } from "zod";
 import {
   PROVIDER_CAPABILITIES,
@@ -14,6 +15,7 @@ import {
   type ProviderLaunch,
   requireProviderCapabilities,
   type ProviderCapability,
+  type ProviderCommand,
   type ProviderConfigChanges,
   type ProviderConfigState,
   type ProviderConnection,
@@ -31,10 +33,10 @@ import type {
   AgentCapabilityFlags,
   AgentClient,
   AgentCreateSessionOptions,
-  AgentFeature,
   AgentLaunchContext,
   AgentMode,
   AgentModelDefinition,
+  AgentOptionControl,
   AgentPermissionRequest,
   AgentPermissionResponse,
   AgentPersistenceHandle,
@@ -63,6 +65,7 @@ import {
   createProviderEnv,
   type ProviderRuntimeSettings,
 } from "./provider-launch-config.js";
+import { readPluginOptionState } from "./plugin-provider-options.js";
 import type { RegisteredProviderDefinition } from "./provider-registry.js";
 import { runProviderTurn } from "./providers/provider-runner.js";
 import { StaleProviderSessionError } from "./stale-provider-session-error.js";
@@ -610,9 +613,10 @@ class ProviderRuntimeSession {
   private readonly activeTurnIds = new Set<string>();
   private pendingWork = false;
   private terminal = false;
+  private detached = false;
   private closePromise: Promise<void> | null = null;
-  config: ProviderConfigState = { models: [], modes: [], thinkingOptions: [], settings: [] };
-  commands: Array<{ name: string; description: string; argumentHint?: string }> = [];
+  config: ProviderConfigState = { models: [], modes: [], thinkingOptions: [] };
+  commands: ProviderCommand[] = [];
   persistence: ProviderPersistence | null = null;
 
   constructor(
@@ -729,6 +733,10 @@ class ProviderRuntimeSession {
 
   async close(): Promise<void> {
     this.history.length = 0;
+    if (this.detached) {
+      this.runtime.removeSession(this.id, this.providerSessionId);
+      return;
+    }
     if (this.restoration === "parent") {
       this.runtime.removeSession(this.id, this.providerSessionId);
       return;
@@ -738,6 +746,22 @@ class ProviderRuntimeSession {
       throw error;
     });
     await this.closePromise;
+  }
+
+  async detachSharedSession(): Promise<void> {
+    this.history.length = 0;
+    if (this.restoration === "parent") {
+      this.runtime.removeSession(this.id, this.providerSessionId);
+      this.detached = true;
+      return;
+    }
+    await this.runtime.complete({
+      type: "session.detach",
+      requestId: randomUUID(),
+      sessionId: this.providerSessionId,
+    });
+    this.runtime.removeSession(this.id, this.providerSessionId);
+    this.detached = true;
   }
 
   private async closeNativeSession(): Promise<void> {
@@ -1127,7 +1151,7 @@ class PluginAgentClient implements AgentClient {
       this.provider,
       bridge,
       forget,
-      async (persistence, state) => {
+      async (persistence, state, options) => {
         forget();
         return await this.runtime.openSession({
           sessionId: randomUUID(),
@@ -1136,15 +1160,15 @@ class PluginAgentClient implements AgentClient {
             model: state.model,
             mode: state.mode,
             thinkingOption: state.thinkingOption,
-            settings: Object.fromEntries(
-              state.settings.map((setting) => [setting.id, setting.value]),
-            ),
+            settings: options,
+            providerOptions: options,
           },
           persistence,
           history: "replay",
         });
       },
       bind,
+      config.settings,
       this.logger,
     );
     bind(bridge);
@@ -1214,6 +1238,14 @@ class PluginAgentSession implements AgentSession {
   >();
   private readonly childSnapshots = new Map<string, Map<string, TimelineTextSnapshot>>();
   private unsubscribe: (() => void) | null = null;
+  /** How the opened session differs from the options it was given. */
+  readonly openOptionsPatch: Record<string, JsonValue>;
+  private knownOptions: Record<string, JsonValue> = {};
+  // The options a reopened session starts with: what it launched with, then every value the
+  // plugin reported or was given, minus every key that was reset.
+  private readonly committedOptions: Record<string, JsonValue>;
+  /** While `applyOptions` waits on the plugin, its `session.config` answers that call. */
+  private applyingOptions = false;
   private currentTurnId: string | null = null;
   private pendingWork = false;
   private closed = false;
@@ -1233,11 +1265,17 @@ class PluginAgentSession implements AgentSession {
     private readonly reopen: (
       persistence: ProviderPersistence,
       state: ProviderConfigState,
+      options: Readonly<Record<string, JsonValue>>,
     ) => Promise<ProviderRuntimeSession>,
     private readonly onBind: (bridge: ProviderRuntimeSession) => void,
+    givenOptions: Readonly<Record<string, JsonValue>>,
     private readonly logger: Logger,
   ) {
     this.subagentIdsBySession.set(bridge.id, null);
+    // Every setting the session opened with that was not given, including ones nobody set.
+    this.committedOptions = { ...givenOptions };
+    this.openOptionsPatch = this.optionDifferences(givenOptions);
+    this.commitOptions();
     for (const event of bridge.history) this.accept(event, false);
     // Opening notices arrive before the manager subscribes to the session.
     // Commit them on registration and replay the same timestamps from history.
@@ -1261,15 +1299,8 @@ class PluginAgentSession implements AgentSession {
     };
   }
 
-  get features(): AgentFeature[] {
-    return this.bridge.config.settings.map((setting) =>
-      setting.type === "toggle"
-        ? { ...setting }
-        : {
-            ...setting,
-            options: setting.options.map((option) => ({ ...option, id: option.value })),
-          },
-    );
+  get controls(): AgentOptionControl[] {
+    return readPluginOptionState(this.bridge.config).controls;
   }
 
   async run(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<AgentRunResult> {
@@ -1288,10 +1319,15 @@ class PluginAgentSession implements AgentSession {
   ): Promise<{ turnId: string }> {
     this.assertReplayComplete();
     const clientMessageId = options.clientMessageId ?? randomUUID();
+    const mapped = mapPromptInput(prompt, this.bridge.commands, {
+      explicitSkill: options.skill !== undefined,
+    });
+    const skill = options.skill === undefined ? mapped.skill : options.skill;
     const result = await this.bridge.prompt({
       clientMessageId,
       delivery: "auto",
-      input: mapPromptInput(prompt, this.bridge.commands),
+      input: mapped.input,
+      ...(skill === undefined ? {} : { skill }),
       ...(options.outputSchema === undefined
         ? {}
         : { outputSchema: toJsonValue(options.outputSchema, "output schema") }),
@@ -1310,6 +1346,8 @@ class PluginAgentSession implements AgentSession {
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
     this.assertReplayComplete();
+    // A busy steer cannot change a sticky skill; reject before insertion instead of dropping it.
+    if (options.skill !== undefined) return { status: "unavailable" };
     if (
       !this.bridge.negotiatedCapabilities.includes("prompt.steer") ||
       this.currentTurnId !== options.expectedTurnId
@@ -1427,17 +1465,25 @@ class PluginAgentSession implements AgentSession {
     }
   }
 
+  async detachSharedSession(): Promise<void> {
+    if (this.closed) return;
+    await this.replaying?.catch(() => undefined);
+    await this.bridge.detachSharedSession();
+    await this.close();
+  }
+
   async listCommands(): Promise<AgentSlashCommand[]> {
     return this.bridge.commands.map((command) => ({
       ...command,
       argumentHint: command.argumentHint ?? "",
-      kind: "command",
+      kind: command.kind ?? "command",
     }));
   }
 
-  async setModel(modelId: string | null): Promise<void> {
+  async setModel(modelId: string | null): Promise<{ model: string | null }> {
     this.assertReplayComplete();
     await this.bridge.configure({ model: modelId });
+    return { model: this.bridge.config.model ?? null };
   }
 
   async setThinkingOption(thinkingOptionId: string | null): Promise<void> {
@@ -1445,11 +1491,39 @@ class PluginAgentSession implements AgentSession {
     await this.bridge.configure({ thinkingOption: thinkingOptionId });
   }
 
-  async setFeature(featureId: string, value: unknown): Promise<void> {
+  /** The agent manager sends one apply at a time per session. */
+  async applyOptions(options: ProviderOptions): Promise<Record<string, JsonValue>> {
     this.assertReplayComplete();
-    await this.bridge.configure({
-      settings: { [featureId]: toJsonValue(value, `setting '${featureId}'`) },
-    });
+    const before = this.currentOptions();
+    const { legacySettings } = readPluginOptionState(this.bridge.config);
+    // The plugin applies every key it is given or rejects the whole request.
+    const settings: Record<string, JsonValue> = {};
+    for (const [id, value] of Object.entries(options)) {
+      settings[id] = toJsonValue(value, `option '${id}'`);
+    }
+    if (Object.keys(settings).length === 0) return {};
+    this.applyingOptions = true;
+    try {
+      // COMPAT(plugin-provider-settings): added in v0.15.0, remove after 2027-05-01. A plugin
+      // reporting `settings` is sent the same keys under that name.
+      await this.bridge.configure({
+        providerOptions: settings,
+        ...(legacySettings ? { settings } : {}),
+      });
+    } catch (error) {
+      // Nothing is stored for a refused patch, so what the plugin moved is reported once the
+      // call has ended.
+      this.applyingOptions = false;
+      for (const event of this.reportOptionChanges()) this.publish(event);
+      throw error;
+    } finally {
+      this.applyingOptions = false;
+    }
+    // A requested key is a request, not a report: only a key the plugin reported before can be
+    // one it has now dropped.
+    const ended = this.optionChanges({ ...before, ...settings }, before);
+    this.commitOptions(settings);
+    return ended;
   }
 
   async revertConversation(input: { messageId: string }): Promise<void> {
@@ -1644,10 +1718,66 @@ class PluginAgentSession implements AgentSession {
     };
   }
 
+  private currentOptions(): Record<string, JsonValue> {
+    return readPluginOptionState(this.bridge.config).options;
+  }
+
+  /** Options whose value differs from `known`: the plugin's own change or its opening state. */
+  private optionDifferences(known: Readonly<Record<string, JsonValue>>): Record<string, JsonValue> {
+    const patch: Record<string, JsonValue> = {};
+    for (const [id, value] of Object.entries(this.currentOptions())) {
+      if (!isDeepStrictEqual(known[id], value)) patch[id] = value;
+    }
+    return patch;
+  }
+
+  /**
+   * Settle the options a reopened session starts with: what is committed, then the request the
+   * plugin accepted, then what it reported back. A key it reported before and no longer reports
+   * was reset.
+   */
+  private commitOptions(accepted: Readonly<Record<string, JsonValue>> = {}): void {
+    for (const [id, value] of Object.entries(accepted)) {
+      if (value === null) delete this.committedOptions[id];
+      else this.committedOptions[id] = value;
+    }
+    const current = this.currentOptions();
+    for (const id of Object.keys(this.knownOptions)) {
+      if (!(id in current)) delete this.committedOptions[id];
+    }
+    Object.assign(this.committedOptions, current);
+    this.knownOptions = current;
+  }
+
+  /**
+   * What changed against the options `known` to be set: values that differ, and `null` for a key
+   * in `reported` that the plugin no longer reports, which went back to its default.
+   */
+  private optionChanges(
+    known: Readonly<Record<string, JsonValue>>,
+    reported: Readonly<Record<string, JsonValue>>,
+  ): Record<string, JsonValue> {
+    const patch = this.optionDifferences(known);
+    const current = this.currentOptions();
+    for (const id of Object.keys(reported)) {
+      if (known[id] !== null && !(id in current)) patch[id] = null;
+    }
+    return patch;
+  }
+
+  private reportOptionChanges(): AgentStreamEvent[] {
+    if (this.applyingOptions) return [];
+    const patch = this.optionChanges(this.knownOptions, this.knownOptions);
+    if (Object.keys(patch).length === 0) return [];
+    this.commitOptions();
+    return [{ type: "options_changed", provider: this.provider, patch }];
+  }
+
   private translateConfig(
     event: Extract<ProviderEvent, { type: "session.config" }>,
   ): AgentStreamEvent[] {
     return [
+      ...this.reportOptionChanges(),
       {
         type: "mode_changed",
         provider: this.provider,
@@ -1800,7 +1930,7 @@ class PluginAgentSession implements AgentSession {
       await this.clearBinding();
       replay.closed = true;
     }
-    const bridge = await this.reopen(replay.persistence, replay.config);
+    const bridge = await this.reopen(replay.persistence, replay.config, this.committedOptions);
     this.bridge = bridge;
     this.subagentIdsBySession.set(bridge.id, null);
     for (const event of bridge.history) this.accept(event, false);
@@ -1903,7 +2033,8 @@ function mapSessionConfig(
     model: config.model,
     mode: config.modeId,
     thinkingOption: config.thinkingOptionId,
-    settings: toJsonObject(config.featureValues ?? {}, "provider settings"),
+    // The plugin SDK reads composer values from `settings`; they are options here.
+    settings: toJsonObject(config.providerOptions ?? {}, "provider settings"),
     providerOptions: config.providerOptions,
     title: config.title ?? undefined,
     persist,
@@ -1922,20 +2053,28 @@ function combineSystemPrompts(
 
 function mapPromptInput(
   prompt: AgentPromptInput,
-  commands: readonly { name: string }[],
-): ProviderPrompt["input"] {
-  if (typeof prompt === "string" && prompt.startsWith("/")) {
+  commands: readonly ProviderCommand[],
+  options: { explicitSkill: boolean } = { explicitSkill: false },
+): { input: ProviderPrompt["input"]; skill?: string } {
+  // Caller-supplied skill metadata is authoritative. Converting a slash command here would
+  // replace the original text with bare arguments, so a clear or an explicit override could
+  // never submit the command the user actually typed.
+  if (!options.explicitSkill && typeof prompt === "string" && prompt.startsWith("/")) {
     const separator = prompt.indexOf(" ");
     const name = prompt.slice(1, separator === -1 ? undefined : separator);
-    if (commands.some((command) => command.name === name)) {
+    const command = commands.find((candidate) => candidate.name === name);
+    if (command) {
       return {
-        type: "command",
-        name,
-        arguments: separator === -1 ? "" : prompt.slice(separator + 1),
+        input: {
+          type: "command",
+          name,
+          arguments: separator === -1 ? "" : prompt.slice(separator + 1),
+        },
+        ...(command.kind === "skill" ? { skill: name } : {}),
       };
     }
   }
-  return { type: "message", content: mapPromptContent(prompt) };
+  return { input: { type: "message", content: mapPromptContent(prompt) } };
 }
 
 function mapPromptContent(prompt: AgentPromptInput): ProviderContent[] {

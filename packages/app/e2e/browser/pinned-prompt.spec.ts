@@ -32,16 +32,20 @@ async function expectSettledPin(page: Page, prompt: string): Promise<void> {
   await expect(pinnedPrompt(page)).toContainText(prompt);
 }
 
-/** Scrolls down until the prompt's own bubble has left the top of the transcript. */
+/** Scrolls down until the prompt's own row has left the top of the transcript. */
 async function scrollPromptAboveFold(page: Page, prompt: string): Promise<void> {
   await scrollTimelinePromptIntoView(page, prompt);
-  const promptRow = timeline(page).getByTestId("user-message").filter({ hasText: prompt });
+  const promptRow = timeline(page)
+    .locator("[data-history-row-id]")
+    .filter({ hasText: prompt })
+    .first();
   const [timelineBox, promptBox] = await Promise.all([
     timeline(page).boundingBox(),
     promptRow.boundingBox(),
   ]);
   if (!timelineBox || !promptBox) throw new Error(`Expected a rendered prompt for ${prompt}`);
-  // Move just beyond this bubble, keeping the reading line inside its own assistant turn.
+  // The reading line is 8px below the viewport top, and a row's box includes its trailing gap.
+  // Scroll until the row, not just the bubble inside it, clears that line.
   const distance = promptBox.y + promptBox.height - timelineBox.y + 2;
   await timeline(page).evaluate((element, delta) => {
     if (element instanceof HTMLElement) element.scrollTop += delta;

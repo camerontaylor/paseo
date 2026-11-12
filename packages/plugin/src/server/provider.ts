@@ -10,6 +10,7 @@ export const PROVIDER_CAPABILITIES = [
   "prompt.output_schema",
   "prompt.steer",
   "session.can_stop_runtime",
+  "session.detach",
   "session.archive",
   "session.configure",
   "session.list",
@@ -126,7 +127,9 @@ export interface ProviderSessionConfig {
   model?: string;
   mode?: string;
   thinkingOption?: string;
+  /** @deprecated The same values as `providerOptions`. */
   settings: Readonly<Record<string, JsonValue>>;
+  /** The agent's options, the provider defaults from `config.json` included. */
   providerOptions?: Readonly<Record<string, unknown>>;
   title?: string;
   persist: boolean;
@@ -136,6 +139,13 @@ export interface ProviderConfigChanges {
   model?: string | null;
   mode?: string | null;
   thinkingOption?: string | null;
+  /**
+   * The option keys to change on the running session, with or without a control. Apply every key
+   * or fail the whole request, for a key you only read when a session opens. `null` returns the
+   * key to the provider's own default. The committed values come back in `session.config`.
+   */
+  providerOptions?: Readonly<Record<string, JsonValue>>;
+  /** @deprecated Sent next to `providerOptions` to a provider that reports `settings`. */
   settings?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -145,6 +155,12 @@ export interface ProviderPrompt {
   input:
     | { type: "message"; content: ProviderContent[] }
     | { type: "command"; name: string; arguments: string };
+  /**
+   * Explicit attachment-local skill selection. `undefined` leaves the selection alone, a name
+   * selects it, and `null` clears it before the prompt text is read. Only providers that
+   * advertise the behavior accept it.
+   */
+  skill?: string | null;
   outputSchema?: JsonValue;
   clearPendingPermissions?: boolean;
 }
@@ -289,6 +305,8 @@ export type ProviderInput =
   | { type: "session.archive"; requestId: string; persistence: ProviderPersistence }
   | { type: "session.unarchive"; requestId: string; persistence: ProviderPersistence }
   | { type: "session.can_stop_runtime"; requestId: string; sessionId: string }
+  /** Leave this attachment without stopping work it inserted into a shared session. */
+  | { type: "session.detach"; requestId: string; sessionId: string }
   | { type: "session.close"; requestId: string; sessionId: string };
 
 export interface ProviderThinkingOption {
@@ -321,6 +339,34 @@ export interface ProviderMode {
   isUnattended?: boolean;
 }
 
+/**
+ * Draws one top-level option key in the composer. The control holds no value: Paseo reads it
+ * from the agent's options.
+ */
+export type ProviderOptionControl =
+  | {
+      type: "toggle";
+      key: string;
+      label: string;
+      description?: string;
+      /** A Lucide icon name. */
+      icon?: string;
+      /** Shown while the key has no value. */
+      defaultValue?: boolean;
+    }
+  | {
+      type: "select";
+      key: string;
+      label: string;
+      description?: string;
+      /** A Lucide icon name. */
+      icon?: string;
+      /** The choice shown while the key has no value. */
+      defaultValue?: string;
+      choices: ReadonlyArray<{ value: string; label: string; description?: string }>;
+    };
+
+/** @deprecated Report `controls` and `providerOptions` instead. */
 export type ProviderSetting =
   | {
       type: "toggle";
@@ -345,7 +391,12 @@ export interface ProviderConfigState {
   models: readonly ProviderModel[];
   modes: readonly ProviderMode[];
   thinkingOptions: readonly ProviderThinkingOption[];
-  settings: readonly ProviderSetting[];
+  /** The option keys that get a composer control. May change at runtime, for example per model. */
+  controls?: readonly ProviderOptionControl[];
+  /** What the session runs with now, for the keys it reports. Publish the committed values. */
+  providerOptions?: Readonly<Record<string, JsonValue>>;
+  /** @deprecated Report `controls` and `providerOptions`. Each setting id is an option key. */
+  settings?: readonly ProviderSetting[];
 }
 
 export interface ProviderCatalog {
@@ -369,6 +420,11 @@ export interface ProviderCommand {
   name: string;
   description: string;
   argumentHint?: string;
+  /**
+   * ACP only describes slash commands. A provider that can distinguish its skills reports them
+   * here so the client can select the skill explicitly instead of relying on textual parsing.
+   */
+  kind?: "command" | "skill";
 }
 
 export interface ProviderError {
@@ -655,6 +711,8 @@ export function requiredProviderCapabilities(input: ProviderInput): readonly Pro
     case "session.interrupt":
     case "session.close":
       return [];
+    case "session.detach":
+      return ["session.detach"];
     case "sessions":
       return ["session.list"];
     case "session.open": {
@@ -891,6 +949,7 @@ const promptSchema = z
       z.object({ type: z.literal("message"), content: z.array(providerContentSchema) }).strict(),
       z.object({ type: z.literal("command"), name: idSchema, arguments: z.string() }).strict(),
     ]),
+    skill: z.string().nullable().optional(),
     outputSchema: z.json().optional(),
     clearPendingPermissions: z.boolean().optional(),
   })
@@ -900,6 +959,7 @@ const configChangesSchema = z
     model: z.string().nullable().optional(),
     mode: z.string().nullable().optional(),
     thinkingOption: z.string().nullable().optional(),
+    providerOptions: jsonObjectSchema.optional(),
     settings: jsonObjectSchema.optional(),
   })
   .strict();
@@ -932,6 +992,9 @@ export const ProviderInputSchema: z.ZodType<ProviderInput> = z.discriminatedUnio
     .strict(),
   z
     .object({ type: z.literal("session.interrupt"), requestId: idSchema, sessionId: idSchema })
+    .strict(),
+  z
+    .object({ type: z.literal("session.detach"), requestId: idSchema, sessionId: idSchema })
     .strict(),
   z
     .object({
@@ -1036,6 +1099,33 @@ const settingSchema = z.discriminatedUnion("type", [
     })
     .strip(),
 ]);
+const controlSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("toggle"),
+      key: idSchema,
+      label: z.string(),
+      description: z.string().optional(),
+      icon: z.string().optional(),
+      defaultValue: z.boolean().optional(),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal("select"),
+      key: idSchema,
+      label: z.string(),
+      description: z.string().optional(),
+      icon: z.string().optional(),
+      defaultValue: z.string().optional(),
+      choices: z.array(
+        z
+          .object({ value: z.string(), label: z.string(), description: z.string().optional() })
+          .strip(),
+      ),
+    })
+    .strip(),
+]);
 const configStateSchema = z
   .object({
     model: z.string().optional(),
@@ -1044,7 +1134,9 @@ const configStateSchema = z
     models: z.array(modelSchema),
     modes: z.array(modeSchema),
     thinkingOptions: z.array(selectOptionSchema),
-    settings: z.array(settingSchema),
+    controls: z.array(controlSchema).optional(),
+    providerOptions: jsonObjectSchema.optional(),
+    settings: z.array(settingSchema).optional(),
   })
   .strip();
 const catalogSchema = z
@@ -1067,7 +1159,12 @@ const noticeSchema = z
   })
   .strip();
 const commandSchema = z
-  .object({ name: idSchema, description: z.string(), argumentHint: z.string().optional() })
+  .object({
+    name: idSchema,
+    description: z.string(),
+    argumentHint: z.string().optional(),
+    kind: z.enum(["command", "skill"]).optional(),
+  })
   .strip();
 const usageSchema = z
   .object({

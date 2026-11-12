@@ -14,7 +14,8 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { useToast } from "@/contexts/toast-api-context";
 import { settingsStyles } from "@/styles/settings";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
-import { useHostFeature } from "@/runtime/host-features";
+import { selectHostFeature, useHostFeature } from "@/runtime/host-features";
+import { useSessionStore } from "@/stores/session-store";
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { buildProviderDefinitions } from "@/utils/provider-definitions";
@@ -434,7 +435,6 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
   const { t } = useTranslation();
   const toast = useToast();
   const isConnected = useHostRuntimeIsConnected(serverId);
-  const supportsHopliteProvider = useHostFeature(serverId, "hopliteProvider");
   const supportsProviderRemoval = useHostFeature(serverId, "providerRemoval");
   const supportsProviderConfigReplace = useHostFeature(serverId, "providerConfigReplace");
   const supportsProviderConfigRename = useHostFeature(serverId, "providerConfigRename");
@@ -531,7 +531,11 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
       if (installingProviderId) return;
       setInstallingProviderId(entry.id);
       try {
-        await patchConfig(buildAcpProviderConfigPatch(entry, supportsHopliteProvider));
+        await patchConfig(
+          buildAcpProviderConfigPatch(entry, (feature) =>
+            selectHostFeature(useSessionStore.getState(), serverId, feature),
+          ),
+        );
         await refresh([entry.id]);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : String(error));
@@ -539,7 +543,7 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
         setInstallingProviderId((current) => (current === entry.id ? null : current));
       }
     },
-    [installingProviderId, patchConfig, refresh, supportsHopliteProvider, toast],
+    [installingProviderId, patchConfig, refresh, serverId, toast],
   );
 
   const handleOpenAddAccount = useCallback((providerId: string, providerLabel: string) => {

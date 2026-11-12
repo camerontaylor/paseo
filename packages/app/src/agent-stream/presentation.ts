@@ -50,6 +50,7 @@ const NO_COLLAPSED_TURNS: StreamPresentation["turns"] = collapseTurns({
   isLatestTurnOpen: false,
   expandedHostIds: new Set(),
   getGroupedCalls: () => undefined,
+  previousSummaryRowsByHostId: new Map(),
 });
 
 /** Find and scrolling address a plugin row by the source it replaces. */
@@ -140,6 +141,8 @@ export function createStreamPresentation() {
         isLatestTurnOpen,
         expandedHostIds: input.expandedTurnHostIds,
         getGroupedCalls: (itemId) => projection.groupsByHostId.get(itemId)?.run.calls,
+        previousSummaryRowsByHostId:
+          collapsed?.summaryRowsByHostId ?? NO_COLLAPSED_TURNS.summaryRowsByHostId,
       });
       collapsedSource = projection.tail;
       collapsedIsLatestTurnOpen = isLatestTurnOpen;

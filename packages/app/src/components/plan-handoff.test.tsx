@@ -80,7 +80,7 @@ describe("PlanHandoffButton", () => {
     cwd: "/code/project",
     model: "opus",
     thinkingOptionId: "high",
-    features: [{ id: "web-search", value: true }],
+    options: { "web-search": true },
   };
 
   const handoffButton = () =>
@@ -182,7 +182,7 @@ describe("PlanHandoffButton", () => {
       model: "opus",
       thinkingOptionId: "high",
       modeId: null,
-      featureValues: { "web-search": true },
+      providerOptions: { "web-search": true },
     });
 
     // Handing off drafts; it never sends.
