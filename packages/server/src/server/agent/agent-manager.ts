@@ -53,6 +53,7 @@ import {
   type AgentSession,
   type AgentSessionConfig,
   type SteerResult,
+  type SideAnswer,
   type AgentStreamEvent,
   type AgentTimelineItem,
   type AgentUsage,
@@ -96,6 +97,11 @@ import {
   type PendingForegroundRun,
 } from "./agent-run-state.js";
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
+import {
+  SideConversationStore,
+  type SideConversationRecord,
+  type SideConversationStoreEvent,
+} from "./side-conversations/store.js";
 import { parseAgentMessage, projectAgentMessages } from "./agent-messages/index.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import {
@@ -146,6 +152,13 @@ export class AgentManagerShuttingDownError extends Error {
   constructor() {
     super("Agent manager is shutting down");
     this.name = "AgentManagerShuttingDownError";
+  }
+}
+
+export class PeerTurnActiveError extends Error {
+  constructor(readonly agentId: string) {
+    super("A turn from another client is running. Wait for it or press Stop.");
+    this.name = "PeerTurnActiveError";
   }
 }
 
@@ -274,6 +287,7 @@ export type AgentManagerEvent =
   | { type: "provider_subagent"; event: ProviderSubagentStoreEvent }
   | { type: "background_work"; agentId: string; items: AgentBackgroundWorkItem[] }
   | { type: "timeline_replacement"; agentId: string; epoch: string }
+  | { type: "side_conversation"; event: SideConversationStoreEvent }
   | {
       type: "agent_stream";
       agentId: string;
@@ -282,6 +296,10 @@ export type AgentManagerEvent =
       epoch?: string;
       timestamp?: string;
     };
+
+function sideConversationEventParentId(event: SideConversationStoreEvent): string {
+  return event.type === "update" ? event.record.parentAgentId : event.parentAgentId;
+}
 
 export type AgentSubscriber = (event: AgentManagerEvent) => void;
 
@@ -383,6 +401,7 @@ export interface AgentManagerOptions {
   paseoToolCatalogFactory?: PaseoToolCatalogFactory;
   resolvePaseoToolPolicy?: (provider: AgentProvider) => ProviderPaseoToolsPolicy | undefined;
   appendSystemPrompt?: string;
+  appendSystemPromptExcludedProviders?: string[];
   agentStreamCoalesceWindowMs?: number;
   rescueTimeouts?: AgentManagerRescueTimeouts;
   beforeSteerUnavailableFallback?: (input: {
@@ -460,6 +479,8 @@ interface HandleStreamEventOptions {
 }
 
 interface ManagedAgentBase {
+  /** Provider requests awaiting settlement, independent of native turn identity. */
+  pendingProviderWork?: boolean;
   id: string;
   provider: AgentProvider;
   cwd: string;
@@ -840,6 +861,8 @@ export class AgentManager {
   private readonly timelineStore: InMemoryAgentTimelineStore;
   private readonly providerSubagents = new ProviderSubagentStore();
   private readonly backgroundWork = new AgentBackgroundWorkStore();
+  private readonly sideConversations = new SideConversationStore();
+  private readonly activeSideQuestions = new Set<string>();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
   private readonly sessionEventTails = new Map<string, Promise<void>>();
   private readonly steerEventBarriers = new Map<string, SteerEventBarrier>();
@@ -872,6 +895,7 @@ export class AgentManager {
     provider: AgentProvider,
   ) => ProviderPaseoToolsPolicy | undefined;
   private appendSystemPrompt: string;
+  private appendSystemPromptExcludedProviders: Set<string>;
   private onAgentAttention?: AgentAttentionCallback;
   private onAgentArchived?: AgentArchivedCallback;
   private onWorkspaceStateMayHaveChanged?: (params: { cwd: string }) => void;
@@ -894,6 +918,7 @@ export class AgentManager {
     this.configurePaseoTools(options);
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
+    this.appendSystemPromptExcludedProviders = new Set(options.appendSystemPromptExcludedProviders);
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
     this.rescueTimeouts = {
       reloadSessionCloseMs:
@@ -1061,6 +1086,10 @@ export class AgentManager {
     this.appendSystemPrompt = prompt ?? "";
   }
 
+  setAppendSystemPromptExcludedProviders(providers: string[]): void {
+    this.appendSystemPromptExcludedProviders = new Set(providers);
+  }
+
   public getMetricsSnapshot(): AgentMetricsSnapshot {
     const byLifecycle: Record<string, number> = {};
     let withActiveForegroundTurn = 0;
@@ -1111,6 +1140,15 @@ export class AgentManager {
     const nowMs = Date.now();
     const nextMs = nowMs > previousMs ? nowMs : previousMs + 1;
     return new Date(nextMs).toISOString();
+  }
+
+  isPeerRun(agentId: string): boolean {
+    const agent = this.agents.get(agentId);
+    return (
+      agent?.capabilities.supportsSharedTurns === true &&
+      agent.activeForegroundTurnId === null &&
+      this.runs.getRun(agentId)?.kind === "autonomous"
+    );
   }
 
   hasInFlightRun(agentId: string): boolean {
@@ -1474,6 +1512,99 @@ export class AgentManager {
     return this.providerSubagents.fetchTimeline(parentAgentId, subagentId, options);
   }
 
+  getSideConversation(parentAgentId: string, threadId: string): SideConversationRecord | null {
+    this.requirePublicAgent(parentAgentId);
+    return this.sideConversations.get(parentAgentId, threadId);
+  }
+
+  listSideConversations(parentAgentId: string): SideConversationRecord[] {
+    this.requirePublicAgent(parentAgentId);
+    return this.sideConversations.list(parentAgentId);
+  }
+
+  async askSideQuestion(
+    parentAgentId: string,
+    threadId: string,
+    question: string,
+    timeoutMs = 30_000,
+  ): Promise<SideAnswer> {
+    // Both gates, in this order: an internal agent must be refused before any work starts, and the
+    // provider seam needs a live session. Checking only one of them lets a question run to
+    // completion against an agent the caller may not read back.
+    this.requirePublicAgent(parentAgentId);
+    const agent = this.requireSessionAgent(parentAgentId);
+    const activeKey = `${parentAgentId}\0${threadId}`;
+    if (this.activeSideQuestions.has(activeKey)) {
+      return {
+        status: "failed",
+        error: "A side question is already pending",
+        threading: "single_shot",
+      };
+    }
+
+    const history = this.sideConversations.history(parentAgentId, threadId);
+    this.dispatchSideConversationUpdate(
+      this.sideConversations.begin(parentAgentId, threadId, question),
+    );
+    if (!agent.session.askSideQuestion) {
+      const answer = { status: "unavailable" as const, reason: "unsupported_provider" as const };
+      this.completeSideConversation(parentAgentId, threadId, answer);
+      return answer;
+    }
+    this.activeSideQuestions.add(activeKey);
+    const abort = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const providerAnswer = agent.session.askSideQuestion(question, history, {
+      signal: abort.signal,
+    });
+    // Attach the rejection arm before racing so a late provider failure is always observed.
+    void providerAnswer.catch(() => undefined);
+    try {
+      const answer = await Promise.race([
+        providerAnswer,
+        new Promise<SideAnswer>((settle) => {
+          timer = setTimeout(
+            () => settle({ status: "timed_out", threading: "single_shot" }),
+            Math.max(0, timeoutMs),
+          );
+        }),
+      ]);
+      this.completeSideConversation(parentAgentId, threadId, answer);
+      return answer;
+    } catch (error) {
+      const answer: SideAnswer = {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Side question failed",
+        threading: "single_shot",
+      };
+      this.completeSideConversation(parentAgentId, threadId, answer);
+      return answer;
+    } finally {
+      if (timer) clearTimeout(timer);
+      // Cancels the provider whenever we stopped waiting first — a timeout, a rejection, or a
+      // caller that already has its answer. Without it the provider keeps polling a forked session.
+      abort.abort();
+      this.activeSideQuestions.delete(activeKey);
+    }
+  }
+
+  /**
+   * The record can be wiped mid-flight by a reload, an archive, or a history clear, in which case
+   * there is nothing to update and nothing to broadcast — the caller still gets its answer.
+   */
+  private completeSideConversation(
+    parentAgentId: string,
+    threadId: string,
+    answer: SideAnswer,
+  ): void {
+    const record = this.sideConversations.complete(parentAgentId, threadId, answer);
+    if (record) this.dispatchSideConversationUpdate(record);
+  }
+
+  private dispatchSideConversationUpdate(record: SideConversationRecord): void {
+    this.dispatch({ type: "side_conversation", event: { type: "update", record } });
+  }
+
   async createAgent(
     config: AgentSessionConfig,
     agentId: string | undefined,
@@ -1677,10 +1808,11 @@ export class AgentManager {
 
     const launchEnv = record?.launchEnv;
     const workspaceId = resolveResumeWorkspaceId({ options, record });
+    const loadsNativeConfig = this.restoresSessionConfig(handle.provider);
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       mergedConfig,
       resolvedAgentId,
-      { purpose, env: launchEnv },
+      { purpose, env: launchEnv, resolveDefaultModel: !loadsNativeConfig },
     );
     const client = this.requireClient(handle.provider);
     const available = await client.isAvailable();
@@ -1705,7 +1837,10 @@ export class AgentManager {
         ...agentEntityData(record ?? options),
       },
     );
-    const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    const providerLaunchConfig = this.resolveProviderLaunchConfig(
+      this.loadedSessionLaunchConfig(loadsNativeConfig, launchConfig, overrides),
+      launchContext,
+    );
     const launchedOptions = this.launchOptionsFor({ client, own: storedConfig.providerOptions });
     const session = await client.resumeSession(
       handle,
@@ -1715,17 +1850,22 @@ export class AgentManager {
     );
     if (purpose === "history") this.historySessions.add(session);
     await this.requireExternalMcpSupport(session, providerLaunchConfig, launchContext);
-    return this.registerSession(session, storedConfig, resolvedAgentId, {
-      launchedOptions,
-      ...options,
-      // The caller read its metadata before this turn in the lane; a setMetadata queued ahead of
-      // it has saved a newer record, the one the open hooks saw.
-      ...(record ? { metadata: record.metadata } : {}),
-      workspaceId,
-      launchEnv,
-      persistence: handle,
-      restoring: true,
-    });
+    return this.registerSession(
+      session,
+      await this.loadedSessionConfig(loadsNativeConfig, session, storedConfig, { purpose }),
+      resolvedAgentId,
+      {
+        launchedOptions,
+        ...options,
+        // The caller read its metadata before this turn in the lane; a setMetadata queued ahead of
+        // it has saved a newer record, the one the open hooks saw.
+        ...(record ? { metadata: record.metadata } : {}),
+        workspaceId,
+        launchEnv,
+        persistence: handle,
+        restoring: true,
+      },
+    );
   }
 
   importProviderSession(input: {
@@ -1788,13 +1928,10 @@ export class AgentManager {
     await this.requireExternalMcpSupport(imported.session, providerLaunchConfig, launchContext);
     let handedToRegistration = false;
     try {
-      const runtimeInfo = await imported.session.getRuntimeInfo();
-      const importedConfig = await this.normalizeConfig(
-        stripInternalPaseoMcpServer({
-          ...imported.config,
-          model: runtimeInfo.model ?? imported.config.model,
-        }),
-        { resolveDefaultModel: false },
+      const importedConfig = await this.resolveLoadedSessionConfig(
+        imported.session,
+        stripInternalPaseoMcpServer(imported.config),
+        { adoptMode: true, resolveDefaultModel: false },
       );
       const timelineRows = buildImportedTimelineRows(imported.timeline);
       const initialTitle = resolveImportedAgentTitle(importedConfig, timelineRows);
@@ -1865,10 +2002,13 @@ export class AgentManager {
       ...overrides,
       provider,
     } as AgentSessionConfig;
+    // Only a reload that loads a session restoring its own selection leaves it to the session.
+    // Without a persistence handle the reload creates a new session, which gets the default.
+    const loadsNativeConfig = Boolean(handle) && this.restoresSessionConfig(provider);
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       refreshConfig,
       agentId,
-      { env: existing.launchEnv },
+      { env: existing.launchEnv, resolveDefaultModel: !loadsNativeConfig },
     );
     const hadPreviousPaseoToolPolicy = this.paseoToolPolicies.has(agentId);
     const previousPaseoToolPolicy = this.paseoToolPolicies.get(agentId);
@@ -1888,7 +2028,10 @@ export class AgentManager {
         metadata: existing.metadata,
       },
     );
-    const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    const providerLaunchConfig = this.resolveProviderLaunchConfig(
+      this.loadedSessionLaunchConfig(loadsNativeConfig, launchConfig, overrides),
+      launchContext,
+    );
     if (
       Object.keys(stripInternalPaseoMcpServer(providerLaunchConfig).mcpServers ?? {}).length > 0 &&
       existing.session.capabilities.supportsMcpServers !== true
@@ -1921,14 +2064,13 @@ export class AgentManager {
         // Wipe the in-memory timeline so registerSession mints a new epoch and
         // hydrateTimelineFromProvider re-streams the freshly read provider history.
         this.timelineStore.delete(agentId);
-        for (const event of this.providerSubagents.deleteParent(agentId)) {
-          this.dispatch({ type: "provider_subagent", event });
-        }
+        this.discardReloadedChildren(agentId);
       }
 
+      const loadedConfig = await this.loadedSessionConfig(loadsNativeConfig, session, storedConfig);
       // Preserve existing labels and timeline during reload.
       handedToRegistration = true;
-      return this.registerSession(session, storedConfig, agentId, {
+      return this.registerSession(session, loadedConfig, agentId, {
         launchedOptions,
         labels: existing.labels,
         metadata: existing.metadata,
@@ -1967,6 +2109,20 @@ export class AgentManager {
           await this.closeUnregisteredSession(session);
         }
       }
+    }
+  }
+
+  // Both child registries are dropped on rehydrate for the same reason: the timeline is
+  // about to be re-streamed from the provider, so anything hanging off the old epoch is
+  // stale. Extracted from reloadAgentSessionInternal because the fork's side-conversation
+  // loop is the branch that takes that method to complexity 21 against oxlint's max of 20 —
+  // upstream sits exactly at the limit, so the fork has to pay its own branch back.
+  private discardReloadedChildren(agentId: string): void {
+    for (const event of this.sideConversations.deleteParent(agentId)) {
+      this.dispatch({ type: "side_conversation", event });
+    }
+    for (const event of this.providerSubagents.deleteParent(agentId)) {
+      this.dispatch({ type: "provider_subagent", event });
     }
   }
 
@@ -2107,6 +2263,8 @@ export class AgentManager {
       !agent.internal &&
       agent.activeForegroundTurnId === null &&
       !this.runs.hasRun(agent.id) &&
+      // Side questions use the parent runtime without starting a foreground turn.
+      ![...this.activeSideQuestions].some((key) => key.startsWith(`${agent.id}\0`)) &&
       !agent.pendingReplacement &&
       agent.pendingPermissions.size === 0 &&
       agent.inFlightPermissionResponses.size === 0 &&
@@ -2135,6 +2293,25 @@ export class AgentManager {
     };
     void close.then(clearClose, clearClose);
     return close;
+  }
+
+  /**
+   * Leave a shared provider session while the provider keeps its work. Unlike close, this asks
+   * the provider for an explicit detach first; a provider without that operation is left alone
+   * so a normal close cannot silently gain different semantics.
+   */
+  async detachSharedSession(agentId: string): Promise<void> {
+    await this.runLifecycleMutation(agentId, async () => {
+      // A queued reload or close may already have replaced the runtime while this request was
+      // waiting. Resolve the current session inside the lane so detach never targets a stale one.
+      const agent = this.requireAgent(agentId);
+      const detach = agent.session.detachSharedSession;
+      if (!detach) throw new Error(`${agent.provider} does not support shared session detach`);
+      await detach.call(agent.session);
+      // Close the same captured runtime in this lane. A second public close lane could be
+      // overtaken by a later reload and close that successor instead.
+      await this.closeAgentRuntime(agentId, () => this.agents.get(agentId) === agent);
+    });
   }
 
   private async closeAgentRuntime(agentId: string, canClose?: () => boolean): Promise<boolean> {
@@ -3118,13 +3295,36 @@ export class AgentManager {
     options?: AgentRunOptions;
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
+    // Correlation for the replace race: these are the manager's own facts about
+    // the call it made. Whether the provider admitted or staged the turn is the
+    // adapter's to log (provider.acp.successor_staged / admission_released).
+    const replacement = agent.pendingReplacement;
+    const sessionId = agent.persistence?.sessionId ?? undefined;
+    if (replacement) {
+      this.logger.info(
+        { agentId, provider: agent.provider, sessionId },
+        "agent.replace.start_turn_invoked",
+      );
+    }
     try {
       const result = await agent.session.startTurn(prompt, options);
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
       }
+      if (replacement) {
+        this.logger.info(
+          { agentId, provider: agent.provider, sessionId, turnId: result.turnId },
+          "agent.replace.start_turn_resolved",
+        );
+      }
       return result.turnId;
     } catch (error) {
+      if (replacement) {
+        this.logger.warn(
+          { agentId, provider: agent.provider, sessionId, err: error },
+          "agent.replace.start_turn_rejected",
+        );
+      }
       if (pendingRun.settled) {
         throw error;
       }
@@ -3354,7 +3554,7 @@ export class AgentManager {
     const terminalError = mutableAgent.lastError;
     const shouldHoldBusyForReplacement = mutableAgent.pendingReplacement && !terminalError;
     let nextLifecycle: "running" | "error" | "idle";
-    if (shouldHoldBusyForReplacement) {
+    if (shouldHoldBusyForReplacement || mutableAgent.pendingProviderWork) {
       nextLifecycle = "running";
     } else if (terminalError) {
       nextLifecycle = "error";
@@ -3409,12 +3609,29 @@ export class AgentManager {
     return "closed_current";
   }
 
+  private assertPromptCanReplacePeerRun(
+    agentId: string,
+    prompt: AgentPromptInput,
+    options?: AgentRunOptions,
+  ): void {
+    if (!this.isPeerRun(agentId)) return;
+    if (options?.clientMessageId) {
+      const agent = this.requireSessionAgent(agentId);
+      this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "rejected", {
+        messageId: options.clientMessageId,
+      });
+      this.emitState(agent);
+    }
+    throw new PeerTurnActiveError(agentId);
+  }
+
   async replaceAgentRun(
     agentId: string,
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<AsyncGenerator<AgentStreamEvent>> {
     const snapshot = this.requireAgent(agentId);
+    this.assertPromptCanReplacePeerRun(agentId, prompt, options);
     if (
       snapshot.lifecycle !== "running" &&
       !snapshot.activeForegroundTurnId &&
@@ -3510,6 +3727,8 @@ export class AgentManager {
     if (result.status === "accepted") {
       return { status: "steered" };
     }
+
+    this.assertPromptCanReplacePeerRun(agentId, prompt, options);
 
     // Providers without autonomous steering keep their existing dispatch behavior. The shared
     // admission may recognize the turn, but only an accepted steer can own it without replacement.
@@ -3785,23 +4004,34 @@ export class AgentManager {
       return { status: "not_running" };
     }
 
-    const interruptAcknowledged = await this.interruptSession(agent.session, agentId);
+    // Correlation ids the manager owns: the run it is settling and the ACP
+    // session that run belongs to. Whether the provider is ready or still
+    // gated is the adapter's to log, never the manager's.
+    const sessionId = agent.persistence?.sessionId ?? undefined;
+    const interruptReturned = await this.interruptSession(agent.session, agentId);
     const settlement = await this.waitWithTimeout({
       operation: run.settledPromise,
-      timeoutMs: interruptAcknowledged
+      timeoutMs: interruptReturned
         ? INTERRUPT_SESSION_TIMEOUT_MS
         : this.rescueTimeouts.interruptSessionMs,
     });
 
-    if (!interruptAcknowledged) {
+    if (!interruptReturned) {
       return { status: settlement === "completed" ? "settled" : "refused" };
     }
 
     const runTurnId = this.runs.getTurnId(agentId);
     if (settlement === "timed_out" && runTurnId) {
+      // Manager-owned facts only. The adapter may still hold its stop boundary,
+      // so this line must never read as the provider being ready or idle.
       this.logger.warn(
-        { agentId, turnId: runTurnId, kind: run.kind },
-        "cancelAgentRun: acknowledged turn still active after timeout, force-canceling",
+        {
+          agentId,
+          turnId: runTurnId,
+          kind: run.kind,
+          sessionId,
+        },
+        "cancelAgentRun: manager settlement wait timed out; force-settling the manager-owned run",
       );
       await this.dispatchSessionEvent(agent, {
         type: "turn_canceled",
@@ -3812,8 +4042,8 @@ export class AgentManager {
       await run.settledPromise;
     } else if (settlement === "timed_out" && run.kind === "foreground") {
       this.logger.warn(
-        { agentId, kind: run.kind },
-        "cancelAgentRun: acknowledged pending turn still active after timeout, clearing it",
+        { agentId, kind: run.kind, sessionId },
+        "cancelAgentRun: manager settlement wait timed out; force-settling the manager-owned pending run",
       );
       this.runs.settleForegroundRun(agentId, run.token);
       if (!agent.pendingReplacement) {
@@ -3823,8 +4053,8 @@ export class AgentManager {
       }
     } else if (settlement === "timed_out" && run.kind === "autonomous") {
       this.logger.warn(
-        { agentId, kind: run.kind },
-        "cancelAgentRun: acknowledged turn still active after timeout, force-canceling",
+        { agentId, kind: run.kind, sessionId },
+        "cancelAgentRun: manager settlement wait timed out; force-settling the manager-owned autonomous run",
       );
       await this.dispatchSessionEvent(agent, {
         type: "turn_canceled",
@@ -3845,6 +4075,17 @@ export class AgentManager {
     agentId: string,
     action: "reload" | "replace" | "rewind",
   ): Promise<void> {
+    if (this.isPeerRun(agentId)) {
+      if (action !== "reload") throw new PeerTurnActiveError(agentId);
+      const agent = this.requireSessionAgent(agentId);
+      await this.dispatchSessionEvent(agent, {
+        type: "turn_canceled",
+        provider: agent.provider,
+        turnId: agent.activeTurnId ?? undefined,
+        reason: "Session reloaded",
+      });
+      return;
+    }
     const result = await this.cancelAgentRun(agentId);
     if (result.status === "refused") {
       throw new AgentRunCancellationError(agentId, action);
@@ -3852,28 +4093,37 @@ export class AgentManager {
   }
 
   private async interruptSession(session: AgentSession, agentId: string): Promise<boolean> {
+    // The manager owns the interrupt call and the wait around it, and nothing
+    // else. It cannot see a provider stop boundary or prompt state, so its logs
+    // record that the call was issued, that it returned or rejected, and when
+    // the manager's own wait ended — never that the provider settled or is idle.
+    const sessionId = session.describePersistence()?.sessionId ?? undefined;
     try {
       const result = await this.waitWithTimeout({
         operation: session.interrupt(),
         timeoutMs: this.rescueTimeouts.interruptSessionMs,
         onLateError: (error) => {
           this.logger.warn(
-            { err: error, agentId },
-            "Session interrupt failed after timeout during cancel",
+            { err: error, agentId, sessionId },
+            "interruptSession: provider rejected the interrupt after the manager stopped waiting",
           );
         },
       });
 
       if (result === "timed_out") {
         this.logger.warn(
-          { agentId, timeoutMs: this.rescueTimeouts.interruptSessionMs },
-          "Timed out interrupting session during cancel",
+          { agentId, sessionId, timeoutMs: this.rescueTimeouts.interruptSessionMs },
+          "interruptSession: manager interrupt wait timed out",
         );
         return false;
       }
+      this.logger.info({ agentId, sessionId }, "interruptSession: interrupt call returned");
       return true;
     } catch (error) {
-      this.logger.error({ err: error, agentId }, "Failed to interrupt session");
+      this.logger.error(
+        { err: error, agentId, sessionId },
+        "interruptSession: provider rejected the interrupt",
+      );
       return false;
     }
   }
@@ -4548,6 +4798,9 @@ export class AgentManager {
   private discardRetainedAgentState(agentId: string): void {
     this.timelineStore.delete(agentId);
     this.paseoToolPolicies.delete(agentId);
+    for (const event of this.sideConversations.deleteParent(agentId)) {
+      this.dispatch({ type: "side_conversation", event });
+    }
     this.detachPluginTools(agentId);
     for (const event of this.providerSubagents.deleteParent(agentId)) {
       this.dispatch({ type: "provider_subagent", event });
@@ -4785,6 +5038,14 @@ export class AgentManager {
     await this.refreshRuntimeInfo(agent, options);
   }
 
+  private applyObservedRuntimeInfo(agent: ActiveManagedAgent, runtimeInfo: AgentRuntimeInfo): void {
+    agent.runtimeInfo = runtimeInfo;
+    if (runtimeInfo.model) agent.config.model = runtimeInfo.model;
+    if (runtimeInfo.thinkingOptionId !== undefined) {
+      agent.config.thinkingOptionId = runtimeInfo.thinkingOptionId ?? undefined;
+    }
+  }
+
   private async refreshRuntimeInfo(
     agent: ActiveManagedAgent,
     options?: { emit?: boolean },
@@ -4796,7 +5057,7 @@ export class AgentManager {
         newInfo.thinkingOptionId !== agent.runtimeInfo?.thinkingOptionId ||
         newInfo.sessionId !== agent.runtimeInfo?.sessionId ||
         newInfo.modeId !== agent.runtimeInfo?.modeId;
-      agent.runtimeInfo = newInfo;
+      this.applyObservedRuntimeInfo(agent, newInfo);
       if (!agent.persistence && newInfo.sessionId) {
         agent.persistence = normalizePersistenceForConfig(
           { provider: agent.provider, sessionId: newInfo.sessionId },
@@ -4859,6 +5120,11 @@ export class AgentManager {
     this.timelineStore.initialize(agent.id, { timestamp: new Date().toISOString() });
     agent.historyPrimed = true;
 
+    for (const event of this.sideConversations.deleteParent(agent.id)) {
+      if (broadcast) {
+        this.dispatch({ type: "side_conversation", event });
+      }
+    }
     for (const event of this.providerSubagents.deleteParent(agent.id)) {
       if (broadcast) {
         this.dispatch({ type: "provider_subagent", event });
@@ -5151,6 +5417,11 @@ export class AgentManager {
     const { agent, event, options, isForegroundEvent, eventTurnId, terminalDisposition, flags } =
       params;
     switch (event.type) {
+      case "pending_work":
+        this.onPendingProviderWork(agent, event.pending);
+        flags.shouldDispatchEvent = false;
+        flags.shouldNotifyWaiters = false;
+        return undefined;
       case "thread_started":
         this.onStreamThreadStarted(agent);
         return undefined;
@@ -5168,7 +5439,7 @@ export class AgentManager {
         this.emitState(agent);
         return undefined;
       case "model_changed":
-        agent.runtimeInfo = event.runtimeInfo;
+        this.applyObservedRuntimeInfo(agent, event.runtimeInfo);
         if (!agent.persistence && event.runtimeInfo.sessionId) {
           agent.persistence = normalizePersistenceForConfig(
             { provider: agent.provider, sessionId: event.runtimeInfo.sessionId },
@@ -5289,6 +5560,20 @@ export class AgentManager {
     }
   }
 
+  /**
+   * Native brackets can end before an accepted steer receives its own output.
+   * Keep finish waiters open across that gap without inventing a turn identity.
+   */
+  private onPendingProviderWork(agent: ActiveManagedAgent, pending: boolean): void {
+    agent.pendingProviderWork = pending;
+    if (pending) agent.lifecycle = "running";
+    else if (!agent.activeTurnId && !agent.activeForegroundTurnId && !agent.pendingReplacement) {
+      agent.lifecycle = agent.lastError ? "error" : "idle";
+      this.runs.settleTerminalRun(agent.id, undefined);
+    }
+    this.emitState(agent);
+  }
+
   private onStreamTurnCompleted(params: {
     agent: ActiveManagedAgent;
     event: Extract<AgentStreamEvent, { type: "turn_completed" }>;
@@ -5320,7 +5605,8 @@ export class AgentManager {
       !isForegroundEvent &&
       !agent.activeForegroundTurnId &&
       agent.lifecycle !== "idle" &&
-      !agent.pendingReplacement
+      !agent.pendingReplacement &&
+      !agent.pendingProviderWork
     ) {
       (agent as ActiveManagedAgent).lifecycle = "idle";
       this.emitState(agent);
@@ -5353,7 +5639,7 @@ export class AgentManager {
       "handleStreamEvent: turn_failed",
     );
     if (terminalDisposition === "stale") return;
-    if (!isForegroundEvent && !agent.activeForegroundTurnId) {
+    if (!isForegroundEvent && !agent.activeForegroundTurnId && !agent.pendingProviderWork) {
       agent.lifecycle = "error";
     }
     agent.lastError = event.error;
@@ -5395,7 +5681,12 @@ export class AgentManager {
       "agent.manager.turn.canceled",
     );
     if (terminalDisposition === "stale") return;
-    if (!isForegroundEvent && !agent.activeForegroundTurnId && !agent.pendingReplacement) {
+    if (
+      !isForegroundEvent &&
+      !agent.activeForegroundTurnId &&
+      !agent.pendingReplacement &&
+      !agent.pendingProviderWork
+    ) {
       agent.lifecycle = "idle";
     }
     agent.lastError = undefined;
@@ -5895,6 +6186,10 @@ export class AgentManager {
     }
   }
 
+  // An event variant with a parent-scoped payload needs a filtering arm here and a membership
+  // arm in eventBelongsToInternalAgent(). Miss the first and an agentId-scoped subscriber
+  // receives every parent's events; miss the second and internal-agent events leak to global
+  // subscribers. provider_subagent and side_conversation carry the whole pattern.
   private dispatch(event: AgentManagerEvent): void {
     for (const subscriber of this.subscribers) {
       if (
@@ -5928,6 +6223,13 @@ export class AgentManager {
       ) {
         continue;
       }
+      if (
+        subscriber.agentId &&
+        event.type === "side_conversation" &&
+        subscriber.agentId !== sideConversationEventParentId(event.event)
+      ) {
+        continue;
+      }
       // Global subscribers (no agentId) skip internal agents unless they opted in.
       if (
         !subscriber.agentId &&
@@ -5945,6 +6247,9 @@ export class AgentManager {
     if (event.type === "agent_removed") return event.internal;
     if (event.type === "agent_stream") return this.agents.get(event.agentId)?.internal === true;
     if (event.type === "background_work") return this.agents.get(event.agentId)?.internal === true;
+    if (event.type === "side_conversation") {
+      return this.agents.get(sideConversationEventParentId(event.event))?.internal === true;
+    }
     if (event.type !== "provider_subagent") return false;
     const parentAgentId =
       event.event.type === "upsert"
@@ -6053,6 +6358,60 @@ export class AgentManager {
     return providerOptions === config.providerOptions ? config : { ...config, providerOptions };
   }
 
+  /** Whether this provider's loaded sessions restore their own model and thinking option. */
+  restoresSessionConfig(provider: AgentProvider): boolean {
+    return this.clients.get(provider)?.restoresSessionConfig === true;
+  }
+
+  private loadedSessionLaunchConfig(
+    loadsNativeConfig: boolean,
+    config: AgentSessionConfig,
+    overrides: Partial<AgentSessionConfig> = {},
+  ): AgentSessionConfig {
+    // Providers that do not restore a selection get the saved one on every load.
+    if (!loadsNativeConfig) return config;
+    // Saved selections are snapshots; only a caller's overrides are instructions
+    // to change a native session while opening it.
+    return { ...config, model: overrides.model, thinkingOptionId: overrides.thinkingOptionId };
+  }
+
+  private async loadedSessionConfig(
+    loadsNativeConfig: boolean,
+    session: AgentSession,
+    config: AgentSessionConfig,
+    options: { purpose?: AgentResumePurpose } = {},
+  ): Promise<AgentSessionConfig> {
+    return loadsNativeConfig ? this.resolveLoadedSessionConfig(session, config, options) : config;
+  }
+
+  private async resolveLoadedSessionConfig(
+    session: AgentSession,
+    config: AgentSessionConfig,
+    options: {
+      purpose?: AgentResumePurpose;
+      adoptMode?: boolean;
+      resolveDefaultModel?: boolean;
+    } = {},
+  ): Promise<AgentSessionConfig> {
+    // A native session may have changed since our last snapshot. Read it before
+    // choosing a default so opening it never replaces its model or thinking level.
+    const runtime = await session.getRuntimeInfo().catch(() => null);
+    return this.normalizeConfig(
+      {
+        ...config,
+        model: runtime?.model ?? config.model,
+        thinkingOptionId:
+          runtime?.thinkingOptionId !== undefined
+            ? (runtime.thinkingOptionId ?? undefined)
+            : config.thinkingOptionId,
+        // Only an import adopts the native mode. On resume and refresh the saved mode is
+        // the user's permission choice in Paseo and keeps being applied.
+        modeId: options.adoptMode ? (runtime?.modeId ?? config.modeId) : config.modeId,
+      },
+      { purpose: options.purpose, resolveDefaultModel: options.resolveDefaultModel },
+    );
+  }
+
   private async prepareSessionConfig(
     config: AgentSessionConfig,
     agentId: string,
@@ -6081,7 +6440,11 @@ export class AgentManager {
   }
 
   private applyDaemonAppendSystemPrompt(config: AgentSessionConfig): AgentSessionConfig {
-    const daemonAppendSystemPrompt = this.appendSystemPrompt.trim();
+    // Exclusions move only daemon policy to provider-owned instructions.
+    // Explicit per-agent system prompts still pass through provider validation.
+    const daemonAppendSystemPrompt = this.appendSystemPromptExcludedProviders.has(config.provider)
+      ? ""
+      : this.appendSystemPrompt.trim();
     const next = { ...config };
     delete next.daemonAppendSystemPrompt;
 

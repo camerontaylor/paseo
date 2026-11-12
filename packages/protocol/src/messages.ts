@@ -237,6 +237,7 @@ export const MutableDaemonConfigSchema = z
     metadataGeneration: MutableMetadataGenerationConfigSchema.default({ providers: [] }),
     autoArchiveAfterMerge: z.boolean().default(false),
     enableTerminalAgentHooks: z.boolean().default(false),
+    appendSystemPromptExcludedProviders: z.array(z.string().min(1)).optional(),
     // COMPAT(idleRuntimeCleanupSetting): added in v0.13.0, keep optional while old daemons are supported.
     // Persisted host-wide value, applied live by the daemon.
     idleRuntimeCleanup: z.boolean().optional(),
@@ -268,6 +269,7 @@ export const MutableDaemonConfigPatchSchema = z
     metadataGeneration: MutableMetadataGenerationConfigSchema.partial().optional(),
     autoArchiveAfterMerge: z.boolean().optional(),
     enableTerminalAgentHooks: z.boolean().optional(),
+    appendSystemPromptExcludedProviders: z.array(z.string().min(1)).optional(),
     idleRuntimeCleanup: z.boolean().optional(),
     resumeOnStartup: z.boolean().optional(),
     resumePrompt: z.string().optional(),
@@ -1506,6 +1508,8 @@ export const SendAgentMessageRequestSchema = z.object({
   /** Accepts full ID, unique prefix, or exact full title (server resolves). */
   agentId: z.string(),
   text: z.string(),
+  /** Explicit skill selection: a name selects, `null` clears, omission leaves it unchanged. */
+  skill: z.string().nullable().optional(),
   /** Opaque sender identity for agent-originated prompts. */
   sourceAgentId: z.string().min(1).optional(),
   sourceAgentServerId: z.string().min(1).optional(),
@@ -1965,6 +1969,7 @@ export const ProviderUsageListRequestMessageSchema = z.object({
 
 export const UsageListReportsRequestMessageSchema = z.object({
   type: z.literal("usage.list_reports.request"),
+  streaming: z.boolean().optional(),
   agentId: z.string().optional(),
   requestId: z.string(),
   reportIds: z.array(z.string()).optional(),
@@ -2092,6 +2097,26 @@ export const ProviderSubagentTimelineRequestMessageSchema = z.object({
 // "current" means the daemon has this agent loaded, the epoch matches, and the cursor is at the head.
 // Anything else is "behind", including an agent the daemon has not loaded.
 export const TimelineFreshnessSchema = z.enum(["current", "behind"]);
+export const SideConversationAskRequestMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.ask.request"),
+  parentAgentId: z.string(),
+  threadId: z.string(),
+  question: z.string().min(1),
+  requestId: z.string(),
+});
+
+export const SideConversationTimelineGetRequestMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.timeline.get.request"),
+  parentAgentId: z.string(),
+  threadId: z.string(),
+  requestId: z.string(),
+});
+
+export const SideConversationListRequestMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.list.request"),
+  parentAgentId: z.string(),
+  requestId: z.string(),
+});
 
 export const SetAgentTimelineSubscriptionRequestMessageSchema = z.object({
   type: z.literal("agent.timeline.set_subscription.request"),
@@ -2209,6 +2234,18 @@ export const AgentDetachRequestMessageSchema = z.object({
 
 export const AgentDetachResponseMessageSchema = z.object({
   type: z.literal("agent.detach.response"),
+  payload: AgentActionResponsePayloadSchema,
+});
+
+/** Leave the provider's shared session without closing it or cancelling its work. */
+export const AgentProviderDetachRequestMessageSchema = z.object({
+  type: z.literal("agent.provider.detach.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+});
+
+export const AgentProviderDetachResponseMessageSchema = z.object({
+  type: z.literal("agent.provider.detach.response"),
   payload: AgentActionResponsePayloadSchema,
 });
 
@@ -3452,6 +3489,8 @@ export const SessionEventSubscriptionSchema = z.enum([
   "workspace_setup_progress",
   "agent.provider_subagents.update",
   "agent.background_work.update",
+  "agent.side_conversation.update",
+  "agent.side_conversation.removed",
   "terminal_attention_required",
   "status.server_info",
   "status.daemon_config_changed",
@@ -3608,6 +3647,9 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentBackgroundWorkListRequestMessageSchema,
   AgentBackgroundWorkStopRequestMessageSchema,
   ProviderSubagentTimelineRequestMessageSchema,
+  SideConversationAskRequestMessageSchema,
+  SideConversationTimelineGetRequestMessageSchema,
+  SideConversationListRequestMessageSchema,
   SetAgentTimelineSubscriptionRequestMessageSchema,
   AgentForkContextRequestMessageSchema,
   SetAgentModeRequestMessageSchema,
@@ -3616,6 +3658,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   SetAgentFeatureRequestMessageSchema,
   AgentConfigApplyRequestMessageSchema,
   AgentDetachRequestMessageSchema,
+  AgentProviderDetachRequestMessageSchema,
   AgentRewindRequestMessageSchema,
   AgentPermissionResponseMessageSchema,
   DiffSubscribeRequestSchema,
@@ -3918,6 +3961,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(usageSetting): added in v0.14, remove after 2027-05-01.
         usageSetting: z.boolean().optional(),
         usageSources: z.boolean().optional(),
+        usageReportsStreaming: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: z.boolean().optional(),
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -4046,6 +4090,13 @@ export const ServerInfoStatusPayloadSchema = z
         wholeTurnTimeline: z.boolean().optional(),
         // COMPAT(providerSubagentNesting): added in v0.7, remove gate after 2027-03-04.
         providerSubagentNesting: z.boolean().optional(),
+        // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
+        sideConversations: z.boolean().optional(),
+        // COMPAT(sideConversationEvents): added in 0.12.0-beta.1.fork.1 — session event
+        // subscriptions can carry the side-conversation update/removal stream, so a modern
+        // (owned-subscription) client can receive proofs for those events. Older fork daemons
+        // advertise sideConversations without this selector support, so clients gate on it.
+        sideConversationEvents: z.boolean().optional(),
         // COMPAT(workspacePinning): added in v0.1.107, remove gate after 2027-01-12.
         workspacePinning: z.boolean().optional(),
         // COMPAT(workspaceMarkUnread): added in v0.5.0, remove after 2027-08-20.
@@ -5253,6 +5304,88 @@ export const ProviderSubagentUpdateMessageSchema = z.object({
       subagentId: z.string(),
     }),
   ]),
+});
+
+export const SideConversationThreadingSchema = z.enum(["threaded", "single_shot"]);
+
+export const SideAnswerUnavailableReasonSchema = z.enum(["unsupported_provider", "session_closed"]);
+
+export const SideAnswerPayloadSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("answered"),
+    content: z.string(),
+    synthetic: z.boolean(),
+    threading: SideConversationThreadingSchema,
+  }),
+  // `reason` is optional because "unspecified" is a real answer (e.g. an ask that failed
+  // before the manager could classify it), not for version tolerance — pre-fork daemons
+  // never send side-conversation answers at all.
+  z.object({
+    status: z.literal("unavailable"),
+    reason: SideAnswerUnavailableReasonSchema.optional(),
+  }),
+  z.object({ status: z.literal("timed_out"), threading: SideConversationThreadingSchema }),
+  z.object({
+    status: z.literal("failed"),
+    error: z.string(),
+    threading: SideConversationThreadingSchema,
+  }),
+]);
+
+export type SideAnswerPayload = z.infer<typeof SideAnswerPayloadSchema>;
+
+export const SideConversationSnapshotPayloadSchema = z.object({
+  parentAgentId: z.string(),
+  threadId: z.string(),
+  items: z.array(AgentTimelineItemPayloadSchema),
+  pendingQuestion: z.string().nullable(),
+  lastAnswer: SideAnswerPayloadSchema.nullable(),
+});
+
+export type SideConversationSnapshotPayload = z.infer<typeof SideConversationSnapshotPayloadSchema>;
+
+export const SideConversationAskResponseMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.ask.response"),
+  payload: z.object({
+    requestId: z.string(),
+    parentAgentId: z.string(),
+    threadId: z.string(),
+    answer: SideAnswerPayloadSchema,
+    error: z.string().nullable(),
+  }),
+});
+
+export const SideConversationTimelineGetResponseMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.timeline.get.response"),
+  payload: SideConversationSnapshotPayloadSchema.extend({
+    requestId: z.string(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const SideConversationUpdateMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.update"),
+  // subscriptionId is the owned-delivery proof tag; it stays optional for legacy broadcasts.
+  payload: SideConversationSnapshotPayloadSchema.extend({ subscriptionId: z.string().optional() }),
+});
+
+export const SideConversationListResponseMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.list.response"),
+  payload: z.object({
+    requestId: z.string(),
+    parentAgentId: z.string(),
+    threads: z.array(SideConversationSnapshotPayloadSchema),
+    error: z.string().nullable(),
+  }),
+});
+
+export const SideConversationRemovedMessageSchema = z.object({
+  type: z.literal("agent.side_conversation.removed"),
+  payload: z.object({
+    parentAgentId: z.string(),
+    threadId: z.string(),
+    subscriptionId: z.string().optional(),
+  }),
 });
 
 export const SetAgentTimelineSubscriptionResponseMessageSchema = z.object({
@@ -6841,7 +6974,11 @@ export const UsageListReportsUpdateMessageSchema = z.object({
 });
 export const UsageListReportsResponseMessageSchema = z.object({
   type: z.literal("usage.list_reports.response"),
-  payload: z.object({ requestId: z.string(), error: z.string().nullable() }),
+  payload: z.object({
+    requestId: z.string(),
+    reports: z.array(UsageReportEntrySchema).optional(),
+    error: z.string().nullable().optional(),
+  }),
 });
 
 const AgentSlashCommandSchema = z.object({
@@ -7467,6 +7604,11 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentBackgroundWorkListResponseMessageSchema,
   AgentBackgroundWorkStopResponseMessageSchema,
   AgentBackgroundWorkUpdateMessageSchema,
+  SideConversationAskResponseMessageSchema,
+  SideConversationTimelineGetResponseMessageSchema,
+  SideConversationUpdateMessageSchema,
+  SideConversationListResponseMessageSchema,
+  SideConversationRemovedMessageSchema,
   SetAgentTimelineSubscriptionResponseMessageSchema,
   AgentAttentionRequiredMessageSchema,
   AgentForkContextResponseMessageSchema,
@@ -7499,6 +7641,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   SetAgentFeatureResponseMessageSchema,
   AgentConfigApplyResponseMessageSchema,
   AgentDetachResponseMessageSchema,
+  AgentProviderDetachResponseMessageSchema,
   AgentRewindResponseMessageSchema,
   UpdateAgentResponseMessageSchema,
   ProjectRenameResponseSchema,
@@ -7709,6 +7852,9 @@ export type SetAgentThinkingResponseMessage = z.infer<typeof SetAgentThinkingRes
 export type SetAgentFeatureResponseMessage = z.infer<typeof SetAgentFeatureResponseMessageSchema>;
 export type AgentConfigApplyResponseMessage = z.infer<typeof AgentConfigApplyResponseMessageSchema>;
 export type AgentDetachResponseMessage = z.infer<typeof AgentDetachResponseMessageSchema>;
+export type AgentProviderDetachResponseMessage = z.infer<
+  typeof AgentProviderDetachResponseMessageSchema
+>;
 export type AgentRewindResponseMessage = z.infer<typeof AgentRewindResponseMessageSchema>;
 export type UpdateAgentResponseMessage = z.infer<typeof UpdateAgentResponseMessageSchema>;
 export type ProjectRenameResponse = z.infer<typeof ProjectRenameResponseSchema>;
@@ -7894,6 +8040,9 @@ export type SetAgentThinkingRequestMessage = z.infer<typeof SetAgentThinkingRequ
 export type SetAgentFeatureRequestMessage = z.infer<typeof SetAgentFeatureRequestMessageSchema>;
 export type AgentConfigApplyRequestMessage = z.infer<typeof AgentConfigApplyRequestMessageSchema>;
 export type AgentDetachRequestMessage = z.infer<typeof AgentDetachRequestMessageSchema>;
+export type AgentProviderDetachRequestMessage = z.infer<
+  typeof AgentProviderDetachRequestMessageSchema
+>;
 export type AgentPermissionResponseMessage = z.infer<typeof AgentPermissionResponseMessageSchema>;
 export type CheckoutStatusRequest = z.infer<typeof CheckoutStatusRequestSchema>;
 export type CheckoutStatusResponse = z.infer<typeof CheckoutStatusResponseSchema>;
@@ -8125,6 +8274,7 @@ export const WSHelloMessageSchema = z.object({
       [CLIENT_CAPS.customModeIcons]: z.boolean().optional(),
       [CLIENT_CAPS.terminalReflowableSnapshot]: z.boolean().optional(),
       [CLIENT_CAPS.providerSubagents]: z.boolean().optional(),
+      [CLIENT_CAPS.sideConversations]: z.boolean().optional(),
       [CLIENT_CAPS.projectUpdates]: z.boolean().optional(),
       [CLIENT_CAPS.compactProviderSnapshots]: z.boolean().optional(),
       [CLIENT_CAPS.providerSnapshotReferences]: z.boolean().optional(),

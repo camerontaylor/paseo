@@ -73,6 +73,22 @@ The connection has three operations:
 Keep the native SDK, process, and stream inside the connection implementation. Convert its output
 to `ProviderEvent` objects before publishing it.
 
+## System instructions
+
+Set `ProviderRegistration.supportsSystemPrompt` to `false` when your native API cannot
+carry additional system instructions. Paseo rejects a nonempty agent `systemPrompt` or
+`daemon.appendSystemPrompt` before opening or resuming that provider session. It never
+drops those instructions or converts them into a conversation message. Omit the field
+for existing providers that already implement the system prompt contract.
+
+A provider listed in `daemon.appendSystemPromptExcludedProviders` never receives
+`daemon.appendSystemPrompt`, so only a nonempty agent `systemPrompt` is checked for it.
+
+`ProviderSessionConfig.systemPrompt` contains the combined agent and daemon instructions.
+Apply them in addition to your provider's default system prompt. A native API that only
+replaces the default prompt, or inserts workspace rules as user context, does not satisfy
+this contract.
+
 ## Launch the provider CLI
 
 Use `spawnProcess` and `execCommand` from `@getpaseo/plugin/server` for process transports
@@ -481,6 +497,33 @@ export const vendorEdits: AcpTransformer = {
   },
 };
 ```
+
+`notification()` runs on the agent's vendor notifications and returns one `AcpVendorUpdate`, an
+array of them, or `null`. The variants are `commands`, `config`, `timeline`, `notice`, and `turn`.
+
+Return `{ type: "turn", turnId, state }` when the agent runs a turn Paseo did not prompt, such as a
+turn started in another client attached to the same agent session. Paseo then shows the turn as a
+running, then finished, run:
+
+```ts
+export const peerTurns: AcpTransformer = {
+  notification(notification) {
+    if (notification.method !== "vendor/turn") return null;
+    const turn = turnSchema.safeParse(notification.params);
+    if (!turn.success) return null;
+    return { type: "turn", turnId: turn.data.turnId, state: turn.data.state };
+  },
+};
+```
+
+- `state` is `started`, `completed`, `failed`, or `canceled`; `error` is optional.
+- `turnId` is agent-scoped. Paseo namespaces it, so it cannot collide with a prompt turn.
+- One vendor turn is open at a time. A `started` while Paseo's own prompt is active is ignored, and
+  a new `started` closes the open turn as completed.
+- A prompt Paseo sends while a vendor turn is open waits for that turn instead of cancelling it.
+- An open vendor turn ends as failed when the ACP transport closes.
+- Vendor updates are applied after every `session/update` that came before them on the wire, so a
+  terminal is never applied before the last chunk of its turn.
 
 ## Test and publish
 

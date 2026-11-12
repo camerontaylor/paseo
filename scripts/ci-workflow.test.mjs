@@ -508,7 +508,6 @@ test("Windows units and integration run independently with complete routed cover
     assert.doesNotMatch(job, /continue-on-error|maxWorkers|--exclude/);
     for (const step of [
       "server_capacity",
-      "server_checkout",
       "server_node",
       "server_fetch",
       "server_install",
@@ -520,6 +519,8 @@ test("Windows units and integration run independently with complete routed cover
     }
     assert.match(job, /env: \*server_test_env/);
   }
+  assert.match(windows, /&server_checkout\b/);
+  assert.match(integration, /- \*server_checkout\b/);
   assert.match(windows, /- \*server_plugin_tests/);
   assert.match(windows, /- \*server_hub_contract/);
   assert.match(ubuntu, /run: npm run test --workspace=@getpaseo\/builtin-plugins/);
@@ -546,9 +547,10 @@ test("Windows units and integration run independently with complete routed cover
   function condition(job) {
     return /    if: \$\{\{ (.+) \}\}/.exec(job)[1];
   }
-  function selected(expression, outputs, cancelled = false) {
+  function selected(expression, outputs, cancelled = false, repository = "getpaseo/paseo") {
     return runInNewContext(expression, {
       needs: { changes: { outputs } },
+      github: { repository },
       cancelled: () => cancelled,
     });
   }
@@ -579,6 +581,81 @@ test("Windows units and integration run independently with complete routed cover
     assert.equal(selected(hubStep, outputs), hub);
     assert.equal(selected(unitCondition, outputs, true), false);
     assert.equal(selected(integrationCondition, outputs, true), false);
+    assert.equal(selected(unitCondition, outputs, false, "camerontaylor/paseo"), false);
+    assert.equal(selected(integrationCondition, outputs, false, "camerontaylor/paseo"), false);
+  }
+});
+
+test("Windows jobs skip the custom fork while upstream jobs remain eligible", () => {
+  const windowsJobs = [];
+  for (const file of readdirSync(new URL(".github/workflows/", repoRoot))) {
+    if (!/\.ya?ml$/.test(file)) continue;
+    const source = readFileSync(new URL(`.github/workflows/${file}`, repoRoot), "utf8");
+    for (const [id, lines] of jobBlocks(source)) {
+      const job = lines.join("\n");
+      if (!/^    runs-on: windows-/m.test(job)) continue;
+      windowsJobs.push(`${file}:${id}`);
+      const expression = /    if: \$\{\{ (.+) \}\}/.exec(job)?.[1];
+      assert.ok(expression, `${file}:${id} has job-level gating`);
+      for (const repository of ["camerontaylor/paseo", "getpaseo/paseo"]) {
+        const eligible = runInNewContext(
+          expression.replaceAll("needs.create-release", 'needs["create-release"]'),
+          {
+            github: {
+              repository,
+              event_name: "workflow_dispatch",
+              event: { inputs: { platform: "all" } },
+            },
+            needs: {
+              changes: { outputs: { full: "true" } },
+              "create-release": { result: "success" },
+            },
+            cancelled: () => false,
+            always: () => true,
+          },
+        );
+        assert.equal(eligible, repository === "getpaseo/paseo", `${file}:${id} in ${repository}`);
+      }
+    }
+  }
+  assert.equal(windowsJobs.length, 4, "all Windows test and desktop build jobs are covered");
+});
+
+test("fresh fork desktop releases finalize with macOS and Linux manifests", () => {
+  const workflow = readFileSync(new URL(".github/workflows/desktop-release.yml", repoRoot), "utf8");
+  const required = workflow.match(
+    /          expected_manifests=\([\s\S]*?(?=          release_lookup=)/,
+  )?.[0];
+  const validate = workflow.match(
+    /          missing_manifests=\([\s\S]*?(?=          publish_args=)/,
+  )?.[0];
+  assert.ok(required);
+  assert.ok(validate);
+  const directory = mkdtempSync(join(tmpdir(), "release-manifests-"));
+  try {
+    for (const [repository, manifests, expected] of [
+      ["camerontaylor/paseo", ["beta-mac.yml", "beta-linux.yml"], 0],
+      ["getpaseo/paseo", ["beta-mac.yml", "beta-linux.yml"], 1],
+      ["getpaseo/paseo", ["beta-mac.yml", "beta-linux.yml", "beta.yml"], 0],
+      ["camerontaylor/paseo", ["beta-linux.yml"], 1],
+      ["camerontaylor/paseo", ["beta-mac.yml"], 1],
+    ]) {
+      const manifestsDir = mkdtempSync(join(directory, "fresh-"));
+      for (const manifest of manifests) writeFileSync(join(manifestsDir, manifest), "");
+      const script = `${required}\n${validate}`.replaceAll("${{ github.repository }}", repository);
+      const result = spawnSync("bash", ["-c", `set -euo pipefail\n${script}`], {
+        encoding: "utf8",
+        env: { ...process.env, RELEASE_CHANNEL: "beta", manifests_dir: manifestsDir },
+      });
+      assert.equal(
+        result.status,
+        expected,
+        `${repository}: ${manifests.join(", ")}\n${result.stdout}\n${result.stderr}`,
+      );
+      if (expected === 1) assert.match(result.stdout, /Missing updater manifests/);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -757,6 +834,56 @@ test("Nix desktop packaging resolves the workspace-local builder", () => {
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim(), "workspace-builder");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("macOS signing repair keeps certificate and keychain passwords separate", () => {
+  const workflow = readFileSync(new URL(".github/workflows/desktop-release.yml", repoRoot), "utf8");
+  const match = workflow.match(/<<'KEYCHAIN_FIX'\n([\s\S]*?)\n          KEYCHAIN_FIX/);
+  assert.ok(match, "the release workflow repairs the pinned signing tool");
+  const script = match[1].replace(/^          /gm, "");
+  const original = [
+    "return await importCerts(keychainFile, certPaths, cscPasswords);",
+    "async function importCerts(keychainFile, paths, keyPasswords) {",
+    '["import", paths[i], "-P", password]',
+    '["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", password, keychainFile]',
+    "}",
+  ].join("\n");
+  const directory = mkdtempSync(join(tmpdir(), "signing-repair-"));
+  try {
+    const packageDirectory = join(directory, "node_modules/app-builder-lib");
+    mkdirSync(join(packageDirectory, "out/codeSign"), { recursive: true });
+    const manifest = join(packageDirectory, "package.json");
+    const sourcePath = join(packageDirectory, "out/codeSign/macCodeSign.js");
+    for (const [version, source, succeeds] of [
+      ["26.8.1", original, true],
+      ["26.8.1", original.replace("cscPasswords);", "differentArguments);"), false],
+      ["26.18.0", original, false],
+    ]) {
+      writeFileSync(manifest, JSON.stringify({ name: "app-builder-lib", version }));
+      writeFileSync(sourcePath, source);
+      const result = spawnSync(process.execPath, ["-e", script], {
+        cwd: directory,
+        encoding: "utf8",
+      });
+      const actual = readFileSync(sourcePath, "utf8");
+      if (succeeds) {
+        assert.equal(result.status, 0, result.stderr);
+        assert.ok(
+          actual.includes("importCerts(keychainFile, certPaths, cscPasswords, keychainPassword)"),
+        );
+        assert.ok(
+          actual.includes("importCerts(keychainFile, paths, keyPasswords, keychainPassword)"),
+        );
+        assert.ok(actual.includes('["import", paths[i], "-P", password]'));
+        assert.ok(actual.includes('"-k", keychainPassword, keychainFile]'));
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.equal(actual, source, "unexpected tool inputs must fail without a partial write");
+      }
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

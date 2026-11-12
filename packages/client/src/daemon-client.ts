@@ -31,7 +31,11 @@ import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import type { z } from "zod";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 import type { LocalSpeechModel } from "@getpaseo/protocol/speech/rpc-schemas";
-import { CLIENT_CAPS, type ClientCapability } from "@getpaseo/protocol/client-capabilities";
+// Split value/type imports: the desvio basket drops the value import once no
+// basket-side code uses CLIENT_CAPS, which orphans the fork's sideConversations
+// declaration at merge time. A separate value-import line survives that merge.
+import type { ClientCapability } from "@getpaseo/protocol/client-capabilities";
+import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import type { AgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
 import { MAX_WEBSOCKET_MESSAGE_BYTES } from "@getpaseo/protocol/websocket-message-limit";
 import {
@@ -482,6 +486,8 @@ export interface SendMessageOptions {
   sourceAgentServerId?: string;
   sessionMode?: string;
   messageId?: string;
+  /** A name selects an explicit skill, `null` clears it; omission leaves it unchanged. */
+  skill?: string | null;
   /** What happens when the agent is mid-turn. The daemon interrupts the turn when omitted. */
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
@@ -761,6 +767,18 @@ export type ProviderSubagentListPayload = Extract<
 export type ProviderSubagentTimelinePayload = Extract<
   SessionOutboundMessage,
   { type: "agent.provider_subagents.timeline.get.response" }
+>["payload"];
+export type SideConversationAskPayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.side_conversation.ask.response" }
+>["payload"];
+export type SideConversationTimelinePayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.side_conversation.timeline.get.response" }
+>["payload"];
+export type SideConversationListPayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.side_conversation.list.response" }
 >["payload"];
 export interface FetchProviderSubagentTimelineOptions {
   direction?: ProviderSubagentTimelinePayload["direction"];
@@ -1348,6 +1366,19 @@ type PingProbeRole = "latency" | "heartbeat" | "foreground";
 export function supportsUsageReports(features: ServerInfoStatusPayload["features"]): boolean {
   return features?.usageSources === true || features?.providerUsageList === true;
 }
+
+/**
+ * Event selectors a host only understands behind a handshake feature. Anything absent from this
+ * map is part of the base protocol and always sent. The client drops mapped selectors the
+ * connected host does not advertise, so an older daemon never parses a selector it does not know.
+ */
+const EVENT_SELECTOR_FEATURES: Partial<
+  Record<SessionEventSubscription, keyof NonNullable<ServerInfoStatusPayload["features"]>>
+> = {
+  // COMPAT(sideConversationEvents): added in 0.12.0-beta.1.fork.1.
+  "agent.side_conversation.update": "sideConversationEvents",
+  "agent.side_conversation.removed": "sideConversationEvents",
+};
 
 export class TerminalKeepUnsupportedError extends Error {
   readonly code = "TERMINALS_KEEP_UNSUPPORTED";
@@ -2793,6 +2824,10 @@ export class DaemonClient {
       timeout?: number;
       signal?: AbortSignal;
       validateSnapshot?: (payload: CorrelatedResponsePayload<T>) => void;
+      /** Rewrites the request on every send, including restores after a reconnect. */
+      prepare?: (message: { type: SessionInboundMessage["type"] } & Record<string, unknown>) => {
+        type: SessionInboundMessage["type"];
+      } & Record<string, unknown>;
     },
   ): OwnedSubscription<CorrelatedResponsePayload<T>> {
     let resetSource = false;
@@ -2804,7 +2839,8 @@ export class DaemonClient {
           this.requireWorkspaceSetupObservation();
         if (query.type === "plugin.rpc.subscribe.request") this.requirePluginSubscriptions();
         const requestId = this.createRequestId(options?.requestId);
-        const request = SessionInboundMessageSchema.parse({ ...query, requestId });
+        const prepared = options?.prepare ? options.prepare({ ...query }) : query;
+        const request = SessionInboundMessageSchema.parse({ ...prepared, requestId });
         try {
           return await this.sendCorrelatedRequest<T, CorrelatedResponsePayload<T>>({
             message: request,
@@ -2869,8 +2905,25 @@ export class DaemonClient {
         events,
         notifications: options?.notifications,
       },
-      options,
+      {
+        signal: options?.signal,
+        prepare: (message) => ({
+          ...message,
+          // Re-evaluated on every send, including the restore after a reconnect, so a downgrade
+          // to a host without the feature never sees the selector.
+          events: this.filterSupportedEventSelectors(message.events as SessionEventSubscription[]),
+        }),
+      },
     );
+  }
+
+  private filterSupportedEventSelectors(
+    events: readonly SessionEventSubscription[],
+  ): SessionEventSubscription[] {
+    return events.filter((event) => {
+      const feature = EVENT_SELECTOR_FEATURES[event];
+      return feature === undefined || this.lastServerInfoMessage?.features?.[feature] === true;
+    });
   }
 
   observeAgents(
@@ -3632,6 +3685,19 @@ export class DaemonClient {
     }
   }
 
+  async detachProviderSession(agentId: string): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.provider.detach.response">({
+        message: {
+          type: "agent.provider.detach.request",
+          agentId,
+        },
+      });
+    if (!payload.accepted) {
+      throw new Error(payload.error ?? "detachProviderSession rejected");
+    }
+  }
+
   async updateAgent(
     agentId: string,
     updates: { name?: string; labels?: Record<string, string> },
@@ -4188,6 +4254,90 @@ export class DaemonClient {
     );
   }
 
+  async askSideConversation(
+    parentAgentId: string,
+    threadId: string,
+    question: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<SideConversationAskPayload> {
+    this.requireSideConversationSupport();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.side_conversation.ask.request",
+      parentAgentId,
+      threadId,
+      question,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.side_conversation.ask.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async fetchSideConversationTimeline(
+    parentAgentId: string,
+    threadId: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<SideConversationTimelinePayload> {
+    this.requireSideConversationSupport();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.side_conversation.timeline.get.request",
+      parentAgentId,
+      threadId,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.side_conversation.timeline.get.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async listSideConversations(
+    parentAgentId: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<SideConversationListPayload> {
+    this.requireSideConversationSupport();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.side_conversation.list.request",
+      parentAgentId,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.side_conversation.list.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
   subscribeAgentTimeline(
     agentId: string,
     handler: (message: TimelineMessage) => void,
@@ -4264,6 +4414,7 @@ export class DaemonClient {
       sourceAgentId: options.sourceAgentId,
       sourceAgentServerId: options.sourceAgentServerId,
       sessionMode: options.sessionMode,
+      ...(options.skill === undefined ? {} : { skill: options.skill }),
       ...(messageId ? { messageId } : {}),
       activeTurnBehavior: options.activeTurnBehavior,
       images: options.images,
@@ -6316,6 +6467,7 @@ export class DaemonClient {
         requestId,
         message: {
           type: "usage.list_reports.request",
+          streaming: features?.usageReportsStreaming === true ? true : undefined,
           requestId,
           forceRefresh: options?.forceRefresh,
           reportIds: options?.reportIds,
@@ -6326,7 +6478,13 @@ export class DaemonClient {
             ? message.payload
             : null,
       });
-      if (response.error !== null) throw new Error(response.error);
+      if (response.error != null) throw new Error(response.error);
+      // COMPAT(usageReportsStreaming): added in v0.11.1, remove after 2027-04-08 once all hosts advertise usageReportsStreaming.
+      // beta.3 sends reports only; beta.4 through 0.11.1 send updates only.
+      if (response.reports !== undefined) {
+        if (reports.length === 0) response.reports.forEach((report) => onReport?.(report));
+        return { requestId, reports: response.reports };
+      }
       return { requestId, reports };
     } finally {
       active = false;
@@ -7287,6 +7445,13 @@ export class DaemonClient {
     }
   }
 
+  private requireSideConversationSupport(): void {
+    // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
+    if (this.lastServerInfoMessage?.features?.sideConversations !== true) {
+      throw new Error("Update the host to use side conversations.");
+    }
+  }
+
   private resolveTransportUrlForAttempt(): string {
     return this.config.url;
   }
@@ -7316,6 +7481,8 @@ export class DaemonClient {
         ...(auth ? { auth } : {}),
         capabilities: {
           ...DEFAULT_CLIENT_CAPABILITIES,
+          // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only.
+          [CLIENT_CAPS.sideConversations]: true,
           ...this.config.capabilities,
         },
         ...(this.config.appVersion ? { appVersion: this.config.appVersion } : {}),
