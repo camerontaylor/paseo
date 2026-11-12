@@ -392,7 +392,7 @@ describe("Claude session closed guard", () => {
     expect(harness.queryFactory).not.toHaveBeenCalled();
   });
 
-  it("fails a turn instead of spawning when close() lands mid-options during startTurn", async () => {
+  it("preserves shutdown settlement without spawning when close() lands mid-options", async () => {
     let releaseBinary: ((binary: string) => void) | undefined;
     const harness = createHarness(async () => "2.1.227", {
       resolveBinary: () =>
@@ -412,10 +412,9 @@ describe("Claude session closed guard", () => {
     releaseBinary?.("/test/claude/bin");
 
     await expect(started).resolves.toEqual({ turnId: expect.any(String) });
-    // close() cancels the active turn before ensureQuery() can throw, so the turn settles as
-    // canceled rather than failed — the ensureQuery throw only fails turns close() cannot cancel.
-    await vi.waitFor(() => expect(events).toContain("turn_canceled"));
-    expect(events).not.toContain("turn_failed");
+    // Graceful close releases runtime ownership without synthesizing a cancellation;
+    // the manager settles the run so daemon restart recovery remains available.
+    expect(events).toEqual(["turn_started"]);
     expect(harness.queryFactory).not.toHaveBeenCalled();
   });
 
