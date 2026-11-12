@@ -7,7 +7,7 @@ record fork-only decisions and releases. See
 ## 0.16.0-beta.2 base decision — 2026-11-12
 
 Advance custom to upstream `v0.16.0-beta.2`
-(`b7605043878e509699bf2d8428253a257dda478d`), retaining merged PR27's
+(source commit `23bae61535542a45ade7196a7b3c152705f16de3`), retaining merged PR27's
 lean checkout-placement lookup. Keep the existing TMAD-derived carry for
 this release; its removal is a separate task after fleet activation.
 

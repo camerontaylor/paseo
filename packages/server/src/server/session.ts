@@ -9678,18 +9678,24 @@ function sessionEventCategory(message: SessionOutboundMessage): SessionEventSubs
     case "hub.execution.agent.stream":
       return message.type;
     case "status":
-      switch (message.payload.status) {
-        case "server_info":
-          return "status.server_info";
-        case "daemon_config_changed":
-          return "status.daemon_config_changed";
-        case "plugin_catalog_changed":
-          return "status.plugin_catalog_changed";
-        case "plugin_settings_changed":
-          return "status.plugin_settings_changed";
-        default:
-          return null;
-      }
+      return statusEventCategory(message);
+    default:
+      return null;
+  }
+}
+
+function statusEventCategory(
+  message: Extract<SessionOutboundMessage, { type: "status" }>,
+): SessionEventSubscription | null {
+  switch (message.payload.status) {
+    case "server_info":
+      return "status.server_info";
+    case "daemon_config_changed":
+      return "status.daemon_config_changed";
+    case "plugin_catalog_changed":
+      return "status.plugin_catalog_changed";
+    case "plugin_settings_changed":
+      return "status.plugin_settings_changed";
     default:
       return null;
   }

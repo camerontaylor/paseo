@@ -5451,13 +5451,7 @@ export class AgentManager {
         this.emitState(agent);
         return undefined;
       case "thinking_option_changed":
-        agent.config.thinkingOptionId = event.thinkingOptionId ?? undefined;
-        if (agent.runtimeInfo) {
-          agent.runtimeInfo = {
-            ...agent.runtimeInfo,
-            thinkingOptionId: event.thinkingOptionId,
-          };
-        }
+        this.applyObservedThinkingOption(agent, event.thinkingOptionId);
         flags.shouldDispatchEvent = false;
         this.emitState(agent);
         return undefined;
@@ -5505,6 +5499,16 @@ export class AgentManager {
         return undefined;
       default:
         return undefined;
+    }
+  }
+
+  private applyObservedThinkingOption(
+    agent: ActiveManagedAgent,
+    thinkingOptionId: string | null,
+  ): void {
+    agent.config.thinkingOptionId = thinkingOptionId ?? undefined;
+    if (agent.runtimeInfo) {
+      agent.runtimeInfo = { ...agent.runtimeInfo, thinkingOptionId };
     }
   }
 
@@ -6194,14 +6198,9 @@ export class AgentManager {
     for (const subscriber of this.subscribers) {
       if (
         subscriber.agentId &&
-        (event.type === "agent_stream" || event.type === "agent_removed") &&
-        subscriber.agentId !== event.agentId
-      ) {
-        continue;
-      }
-      if (
-        subscriber.agentId &&
-        event.type === "background_work" &&
+        (event.type === "agent_stream" ||
+          event.type === "agent_removed" ||
+          event.type === "background_work") &&
         subscriber.agentId !== event.agentId
       ) {
         continue;
