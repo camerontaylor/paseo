@@ -21,9 +21,10 @@ export class AgentQueueUnsupportedError extends Error {
 
 export interface PaseoAgentQueueEnqueueOptions {
   /**
-   * Caller-chosen id. Enqueueing an id that is still queued, was among the last 100 drained, or
-   * has a delivery receipt does nothing and returns the current snapshot, so a retry never
-   * duplicates the prompt.
+   * Caller-chosen id. Enqueueing an id that is still queued, is one of the agent's last 100
+   * drained ids, or has a completed delivery receipt returns the current snapshot and queues
+   * nothing. Outside those limits the id is forgotten and a repeat enqueue sends again; a deleted
+   * non-voice item leaves no record, so re-enqueueing it after `remove` queues it anew.
    */
   itemId: string;
   text: string;

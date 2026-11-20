@@ -913,9 +913,13 @@ snapshot = await queue.retry("docket:task-7", snapshot.revision);
 - **This is the user's composer queue.** Your item appears in the user's chat, and the user can
   edit, reorder, or delete it. Delivery is FIFO: a failed item ahead of yours blocks yours until
   it is retried or removed.
-- **`enqueue` is idempotent per `itemId`.** An id that is still queued, among the last 100 drained
-  ids, or holding a delivery receipt returns the current snapshot and queues nothing, so retrying
-  after a timeout never sends the prompt twice. Choose ids that are stable across your retries.
+- **`enqueue` is idempotent per `itemId`, within limits.** The daemon returns the current snapshot
+  and queues nothing when the id is still in the queue, is one of the last 100 drained ids for that
+  agent, or has a completed delivery receipt. Past those, the id is forgotten and enqueueing it
+  again sends the prompt again: once more than 100 later items have drained, and always after the
+  item was deleted, since only a voice item leaves a removal record. Retry a timed-out `enqueue`
+  promptly with the same id; to resend deliberately, use a new id. Docket must not treat a
+  re-enqueue after `remove` as deduplicated.
 - **An agent holds at most 50 queued items.** Enqueueing past that rejects with `queue_full` (the
   daemon's `QueueFullError`). A delivery gives up after 8 attempts and leaves the item in a failed
   `deliveryState` until `retry`.
