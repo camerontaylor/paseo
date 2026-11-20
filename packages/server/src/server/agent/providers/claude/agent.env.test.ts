@@ -1,10 +1,16 @@
+import os from "node:os";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../../../test-utils/test-logger.js";
 import type { AgentLaunchContext } from "../../agent-sdk-types.js";
 import { ClaudeAgentClient } from "./agent.js";
 import type { ClaudeQueryInput } from "./query.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 function createQueryMock(events: unknown[]): Query {
   let index = 0;
@@ -29,7 +35,10 @@ function createQueryMock(events: unknown[]): Query {
 }
 
 describe("Claude SDK env", () => {
-  test("forwards launch-context env through Claude process env", async () => {
+  test("forwards launch-context env and supplies the macOS Keychain account", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.stubEnv("USER", undefined);
+    vi.stubEnv("LOGNAME", undefined);
     let capturedEnv: Record<string, string | undefined> | undefined;
     const launchContext: AgentLaunchContext = {
       env: {
@@ -90,6 +99,8 @@ describe("Claude SDK env", () => {
       expect(capturedEnv?.PASEO_TEST_FLAG).toBe(launchContext.env?.PASEO_TEST_FLAG);
       expect(capturedEnv?.MCP_TIMEOUT).toBe("claude-startup-timeout");
       expect(capturedEnv?.MCP_TOOL_TIMEOUT).toBe("claude-tool-timeout");
+      expect(capturedEnv?.USER).toBe(os.userInfo().username);
+      expect(capturedEnv?.LOGNAME).toBe(os.userInfo().username);
     } finally {
       await session.close();
     }
@@ -134,6 +145,12 @@ describe("Claude SDK env", () => {
       logger: createTestLogger(),
       queryFactory,
       resolveBinary: async () => "/test/claude/bin",
+      runtimeSettings: {
+        env: {
+          USER: "configured-user",
+          LOGNAME: "configured-logname",
+        },
+      },
     });
     const session = await client.resumeSession(
       {
@@ -154,6 +171,8 @@ describe("Claude SDK env", () => {
       expect(result.sessionId).toBe("persisted-session");
       expect(capturedEnv?.PASEO_AGENT_ID).toBe(launchContext.env?.PASEO_AGENT_ID);
       expect(capturedEnv?.PASEO_TEST_FLAG).toBe(launchContext.env?.PASEO_TEST_FLAG);
+      expect(capturedEnv?.USER).toBe("configured-user");
+      expect(capturedEnv?.LOGNAME).toBe("configured-logname");
     } finally {
       await session.close();
     }

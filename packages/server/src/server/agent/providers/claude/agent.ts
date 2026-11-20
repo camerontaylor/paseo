@@ -3227,11 +3227,21 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private buildSdkEnv(): NodeJS.ProcessEnv {
-    return createProviderEnv({
+    const env = createProviderEnv({
       baseEnv: process.env,
       runtimeSettings: this.runtimeSettings,
       overlays: [this.launchEnv],
     });
+    // A macOS LaunchAgent does not receive USER. Claude uses that value as the
+    // Keychain account name; without it, older CLI versions fall back to the
+    // credentials file and can rotate a different copy of the refresh token.
+    if (process.platform === "darwin" && !env.USER) {
+      env.USER = os.userInfo().username;
+    }
+    if (process.platform === "darwin" && !env.LOGNAME) {
+      env.LOGNAME = env.USER ?? os.userInfo().username;
+    }
+    return env;
   }
 
   private async buildOptions(): Promise<ClaudeOptions> {
