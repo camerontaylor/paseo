@@ -27,6 +27,8 @@ export const CLIENT_CAPS = {
   // COMPAT(providerSubagents): added in v0.1.107. The daemon emits provider-owned
   // child descriptors and timelines only to clients that understand the new messages.
   providerSubagents: "provider_subagents",
+  // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
+  sideConversations: "side_conversations",
   // COMPAT(projectedSubagentTimeline): added after v0.8.0, remove gates after 2027-03-14; retain wire capability.
   projectedSubagentTimeline: "projected_subagent_timeline",
   // COMPAT(projectUpdates): added in v0.1.109, remove gate after 2027-01-15.
@@ -55,7 +57,20 @@ export const CLIENT_CAPS = {
   // Sources without it never receive agent-level background agents in inclusive lists or
   // update subscriptions, because older apps auto-open a tab for every replicated root agent.
   backgroundAgents: "background_agents",
+  // COMPAT(durableAgentQueue): fork addition (TM-02). The daemon only mirrors
+  // `agent.queue.update` to clients that advertise this, so a client with a
+  // strict outbound union never receives the event.
+  durableAgentQueue: "durable_agent_queue",
+  // COMPAT(durableVoiceInputV1): fork addition (TM-04). Gate for voice
+  // attachment admission into the durable queue and the receipt-read RPC.
+  // Keep the gate while stock peers are supported.
+  durableVoiceInputV1: "durable_voice_input_v1",
   browserHost: "browser_host",
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  // Clients declaring this get the optional `artifacts` / `companionEntries`
+  // agent-snapshot fields. Paired with the `agent.companion.update_entry.*`
+  // operations; not the source fork's `companionStream` capability name.
+  companionStreamPortV1: "companion_stream_port_v1",
 } as const;
 
 export type ClientCapability = (typeof CLIENT_CAPS)[keyof typeof CLIENT_CAPS];

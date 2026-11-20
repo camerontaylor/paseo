@@ -673,40 +673,43 @@ test("built-in OMP override keeps the real OMP adapter enabled and launchable", 
   await session.close();
 });
 
-test("new provider extending acp uses GenericACPAgentClient", () => {
-  const registry = buildProviderRegistry(logger, {
-    providerOverrides: {
-      "my-agent": {
-        extends: "acp",
-        label: "My Agent",
-        command: ["my-agent", "--acp"],
+test.each(["my-agent", "gjc"])(
+  "custom ACP provider %s uses GenericACPAgentClient",
+  (providerId) => {
+    const registry = buildProviderRegistry(logger, {
+      providerOverrides: {
+        [providerId]: {
+          extends: "acp",
+          label: "My Agent",
+          command: [providerId, "--acp"],
+          env: {
+            ACP_TOKEN: "secret",
+          },
+        },
+      },
+    });
+
+    expect(registry[providerId].createClient(logger).provider).toBe(providerId);
+    expect(mockState.constructorArgs.genericAcp).toEqual([
+      {
+        command: [providerId, "--acp"],
         env: {
           ACP_TOKEN: "secret",
         },
+        providerId,
+        label: "My Agent",
       },
-    },
-  });
-
-  expect(registry["my-agent"].createClient(logger).provider).toBe("my-agent");
-  expect(mockState.constructorArgs.genericAcp).toEqual([
-    {
-      command: ["my-agent", "--acp"],
-      env: {
-        ACP_TOKEN: "secret",
+      {
+        command: [providerId, "--acp"],
+        env: {
+          ACP_TOKEN: "secret",
+        },
+        providerId,
+        label: "My Agent",
       },
-      providerId: "my-agent",
-      label: "My Agent",
-    },
-    {
-      command: ["my-agent", "--acp"],
-      env: {
-        ACP_TOKEN: "secret",
-      },
-      providerId: "my-agent",
-      label: "My Agent",
-    },
-  ]);
-});
+    ]);
+  },
+);
 
 test("Hub E2E ACP provider applies exact grants for its injected MCP server", () => {
   const registry = buildProviderRegistry(logger, {

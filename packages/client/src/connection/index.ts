@@ -135,6 +135,12 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   [CLIENT_CAPS.customModeIcons]: true,
   [CLIENT_CAPS.terminalReflowableSnapshot]: true,
   [CLIENT_CAPS.providerSubagents]: true,
+  // Fork-only capability, so this entry is fork-only too. The map is
+  // exhaustive over ClientCapability and the fork adds sideConversations to
+  // CLIENT_CAPS, so omitting it is a TS1360 the moment the fork merges.
+  // Nothing conflicts here: the file is upstream-new (#4470), the fork never
+  // edits it, and git never asks. Carried as a branch, not a resolution.
+  [CLIENT_CAPS.sideConversations]: true,
   [CLIENT_CAPS.projectedSubagentTimeline]: true,
   [CLIENT_CAPS.projectUpdates]: true,
   [CLIENT_CAPS.compactProviderSnapshots]: true,
@@ -146,7 +152,11 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   [CLIENT_CAPS.workspaceSetupObservation]: true,
   [CLIENT_CAPS.pluginBinaryPayloads]: true,
   [CLIENT_CAPS.backgroundAgents]: true,
+  [CLIENT_CAPS.durableAgentQueue]: true,
+  [CLIENT_CAPS.durableVoiceInputV1]: true,
   [CLIENT_CAPS.explicitEventSubscriptions]: true,
+  // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+  [CLIENT_CAPS.companionStreamPortV1]: true,
 } satisfies Record<Exclude<ClientCapability, typeof CLIENT_CAPS.browserHost>, true>;
 
 /** Calling releases demand; ready waits for membership, or local attachment on broadcast hosts. */

@@ -10,6 +10,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 
 import { DEFAULT_APP_SETTINGS } from "@/hooks/use-settings";
 import { setPanelInstanceAttributes } from "@/panels/panel-instance-attributes";
+import { usePanelStore } from "@/stores/panel-store";
 import {
   collectAllPanes,
   collectAllTabs,
@@ -23,14 +24,118 @@ import {
 } from "@/workspace-tabs/open-beside";
 
 const WORKSPACE_KEY = "server-1:workspace-1";
+const SIDE_CONVERSATION = {
+  kind: "side_conversation",
+  parentAgentId: "parent-1",
+  threadId: "thread-1",
+} as const;
+
+function layout() {
+  const value = useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY];
+  if (!value) throw new Error("workspace layout missing");
+  return value;
+}
+
+function paneIdHolding(tabId: string): string | undefined {
+  return collectAllPanes(layout().root).find((pane) => pane.tabIds.includes(tabId))?.id;
+}
+
+function sidePaneId(): string | null {
+  return useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY] ?? null;
+}
 
 beforeEach(() => {
+  usePanelStore.setState({
+    mobilePanel: { target: "agent", revision: 0 },
+  });
   useWorkspaceLayoutStore.setState({
     layoutMode: "split-panes",
     sheetsByWorkspace: {},
     layoutByWorkspace: {},
     explorerSidebarPaneIdByWorkspace: {},
     sidePaneIdByWorkspace: {},
+    splitSizesByWorkspace: {},
+  });
+});
+
+// Side conversations route on the `subagents` preference rather than one of their own — these
+// pin that decision, and stand in for the coverage lost when side-panel.test.ts was deleted.
+describe("openPreferredWorkspaceTarget for a side conversation", () => {
+  it("opens in the single compact pane, never a second one", () => {
+    useWorkspaceLayoutStore.getState().setLayoutMode("compact");
+    const tabId = openPreferredWorkspaceTarget({
+      workspaceKey: WORKSPACE_KEY,
+      target: SIDE_CONVERSATION,
+      source: "subagents",
+      preferences: { ...DEFAULT_APP_SETTINGS.openInSidePane, subagents: true },
+    });
+
+    expect(tabId).not.toBeNull();
+    expect(collectAllPanes(layout().root)).toHaveLength(1);
+    expect(paneIdHolding(tabId as string)).toBe(layout().focusedPaneId);
+    expect(sidePaneId()).toBeNull();
+  });
+
+  it("opens in the side pane when the subagents preference is on", () => {
+    const tabId = openPreferredWorkspaceTarget({
+      workspaceKey: WORKSPACE_KEY,
+      target: SIDE_CONVERSATION,
+      source: "subagents",
+      preferences: { ...DEFAULT_APP_SETTINGS.openInSidePane, subagents: true },
+    });
+
+    expect(tabId).not.toBeNull();
+    expect(paneIdHolding(tabId as string)).toBe(sidePaneId());
+    expect(findPaneById(layout().root, sidePaneId())).not.toBeNull();
+  });
+
+  it("opens in the focused pane when the subagents preference is off", () => {
+    const tabId = openPreferredWorkspaceTarget({
+      workspaceKey: WORKSPACE_KEY,
+      target: SIDE_CONVERSATION,
+      source: "subagents",
+      preferences: { ...DEFAULT_APP_SETTINGS.openInSidePane, subagents: false },
+    });
+
+    expect(tabId).not.toBeNull();
+    expect(paneIdHolding(tabId as string)).toBe(layout().focusedPaneId);
+    expect(sidePaneId()).toBeNull();
+  });
+
+  it("reveals the existing thread instead of opening a second one", () => {
+    const preferences = { ...DEFAULT_APP_SETTINGS.openInSidePane, subagents: true };
+    const input = {
+      workspaceKey: WORKSPACE_KEY,
+      target: SIDE_CONVERSATION,
+      source: "subagents" as const,
+      preferences,
+    };
+
+    const first = openPreferredWorkspaceTarget(input);
+    const second = openPreferredWorkspaceTarget(input);
+
+    expect(second).toBe(first);
+    expect(
+      collectAllTabs(layout().root).filter((tab) => tab.target.kind === "side_conversation"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps the thread tab when the compact layout widens", () => {
+    useWorkspaceLayoutStore.getState().setLayoutMode("compact");
+    const tabId = openPreferredWorkspaceTarget({
+      workspaceKey: WORKSPACE_KEY,
+      target: SIDE_CONVERSATION,
+      source: "subagents",
+      preferences: { ...DEFAULT_APP_SETTINGS.openInSidePane, subagents: false },
+    });
+
+    useWorkspaceLayoutStore.getState().setLayoutMode("split-panes");
+
+    expect(
+      collectAllTabs(layout().root).some(
+        (tab) => tab.tabId === tabId && tab.target.kind === "side_conversation",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -145,7 +250,7 @@ describe("opening beside", () => {
     });
   }
 
-  function paneIdHolding(tabId: string | null): string | undefined {
+  function paneIdHoldingInLayout(tabId: string | null): string | undefined {
     const root = useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY].root;
     return collectAllPanes(root).find((pane) => pane.tabIds.includes(tabId ?? ""))?.id;
   }
@@ -155,9 +260,10 @@ describe("opening beside", () => {
 
     const tabId = openSubagentWithSidePreference();
 
-    const sidePaneId = useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY];
-    expect(sidePaneId).toEqual(expect.any(String));
-    expect(paneIdHolding(tabId)).toBe(sidePaneId);
+    const openedSidePaneId =
+      useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY];
+    expect(openedSidePaneId).toEqual(expect.any(String));
+    expect(paneIdHoldingInLayout(tabId)).toBe(openedSidePaneId);
   });
 
   it("keeps a single-pane workspace in one pane despite the side preference", () => {
@@ -170,7 +276,7 @@ describe("opening beside", () => {
     });
 
     expect(useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY]).toBeFalsy();
-    expect(paneIdHolding(preferredTabId)).toBe("main");
-    expect(paneIdHolding(besideTabId)).toBe("main");
+    expect(paneIdHoldingInLayout(preferredTabId)).toBe("main");
+    expect(paneIdHoldingInLayout(besideTabId)).toBe("main");
   });
 });

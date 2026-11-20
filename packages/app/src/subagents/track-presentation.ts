@@ -10,11 +10,12 @@ import { isFinishedSubagent } from "./archive-finished";
 import { providerSubagentLifecycleStatus } from "./provider-store";
 
 function presentationStatus(row: SubagentRow) {
+  if (row.kind === "provider") return providerSubagentLifecycleStatus(row.status);
   if (row.kind === "paseo") {
     if (row.turn.phase === "open") return "running";
     return row.status === "running" ? "idle" : row.status;
   }
-  return providerSubagentLifecycleStatus(row.status);
+  return row.status;
 }
 
 /**
@@ -24,9 +25,11 @@ function presentationStatus(row: SubagentRow) {
 export function deriveSubagentStatusBucket(
   status: AgentLifecycleStatus,
   backgroundWork?: AgentBackgroundWorkSummary | null,
+  requiresAttention = false,
 ): SidebarStateBucket {
   if (status === "error") return "failed";
   if (isAgentRunning({ status, backgroundWork })) return "running";
+  if (requiresAttention) return "attention";
   return "done";
 }
 
@@ -57,6 +60,7 @@ export function buildSubagentRowPresentationData(row: SubagentRow): SubagentRowP
     statusBucket: deriveSubagentStatusBucket(
       status,
       row.kind === "paseo" ? row.backgroundWork : undefined,
+      row.kind === "side_conversation" && row.requiresAttention,
     ),
   };
 }

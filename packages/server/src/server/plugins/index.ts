@@ -1,4 +1,8 @@
 import type { PluginAgentToolsRuntime } from "./agent-tools.js";
+import {
+  ACCOUNT_USAGE_SOURCES,
+  providerAccountUsageInputs,
+} from "./usage-sources/provider-accounts.js";
 import type { PluginLifecycle } from "./lifecycle/index.js";
 import path from "node:path";
 import { stat, rm } from "node:fs/promises";
@@ -220,6 +224,9 @@ export class PluginService {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    this.configStore.onFieldChange("providers", () =>
+      this.usageSources.invalidateReports((id) => ACCOUNT_USAGE_SOURCES.has(id.split(":")[0]!)),
+    );
     const config = this.configStore.get();
     this.globalStartsBlocked = config.pluginsEnabled !== true;
     await this.builtinPlugins.load(async (plugin) => {
@@ -671,7 +678,14 @@ export class PluginService {
             const result = await this.runtime.discoverUsage(pluginId, source.id, scope);
             if (!Array.isArray(result))
               throw new Error(`Invalid usage discovery from ${source.id}`);
-            return result;
+            return scope.kind === "global" &&
+              this.builtinPluginIds.has(pluginId) &&
+              pluginId === `${source.id}-usage-source`
+              ? [
+                  ...result,
+                  ...providerAccountUsageInputs(source.id, this.configStore.get().providers),
+                ]
+              : result;
           },
           fetch: (input) => {
             return this.runtime.fetchUsage(pluginId, source.id, input);
@@ -711,6 +725,8 @@ export class PluginService {
           id: provider.id,
           label: provider.label,
           description: provider.description,
+          supportsSystemPrompt: provider.supportsSystemPrompt,
+          restoresSessionConfig: provider.restoresSessionConfig,
           command: provider.command,
           requiresConfiguration: provider.requiresConfiguration,
           status: provider.hasStatus

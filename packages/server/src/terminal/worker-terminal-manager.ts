@@ -48,6 +48,7 @@ import type {
 } from "./terminal-manager.js";
 import {
   classifyTerminalWorkerProtocol,
+  TERMINAL_WORKER_PROTOCOL_VERSION,
   type TerminalWorkerProtocolFit,
 } from "./terminal-worker-protocol.js";
 import type {
@@ -110,6 +111,7 @@ export interface TerminalCreateEnvironment {
 
 interface WorkerTerminalManagerOptions {
   worker: TerminalWorkerConnection;
+  protocolVersion?: number | string;
   /** Reconnects a surviving worker; null means it is confirmed gone or the owner stopped. */
   reconnect?: () => Promise<TerminalWorkerConnection | null>;
   requestTimeoutMs?: number;
@@ -280,7 +282,13 @@ export function createWorkerTerminalManager(
       get workspaceId() {
         return record.info.workspaceId;
       },
+      supportsCommandDispatch:
+        managerOptions.protocolVersion === undefined ||
+        managerOptions.protocolVersion === TERMINAL_WORKER_PROTOCOL_VERSION,
       send(message: ClientMessage): void {
+        if (message.type === "command" && managerOptions.protocolVersion === 5) {
+          throw new Error("Managed commands require a current terminal worker");
+        }
         if (message.type === "resize") {
           record.state = {
             ...record.state,
@@ -1182,6 +1190,7 @@ export async function startWorkerTerminalManager(
     };
     const manager = createWorkerTerminalManager({
       worker: connection,
+      protocolVersion: record.protocolVersion,
       reconnect,
       ...(options.requestTimeoutMs === undefined
         ? {}

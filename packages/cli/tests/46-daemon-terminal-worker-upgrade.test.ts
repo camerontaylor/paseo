@@ -35,6 +35,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
+import { TERMINAL_WORKER_PROTOCOL_VERSION as currentProtocolVersion } from "../../server/dist/server/terminal/terminal-worker-protocol.js";
 
 if (process.platform === "win32") {
   console.log("Skipping terminal worker upgrade CLI test on Windows (POSIX shell terminals).");
@@ -456,8 +457,8 @@ try {
   });
   console.log(`Competing listener owns released port ${releasedPort}`);
 
-  // Protocols 0–4 have no draining adapter. Protocol 5 is now the supported previous wire;
-  // its classification is covered by terminal-worker-protocol.test.ts.
+  // Protocol 5 draining and its managed-command handoff are exercised by
+  // worker-terminal-manager.test.ts; protocols 0–4 remain obsolete unreleased wires.
   for (const protocolVersion of [0, 1, 2, 3, 4]) {
     console.log(`Test 4: obsolete protocol ${protocolVersion} is closed before serving terminals`);
     const obsolete = await leaveWorkerWithProtocol(

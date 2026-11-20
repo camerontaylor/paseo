@@ -110,6 +110,7 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: true,
       isGitCheckout: false,
       currentBranchName: null,
+      baseRefName: null,
     });
   });
 
@@ -131,6 +132,7 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: true,
       isGitCheckout: false,
       currentBranchName: null,
+      baseRefName: null,
     });
   });
 
@@ -140,7 +142,7 @@ describe("workspace source of truth consumption", () => {
         workspace: createWorkspaceDescriptor(),
         checkoutState: {
           kind: "ready",
-          checkout: { isGit: true, currentBranch: "feat/workspace-sot" },
+          checkout: { isGit: true, currentBranch: "feat/workspace-sot", baseRef: "main" },
         },
       }),
     ).toEqual({
@@ -150,7 +152,23 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: true,
       isGitCheckout: true,
       currentBranchName: "feat/workspace-sot",
+      baseRefName: "main",
     });
+  });
+
+  it("keeps the current branch visible without a resolved base branch", () => {
+    const state = resolveWorkspaceHeaderRenderState({
+      workspace: createWorkspaceDescriptor(),
+      checkoutState: {
+        kind: "ready",
+        checkout: { isGit: true, currentBranch: "feature", baseRef: null },
+      },
+    });
+    expect(state.kind).toBe("ready");
+    if (state.kind === "ready") {
+      expect(state.currentBranchName).toBe("feature");
+      expect(state.baseRefName).toBeNull();
+    }
   });
 
   it("renders non-git checkout headers without branch affordance after checkout status resolves", () => {
@@ -164,7 +182,7 @@ describe("workspace source of truth consumption", () => {
         }),
         checkoutState: {
           kind: "ready",
-          checkout: { isGit: false, currentBranch: null },
+          checkout: { isGit: false, currentBranch: null, baseRef: null },
         },
       }),
     ).toEqual({
@@ -174,6 +192,7 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: false,
       isGitCheckout: false,
       currentBranchName: null,
+      baseRefName: null,
     });
   });
 
@@ -190,6 +209,7 @@ describe("workspace source of truth consumption", () => {
       isSubtitleDistinct: true,
       isGitCheckout: false,
       currentBranchName: null,
+      baseRefName: null,
     });
   });
 

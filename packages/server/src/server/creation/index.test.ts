@@ -145,6 +145,66 @@ test("a failed agent startup retries only that stage with the reserved IDs", asy
   expect(attempts).toBe(2);
 });
 
+test("creation reports structured provider errors without object coercion", async () => {
+  const f = await fixture();
+  f.input.createAgent = async () => {
+    throw { code: "-32603", data: { details: "Workspace is not trusted" } };
+  };
+  const result = await f.service.create(f.input);
+  expect(result).toMatchObject({ phase: "failed", failedStage: "agent" });
+  expect(result.error).toContain("Workspace is not trusted");
+  expect(result.error).not.toBe("[object Object]");
+});
+
+test("creation retains real Error diagnostics in returned observed and persisted snapshots", async () => {
+  const f = await fixture();
+  const failure = Object.assign(
+    new Error("Synthetic startup failure", { cause: new Error("Synthetic inner failure") }),
+    {
+      code: "SYNTHETIC_STARTUP",
+      signal: "SIGTERM",
+      stderr: "Synthetic stderr",
+      stdout: "Synthetic stdout",
+    },
+  );
+  f.input.createAgent = async () => {
+    throw failure;
+  };
+  const result = await f.service.create(f.input, f.observe);
+  const expectedError = [
+    "Synthetic startup failure",
+    "exit code: SYNTHETIC_STARTUP",
+    "signal: SIGTERM",
+    "stderr: Synthetic stderr",
+    "stdout: Synthetic stdout",
+    "caused by: Synthetic inner failure",
+  ].join("\n");
+  const failureSnapshot = {
+    phase: "failed",
+    failedStage: "agent",
+    errorCode: "SYNTHETIC_STARTUP",
+    outcomeUnknown: false,
+    workspace,
+    error: expectedError,
+  };
+  expect(result).toMatchObject(failureSnapshot);
+  expect(f.updates.at(-1)).toEqual(result);
+  expect(f.updates.filter((snapshot) => snapshot.phase === "failed")).toEqual([result]);
+  const persistedUpdates: CreationSnapshot[] = [];
+  const subscription = await new CreationService(f.directory, silentLogger).subscribe(
+    f.input.kind,
+    f.input.key,
+    (snapshot) => persistedUpdates.push(snapshot),
+  );
+  try {
+    expect(subscription.snapshot).toEqual(result);
+    expect(subscription.snapshot).toMatchObject(failureSnapshot);
+    expect(persistedUpdates).toEqual([]);
+  } finally {
+    subscription.unsubscribe();
+  }
+});
+
 test("an uncertain prompt outcome never resends or removes its workspace and agent", async () => {
   const f = await fixture();
   let prompts = 0;

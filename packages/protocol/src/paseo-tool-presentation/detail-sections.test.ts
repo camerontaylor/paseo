@@ -222,5 +222,6 @@ assert.deepEqual(build("mcp__paseo__send_agent_prompt", { prompt: "Hello", agent
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
-  }, 30_000);
+    // Two real TypeScript compilations can exceed 30s on shared CI runners.
+  }, 90_000);
 });

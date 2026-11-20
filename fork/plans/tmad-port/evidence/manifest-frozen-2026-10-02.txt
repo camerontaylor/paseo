@@ -1,0 +1,202 @@
+# Branches merged into paseo-mine, in this order. `#` starts a comment; whatever
+# follows a branch name is printed back in the build summary, so it is the reason
+# the line still exists.
+#
+# ORDER MATTERS: the front is frozen, the back moves. Merges resolve against
+# everything already merged, so moving a line re-resolves every line below it and
+# throws away their recorded resolutions. APPEND; DO NOT INSERT.
+#
+# Carries reviewed against getpaseo/paseo on 2026-09-23. The earlier sweep is
+# fork/upstream-prs-2026-09-12.md.
+# Re-check before trusting:
+#   gh pr view <N> -R getpaseo/paseo --json state,mergeable,updatedAt
+#
+# BASE: v0.11.0-beta.3, latest beta release as of 2026-10-02.
+# custom is synced to this tag. #5227 is included, retaining the external-volume
+# protection that replaced #3089. A base change re-resolves every carried line,
+# so the first build on a new base needs full verification.
+#
+# ---------------------------------------------------------------------------
+# WE REFERENCE AUTHOR FORK BRANCHES, NOT `upstream/pull/N/head`.
+#
+# `refs/pull/N/head` STOPS UPDATING the moment a PR closes. The author's fork
+# branch does not. On 2026-09-07..09 the maintainer adopted a policy of
+# auto-closing feature PRs (CONTRIBUTING.md, "This PR remains closed unless I
+# explicitly follow up"), which closed eight lines of this basket in three days.
+# A PR ref now means "frozen at the instant upstream slammed the door", and the
+# rot becomes ours to pay.
+#
+# Measured 2026-09-10: seven of eight carried branches were still byte-identical
+# to their frozen PR ref, because the closes were only days old. #2785 was not —
+# colonelpanic8 rebased onto upstream/main of 09-09, the day AFTER the close, and
+# added three commits: "adapt provider accounts to refreshed interfaces",
+# "adapt provider account styles to current theme", "adapt provider account
+# harness to current services". That is exactly the silently-rotting joint the
+# fork README warns about, and the author is still paying for it. The frozen ref
+# throws all three away.
+#
+# Each line's remote is configured in DESVIO_REPO with a SINGLE-BRANCH refspec,
+# so `git fetch <author>` costs one branch and not a whole fork:
+#   git remote add <author> https://github.com/<author>/<repo>.git
+#   git config remote.<author>.fetch "+refs/heads/<br>:refs/remotes/<author>/<br>"
+# Use braces. Bare `$br:refs/...` loses the `:r` to zsh's root-name modifier and
+# writes a refspec with no colon in it; the fetch then fails with
+# "couldn't find remote ref", which is not what a missing colon sounds like.
+# ---------------------------------------------------------------------------
+#
+# Dropped since 2026-08-22:
+#   #2582  notification sounds — MERGED upstream 2026-08-08. Already in the base.
+#   #2319  wide chars in terminal captures — superseded by #4101, which is rebased
+#          onto the tree's actual shape and MERGEABLE. Was never in our base;
+#          the 09-07 sweep corrected the belief that it had merged.
+#   #3672  draft pending leak — superseded by #4442 on merit, not by policy.
+#          #4442 is the maintainer's own canonical fix and covers the daemon
+#          boundary too.
+#   #467   hidden-terminal battery drain — closed unmerged; revive as a local
+#          branch if we want it, it is a front-of-manifest case.
+#   #4421  restore cached conversations — MERGED 2026-09-07, in v0.8.0-beta.1.
+#   #3440  low-order X25519 peer keys — hole already closed in base by #3669.
+#   #4442  duplicate workspaces and agents on retries — DROPPED 2026-09-12,
+#          on merit, while still open. It is a SECOND ANSWER to a question
+#          v0.8.0 already answers: upstream ships keyed creation end to end
+#          (protocol messages.ts:1684 idempotencyKey; session.ts:3574 routing
+#          to agentRequests.create; agent/requests/index.ts; daemon-client.ts
+#          :2550 gated on requireAgentRequestReceipts). #4442 does not use it —
+#          8bfc5c2e1 RENAMES agent/requests/ to request-receipts/ and 467363659
+#          adds a parallel client/src/creation/ + server/creation/ subsystem.
+#          Carrying it means two idempotency mechanisms in one tree, and the
+#          desvio gate is typecheck+lint, which cannot tell you which one owns
+#          agent creation at runtime.
+#          The bug is real and still live: the app never sends a key (empty
+#          grep for idempotencyKey in packages/app on upstream/main), so the
+#          UI path cannot dedupe. Upstream knows — #3217 OPEN, #2673 OPEN.
+#          Nothing is extractable: the app-side wiring exists ONLY on this
+#          branch, fused into the rework. Five upstream attempts (#3272 #2614
+#          #3546 #4280 #4585) are all CLOSED and all added a client-side
+#          single-flight guard, which stops concurrent duplicates but not a
+#          retry seconds later — the exact hole agentRequests closes.
+#          Replacement: write the two call sites fresh against upstream's key
+#          (create-agent-request.ts and new-workspace-screen.tsx), gated on
+#          the receipts capability. Small, and an upstream candidate.
+#          Revive this line only if upstream merges #4442 itself.
+#   fork/reseat-side-conversations-0.8 — overtaken 2026-09-12, per its own
+#          delete condition: the v0.8.0 sync landed both of its commits on
+#          custom itself. Verified, not assumed: both files are byte-identical
+#          between the two refs, and merging the branch into custom yields
+#          custom's own tree OID unchanged, so the line is a no-op merge.
+#          The panel fix is still the NOOP one — select.ts:250 returns
+#          providerRows alone once providerParentSubagentId is set, so no
+#          side-conversation row reaches the nested track. Reading
+#          selectSideConversationsForParent instead of the hook's return
+#          makes "wire it for real" look correct; it is not. See
+#          fork/upstream-sync.md → v0.8.0 row.
+#   #3089  external-volume startup workaround — removed 2026-09-23. Upstream
+#          #5227 covers missing mounts at startup and during periodic scans.
+#          #5227 landed after v0.9.1, so a build pinned to that tag alone does
+#          not include the replacement; use current upstream/main for the basket.
+#   #3727  separate selectable Opus 5 [1m] model — removed 2026-09-23 by choice.
+#          Upstream v0.9.1 defaults to Opus 5.5 with a 1M context window.
+#          This drops the explicit Opus 5 [1m] runtime choice; the plain Opus 5
+#          entry remains upstream-owned.
+
+# ---- FRONT: the two biggest conflict payers, at the bottom of the stack where
+# ---- nothing above them disturbs their resolutions.
+
+# PR #2785 multi-provider accounts, rebased onto v0.11.0-beta.3 with Sol's
+# usage-source conflict resolution and the beta.3 route/test compatibility fix.
+# The local branch preserves the author merge as its parent.
+fork/multi-account-beta3-2026-10-02
+
+# ---- MIDDLE: open and policy-closed upstream PRs, oldest first. When one lands,
+# ---- delete its line; only the lines below it re-resolve.
+
+muzhi1991/fix/codex-toolsurface-screenshot                  # PR #2237 materialize Codex toolSurface screenshots — +177/2f, also relieves the relay cap. OPEN.
+dkribeiro/fix/2610-timeline-byte-bounded-hydration          # PR #2664 byte-bound timeline pages — fixes #2610. OPEN. Its replacement #4153 is CLOSED, so this stays.
+timigod/fix/one-shot-workspace-observer-fanout              # PR #3117 one-shot inventory skips Git observers — kills a 26 s connect stall. Closed 09-08 for want of a test.
+bwestlund17/fix/zcode-slash-commands                        # PR #3369 async initial commands for custom ACP providers — 51 lines, replaces the hard-coded "" at acp-agent.ts:2688. OPEN.
+# PR #3474 retired on v0.11.0-beta.3: the old quota-fetcher was removed and
+# the Claude usage plugin already returns 403 as a rejected credential response.
+ngothanhthien/fix/coalesced-flush-crashes-daemon-for-torn-down-agent  # PR #3545 coalesced flush for a torn-down agent crashes the daemon — 17 lines. The crash is live in our tree. Closed 09-08 for want of a test.
+codebutler/claude-permission-reason                         # PR #3950 canUseTool decisionReason — permission cards say why they appeared. +37/0, additive. OPEN.
+# Pin #4101 to the last verified author head. The 2026-10-02 author rebase
+# c3707e6be..701bf00d7 pulls over 1,000 changed paths from upstream/main,
+# beyond the published beta.3 base. Review that base drift separately.
+fork/pinned-cjk-terminal-switch-spacing-2026-10-02  # PR #4101 CJK spacing across retained rows — c3707e6be. Supersedes #2319/#3458/#3767.
+# PR #4113 removed on v0.11.0-beta.1: upstream forwards steerActiveTurn
+# and tests call propagation plus failure without turn replacement.
+ThePharmer/fix/claude-thinking-display                      # PR #4355 send display:"summarized" so Claude thinking blocks render — 12 lines. OPEN.
+
+# ---- BACK: our own branches. Churn belongs here, where it disturbs least.
+
+custom                                  # the fork itself: side conversations, the ACP cancellation
+                                        # boundary, fork/ and fork CI. Includes v0.9.1 as of the
+                                        # 2026-09-23 sync. Still true after any protocol change: run
+                                        # server/authorization/index.test.ts — fork/upstream-sync.md owns
+                                        # the joints that rot without conflicting, now including contracts
+                                        # the fork widened that upstream keeps calling.
+
+# ---- INFI-PC INTAKE: isolated ports on custom/v0.10.1. See
+# ---- fork/plans/infi-pc-intake-work-items.md for acceptance and dependencies.
+intake/infi-agent-file-links           # IP-01 0f0ba1f1d; source checkout paths, workspace containment.
+intake/infi-fork-pr-lookup             # IP-02 160430f94; fork-local PR first, full-page fallback.
+intake/infi-desktop-quit-confirmation  # IP-03 884ac282d; managed daemon quit and signal path.
+intake/infi-package-scripts            # IP-04 41b31a3dd+fixes; nested scripts, service preservation.
+intake/infi-plan-copy                  # IP-05 fe676b131/f777bc1b3; live and historical plan copy.
+intake/infi-plan-handoff               # IP-06 fe676b131/f777bc1b3; editable draft, manual Send.
+intake/infi-base-branch-contract       # IP-07 fae603ccb; qualified refs, optional wire/API.
+intake/infi-branch-header              # IP-08 fae603ccb; gated branch pair picker, follows IP-07.
+intake/infi-recent-agents               # IP-09 f777bc1b3; recently closed menu, archive intact.
+intake/infi-pinned-prompt               # IP-11 6843b4ff7+fixes; desktop visible-response pin.
+intake/infi-status-pulse                # IP-12 6843b4ff7; bounded attention animation.
+intake/infi-project-pr-facts            # IP-13 80c69f95c; forge search CI facts, follows IP-02.
+intake/infi-navigation-history          # IP-10 f777bc1b3; route/tab history, follows IP-09.
+intake/infi-project-pr-browser          # IP-14 80c69f95c; project PR overlay and workspace seed, follows IP-13.
+
+# If the first build is rough, comment out from the BOTTOM UP — one `#` each.
+# Order survives, and re-enabling costs one character. `custom` and #2785 are the
+# two that will want attention first.
+#
+# ---- Disabled, with the reason. These are NOT merge conflicts; each needs a
+# ---- code change, so re-enabling one is a task, not a character.
+#
+# upstream/pull/280/head  # PR #280  Cursor provider via headless CLI. DISABLED 2026-08-22.
+#   Upstream registers CursorACPAgentClient under the same `cursor` key in
+#   PROVIDER_CLIENT_FACTORIES that this PR registers CursorCliAgentClient under, and the
+#   PR's client still implements the removed listModels/listModes API instead of the
+#   required fetchCatalog. Landing it means porting providers/cursor-cli-agent.ts.
+#   Upstream has never ruled on ACP-vs-CLI for Cursor. Closed 2026-09-07.
+#
+# upstream/pull/1813/head # PR #1813 image diff viewer. DISABLED 2026-08-22.
+#   Upstream replaced the React DiffFileBody/SharedDiffView renderer with the
+#   canvas-painted DiffDocument, deleting the only mount point for the PR's
+#   ImageDiffBody. Neither side can be kept. To land it: union the six easy files
+#   (messages.ts keeps HEAD's COMPAT(diffOldPath) comment + shared oldPath + both
+#   capability blocks; checkout-git.ts keeps HEAD's unconditional oldPath spread + the
+#   topic's binaryKind; union the new RPC into workspace-git-service.ts, its stub, and
+#   the features advertisement in websocket-server.ts) THEN port ImageDiffBody as a new
+#   row kind across diff-document/{types,model}.ts and surface.{web,native}.tsx.
+#
+# upstream/pull/1826/head # PR #1826 persist queued messages. DISABLED 2026-08-22.
+#   Merges fine (rerere has the resolution) but is stale against upstream drift in five
+#   places that produce NO conflict markers:
+#     composer/draft-coordinator.ts   switch no longer exhaustive over UserComposerAttachment
+#     composer/submit.test.ts         still passes clearDraft, which this PR removed
+#     runtime/directory-sync/*.test   stubs missing onAgentInactive/onAgentDirectoryCommitted
+#     schedule/service.ts             ScheduleAgentManager Pick missing waitForAgentRunStart
+#   Closed 2026-09-07. Re-add if the author rebases — they have rebased it 4x already.
+#
+# upstream/pull/1834/head # PR #1834 provider-native session fork. DISABLED 2026-08-22.
+#   Costs 4 local patches: a duplicate TraeACPAgentClient import inside its own recorded
+#   rerere resolution (needs --forget to re-record), i18n/resources/ko.ts missing
+#   workspace.tabs.menu.forkAgent, the onForkAgent input in
+#   workspace-tab-trailing-accessory.test.tsx, and fork/mobile-fork-icon below.
+#   Closed 2026-09-07.
+#
+# fork/mobile-fork-icon   # ours. Companion to #1834 — disabled with it. Re-enable together.
+#                         # Adds the "git-branch" case to the mobile tab-menu icon switch.
+                          # That switch has a default: arm, so the missing case draws the
+                          # wrong icon rather than failing to compile — nothing would catch
+                          # it. The resolver kept making this edit itself and tripping
+                          # desvio's out-of-set guard; carried as a branch it survives,
+                          # because rerere only replays MARKER resolutions and this file
+                          # never conflicts. Merge after #1834.

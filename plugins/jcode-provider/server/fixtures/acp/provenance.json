@@ -1,0 +1,23 @@
+{
+  "sourceRepository": "camerontaylor/jcode",
+  "sourcePath": "tests/fixtures/acp",
+  "sourceCommit": "5fa1db619a52084128be56a15a024b3e831325a1",
+  "contract": "docs/ACP_FORK_INTERFACE.md",
+  "copiedAt": "2026-11-11T08:45:00+11:00",
+  "purpose": "Shared ACP v1 consumer replay corpus. Vendored byte-for-byte; do not edit. Refresh by copying the same path from the pinned jcode commit and updating these hashes.",
+  "files": {
+    "01-create-list-load-v1.jsonl": "96145fc0490bf1e967058bfb7c18f01343613a454955e52cbf7e4060a6a99d02",
+    "02-shared-observe-steer-v1.jsonl": "cb582397c708cda331177757b915429fb1cdbf4ef9513296a87c802c13642732",
+    "03-stop-then-prompt-v1.jsonl": "a04650201896728fc84b78a2ca10cfe9ead3d683df44b96d995e109ae5a03315",
+    "04-detach-v1.jsonl": "4cb2364e2ba144d50a0ff783d7969d152e450848da6136105b3dea777f1d3284",
+    "05-close-owner-aware-v1.jsonl": "630d4b23a8d9e4968a042ef4a5d6b8a6a8f4764afe5ea3ff602271d1dfcedd6f",
+    "07-config-commands-v1.jsonl": "49f7bc50e8540ca238d6000c75e0691abe7b3a3e382924844cad9bf2b9a80b35",
+    "08-negotiation-legacy-v1.jsonl": "8e615666583b6a7f99a5cfb51af8525d481ab43ae7c283e2ea9ec2eb0d69a5b3",
+    "09-elicitation-form-v1.jsonl": "ddb4988d6774f3bcdb015b84084158add174b60302a50fedffbeec2a3da217df",
+    "09-midturn-attach-v1.jsonl": "5023b10ff5087c36b9a0d1ff56708aa1230e3e7a02ecd180bb68754daa581f2e",
+    "10-reverse-steer-v1.jsonl": "2216b7710c50e3857622ee2bf55af857b111ea85bc94d642b45e0416b833a154",
+    "11-import-repeated-user-replay-v1.jsonl": "e5a94b2f22ac75b9bcd046ea472bd358d63230e246652e1db986194d1809d2ca",
+    "12-skill-selection-clear-v1.jsonl": "62e2ee08910375d0cda9176e239d399809149c826ef308ad71b06f0ab23697d1",
+    "README.md": "8948c5b94d0165c2880debba263f764bcd549d182191d8d040648ab95e6d3d03"
+  }
+}

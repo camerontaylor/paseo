@@ -17,6 +17,7 @@ import { requestTimelineReplacement } from "@/timeline/timeline-replacement";
 import { type ViewedTimelineOwner } from "@/timeline/viewed-timeline-sync";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import { parseServerInfoStatusPayload } from "@getpaseo/protocol/messages";
+import { flushQueueOutboxForServer } from "@/stores/queue-outbox-store";
 import {
   buildAgentAttentionNotificationPayload,
   type AgentAttentionReason,
@@ -49,6 +50,7 @@ import { toErrorMessage } from "@/utils/error-messages";
 import { showProviderNoticeToast } from "@/utils/provider-notice-toast";
 import { applyCheckoutStatusUpdateFromEvent } from "@/git/checkout-status-cache";
 import { resyncProviderSubagents, useProviderSubagentStore } from "@/subagents/provider-store";
+import { useSideConversationStore } from "@/side-conversations/store";
 
 // Re-export types from session-store and draft-store for backward compatibility
 export type { DraftInput } from "@/stores/draft-store";
@@ -311,29 +313,33 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   useEffect(() => {
     const unregister = voiceRuntime?.registerSession({
       serverId,
-      setVoiceMode: async (enabled, agentId) => {
+      setVoiceMode: async (enabled, agentId, input) => {
         if (!client) {
           throw new Error(t("common.errors.daemonUnavailable"));
         }
-        await client.setVoiceMode(enabled, agentId);
+        return client.setVoiceMode(enabled, agentId, input);
       },
-      sendVoiceAudioChunk: async (audioData, mimeType) => {
+      sendVoiceAudioChunk: async (audioData, mimeType, transport) => {
         if (!client) {
           throw new Error(t("common.errors.daemonUnavailable"));
         }
-        await client.sendVoiceAudioChunk(audioData, mimeType);
+        await client.sendVoiceAudioChunk(audioData, mimeType, false, transport);
       },
-      audioPlayed: async (chunkId) => {
+      audioPlayed: async (chunkId, error, transport) => {
         if (!client) {
           throw new Error(t("common.errors.daemonUnavailable"));
         }
-        await client.audioPlayed(chunkId);
+        await client.audioPlayed(chunkId, error, transport);
       },
-      abortRequest: async () => {
+      readVoiceInputReceipts: async (input) => {
+        if (!client) throw new Error(t("common.errors.daemonUnavailable"));
+        return client.readVoiceInputReceipts(input);
+      },
+      abortRequest: async (transport) => {
         if (!client) {
           throw new Error(t("common.errors.daemonUnavailable"));
         }
-        await client.abortRequest();
+        await client.abortRequest(transport);
       },
       setAssistantAudioPlaying: (isPlaying) => {
         setIsPlayingAudio(serverId, isPlaying);
@@ -345,6 +351,44 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   useEffect(() => {
     voiceRuntime?.updateSessionConnection(serverId, isConnected);
   }, [isConnected, serverId, voiceRuntime]);
+
+  useEffect(() => {
+    if (!voiceRuntime) return;
+    const runtime = voiceRuntime;
+    let release = () => {};
+    let observing = false;
+    function synchronizeVoiceQueueObservation() {
+      const snapshot = runtime.getSnapshot();
+      const active =
+        snapshot.isVoiceMode &&
+        snapshot.activeServerId === serverId &&
+        useSessionStore.getState().sessions[serverId]?.serverInfo?.features?.durableVoiceInputV1 ===
+          true;
+      if (active === observing) return;
+      observing = active;
+      release();
+      if (!active) return;
+      const observation = client.observeEvents(["agent.queue.update"]);
+      const unsubscribe = observation.subscribe({
+        snapshot: () => {},
+        update: (message) => {
+          if (message.type === "agent.queue.update") {
+            runtime.onQueueChanged(serverId, message.payload.agentId);
+          }
+        },
+      });
+      release = () => {
+        unsubscribe();
+        void observation.release();
+      };
+    }
+    synchronizeVoiceQueueObservation();
+    const unsubscribe = voiceRuntime.subscribe(synchronizeVoiceQueueObservation);
+    return () => {
+      unsubscribe();
+      release();
+    };
+  }, [client, serverId, voiceRuntime]);
 
   // If the client drops mid-initialization, clear pending flags
   useEffect(() => {
@@ -474,6 +518,13 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         "agent_permission_request",
         "agent_permission_resolved",
         "agent.provider_subagents.update",
+        // The client drops these selectors against a host that does not advertise
+        // features.sideConversationEvents, so a shared list stays honest across versions.
+        "agent.side_conversation.update",
+        "agent.side_conversation.removed",
+        // The client drops this one against a host that does not advertise
+        // features.durableAgentQueueV1, for the same reason.
+        "agent.queue.update",
         "checkout_status_update",
         "status.server_info",
       ],
@@ -508,6 +559,24 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       },
     });
 
+    const unsubAgentQueueUpdate = client.on("agent.queue.update", (message) => {
+      if (message.type !== "agent.queue.update") return;
+      useSessionStore.getState().applyAgentQueueSnapshot(serverId, message.payload);
+    });
+
+    const unsubSideConversationUpdate = client.on("agent.side_conversation.update", (message) => {
+      if (message.type !== "agent.side_conversation.update") return;
+      useSideConversationStore.getState().applySnapshot(serverId, message.payload);
+    });
+
+    // The daemon drops threads on archive, reload, and history clear. Without this the row stays
+    // in the subagents track and its tab opens a thread nothing on the host still has.
+    const unsubSideConversationRemoved = client.on("agent.side_conversation.removed", (message) => {
+      if (message.type !== "agent.side_conversation.removed") return;
+      const { parentAgentId, threadId } = message.payload;
+      useSideConversationStore.getState().remove(serverId, parentAgentId, threadId);
+    });
+
     const unsubCheckoutStatusUpdate = onFeed("checkout_status_update", (message) => {
       if (message.type !== "checkout_status_update") return;
       applyCheckoutStatusUpdateFromEvent({ queryClient, serverId, message });
@@ -518,6 +587,20 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       const serverInfo = parseServerInfoStatusPayload(message.payload);
       if (serverInfo) {
         updateSessionServerInfo(serverId, toDaemonServerInfo(serverInfo));
+        // COMPAT(durableAgentQueue): added in v0.11.0-beta.3+custom (TM-02/TM-03).
+        // Server info arrives on every (re)connect, which is exactly when an
+        // enqueue the daemon never acknowledged should be retried. Hosts without
+        // the flag keep the local queue path and their outbox entries wait; the
+        // local queue is in-memory and session-scoped, so nothing durable is
+        // implied about it either way.
+        if (serverInfo.features?.durableAgentQueueV1 === true) {
+          void flushQueueOutboxForServer({
+            serverId,
+            client,
+            applySnapshot: (snapshot) =>
+              useSessionStore.getState().applyAgentQueueSnapshot(serverId, snapshot),
+          });
+        }
         return;
       }
     });
@@ -635,11 +718,18 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       if (message.type !== "transcription_result") return;
 
       const transcriptText = message.payload.text.trim();
-      voiceRuntime?.onTranscriptionResult(serverId, transcriptText);
+      voiceRuntime?.onTranscriptionResult(serverId, transcriptText, message.payload);
     });
 
     const unsubVoiceInputState = client.on("voice_input_state", (message) => {
       if (message.type !== "voice_input_state") return;
+      if (voiceRuntime && !voiceRuntime.acceptsVoiceTransport(serverId, message.payload)) return;
+      if (message.payload.error) {
+        voiceRuntime?.onInputError(serverId, message.payload.error);
+      }
+      if (message.payload.recognitionIssue) {
+        voiceRuntime?.onRecognitionIssue(serverId, message.payload.recognitionIssue);
+      }
       voiceRuntime?.onServerSpeechStateChanged(serverId, message.payload.isSpeaking);
     });
 
@@ -669,6 +759,9 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         .release()
         .catch((error) => console.warn("[Session] Failed to release feeds", error));
       unsubProviderSubagentUpdate();
+      unsubAgentQueueUpdate();
+      unsubSideConversationUpdate();
+      unsubSideConversationRemoved();
       unsubAgentAttention();
       unsubCheckoutStatusUpdate();
       unsubStatus();

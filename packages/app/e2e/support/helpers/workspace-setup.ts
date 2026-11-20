@@ -23,6 +23,7 @@ type WorkspaceSetupDaemonClient = Pick<
   | "fetchWorkspaces"
   | "listTerminals"
   | "observeEvents"
+  | "listWorkspaceScripts"
   | "removeProject"
   | "subscribeRawMessages"
 >;

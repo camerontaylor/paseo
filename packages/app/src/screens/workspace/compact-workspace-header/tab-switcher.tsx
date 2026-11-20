@@ -19,6 +19,7 @@ import {
   type WorkspaceTabMenuLabels,
 } from "@/screens/workspace/workspace-tab-menu";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
+import { useStartSideConversation } from "@/side-conversations/start";
 
 // The trigger draws at 32pt beside its island neighbours, so only vertical slop is free.
 const TAB_SWITCHER_TRIGGER_HIT_SLOP = { top: 8, bottom: 8 } as const;
@@ -105,6 +106,9 @@ function getFallbackTabOptionDescription(
   if (tab.target.kind === "provider_subagent") {
     return labels.agent;
   }
+  if (tab.target.kind === "side_conversation") {
+    return labels.agent;
+  }
   if (tab.target.kind === "commit_diff") {
     return tab.target.sha.slice(0, 7);
   }
@@ -143,6 +147,8 @@ interface MobileWorkspaceTabSwitcherProps {
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
   onCloseTabsBelow: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
+  onViewArtifacts: (agentId: string) => void;
+  onFindInChat: (agentId: string) => void;
 }
 
 function MobileWorkspaceTabOption({
@@ -164,6 +170,8 @@ function MobileWorkspaceTabOption({
   onCloseTabsAbove,
   onCloseTabsBelow,
   onCloseOtherTabs,
+  onViewArtifacts,
+  onFindInChat,
 }: {
   tab: WorkspaceTabDescriptor;
   tabIndex: number;
@@ -183,8 +191,14 @@ function MobileWorkspaceTabOption({
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
   onCloseTabsBelow: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
+  onViewArtifacts: (agentId: string) => void;
+  onFindInChat: (agentId: string) => void;
 }) {
   const { t } = useTranslation();
+  const startSideConversation = useStartSideConversation({
+    serverId: normalizedServerId,
+    workspaceId: normalizedWorkspaceId,
+  });
   const tabMenuLabels = useMemo<WorkspaceTabMenuLabels>(
     () => ({
       copyResumeCommand: t("workspace.tabs.menu.copyResumeCommand"),
@@ -199,7 +213,10 @@ function MobileWorkspaceTabOption({
       closeOthers: t("workspace.tabs.menu.closeOthers"),
       reloadAgent: t("workspace.tabs.menu.reloadAgent"),
       reloadAgentTooltip: t("workspace.tabs.menu.reloadAgentTooltip"),
+      newSideConversation: t("sideConversations.actions.new"),
       close: t("workspace.tabs.menu.close"),
+      viewArtifacts: t("workspace.tabs.menu.viewArtifacts", { defaultValue: "View artifacts" }),
+      findInChat: t("workspace.tabs.menu.findInChat"),
     }),
     [t],
   );
@@ -215,11 +232,14 @@ function MobileWorkspaceTabOption({
     onCopyTerminalId,
     onCopyFilePath,
     onReloadAgent,
+    onStartSideConversation: startSideConversation ?? undefined,
     onRenameTab,
     onCloseTab,
     onCloseTabsBefore: onCloseTabsAbove,
     onCloseTabsAfter: onCloseTabsBelow,
     onCloseOtherTabs,
+    onViewArtifacts,
+    onFindInChat,
     labels: tabMenuLabels,
   });
 
@@ -298,6 +318,8 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
   onCloseTabsAbove,
   onCloseTabsBelow,
   onCloseOtherTabs,
+  onViewArtifacts,
+  onFindInChat,
 }: MobileWorkspaceTabSwitcherProps) {
   const { t } = useTranslation();
   const tabFallbackLabels = useMemo(
@@ -420,6 +442,8 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
           onCloseTabsAbove={onCloseTabsAbove}
           onCloseTabsBelow={onCloseTabsBelow}
           onCloseOtherTabs={onCloseOtherTabs}
+          onViewArtifacts={onViewArtifacts}
+          onFindInChat={onFindInChat}
         />
       );
     },
@@ -439,6 +463,8 @@ export const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitch
       onCloseTabsAbove,
       onCloseTabsBelow,
       onCloseOtherTabs,
+      onViewArtifacts,
+      onFindInChat,
     ],
   );
 

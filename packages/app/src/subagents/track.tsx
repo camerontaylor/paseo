@@ -41,6 +41,7 @@ export interface SubagentsTrackProps {
   rows: SubagentRow[];
   onOpenSubagent: (address: AgentAddress) => void;
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
+  onOpenSideConversation: (parentAgentId: string, threadId: string) => void;
   /**
    * The sheet a row opens, or null when it opens as a tab. A sheet replaces the list in place and
    * Back returns to it; a tab replaces the list's pane, so choosing it ends the list.
@@ -73,6 +74,7 @@ export function SubagentsTrack({
   rows,
   onOpenSubagent,
   onOpenProviderSubagent,
+  onOpenSideConversation,
   sheetTabFor,
   onArchiveSubagent,
   onArchiveFinished,
@@ -118,6 +120,7 @@ export function SubagentsTrack({
           serverId={serverId}
           onOpenSubagent={onOpenSubagent}
           onOpenProviderSubagent={onOpenProviderSubagent}
+          onOpenSideConversation={onOpenSideConversation}
           sheetTabId={sheets[index]?.tab.tabId ?? null}
           onArchiveSubagent={onArchiveSubagent}
           onDetachSubagent={onDetachSubagent}
@@ -190,6 +193,7 @@ interface SubagentsTrackRowProps {
   row: SubagentRow;
   onOpenSubagent: (address: AgentAddress) => void;
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
+  onOpenSideConversation: (parentAgentId: string, threadId: string) => void;
   /** The sheet page the row opens in place of the list, when it opens in a sheet. */
   sheetTabId: string | null;
   onArchiveSubagent: (address: AgentAddress) => void;
@@ -201,6 +205,7 @@ function SubagentsTrackRow({
   row,
   onOpenSubagent,
   onOpenProviderSubagent,
+  onOpenSideConversation,
   sheetTabId,
   onArchiveSubagent,
   onDetachSubagent,
@@ -215,10 +220,12 @@ function SubagentsTrackRow({
   const handlePress = useCallback(() => {
     if (row.kind === "provider") {
       onOpenProviderSubagent(row.parentAgentId, row.id);
+    } else if (row.kind === "side_conversation") {
+      onOpenSideConversation(row.parentAgentId, row.id);
     } else {
       onOpenSubagent(row.address);
     }
-  }, [onOpenProviderSubagent, onOpenSubagent, row]);
+  }, [onOpenProviderSubagent, onOpenSideConversation, onOpenSubagent, row]);
   const handleArchivePress = useCallback(() => {
     if (row.kind === "paseo") onArchiveSubagent(row.address);
   }, [onArchiveSubagent, row]);
