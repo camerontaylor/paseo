@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
-import { createPaseoApi, createPaseoClient } from "./index.js";
+import { AgentQueueUnsupportedError, createPaseoApi, createPaseoClient } from "./index.js";
 import { DaemonClient } from "./daemon-client.js";
 import type { PaseoAgent, PaseoClient, PaseoWorkspace } from "./index.js";
 
@@ -2194,5 +2194,117 @@ test("background stop rejects when the host does not advertise the operation", a
       .ref("agent-a")
       .backgroundWork.stop({ ...SHELL_ITEM, canStop: true, stopToken: "generation" }),
   ).rejects.toThrow("Update the host");
+  await client.close();
+});
+
+// FORK: durable agent queue handle.
+const queueSnapshot = {
+  agentId: "agent_q",
+  revision: 3,
+  items: [],
+};
+
+test("agent queue handle forwards each call to the durable queue RPCs", async () => {
+  const { client, ws } = await connectClient({
+    ownedSubscriptions: true,
+    durableAgentQueueV1: true,
+  });
+  const queue = client.agents.ref("agent_q").queue;
+
+  const respond = (type: string) => {
+    const request = parseSentFrame(ws.sent.at(-1)).message as Record<string, unknown>;
+    ws.message(
+      sessionMessage({
+        type,
+        payload: {
+          requestId: request.requestId,
+          agentId: "agent_q",
+          queue: queueSnapshot,
+          error: null,
+        },
+      }),
+    );
+    return request;
+  };
+
+  const enqueued = queue.enqueue({ itemId: "item_1", text: "hello", intent: "queue" });
+  expect(respond("agent.queue.enqueue.response")).toMatchObject({
+    type: "agent.queue.enqueue.request",
+    agentId: "agent_q",
+    itemId: "item_1",
+    text: "hello",
+    intent: "queue",
+  });
+  await expect(enqueued).resolves.toEqual(queueSnapshot);
+
+  const listed = queue.list();
+  expect(respond("agent.queue.list.response")).toMatchObject({
+    type: "agent.queue.list.request",
+    agentId: "agent_q",
+  });
+  await expect(listed).resolves.toMatchObject({ revision: 3 });
+
+  const removed = queue.remove("item_1", 3);
+  expect(respond("agent.queue.delete.response")).toMatchObject({
+    type: "agent.queue.delete.request",
+    agentId: "agent_q",
+    itemId: "item_1",
+    expectedRevision: 3,
+  });
+  await removed;
+
+  const retried = queue.retry("item_1", 4);
+  expect(respond("agent.queue.retry.response")).toMatchObject({
+    type: "agent.queue.retry.request",
+    agentId: "agent_q",
+    itemId: "item_1",
+    expectedRevision: 4,
+  });
+  await retried;
+
+  await client.close();
+});
+
+test("agent queue handle rejects before sending on a host without durableAgentQueueV1", async () => {
+  const { client, ws } = await connectClient({ ownedSubscriptions: true });
+  const queue = client.agents.ref("agent_q").queue;
+  const sentBefore = ws.sent.length;
+
+  const calls = [
+    queue.enqueue({ itemId: "item_1", text: "hello", intent: "queue" }),
+    queue.list(),
+    queue.remove("item_1", 1),
+    queue.retry("item_1", 1),
+  ];
+  for (const call of calls) {
+    await expect(call).rejects.toMatchObject({
+      name: "AgentQueueUnsupportedError",
+      code: "AGENT_QUEUE_UNSUPPORTED",
+    });
+    await expect(call).rejects.toBeInstanceOf(AgentQueueUnsupportedError);
+  }
+  expect(ws.sent).toHaveLength(sentBefore);
+  await client.close();
+});
+
+test("agent queue handle surfaces the daemon's revision conflict code", async () => {
+  const { client, ws } = await connectClient({
+    ownedSubscriptions: true,
+    durableAgentQueueV1: true,
+  });
+  const removing = client.agents.ref("agent_q").queue.remove("item_1", 1);
+  const request = parseSentFrame(ws.sent.at(-1)).message as Record<string, unknown>;
+  ws.message(
+    sessionMessage({
+      type: "agent.queue.delete.response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "agent_q",
+        queue: null,
+        error: "queue_revision_conflict",
+      },
+    }),
+  );
+  await expect(removing).rejects.toThrow("queue_revision_conflict");
   await client.close();
 });
