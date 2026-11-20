@@ -319,9 +319,14 @@ describe("workspace-layout-store helpers", () => {
   it.each([true, false])(
     "drops a retired side conversation on restore (ordinary tab present: %s)",
     async (includeAgent) => {
-      const agentTab = { tabId: "agent-tab", target: { kind: "agent", agentId: "parent" } };
+      const agentTab = {
+        tabId: "agent-tab",
+        target: { kind: "agent", agentId: "parent" },
+        createdAt: 1,
+      };
       const sideTab = {
         tabId: "side-tab",
+        createdAt: 2,
         target: { kind: "side_conversation", parentAgentId: "parent", threadId: "old" },
       };
       const tabs = includeAgent ? [agentTab, sideTab] : [sideTab];
@@ -351,11 +356,15 @@ describe("workspace-layout-store helpers", () => {
       await restored.persist.rehydrate();
 
       const layout = restored.getState().layoutByWorkspace.workspace;
-      expect(collectAllTabs(layout.root).map((tab) => tab.target)).toEqual([
-        includeAgent ? agentTab.target : { kind: "new_tab" },
-      ]);
+      expect(layout).toBeDefined();
+      const pane = findPaneById(layout.root, "main");
+      const restoredTabs = collectAllTabs(layout.root);
+      expect(restoredTabs.some((tab) => tab.tabId === sideTab.tabId)).toBe(false);
+      expect(
+        restoredTabs.filter((tab) => pane?.tabIds.includes(tab.tabId)).map((tab) => tab.target),
+      ).toEqual([includeAgent ? agentTab.target : { kind: "new_tab" }]);
       if (includeAgent) {
-        expect(findPaneById(layout.root, "main")?.focusedTabId).toBe(agentTab.tabId);
+        expect(pane?.focusedTabId).toBe(agentTab.tabId);
       }
     },
   );
