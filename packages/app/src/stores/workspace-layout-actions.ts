@@ -678,8 +678,10 @@ function normalizePaneNode(rawPane: SplitPaneInternal | undefined): SplitNodeInt
   }
   const tabs = normalizeWorkspaceTabs(rawPane?.tabs);
   const tabIds = normalizeTabIds(rawPane?.tabIds);
+  // Legacy panes carry only tab IDs. An explicit tab whose target no longer
+  // resolves must not be restored as a draft through that fallback.
   const mergedTabs =
-    tabs.length > 0
+    Array.isArray(rawPane?.tabs) && rawPane.tabs.length > 0
       ? tabs
       : tabIds.map((tabId) => ({
           tabId,

@@ -316,47 +316,49 @@ describe("workspace-layout-store helpers", () => {
     expect(persistedIds.has(restoredNewTab?.tabId ?? "")).toBe(false);
   });
 
-  it("restores ordinary tabs from a layout with a retired side conversation", async () => {
-    await AsyncStorage.setItem(
-      "workspace-layout-state",
-      JSON.stringify({
-        version: 2,
-        state: {
-          layoutByWorkspace: {
-            workspace: {
-              focusedPaneId: "main",
-              root: {
-                kind: "pane",
-                pane: {
-                  id: "main",
-                  focusedTabId: "side-tab",
-                  tabs: [
-                    { tabId: "agent-tab", target: { kind: "agent", agentId: "parent" } },
-                    {
-                      tabId: "side-tab",
-                      target: {
-                        kind: "side_conversation",
-                        parentAgentId: "parent",
-                        threadId: "old",
-                      },
-                    },
-                  ],
+  it.each([true, false])(
+    "drops a retired side conversation on restore (ordinary tab present: %s)",
+    async (includeAgent) => {
+      const agentTab = { tabId: "agent-tab", target: { kind: "agent", agentId: "parent" } };
+      const sideTab = {
+        tabId: "side-tab",
+        target: { kind: "side_conversation", parentAgentId: "parent", threadId: "old" },
+      };
+      const tabs = includeAgent ? [agentTab, sideTab] : [sideTab];
+      await AsyncStorage.setItem(
+        "workspace-layout-state",
+        JSON.stringify({
+          version: 2,
+          state: {
+            layoutByWorkspace: {
+              workspace: {
+                focusedPaneId: "main",
+                root: {
+                  kind: "pane",
+                  pane: {
+                    id: "main",
+                    focusedTabId: sideTab.tabId,
+                    tabIds: tabs.map((tab) => tab.tabId),
+                    tabs,
+                  },
                 },
               },
             },
           },
-        },
-      }),
-    );
-    const restored = createWorkspaceLayoutStore(createDeterministicWorkspaceLayoutIds());
-    await restored.persist.rehydrate();
+        }),
+      );
+      const restored = createWorkspaceLayoutStore(createDeterministicWorkspaceLayoutIds());
+      await restored.persist.rehydrate();
 
-    const layout = restored.getState().layoutByWorkspace.workspace;
-    expect(collectAllTabs(layout.root).map((tab) => tab.target)).toEqual([
-      { kind: "agent", agentId: "parent" },
-    ]);
-    expect(findPaneById(layout.root, "main")?.focusedTabId).toBe("agent-tab");
-  });
+      const layout = restored.getState().layoutByWorkspace.workspace;
+      expect(collectAllTabs(layout.root).map((tab) => tab.target)).toEqual([
+        includeAgent ? agentTab.target : { kind: "new_tab" },
+      ]);
+      if (includeAgent) {
+        expect(findPaneById(layout.root, "main")?.focusedTabId).toBe(agentTab.tabId);
+      }
+    },
+  );
 
   it("finds panes and tabs across nested groups", () => {
     const root: SplitNode = {
