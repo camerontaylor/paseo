@@ -77,17 +77,57 @@ const WorkspaceTabStorageSchema = z.strictObject({
   createdAt: z.number(),
   state: z.json().optional(),
 });
+const RetiredSideConversationTabSchema = z.object({
+  tabId: z.string(),
+  target: z.object({ kind: z.literal("side_conversation") }),
+});
+
+// COMPAT(sideConversations): remove retired tabs before validating the rest of the pane.
+function stripRetiredSideConversationTabs(value: unknown): unknown {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("tabs" in value) ||
+    !Array.isArray(value.tabs) ||
+    !("tabIds" in value) ||
+    !Array.isArray(value.tabIds)
+  ) {
+    return value;
+  }
+
+  const retiredIds = new Set<unknown>();
+  const tabs = value.tabs.filter((tab) => {
+    const result = RetiredSideConversationTabSchema.safeParse(tab);
+    if (!result.success) return true;
+    retiredIds.add(result.data.tabId);
+    return false;
+  });
+  if (retiredIds.size === 0) return value;
+
+  return {
+    ...value,
+    tabs,
+    tabIds: value.tabIds.filter((id) => !retiredIds.has(id)),
+    ...("focusedTabId" in value && retiredIds.has(value.focusedTabId)
+      ? { focusedTabId: null }
+      : {}),
+  };
+}
+
 const SplitNodeStorageSchema: z.ZodType<SplitNode> = z.lazy(() =>
   z.discriminatedUnion("kind", [
     z.strictObject({
       kind: z.literal("pane"),
-      pane: z.strictObject({
-        id: z.string(),
-        tabIds: z.array(z.string()),
-        focusedTabId: z.string().nullable(),
-        tabs: z.array(WorkspaceTabStorageSchema).optional(),
-        hidden: z.boolean().optional(),
-      }),
+      pane: z.preprocess(
+        stripRetiredSideConversationTabs,
+        z.strictObject({
+          id: z.string(),
+          tabIds: z.array(z.string()),
+          focusedTabId: z.string().nullable(),
+          tabs: z.array(WorkspaceTabStorageSchema).optional(),
+          hidden: z.boolean().optional(),
+        }),
+      ),
     }),
     z.strictObject({
       kind: z.literal("group"),

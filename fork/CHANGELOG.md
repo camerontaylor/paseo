@@ -4,6 +4,12 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 [the archived release-channel plan](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
 
+## Unreleased
+
+Remove side conversations from the fork. Layout restore drops saved side
+conversation tabs, and the daemon returns a correlated error for older clients
+that still request a side conversation.
+
 ## 0.17.0-beta.1 base decision — 2026-11-20
 
 Merge upstream `v0.17.0-beta.1` (`6c89950b2ef77efee47b127d09d05eb347d25f33`)

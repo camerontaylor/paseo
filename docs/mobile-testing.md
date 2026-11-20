@@ -180,11 +180,6 @@ divergence looks like a missing feature rather than a stale selector.
 
 A `.ad` script cannot create its own daemon state, so a flow with fixture requirements pairs the
 script with a shell harness that seeds out of band and injects ids as `${VAR}` via `-e`.
-[run-side-conversation-android.sh](../packages/app/e2e/mobile/run-side-conversation-android.sh) is
-the worked example: it seeds a mock parent with `mockSideQuestions`, deep-links the device to that
-agent, runs `side-conversation-basic.android.ad`, and removes the project afterwards. Its header
-lists the daemon and Metro it expects.
-
 Deep-linking is how a flow starts on a specific agent without navigating the sidebar:
 
 ```bash

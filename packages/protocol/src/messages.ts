@@ -2252,6 +2252,7 @@ export const ProviderSubagentTimelineRequestMessageSchema = z.object({
 // "current" means the daemon has this agent loaded, the epoch matches, and the cursor is at the head.
 // Anything else is "behind", including an agent the daemon has not loaded.
 export const TimelineFreshnessSchema = z.enum(["current", "behind"]);
+// COMPAT(sideConversations): retain the retired fork RPCs and events for wire parsing.
 export const SideConversationAskRequestMessageSchema = z.object({
   type: z.literal("agent.side_conversation.ask.request"),
   parentAgentId: z.string(),
@@ -4582,12 +4583,8 @@ export const ServerInfoStatusPayloadSchema = z
         wholeTurnTimeline: z.boolean().optional(),
         // COMPAT(providerSubagentNesting): added in v0.7, remove gate after 2027-03-04.
         providerSubagentNesting: z.boolean().optional(),
-        // COMPAT(sideConversations): added in 0.7.0-beta.2.fork.1, fork-only — stock peers never gain it, so the gate lasts as long as stock peers are supported.
+        // COMPAT(sideConversations): read capability flags from older fork daemons.
         sideConversations: z.boolean().optional(),
-        // COMPAT(sideConversationEvents): added in 0.12.0-beta.1.fork.1 — session event
-        // subscriptions can carry the side-conversation update/removal stream, so a modern
-        // (owned-subscription) client can receive proofs for those events. Older fork daemons
-        // advertise sideConversations without this selector support, so clients gate on it.
         sideConversationEvents: z.boolean().optional(),
         // COMPAT(workspacePinning): added in v0.1.107, remove gate after 2027-01-12.
         workspacePinning: z.boolean().optional(),
@@ -8885,7 +8882,8 @@ export const WSHelloMessageSchema = z.object({
       [CLIENT_CAPS.customModeIcons]: z.boolean().optional(),
       [CLIENT_CAPS.terminalReflowableSnapshot]: z.boolean().optional(),
       [CLIENT_CAPS.providerSubagents]: z.boolean().optional(),
-      [CLIENT_CAPS.sideConversations]: z.boolean().optional(),
+      // COMPAT(sideConversations): accept the retired capability from older clients.
+      side_conversations: z.boolean().optional(),
       [CLIENT_CAPS.projectUpdates]: z.boolean().optional(),
       [CLIENT_CAPS.compactProviderSnapshots]: z.boolean().optional(),
       [CLIENT_CAPS.providerSnapshotReferences]: z.boolean().optional(),
