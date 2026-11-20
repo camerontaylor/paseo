@@ -29,13 +29,6 @@ export function normalizeWorkspaceTabTarget(
       ? { kind: "provider_subagent", parentAgentId, subagentId }
       : null;
   }
-  if (value.kind === "side_conversation") {
-    const parentAgentId = trimNonEmpty(value.parentAgentId);
-    const threadId = trimNonEmpty(value.threadId);
-    return parentAgentId && threadId
-      ? { kind: "side_conversation", parentAgentId, threadId }
-      : null;
-  }
   if (value.kind === "file") {
     return normalizeFileTabTarget(value);
   }
@@ -139,9 +132,6 @@ function nestedAgentWorkspaceTabTargetsEqual(
   if (left.kind === "provider_subagent" && right.kind === "provider_subagent") {
     return left.parentAgentId === right.parentAgentId && left.subagentId === right.subagentId;
   }
-  if (left.kind === "side_conversation" && right.kind === "side_conversation") {
-    return left.parentAgentId === right.parentAgentId && left.threadId === right.threadId;
-  }
   if (left.kind === "terminal" && right.kind === "terminal") {
     return left.terminalId === right.terminalId;
   }
@@ -224,9 +214,6 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
   }
   if (target.kind === "provider_subagent") {
     return `provider_subagent_${target.parentAgentId.length}_${target.parentAgentId}_${target.subagentId.length}_${target.subagentId}`;
-  }
-  if (target.kind === "side_conversation") {
-    return `side_conversation_${target.parentAgentId.length}_${target.parentAgentId}_${target.threadId.length}_${target.threadId}`;
   }
   if (target.kind === "terminal") {
     return `terminal_${target.terminalId}`;

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { CLIENT_CAPS } from "../src/client-capabilities.js";
 import {
   ServerInfoStatusPayloadSchema,
   SessionInboundMessageSchema,
@@ -76,8 +75,8 @@ describe("side conversation protocol", () => {
         clientId: "client-1",
         clientType: "browser",
         protocolVersion: 1,
-        capabilities: { [CLIENT_CAPS.sideConversations]: true },
-      }).capabilities?.[CLIENT_CAPS.sideConversations],
+        capabilities: { side_conversations: true },
+      }).capabilities?.side_conversations,
     ).toBe(true);
   });
 });

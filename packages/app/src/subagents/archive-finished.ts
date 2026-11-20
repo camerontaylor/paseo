@@ -72,7 +72,7 @@ function managedRowIdentity(address: AgentAddress): string {
 
 function rowIdentity(row: SubagentRow): string {
   if (row.kind === "paseo") return managedRowIdentity(row.address);
-  return row.kind === "provider" ? `provider:${row.id}` : `side_conversation:${row.id}`;
+  return `provider:${row.id}`;
 }
 
 function rowIdentities(rows: readonly SubagentRow[]): Set<string> {

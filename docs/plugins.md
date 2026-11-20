@@ -888,6 +888,47 @@ Serialized `data` must be at most 64 KiB; the daemon rejects a larger append ins
 payload that cannot be rendered intact. The daemon advertises this RPC through
 `server_info.features.pluginTimelineItems`.
 
+### Queue a prompt for an agent
+
+> Fork only. The durable agent queue exists in the camerontaylor/paseo fork and not in upstream
+> Paseo, so this handle is absent from upstream's `@getpaseo/client`.
+
+`paseo.agents.ref(agentId).queue` reaches the same durable queue as the composer:
+
+```ts
+const queue = paseo.agents.ref(agentId).queue;
+let snapshot = await queue.enqueue({
+  itemId: "docket:task-7",
+  text: "Run the tests",
+  intent: "queue",
+});
+snapshot = await queue.list(); // { agentId, revision, items: [{ id, deliveryState, ... }] }
+snapshot = await queue.remove("docket:task-7", snapshot.revision);
+snapshot = await queue.retry("docket:task-7", snapshot.revision);
+```
+
+`intent` is `"queue"` or `"steer_strict"`. Every call resolves to the full snapshot, so keep its
+`revision` for the next `remove` or `retry`.
+
+- **This is the user's composer queue.** Your item appears in the user's chat, and the user can
+  edit, reorder, or delete it. Delivery is FIFO: a failed item ahead of yours blocks yours until
+  it is retried or removed.
+- **`enqueue` is idempotent per `itemId`, within limits.** The daemon returns the current snapshot
+  and queues nothing when the id is still in the queue, is one of the last 100 drained ids for that
+  agent, or has a completed delivery receipt. Past those, the id is forgotten and enqueueing it
+  again sends the prompt again: once more than 100 later items have drained, and always after the
+  item was deleted, since only a voice item leaves a removal record. Retry a timed-out `enqueue`
+  promptly with the same id; to resend deliberately, use a new id. Docket must not treat a
+  re-enqueue after `remove` as deduplicated.
+- **An agent holds at most 50 queued items.** Enqueueing past that rejects with `queue_full` (the
+  daemon's `QueueFullError`). A delivery gives up after 8 attempts and leaves the item in a failed
+  `deliveryState` until `retry`.
+- **`remove` and `retry` are revision-checked.** A stale `expectedRevision` rejects with
+  `queue_revision_conflict`; `list()` and retry from the new `revision`. Daemon rejections reach
+  you as an `Error` whose message is the code, as with `queue_full`.
+- **Hosts without `server_info.features.durableAgentQueueV1`** reject every call with
+  `AgentQueueUnsupportedError` (`code: "AGENT_QUEUE_UNSUPPORTED"`) before anything is sent.
+
 ## Contribute client slash commands
 
 `addSlashCommand` registers an agent- or workspace-context command in the composer. The

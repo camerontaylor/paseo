@@ -15,7 +15,7 @@ function connection(
     sideConversationEvents?: boolean;
   } = {},
 ) {
-  let sideConversationEvents = options.sideConversationEvents ?? false;
+  const sideConversationEvents = options.sideConversationEvents ?? false;
   const sent: Array<{
     type: string;
     capabilities?: Record<string, unknown>;
@@ -137,9 +137,6 @@ function connection(
     open: () => open(),
     disconnect: () => closed(),
     receive: (message: unknown) => receive(JSON.stringify({ type: "session", message })),
-    setSideConversationEvents: (value: boolean) => {
-      sideConversationEvents = value;
-    },
   };
 }
 
@@ -166,29 +163,7 @@ function eventSubscriptionRequests(h: ReturnType<typeof connection>): string[][]
     .map((frame) => frame.message?.events ?? []);
 }
 
-test("event subscriptions drop selectors the host does not advertise", async () => {
-  const h = connection();
-  try {
-    const ready = h.client.connect();
-    h.open();
-    await ready;
-
-    const observation = h.client.observeEvents([
-      "project.update",
-      "agent.side_conversation.update",
-      "agent.side_conversation.removed",
-    ]);
-    await observation.ready;
-
-    // A daemon without the feature must never parse a selector it does not know.
-    expect(eventSubscriptionRequests(h)).toEqual([["project.update"]]);
-    await observation.release();
-  } finally {
-    await h.client.close();
-  }
-});
-
-test("event subscriptions keep fork selectors a capable host advertises", async () => {
+test("event subscriptions omit retired selectors even on a legacy host", async () => {
   const h = connection({ sideConversationEvents: true });
   try {
     const ready = h.client.connect();
@@ -202,9 +177,7 @@ test("event subscriptions keep fork selectors a capable host advertises", async 
     ]);
     await observation.ready;
 
-    expect(eventSubscriptionRequests(h)).toEqual([
-      ["project.update", "agent.side_conversation.update", "agent.side_conversation.removed"],
-    ]);
+    expect(eventSubscriptionRequests(h)).toEqual([["project.update"]]);
     await observation.release();
   } finally {
     await h.client.close();
@@ -227,37 +200,6 @@ test("a subscription registered before the handshake sends only supported select
     await observation.ready;
 
     expect(eventSubscriptionRequests(h)).toEqual([["project.update"]]);
-    await observation.release();
-  } finally {
-    await h.client.close();
-  }
-});
-
-test("a downgrade reconnect drops fork selectors and keeps ordinary ones", async () => {
-  const h = connection({ sideConversationEvents: true });
-  try {
-    const ready = h.client.connect();
-    h.open();
-    await ready;
-    const observation = h.client.observeEvents([
-      "project.update",
-      "agent.side_conversation.removed",
-    ]);
-    await observation.ready;
-
-    // The host comes back older: the restore must filter against the new handshake, not the
-    // selector list as it was first sent.
-    h.setSideConversationEvents(false);
-    h.disconnect();
-    const reconnecting = h.client.connect();
-    h.open();
-    await reconnecting;
-
-    await expect.poll(() => eventSubscriptionRequests(h).length).toBe(2);
-    expect(eventSubscriptionRequests(h)).toEqual([
-      ["project.update", "agent.side_conversation.removed"],
-      ["project.update"],
-    ]);
     await observation.release();
   } finally {
     await h.client.close();

@@ -316,6 +316,59 @@ describe("workspace-layout-store helpers", () => {
     expect(persistedIds.has(restoredNewTab?.tabId ?? "")).toBe(false);
   });
 
+  it.each([true, false])(
+    "drops a retired side conversation on restore (ordinary tab present: %s)",
+    async (includeAgent) => {
+      const agentTab = {
+        tabId: "agent-tab",
+        target: { kind: "agent", agentId: "parent" },
+        createdAt: 1,
+      };
+      const sideTab = {
+        tabId: "side-tab",
+        createdAt: 2,
+        target: { kind: "side_conversation", parentAgentId: "parent", threadId: "old" },
+      };
+      const tabs = includeAgent ? [agentTab, sideTab] : [sideTab];
+      await AsyncStorage.setItem(
+        "workspace-layout-state",
+        JSON.stringify({
+          version: 2,
+          state: {
+            layoutByWorkspace: {
+              workspace: {
+                focusedPaneId: "main",
+                root: {
+                  kind: "pane",
+                  pane: {
+                    id: "main",
+                    focusedTabId: sideTab.tabId,
+                    tabIds: tabs.map((tab) => tab.tabId),
+                    tabs,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      );
+      const restored = createWorkspaceLayoutStore(createDeterministicWorkspaceLayoutIds());
+      await restored.persist.rehydrate();
+
+      const layout = restored.getState().layoutByWorkspace.workspace;
+      expect(layout).toBeDefined();
+      const pane = findPaneById(layout.root, "main");
+      const restoredTabs = collectAllTabs(layout.root);
+      expect(restoredTabs.some((tab) => tab.tabId === sideTab.tabId)).toBe(false);
+      expect(
+        restoredTabs.filter((tab) => pane?.tabIds.includes(tab.tabId)).map((tab) => tab.target),
+      ).toEqual([includeAgent ? agentTab.target : { kind: "new_tab" }]);
+      if (includeAgent) {
+        expect(pane?.focusedTabId).toBe(agentTab.tabId);
+      }
+    },
+  );
+
   it("finds panes and tabs across nested groups", () => {
     const root: SplitNode = {
       kind: "group",

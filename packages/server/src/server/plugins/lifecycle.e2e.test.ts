@@ -7,6 +7,7 @@ import { expect, onTestFinished, test } from "vitest";
 import { DaemonClient } from "../test-utils/daemon-client.js";
 import { createTestPaseoDaemon } from "../test-utils/paseo-daemon.js";
 import { resolveDaemonVersion } from "../daemon-version.js";
+import { VOICE_AVAILABLE_INSTRUCTION } from "../voice-config.js";
 import { BuiltinPluginLoader } from "./builtin/index.js";
 import { createPaseoApi } from "@getpaseo/client";
 
@@ -546,6 +547,10 @@ test("agent creation hooks change the provider and environment before the sessio
       `export default function contribute(server) { server.addHook("agent.open.before", async ({ request }) => ({ ...request, appendSystemPrompt: [...(request.appendSystemPrompt ?? []), ${JSON.stringify(prompt)}] })); return () => {}; }`,
     );
   await writePrompt("First plugin");
+  // The test daemon serves Paseo tools, so the fork appends its voice
+  // availability line between the saved prompt and the plugin appends.
+  const openSystemPrompt = (...pluginPrompts: string[]) =>
+    ["Saved instructions", VOICE_AVAILABLE_INSTRUCTION, ...pluginPrompts].join("\n\n");
   const daemon = await createTestPaseoDaemon();
   const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
   try {
@@ -585,7 +590,7 @@ test("agent creation hooks change the provider and environment before the sessio
           hook: "provider.open",
           config: {
             env: { HOOK_CREATE: "created", HOOK_OPEN: "opened" },
-            systemPrompt: "Saved instructions\n\nFirst plugin\n\nPlugin instructions",
+            systemPrompt: openSystemPrompt("First plugin", "Plugin instructions"),
           },
         },
         {
@@ -602,9 +607,9 @@ test("agent creation hooks change the provider and environment before the sessio
       .filter((entry) => entry.message.startsWith('{"hook":"provider.open"'))
       .map((entry) => JSON.parse(entry.message).config.systemPrompt);
     expect(opens).toEqual([
-      "Saved instructions\n\nFirst plugin\n\nPlugin instructions",
-      "Saved instructions\n\nChanged plugin\n\nPlugin instructions",
-      "Saved instructions\n\nPlugin instructions",
+      openSystemPrompt("First plugin", "Plugin instructions"),
+      openSystemPrompt("Changed plugin", "Plugin instructions"),
+      openSystemPrompt("Plugin instructions"),
     ]);
     expect((await daemon.daemon.agentStorage.get(agent.id))?.config?.systemPrompt).toBe(
       "Saved instructions",

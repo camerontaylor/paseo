@@ -13,9 +13,6 @@ export function subagentRowTarget(row: SubagentRow): WorkspaceTabTarget {
   if (row.kind === "provider") {
     return { kind: "provider_subagent", parentAgentId: row.parentAgentId, subagentId: row.id };
   }
-  if (row.kind === "side_conversation") {
-    return { kind: "side_conversation", parentAgentId: row.parentAgentId, threadId: row.id };
-  }
   return { kind: "agent", agentId: row.id };
 }
 
