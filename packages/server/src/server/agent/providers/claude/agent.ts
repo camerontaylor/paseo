@@ -7,6 +7,7 @@ import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { promises } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { LRUCache } from "lru-cache";
 import stripAnsi from "strip-ansi";
@@ -3872,7 +3873,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private buildSdkEnv() {
-    return createProviderEnv({
+    const env = createProviderEnv({
       baseEnv: process.env,
       runtimeSettings: this.runtimeSettings,
       overlays: [
@@ -3882,6 +3883,16 @@ class ClaudeAgentSession implements AgentSession {
         { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" },
       ],
     });
+    // A macOS LaunchAgent does not receive USER. Claude uses that value as the
+    // Keychain account name; without it, older CLI versions fall back to the
+    // credentials file and can rotate a different copy of the refresh token.
+    if (process.platform === "darwin" && !env.USER) {
+      env.USER = os.userInfo().username;
+    }
+    if (process.platform === "darwin" && !env.LOGNAME) {
+      env.LOGNAME = env.USER ?? os.userInfo().username;
+    }
+    return env;
   }
 
   private async buildOptions(permissionMode: PermissionMode): Promise<ClaudeOptions> {
