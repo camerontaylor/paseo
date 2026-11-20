@@ -7,6 +7,10 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+  # FORK-LOCAL: lets .github/workflows/fork-ci.yml run this matrix on fork
+  # branches, which the main/pull_request triggers above never reach. Keep on
+  # an upstream merge; dropping it silently disables the fork's full CI.
+  workflow_call:
 
 # A newer push to the same ref cancels the run still in progress, main included.
 # A full run costs about 200 runner-minutes against the org's 20 concurrent
@@ -182,16 +186,18 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.hub != 'false') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - &server_capacity
         name: Log runner capacity
         run: |
           node -e "const os = require('node:os'); console.log(JSON.stringify({cpus: os.cpus().length, model: os.cpus()[0].model, ramGiB: os.totalmem() / 2 ** 30}))"
 
-      - &server_checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - &server_node
         uses: actions/setup-node@v4
@@ -217,6 +223,52 @@ jobs:
         name: Build server dependencies
         run: npm run build:server-deps
 
+      # Pin the shared v1 contract corpus and runtime together. Installed p199
+      # predates the Stop and Desktop tool-capability fixes.
+      - uses: actions/checkout@v4
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        with:
+          repository: camerontaylor/jcode
+          ref: 8c79c1d29c5bf53784511df61e258dadae46a4e8
+          path: .jcode-e2e-source
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        with:
+          workspaces: .jcode-e2e-source
+          key: paseo-jcode-shared-session
+      - name: Build pinned jcode v1 acceptance runtime
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        working-directory: .jcode-e2e-source
+        env:
+          CARGO_BUILD_RUSTC_WRAPPER: ""
+        # Build metadata deliberately does not watch HEAD as a Cargo input.
+        run: JCODE_BUILD_GIT_HASH="$(git rev-parse --short=9 HEAD)" cargo build --locked --bin jcode -j 2
+      - name: Replay pinned jcode v1 contract corpus
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        env:
+          JCODE_ACP_FIXTURE_DIR: ${{ github.workspace }}/.jcode-e2e-source/tests/fixtures/acp
+        run: npm run test --workspace=@getpaseo/builtin-plugins -- jcode-provider/server/corpus-replay.test.ts --bail=1
+
+      - name: Run full live jcode v1 acceptance
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        env:
+          JCODE_E2E_BINARY: ${{ github.workspace }}/.jcode-e2e-source/target/debug/jcode
+          JCODE_EXPECTED_PROVENANCE: 8c79c1d29
+          # Exercise explicit relative-root resolution as well as the full runner.
+          PASEO_CONSUMER_ROOT: .
+          JCODE_ACCEPTANCE_OUT_DIR: ${{ runner.temp }}/jcode-v1-acceptance
+        run: bash .jcode-e2e-source/scripts/live-acceptance/run-live-acceptance.sh
+
+      - name: Run jcode daemon integration
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        env:
+          JCODE_E2E_BINARY: ${{ github.workspace }}/.jcode-e2e-source/target/debug/jcode
+        run: npm run test:integration:local --workspace=@getpaseo/server -- src/server/daemon-e2e/jcode-shared-session.local.e2e.test.ts --maxWorkers=1 --bail=1 --exclude '**/!(jcode-shared-session).local.e2e.test.ts'
+
       - name: Run server tests
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         run: npm run test --workspace=@getpaseo/server
@@ -238,11 +290,14 @@ jobs:
   server-tests-windows:
     name: server-tests (windows-latest)
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.hub != 'false') }}
+    if: ${{ github.repository != 'camerontaylor/paseo' && !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.hub != 'false') }}
     runs-on: windows-latest
     steps:
       - *server_capacity
-      - *server_checkout
+      - &server_checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - *server_node
       - *server_fetch
       - *server_install
@@ -261,7 +316,7 @@ jobs:
   server-integration-windows:
     name: server-integration (windows-latest)
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
+    if: ${{ github.repository != 'camerontaylor/paseo' && !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
     runs-on: windows-latest
     steps:
       - *server_capacity
@@ -385,7 +440,7 @@ jobs:
   desktop-tests-windows:
     name: desktop-tests (windows-latest)
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.desktop != 'false') }}
+    if: ${{ github.repository != 'camerontaylor/paseo' && !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.desktop != 'false') }}
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:

@@ -45,6 +45,7 @@ export interface TerminalEmulatorHandle {
   copySelection: (clipboard: TerminalClipboardWriter) => Promise<string>;
   clear: () => void;
   claimSize: () => void;
+  restoreSurface: () => void;
   showKeyboard: () => void;
   blur: () => void;
 }
@@ -267,6 +268,9 @@ export default function TerminalEmulator({
       claimSize: () => {
         runtimeRef.current?.resize({ forceClaim: true, shouldClaim: true });
       },
+      restoreSurface: () => {
+        runtimeRef.current?.restoreSurface();
+      },
       showKeyboard: () => {
         runtimeRef.current?.resize({ forceClaim: true, shouldClaim: true });
         runtimeRef.current?.focus();
@@ -298,6 +302,9 @@ export default function TerminalEmulator({
       },
       claimSize: () => {
         runtimeRef.current?.resize({ forceClaim: true, shouldClaim: true });
+      },
+      restoreSurface: () => {
+        runtimeRef.current?.restoreSurface();
       },
       showKeyboard: () => {
         runtimeRef.current?.resize({ forceClaim: true, shouldClaim: true });

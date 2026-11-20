@@ -16,7 +16,12 @@ import { z } from "zod";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
 
-import type { AgentMode, AgentProvider, AgentSessionConfig } from "../agent-sdk-types.js";
+import type {
+  AgentMode,
+  AgentProvider,
+  AgentProviderNotice,
+  AgentSessionConfig,
+} from "../agent-sdk-types.js";
 import type { AgentManager, ManagedAgent } from "../agent-manager.js";
 import { ActiveTurnBehaviorSchema, AgentProfileSchema } from "@getpaseo/protocol/messages";
 import type { DaemonConfigStore } from "../../daemon-config-store.js";
@@ -186,6 +191,8 @@ interface ProviderSummary {
   label: string;
   description: string;
   enabled: boolean;
+  source?: "builtin" | "custom";
+  baseProviderId?: string;
   modes: AgentMode[];
   status: string;
   error?: string;
@@ -313,6 +320,8 @@ function toProviderSummary(entry: {
   label?: string;
   description?: string;
   enabled: boolean;
+  source?: "builtin" | "custom";
+  baseProviderId?: string;
   modes?: AgentMode[];
   status: string;
   error?: string;
@@ -322,6 +331,8 @@ function toProviderSummary(entry: {
     label: entry.label ?? entry.provider,
     description: entry.description ?? "",
     enabled: entry.enabled,
+    ...(entry.source ? { source: entry.source } : {}),
+    ...(entry.baseProviderId ? { baseProviderId: entry.baseProviderId } : {}),
     modes: entry.modes ?? [],
     status: entry.status === "ready" ? "available" : entry.status,
     ...(entry.error ? { error: entry.error } : {}),
@@ -1329,7 +1340,12 @@ function createToolCatalog(
   type TopLevelCreateAgentArgs = z.infer<typeof canonicalTopLevelCreateAgentArgsSchema>;
   type LegacyTopLevelCreateAgentArgs = z.infer<typeof legacyTopLevelCreateAgentArgsSchema>;
 
-  if (options.voiceOnly || options.enableVoiceTools || callerContext?.enableVoiceTools) {
+  if (
+    options.voiceOnly ||
+    scope === "agent" ||
+    options.enableVoiceTools ||
+    callerContext?.enableVoiceTools
+  ) {
     registerTool(
       "speak",
       {
@@ -1353,18 +1369,23 @@ function createToolCatalog(
         }
         const handler = resolveSpeakHandler?.(callerAgentId) ?? null;
         if (!handler) {
-          throw new PaseoToolInputError(
-            `No speak handler registered for your session '${callerAgentId}'`,
-          );
+          // Voice can detach while the agent works; the tool call settles
+          // instead of failing so the turn keeps its visible reply in chat.
+          return {
+            content: [{ type: "text", text: "Voice is not attached. Continue in the chat." }],
+            structuredContent: ensureValidJson({ ok: false }),
+          };
         }
-        await handler({
+        const outcome = await handler({
           text: args.text,
           callerAgentId,
           signal: context?.signal,
         });
         return {
-          content: [],
-          structuredContent: ensureValidJson({ ok: true }),
+          content: outcome
+            ? [{ type: "text", text: `Audio ${outcome.reason}. Continue in the chat.` }]
+            : [],
+          structuredContent: ensureValidJson({ ok: !outcome }),
         };
       },
     );
@@ -2309,17 +2330,28 @@ function createToolCatalog(
       },
       outputSchema: {
         success: z.boolean(),
+        notices: z
+          .array(
+            z.object({ type: z.enum(["info", "warning", "error"]), message: z.string() }).strict(),
+          )
+          .optional(),
       },
     },
     async ({ agentId, name, labels, settings }) => {
+      const notices: AgentProviderNotice[] = [];
       if (settings?.modeId !== undefined) {
-        await agentManager.setAgentMode(agentId, settings.modeId);
+        const notice = await agentManager.setAgentMode(agentId, settings.modeId);
+        if (notice) notices.push(notice);
       }
       if (settings?.model !== undefined) {
         await agentManager.setAgentModel(agentId, settings.model);
       }
       if (settings?.thinkingOptionId !== undefined) {
-        await agentManager.setAgentThinkingOption(agentId, settings.thinkingOptionId);
+        const notice = await agentManager.setAgentThinkingOption(
+          agentId,
+          settings.thinkingOptionId,
+        );
+        if (notice) notices.push(notice);
       }
       if (settings?.features) {
         await agentManager.setAgentOptions(agentId, settings.features);
@@ -2328,8 +2360,11 @@ function createToolCatalog(
       await updateAgentCommand({ agentManager }, { agentId, name, labels });
 
       return {
-        content: [],
-        structuredContent: ensureValidJson({ success: true }),
+        content: notices.map((notice) => ({ type: "text" as const, text: notice.message })),
+        structuredContent: ensureValidJson({
+          success: true,
+          ...(notices.length > 0 ? { notices } : {}),
+        }),
       };
     },
   );
@@ -2868,9 +2903,9 @@ function createToolCatalog(
         throw new Error("Schedule service is not configured");
       }
 
-      const schedules = (await scheduleService.list())
-        .filter((schedule) => schedule.target.type === "new-agent")
-        .map((schedule) => toScheduleSummary(schedule));
+      const schedules = (await scheduleService.list()).map((schedule) =>
+        toScheduleSummary(schedule),
+      );
       return {
         content: [],
         structuredContent: ensureValidJson({ schedules }),
@@ -3102,7 +3137,8 @@ function createToolCatalog(
     "list_providers",
     {
       title: "List providers",
-      description: "List configured agent providers, availability, and their modes.",
+      description:
+        "List configured agent providers and accounts, including availability, modes, and each account's base provider.",
       inputSchema: {},
       outputSchema: {
         providers: z.array(ProviderSummarySchema),
@@ -3183,6 +3219,8 @@ function createToolCatalog(
         label: z.string().nullable().optional(),
         description: z.string().nullable().optional(),
         enabled: z.boolean(),
+        source: z.enum(["builtin", "custom"]).optional(),
+        baseProviderId: z.string().optional(),
         status: z.string(),
         modes: z.array(ProviderModeSchema).nullish(),
         selectedModel: z.string().nullable(),
@@ -3224,6 +3262,8 @@ function createToolCatalog(
           label: summary.label,
           description: summary.description,
           enabled: summary.enabled,
+          ...(summary.source ? { source: summary.source } : {}),
+          ...(summary.baseProviderId ? { baseProviderId: summary.baseProviderId } : {}),
           status: summary.status,
           modes: summary.modes,
           selectedModel: selectedModel ?? null,

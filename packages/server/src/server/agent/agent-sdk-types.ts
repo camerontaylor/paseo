@@ -129,6 +129,8 @@ export interface ProviderSnapshotEntry {
   status: ProviderStatus;
   enabled: boolean;
   source?: "builtin" | "custom";
+  /** Builtin provider this entry extends, when it is a custom provider account. */
+  baseProviderId?: string;
   error?: string;
   models?: AgentModelDefinition[];
   modes?: AgentMode[];
@@ -168,6 +170,7 @@ export interface AgentCreateConfigUnattendedInput {
 
 export interface AgentCapabilityFlags {
   [capability: string]: boolean | undefined;
+  supportsSharedTurns?: boolean;
   supportsStreaming: boolean;
   supportsSessionPersistence: boolean;
   supportsSessionListing?: boolean;
@@ -197,10 +200,17 @@ export type AgentPromptContentBlock =
 export type AgentPromptInput = string | AgentPromptContentBlock[];
 
 export interface AgentRunOptions {
+  /** Manager admission guard, checked synchronously with the run reservation. */
+  requireNoPendingPermissions?: boolean;
   outputSchema?: unknown;
   resumeFrom?: AgentPersistenceHandle;
   maxThinkingTokens?: number;
   clientMessageId?: string;
+  /**
+   * Explicit attachment-local skill selection for providers that support it.
+   * `undefined` leaves the current selection alone, `null` clears it.
+   */
+  skill?: string | null;
 }
 
 export interface AgentSteerOptions extends AgentRunOptions {
@@ -414,6 +424,7 @@ export type AgentTimelineItem =
 
 export type AgentStreamEvent =
   | { type: "thread_started"; sessionId: string; provider: AgentProvider }
+  | { type: "pending_work"; provider: AgentProvider; pending: boolean }
   | { type: "turn_started"; provider: AgentProvider; turnId?: string }
   | { type: "turn_completed"; provider: AgentProvider; usage?: AgentUsage; turnId?: string }
   | { type: "usage_updated"; provider: AgentProvider; usage: AgentUsage; turnId?: string }
@@ -748,6 +759,8 @@ export interface AgentSession {
   canStopRuntime?(): Promise<boolean>;
   /** Release live runtime resources without archiving or deleting the durable native session. */
   close(): Promise<void>;
+  /** Leave a shared provider session without closing or cancelling work the provider keeps. */
+  detachSharedSession?(): Promise<void>;
   listCommands?(): Promise<AgentSlashCommand[]>;
   /** A returned model is the effective selection committed by this mutation.
    * Returning void means the requested selection was accepted. No status read is required. */
@@ -826,6 +839,12 @@ export interface AgentClient {
    * about options while creating. If the agent ended up different from the options, say so in the
    * session's `openOptionsPatch`.
    */
+  /**
+   * True when a loaded native session restores its own model and thinking option and
+   * reports them. The manager then sends only explicit overrides on load and adopts what
+   * the session reports. Otherwise the saved selection is sent on every load.
+   */
+  readonly restoresSessionConfig?: boolean;
   createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,

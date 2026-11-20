@@ -20,3 +20,21 @@ export function createHeadlessTerminal(options: HeadlessTerminalOptions): Termin
   terminal.loadAddon(new UnicodeGraphemesAddon());
   return terminal;
 }
+
+/**
+ * Drain xterm's queued writes into the parsed buffer.
+ *
+ * `write()` queues the data and parses it on a timer, so a process that
+ * writes and exits in the same tick leaves its final output unparsed. Disposing
+ * drops that queue, and the replay then serializes an empty buffer forever.
+ * `_writeBuffer.flushSync` is xterm's own drain path (it is what `resize`
+ * calls); the headless build exposes no public equivalent.
+ */
+export function flushHeadlessTerminal(terminal: Terminal): void {
+  const core = (
+    terminal as unknown as {
+      _core: { _writeBuffer: { flushSync(): void } };
+    }
+  )._core;
+  core._writeBuffer.flushSync();
+}

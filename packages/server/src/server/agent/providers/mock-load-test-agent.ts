@@ -834,13 +834,9 @@ export class MockLoadTestAgentSession implements AgentSession {
       typeof options.config.providerOptions?.mockRewindError === "string"
         ? options.config.providerOptions.mockRewindError
         : null;
-    const requestedPromptRejections = options.config.providerOptions?.mockPromptRejections;
-    this.remainingPromptRejections =
-      typeof requestedPromptRejections === "number" &&
-      Number.isSafeInteger(requestedPromptRejections) &&
-      requestedPromptRejections > 0
-        ? requestedPromptRejections
-        : 0;
+    this.remainingPromptRejections = getPositiveFeatureInteger(
+      options.config.providerOptions?.mockPromptRejections,
+    );
     this.remainingSteerFailures = getPositiveFeatureInteger(
       options.config.providerOptions?.mockSteerAmbiguousFailures,
     );

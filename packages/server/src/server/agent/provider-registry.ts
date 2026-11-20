@@ -477,6 +477,7 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     interrupt: () => inner.interrupt(),
     stopBackgroundWork: inner.stopBackgroundWork?.bind(inner),
     close: () => inner.close(),
+    detachSharedSession: inner.detachSharedSession?.bind(inner),
     canStopRuntime: inner.canStopRuntime?.bind(inner),
     listCommands: inner.listCommands?.bind(inner),
     setModel: inner.setModel?.bind(inner),

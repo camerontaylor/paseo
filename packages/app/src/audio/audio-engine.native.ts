@@ -1,9 +1,10 @@
+import * as native from "@getpaseo/expo-two-way-audio";
 import type { AudioEngine, AudioEngineCallbacks, AudioEngineOptions } from "./audio-engine-types";
 
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import { File, Paths } from "expo-file-system";
 import { playFile } from "./file-playback";
-import { createNativeAudioEngine, type NativeAudioEngineDeps } from "./native-audio-engine";
+import { createNativeAudioEngine } from "./native-audio-engine";
 
 // AVPlayer needs a file extension to recognize local encoded audio on iOS.
 const FILE_EXTENSIONS: Record<string, string> = {
@@ -55,6 +56,5 @@ export function createAudioEngine(
   callbacks: AudioEngineCallbacks,
   options?: AudioEngineOptions,
 ): AudioEngine {
-  const native: NativeAudioEngineDeps["native"] = require("@getpaseo/expo-two-way-audio");
   return createNativeAudioEngine({ native, playEncodedAudio }, callbacks, options);
 }

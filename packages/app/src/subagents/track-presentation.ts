@@ -10,11 +10,9 @@ import { isFinishedSubagent } from "./archive-finished";
 import { providerSubagentLifecycleStatus } from "./provider-store";
 
 function presentationStatus(row: SubagentRow) {
-  if (row.kind === "paseo") {
-    if (row.turn.phase === "open") return "running";
-    return row.status === "running" ? "idle" : row.status;
-  }
-  return providerSubagentLifecycleStatus(row.status);
+  if (row.kind === "provider") return providerSubagentLifecycleStatus(row.status);
+  if (row.turn.phase === "open") return "running";
+  return row.status === "running" ? "idle" : row.status;
 }
 
 /**

@@ -12,8 +12,10 @@ function connection(
     browserHost?: { hostKind: string; supportedCommands: string[] };
     acknowledgeTimelineReads?: boolean;
     timelineFreshnessCheck?: boolean;
+    sideConversationEvents?: boolean;
   } = {},
 ) {
+  const sideConversationEvents = options.sideConversationEvents ?? false;
   const sent: Array<{
     type: string;
     capabilities?: Record<string, unknown>;
@@ -49,6 +51,7 @@ function connection(
                   selectiveAgentTimeline: !options.broadcasts,
                   explicitEventSubscriptions: !options.broadcasts,
                   timelineFreshnessCheck: options.timelineFreshnessCheck === true,
+                  ...(sideConversationEvents ? { sideConversationEvents: true } : {}),
                 },
               },
             },
@@ -149,6 +152,55 @@ test("a plain client advertises every protocol capability and no browser host", 
     expect(h.sent[0].capabilities).toEqual(
       Object.fromEntries(Object.values(protocolCapabilities).map((key) => [key, true])),
     );
+  } finally {
+    await h.client.close();
+  }
+});
+
+function eventSubscriptionRequests(h: ReturnType<typeof connection>): string[][] {
+  return h.sent
+    .filter((frame) => frame.message?.type === "session.events.set_subscription.request")
+    .map((frame) => frame.message?.events ?? []);
+}
+
+test("event subscriptions omit retired selectors even on a legacy host", async () => {
+  const h = connection({ sideConversationEvents: true });
+  try {
+    const ready = h.client.connect();
+    h.open();
+    await ready;
+
+    const observation = h.client.observeEvents([
+      "project.update",
+      "agent.side_conversation.update",
+      "agent.side_conversation.removed",
+    ]);
+    await observation.ready;
+
+    expect(eventSubscriptionRequests(h)).toEqual([["project.update"]]);
+    await observation.release();
+  } finally {
+    await h.client.close();
+  }
+});
+
+test("a subscription registered before the handshake sends only supported selectors", async () => {
+  const h = connection();
+  try {
+    const connecting = h.client.connect();
+    // Registered while the handshake is still in flight: the first send must already respect
+    // the features the host advertises, because that handshake lands before the registration
+    // starts.
+    const observation = h.client.observeEvents([
+      "project.update",
+      "agent.side_conversation.update",
+    ]);
+    h.open();
+    await connecting;
+    await observation.ready;
+
+    expect(eventSubscriptionRequests(h)).toEqual([["project.update"]]);
+    await observation.release();
   } finally {
     await h.client.close();
   }

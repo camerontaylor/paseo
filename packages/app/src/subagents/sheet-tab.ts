@@ -10,9 +10,10 @@ import type { SubagentRow } from "./select";
 
 /** The workspace target a subagent row opens. */
 export function subagentRowTarget(row: SubagentRow): WorkspaceTabTarget {
-  return row.kind === "provider"
-    ? { kind: "provider_subagent", parentAgentId: row.parentAgentId, subagentId: row.id }
-    : { kind: "agent", agentId: row.id };
+  if (row.kind === "provider") {
+    return { kind: "provider_subagent", parentAgentId: row.parentAgentId, subagentId: row.id };
+  }
+  return { kind: "agent", agentId: row.id };
 }
 
 /**

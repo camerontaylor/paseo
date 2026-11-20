@@ -3,5 +3,7 @@
   <application>
     <!-- Hosts a scroll view in a real window, so layout clamps and draws run as they do on device. -->
     <activity android:name="android.app.Activity" android:exported="false" />
+    <activity android:name="sh.paseo.scroll.SelectionTestActivity" android:exported="false"
+      android:theme="@android:style/Theme.Material.Light.NoActionBar" />
   </application>
 </manifest>

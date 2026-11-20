@@ -33,6 +33,8 @@ export interface StopOnQuitDeps {
   isDesktopManagedDaemonRunning: () => boolean;
   stopDaemon: () => Promise<unknown>;
   showShutdownFeedback: () => void;
+  quitSignal: AbortSignal;
+  confirmStopDaemon: (stopByDefault: boolean, signal: AbortSignal) => Promise<boolean>;
 }
 
 export function registerExternalQuitSignals({
@@ -41,15 +43,18 @@ export function registerExternalQuitSignals({
 }: {
   signals: ExternalQuitSignalSource;
   quit: () => void;
-}): void {
+}): AbortSignal {
   let quitRequested = false;
+  const quitSignal = new AbortController();
   for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] satisfies NodeJS.Signals[]) {
     signals.on(signal, () => {
       if (quitRequested) return;
       quitRequested = true;
+      quitSignal.abort();
       quit();
     });
   }
+  return quitSignal.signal;
 }
 
 export function shouldStopDesktopManagedDaemonOnQuit(settings: QuitLifecycleSettings): boolean {
@@ -59,12 +64,20 @@ export function shouldStopDesktopManagedDaemonOnQuit(settings: QuitLifecycleSett
 export async function stopDesktopManagedDaemonOnQuitIfNeeded(
   deps: StopOnQuitDeps,
 ): Promise<boolean> {
+  if (!deps.isDesktopManagedDaemonRunning()) {
+    return false;
+  }
+
   const settings = await deps.settingsStore.get();
   if (!shouldStopDesktopManagedDaemonOnQuit(settings)) {
     return false;
   }
 
-  if (!deps.isDesktopManagedDaemonRunning()) {
+  const stopByDefault = shouldStopDesktopManagedDaemonOnQuit(settings);
+  const confirmed = deps.quitSignal.aborted
+    ? stopByDefault
+    : await deps.confirmStopDaemon(stopByDefault, deps.quitSignal);
+  if (!(deps.quitSignal.aborted ? stopByDefault : confirmed)) {
     return false;
   }
 
@@ -113,12 +126,17 @@ export function createQuitLifecycle({
   // window-all-closed handler, which would veto that second quit.
   let quitting = false;
   let quittingForUpdate = false;
+  let checkingUpdate = false;
   const updateQuit = createDeferredUpdateQuit();
 
   function handleBeforeQuit(event: BeforeQuitEvent): void {
     closeTransportSessions();
     if (quittingForUpdate) return;
     if (quitting) {
+      if (!checkingUpdate) {
+        event.preventDefault();
+        return;
+      }
       // MacUpdater's no-relaunch path calls app.quit() without emitting
       // before-quit-for-update. A second quit is equivalent handoff evidence.
       updateQuit.resolve();
@@ -135,6 +153,7 @@ export function createQuitLifecycle({
       }
 
       const signal = createUpdateDeadlineSignal();
+      checkingUpdate = true;
       const updateInstallation = installAppUpdateOnQuit(signal).catch((error) => {
         onUpdateError(error);
         return false;

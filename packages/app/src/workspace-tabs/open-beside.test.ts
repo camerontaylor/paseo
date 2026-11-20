@@ -10,6 +10,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 
 import { DEFAULT_APP_SETTINGS } from "@/hooks/use-settings";
 import { setPanelInstanceAttributes } from "@/panels/panel-instance-attributes";
+import { usePanelStore } from "@/stores/panel-store";
 import {
   collectAllPanes,
   collectAllTabs,
@@ -23,14 +24,17 @@ import {
 } from "@/workspace-tabs/open-beside";
 
 const WORKSPACE_KEY = "server-1:workspace-1";
-
 beforeEach(() => {
+  usePanelStore.setState({
+    mobilePanel: { target: "agent", revision: 0 },
+  });
   useWorkspaceLayoutStore.setState({
     layoutMode: "split-panes",
     sheetsByWorkspace: {},
     layoutByWorkspace: {},
     explorerSidebarPaneIdByWorkspace: {},
     sidePaneIdByWorkspace: {},
+    splitSizesByWorkspace: {},
   });
 });
 
@@ -145,7 +149,7 @@ describe("opening beside", () => {
     });
   }
 
-  function paneIdHolding(tabId: string | null): string | undefined {
+  function paneIdHoldingInLayout(tabId: string | null): string | undefined {
     const root = useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY].root;
     return collectAllPanes(root).find((pane) => pane.tabIds.includes(tabId ?? ""))?.id;
   }
@@ -155,9 +159,10 @@ describe("opening beside", () => {
 
     const tabId = openSubagentWithSidePreference();
 
-    const sidePaneId = useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY];
-    expect(sidePaneId).toEqual(expect.any(String));
-    expect(paneIdHolding(tabId)).toBe(sidePaneId);
+    const openedSidePaneId =
+      useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY];
+    expect(openedSidePaneId).toEqual(expect.any(String));
+    expect(paneIdHoldingInLayout(tabId)).toBe(openedSidePaneId);
   });
 
   it("keeps a single-pane workspace in one pane despite the side preference", () => {
@@ -170,7 +175,7 @@ describe("opening beside", () => {
     });
 
     expect(useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY]).toBeFalsy();
-    expect(paneIdHolding(preferredTabId)).toBe("main");
-    expect(paneIdHolding(besideTabId)).toBe("main");
+    expect(paneIdHoldingInLayout(preferredTabId)).toBe("main");
+    expect(paneIdHoldingInLayout(besideTabId)).toBe("main");
   });
 });
