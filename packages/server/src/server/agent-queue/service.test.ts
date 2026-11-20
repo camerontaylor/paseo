@@ -119,6 +119,7 @@ describe("AgentQueueService", () => {
         if (sendError) {
           throw sendError;
         }
+        await input.beforeDispatch();
         sent.push(input);
         // A real send starts a turn, so the agent is no longer free to drain.
         agents.lifecycle = "running";
@@ -990,7 +991,7 @@ describe("AgentQueueService startup recovery", () => {
     sent: SendQueuedPromptInput[];
   }
 
-  async function createRecoveryHarness(): Promise<RecoveryHarness> {
+  async function createRecoveryHarness(failAfterDispatch = false): Promise<RecoveryHarness> {
     const agents = new FakeAgentController();
     const receipts = new MessageReceipts(join(dir, "agent-requests"));
     const store = new AgentQueueStore(join(dir, "queues"));
@@ -1002,6 +1003,8 @@ describe("AgentQueueService startup recovery", () => {
       logger: createTestLogger(),
       receipts,
       sendPrompt: async (input) => {
+        await input.beforeDispatch();
+        if (failAfterDispatch) throw new Error("provider acceptance lost");
         sent.push(input);
         agents.lifecycle = "running";
       },
@@ -1042,6 +1045,31 @@ describe("AgentQueueService startup recovery", () => {
     expect(second.sent.map((input) => input.messageId)).toEqual(["kept"]);
     expect((await second.service.list("agent-a")).items).toEqual([]);
     await second.service.stop();
+  });
+
+  test("a live failure after beforeDispatch holds speech as uncertain without auto-replay", async () => {
+    const harness = await createRecoveryHarness(true);
+    await harness.service.start();
+    await harness.service.enqueue({
+      agentId: "agent-a",
+      itemId: "speech",
+      text: "spoken follow-up",
+      intent: "queue",
+    });
+    await harness.service.flushDrains();
+    expect((await harness.service.list("agent-a")).items).toEqual([
+      expect.objectContaining({ id: "speech", deliveryState: "uncertain", attempts: 1 }),
+    ]);
+    expect(await harness.receipts.outcome("agent-a", "speech#1")).toBe("pending");
+    harness.agents.emitLifecycle("running", "agent-a");
+    harness.agents.emitLifecycle("idle", "agent-a");
+    await harness.service.flushDrains();
+    expect((await harness.service.list("agent-a")).items[0]).toMatchObject({
+      deliveryState: "uncertain",
+      attempts: 1,
+    });
+    expect(harness.sent).toEqual([]);
+    await harness.service.stop();
   });
 
   test("a claim whose receipt completed is delivered, not resent", async () => {
@@ -1087,7 +1115,8 @@ describe("AgentQueueService startup recovery", () => {
         agentId: "agent-a",
         messageId: "claimed#1",
         request: { prompt, intent: "queue" },
-        send: async () => {
+        send: async (beforeDispatch) => {
+          await beforeDispatch();
           throw new Error("daemon restarted mid-send");
         },
       })
@@ -1199,6 +1228,7 @@ describe("AgentQueueService startup recovery", () => {
       } as unknown as AgentStorage,
       logger: createTestLogger(),
       sendPrompt: async (input) => {
+        await input.beforeDispatch();
         sent.push(input);
         agents.lifecycle = "running";
       },

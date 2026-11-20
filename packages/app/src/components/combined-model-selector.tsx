@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -22,7 +22,10 @@ import {
   type ToolbarGlyph,
 } from "@/components/ui/control-geometry";
 
+import { useKeyboardToggle, type KeyboardToggleAction } from "@/hooks/use-keyboard-toggle";
+
 const EMPTY_COMBOBOX_OPTIONS: ComboboxOption[] = [];
+const DEFAULT_TRIGGER_DECORATION = { showCaret: true, tooltip: undefined };
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 
 const foregroundMutedMapping = (theme: Theme) => ({
@@ -50,6 +53,7 @@ interface CombinedModelSelectorProps {
     hovered: boolean;
     pressed: boolean;
   }) => React.ReactNode;
+  toggleAction?: KeyboardToggleAction;
   onOpen?: () => void;
   onClose?: () => void;
   onRetryProvider?: (provider: AgentProvider) => void;
@@ -70,6 +74,7 @@ interface CombinedModelSelectorProps {
   toolbar?: {
     glyph: ToolbarGlyph;
     showCaret: boolean;
+    tooltip?: ReactNode;
   };
 }
 
@@ -85,6 +90,7 @@ export function CombinedModelSelector({
   onCreateProfile,
   onEditProfile,
   renderTrigger,
+  toggleAction,
   onOpen,
   onClose,
   onRetryProvider,
@@ -149,6 +155,14 @@ export function CombinedModelSelector({
   const handleTriggerPress = useCallback(() => {
     handleOpenChange(!isOpen);
   }, [handleOpenChange, isOpen]);
+
+  useKeyboardToggle({
+    action: toggleAction,
+    disabled,
+    open: isOpen,
+    searchFocused: browser.isSearchFocused,
+    onToggle: handleTriggerPress,
+  });
 
   const triggerStyle = useCallback(
     ({ pressed, hovered }: PressableStateCallbackType & { hovered?: boolean }) => {
@@ -219,6 +233,8 @@ export function CombinedModelSelector({
     </View>
   );
 
+  const { showCaret, tooltip } = toolbar ?? DEFAULT_TRIGGER_DECORATION;
+
   return (
     <>
       {renderTrigger ? (
@@ -257,7 +273,8 @@ export function CombinedModelSelector({
             model: browser.selectedModelLabel,
           })}
           testID="combined-model-selector"
-          chevron={toolbar?.showCaret === false ? null : undefined}
+          chevron={showCaret === false ? null : undefined}
+          tooltip={tooltip}
         >
           {selectedProvider.trim().length > 0 ? (
             <View style={toolbar ? styles.toolbarGlyph : styles.glyph}>

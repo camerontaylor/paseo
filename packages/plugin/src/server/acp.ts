@@ -4,9 +4,12 @@ import type {
   ProviderCommand,
   ProviderConfigState,
   ProviderError,
+  ProviderMode,
   ProviderNotice,
+  ProviderPersistence,
   ProviderRegistration,
   ProviderTimelineItem,
+  ProviderToolCallDetail,
 } from "./provider.js";
 import { createAcpProviderConnection } from "./acp-internal/connection.js";
 
@@ -56,6 +59,14 @@ export interface AcpOptions {
   vendorTurnsAreNeverForeground?: boolean;
   waitForInitialCommands?: boolean;
   initialCommandsTimeoutMs?: number;
+  /** Allow delayed session/load updates before publishing the session as ready. */
+  loadReplayQuietPeriodMs?: number;
+  /** An unattended mode that approves ACP allow-once requests in the specified native mode. */
+  autoAcceptMode?: {
+    mode: Omit<ProviderMode, "isUnattended">;
+    nativeMode: string;
+    default?: boolean;
+  };
 }
 
 export interface AcpContext {
@@ -106,6 +117,8 @@ export interface AcpDiscoveryContext extends AcpContext {
 
 export interface AcpConfigureContext extends AcpContext {
   config: AcpConfigAccess;
+  catalog(): ProviderCatalog;
+  apply(change: AcpConfigChange): Promise<void>;
 }
 
 export type AcpConfigChange =
@@ -123,6 +136,7 @@ export interface AcpToolCallSnapshot {
   input: JsonValue;
   output: JsonValue;
   locations: readonly string[];
+  detail?: ProviderToolCallDetail;
 }
 
 export type AcpVendorUpdate =
@@ -148,6 +162,13 @@ export interface AcpTransformer {
     commands: readonly ProviderCommand[],
     context: AcpPolicyContext,
   ): readonly ProviderCommand[] | null;
+  /** Decode an older saved session and supply extension metadata for session/new or session/load. */
+  sessionOpen?(context: {
+    persistence?: ProviderPersistence;
+    systemPrompt?: string;
+    agentMetadata: JsonValue;
+  }): { sessionId?: string; metadata?: Readonly<Record<string, JsonValue>> };
+
   discover?(
     catalog: ProviderCatalog,
     context: AcpDiscoveryContext,

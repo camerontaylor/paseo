@@ -23,7 +23,8 @@ test("message retries survive reconstruction without submitting twice", async ()
     agentId: "agent",
     messageId: "arrival",
     request: { text: "hello" },
-    send: async () => {
+    send: async (beforeDispatch: () => Promise<void>) => {
+      await beforeDispatch();
       deliveries++;
     },
   };
@@ -41,7 +42,8 @@ test("ambiguous provider delivery is never blindly replayed after restart", asyn
     agentId: "agent",
     messageId: "arrival",
     request: {},
-    send: async () => {
+    send: async (beforeDispatch: () => Promise<void>) => {
+      await beforeDispatch();
       deliveries++;
       throw new Error("connection lost");
     },
@@ -53,7 +55,7 @@ test("ambiguous provider delivery is never blindly replayed after restart", asyn
   expect(deliveries).toBe(1);
 });
 
-test("failed local message preparation does not leave an ambiguous receipt", async () => {
+test("a send that fails before beforeDispatch can be retried with the same message", async () => {
   const { requests, directory } = await fixture();
   let available = false;
   let sends = 0;
@@ -61,14 +63,13 @@ test("failed local message preparation does not leave an ambiguous receipt", asy
     agentId: "agent",
     messageId: "message",
     request: {},
-    prepare: async () => {
-      if (!available) throw new Error("load failed");
-    },
-    send: async () => {
+    send: async (beforeDispatch: () => Promise<void>) => {
+      if (!available) throw new Error("mode change failed");
+      await beforeDispatch();
       sends++;
     },
   };
-  await expect(requests.send(input)).rejects.toThrow("load failed");
+  await expect(requests.send(input)).rejects.toThrow("mode change failed");
   available = true;
   await new MessageReceipts(directory).send(input);
   available = false;
@@ -112,7 +113,7 @@ test("voice receipts remain readable after more than 100 later deliveries", asyn
   expect(outcomes[0]).toMatchObject({ messageId: "attachment:first", state: "completed" });
 });
 
-test("known reservation loss clears the pending receipt but provider ambiguity does not", async () => {
+test("a reservation loss before beforeDispatch leaves no receipt", async () => {
   const { requests, directory } = await fixture();
   const busy = Object.assign(new Error("busy"), { code: "AGENT_RUN_BUSY" });
   const input = {
@@ -177,7 +178,8 @@ test("in-flight dispatch is reported as sending, and removal waits for it", asyn
   });
   const pending = requests.send({
     ...input,
-    send: async () => {
+    send: async (beforeDispatch) => {
+      await beforeDispatch();
       entered();
       await barrier;
     },
@@ -230,7 +232,8 @@ test("completed logical speech wins over an older ambiguous attempt", async () =
     messageId: "speech#1",
     request: {},
     attachment: { messageId: "speech", attachmentId: "attachment", voiceOwner: "owner" },
-    send: async () => {
+    send: async (beforeDispatch: () => Promise<void>) => {
+      await beforeDispatch();
       throw new Error("unknown provider outcome");
     },
   };

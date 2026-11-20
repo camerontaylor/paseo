@@ -135,6 +135,7 @@ export interface SeedDaemonClient {
         thinkingOptionId?: string | null;
         status: string;
         title?: string | null;
+        metadata?: Record<string, unknown>;
       };
     }>;
   }>;

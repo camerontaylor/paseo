@@ -260,9 +260,11 @@ async function dispatch(input: ProviderInput, state: AcpConnectionState): Promis
     case "session.open":
       await openSession(input, state);
       return;
-    case "session.prompt":
-      await requireSession(state, input.sessionId).runtime.prompt(input);
+    case "session.prompt": {
+      const session = requireSession(state, input.sessionId);
+      await mutateSession(session, session.runtime.preparePrompt(input));
       return;
+    }
     case "session.interrupt":
       await requireSession(state, input.sessionId).runtime.interrupt();
       state.emit({ type: "request.completed", requestId: input.requestId });
@@ -319,6 +321,7 @@ async function discover(
     options: state.options,
     launch: state.launch,
     boundarySessionId: "catalog",
+    cwd: input.cwd,
     env: {},
     emit: state.emit,
   });
@@ -374,6 +377,7 @@ async function openSession(
     options: state.options,
     launch: state.launch,
     boundarySessionId: input.sessionId,
+    cwd: input.config.cwd,
     env: input.config.env,
     emit: state.emit,
   });
@@ -388,6 +392,7 @@ async function openSession(
       capabilities,
       mutationLane: Promise.resolve(),
     });
+    state.emit({ type: "session.ready", requestId: input.requestId, sessionId: input.sessionId });
   } catch (error) {
     await runtime.close();
     throw error;
@@ -413,8 +418,15 @@ interface StartRuntimeOptions {
   launch?: ProviderLaunch;
   options: RunAcpProviderOptions;
   boundarySessionId: string;
+  cwd?: string;
   env: Readonly<Record<string, string>>;
   emit(event: ProviderEvent): void;
+}
+
+interface PendingPermission {
+  request: RequestPermissionRequest;
+  turnId: string | undefined;
+  resolve(response: RequestPermissionResponse): void;
 }
 
 class AcpRuntime {
@@ -432,17 +444,13 @@ class AcpRuntime {
   // Running tool rows published by transformers; the turn's terminal closes any left open.
   private readonly vendorToolCalls = new Map<string, ToolCallTimelineItem>();
   private readonly pendingCompactions = new Set<string>();
-  private readonly permissions = new Map<
-    string,
-    { request: RequestPermissionRequest; resolve(response: RequestPermissionResponse): void }
-  >();
+  private readonly permissions = new Map<string, PendingPermission>();
   private readonly transformers: readonly AcpTransformer[];
   private readonly vendorTurnsAreNeverForeground: boolean;
   private configOptions: SessionConfigOption[] = [];
-  private autoAccept = false;
-  private hasToolPolicy = false;
   private modes: NewSessionResponse["modes"] = null;
   private commandWaiter: (() => void) | null = null;
+  private receivedInitialCommands = false;
   private messageSequence = 0;
   /**
    * Fallback ids for streamed chunks that carry no `messageId`, one per
@@ -455,11 +463,11 @@ class AcpRuntime {
     string
   >();
   /**
-   * Active while a persisted session loads. ACP agents replay the loaded
-   * session's updates before session/load resolves; the value follows the
-   * open request's history contract.
+   * Replay updates count as history until the session reports ready.
+   * Once ready, suppress late replay rows until the first prompt.
    */
   private replayWindow: "replay" | "skip" | null = null;
+  private lastLoadUpdateAt = 0;
   private closing = false;
   private processFailed = false;
   private configTransaction = false;
@@ -467,7 +475,10 @@ class AcpRuntime {
   private readonly closeConnector: () => Promise<void>;
   private notificationLane: Promise<void> = Promise.resolve();
   private promptLane: Promise<void> = Promise.resolve();
-  private activePrompt: { turnId: string; settled: Promise<void> } | null = null;
+  private autoAccept = false;
+  private hasToolPolicy = false;
+  private activePrompt: { turnId: string; settled: Promise<void>; cancelling: boolean } | null =
+    null;
   private lastUsage: ProviderUsage = {};
   private readonly outstandingSteers = new Map<
     string,
@@ -518,6 +529,7 @@ class AcpRuntime {
         env: process.env,
       };
       child = spawnProcess(launch.command, launch.args, {
+        cwd: options.cwd,
         env: { ...launch.env, ...options.env },
         stdio: "pipe",
       });
@@ -635,8 +647,8 @@ class AcpRuntime {
   ): Promise<readonly ProviderCapability[]> {
     const mcpServers =
       this.connectionPolicy.sendSessionMcpServers === false ? [] : toAcpMcpServers(input.config);
-    const nativeSessionId = readNativeSessionId(input.persistence);
-    const metadata = {
+    let nativeSessionId = readNativeSessionId(input.persistence);
+    const metadata: Record<string, unknown> = {
       _paseo: {
         systemPrompt: input.config.systemPrompt,
         providerOptions: input.config.providerOptions,
@@ -644,6 +656,7 @@ class AcpRuntime {
         persist: input.config.persist,
       },
     };
+    nativeSessionId = this.prepareSessionOpen(input, nativeSessionId, metadata);
     let response: Pick<NewSessionResponse, "modes" | "configOptions">;
     if (nativeSessionId) {
       // ACP agents replay the loaded session's updates before session/load resolves,
@@ -661,7 +674,7 @@ class AcpRuntime {
         );
         await this.drainNotifications();
       } finally {
-        this.replayWindow = null;
+        if (!this.options.options.acpOptions?.loadReplayQuietPeriodMs) this.replayWindow = null;
       }
       // Replayed chunks leave their fallback ids behind; the live stream that follows starts
       // its own items even when the agent replays without message ids.
@@ -677,7 +690,7 @@ class AcpRuntime {
       response = newSession;
       this.nativeSessionId = newSession.sessionId;
     }
-    this.modes = response.modes;
+    this.modes = response.modes ?? null;
     this.configOptions = response.configOptions ?? [];
     for (const transformer of this.transformers) {
       this.sessionPolicy = mergePolicy(
@@ -691,14 +704,7 @@ class AcpRuntime {
     this.sharedTurns = connectionCapabilities.includes("session.shared_turns");
     this.hasToolPolicy = Boolean(input.config.toolPolicy);
     await this.applyInitialConfig(input.config);
-    // The local auto_accept toggle is configurable even without vendor options.
-    const sessionCapabilities = connectionCapabilities.filter(
-      (capability) =>
-        capability !== "session.detach" &&
-        (capability !== "prompt.steer" ||
-          (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true)),
-    );
-    if (this.sessionPolicy.detach === true) sessionCapabilities.push("session.detach");
+    const sessionCapabilities = this.sessionCapabilities(connectionCapabilities);
     this.emit({
       type: "session.opened",
       requestId: input.requestId,
@@ -709,6 +715,51 @@ class AcpRuntime {
       title: input.config.title,
       cwd: input.config.cwd,
     });
+    this.emitOmittedMcpNotice(input);
+    this.emitConfig();
+    if (this.options.options.acpOptions?.waitForInitialCommands) {
+      await this.waitForInitialCommands();
+    }
+    const quietPeriod = this.options.options.acpOptions?.loadReplayQuietPeriodMs;
+    if (this.replayWindow && quietPeriod && quietPeriod > 0) {
+      await this.waitForLoadReplay(quietPeriod);
+      this.replayWindow = "skip";
+    }
+    return sessionCapabilities;
+  }
+
+  private prepareSessionOpen(
+    input: Extract<ProviderInput, { type: "session.open" }>,
+    nativeSessionId: string | null,
+    metadata: Record<string, unknown>,
+  ): string | null {
+    for (const transformer of this.transformers) {
+      const prepared = transformer.sessionOpen?.({
+        persistence: input.persistence,
+        systemPrompt: input.config.systemPrompt,
+        agentMetadata: jsonValue(this.agentCapabilities._meta ?? null),
+      });
+      nativeSessionId ??= prepared?.sessionId ?? null;
+      Object.assign(metadata, prepared?.metadata);
+    }
+    return nativeSessionId;
+  }
+
+  private sessionCapabilities(
+    connectionCapabilities: readonly ProviderCapability[],
+  ): ProviderCapability[] {
+    // The fork setting remains configurable without native mode options.
+    const sessionCapabilities = connectionCapabilities.filter(
+      (capability) =>
+        capability !== "session.detach" &&
+        (capability !== "prompt.steer" ||
+          (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true)),
+    );
+    if (this.sessionPolicy.detach === true) sessionCapabilities.push("session.detach");
+    return sessionCapabilities;
+  }
+
+  private emitOmittedMcpNotice(input: Extract<ProviderInput, { type: "session.open" }>): void {
     const omittedServers = Object.keys(input.config.mcpServers);
     if (this.connectionPolicy.sendSessionMcpServers === false && omittedServers.length > 0) {
       this.emit({
@@ -722,12 +773,6 @@ class AcpRuntime {
         },
       });
     }
-    this.emitConfig();
-    if (this.options.options.acpOptions?.waitForInitialCommands) {
-      await this.waitForInitialCommands();
-    }
-    this.emit({ type: "session.ready", requestId: input.requestId, sessionId: input.sessionId });
-    return sessionCapabilities;
   }
 
   async discover(cwd?: string): Promise<ProviderCatalog> {
@@ -738,17 +783,31 @@ class AcpRuntime {
       this.connection.newSession({ cwd: cwd ?? process.cwd(), mcpServers: [] }),
     );
     this.nativeSessionId = response.sessionId;
-    this.modes = response.modes;
+    this.modes = response.modes ?? null;
     this.configOptions = response.configOptions ?? [];
-    return toProviderCatalog(response.modes, response.configOptions ?? []);
+    const catalog = toProviderCatalog(this.modes, this.configOptions);
+    const autoAcceptMode = this.options.options.acpOptions?.autoAcceptMode;
+    if (!autoAcceptMode) return catalog;
+    return {
+      ...catalog,
+      modes: [...catalog.modes, { ...autoAcceptMode.mode, isUnattended: true }],
+      defaultMode: autoAcceptMode.default ? autoAcceptMode.mode.id : catalog.defaultMode,
+    };
   }
 
-  prompt(input: Extract<ProviderInput, { type: "session.prompt" }>): Promise<void> {
+  preparePrompt(input: Extract<ProviderInput, { type: "session.prompt" }>): () => Promise<void> {
+    const stopGeneration = this.stopGeneration;
+    return () => this.prompt(input, stopGeneration);
+  }
+
+  private prompt(
+    input: Extract<ProviderInput, { type: "session.prompt" }>,
+    stopGeneration: number,
+  ): Promise<void> {
     if (this.detached) return Promise.reject(new Error("Session was detached from the agent"));
     this.assertPromptSelection(input.prompt);
     if (input.prompt.delivery === "steer") return this.steer(input);
     // A stop cancels the prompts waiting when it is pressed, not prompts admitted after it.
-    const stopGeneration = this.stopGeneration;
     const admission = this.promptLane.then(() => this.admitPrompt(input, stopGeneration));
     this.promptLane = admission.catch(() => undefined);
     return admission;
@@ -837,6 +896,7 @@ class AcpRuntime {
   ): boolean {
     if (this.settledLocalTurns.has(turnId)) return false;
     this.remember(this.settledLocalTurns, turnId);
+    this.finishTurnPermissions(turnId);
     this.fallbackChunkIds.clear();
     this.terminalizeTransientItems(state);
     this.emit({
@@ -1035,6 +1095,7 @@ class AcpRuntime {
     }
     if (this.closing) return;
     const text = promptEchoText(input.prompt);
+    this.replayWindow = null;
     const turnId = `acp:${input.prompt.clientMessageId}`;
     this.fallbackChunkIds.clear();
     this.emit({
@@ -1098,6 +1159,7 @@ class AcpRuntime {
         }
         if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
         const state = response.stopReason === "cancelled" ? "canceled" : "completed";
+        this.finishTurnPermissions(turnId);
         if (correlation === null || correlation.role === "none" || correlation.turnId === null) {
           this.endLocalTurn(turnId, state);
         } else {
@@ -1109,13 +1171,14 @@ class AcpRuntime {
       },
       async (error): Promise<void> => {
         await this.drainNotifications();
+        this.finishTurnPermissions(turnId);
         if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
         this.endLocalTurn(turnId, "failed", { message: describeError(error) });
         releaseResponse();
         return undefined;
       },
     );
-    this.activePrompt = { turnId, settled };
+    this.activePrompt = { turnId, settled, cancelling: false };
     void settled.finally(() => {
       this.expireSteerEcho(input.prompt.clientMessageId);
       if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
@@ -1149,8 +1212,15 @@ class AcpRuntime {
     return this.interruptTurn();
   }
 
-  private interruptTurn(): Promise<void> {
-    return this.call(this.connection.cancel({ sessionId: this.nativeSessionId }));
+  private async interruptTurn(): Promise<void> {
+    const active = this.activePrompt;
+    if (active) active.cancelling = true;
+    try {
+      await this.call(this.connection.cancel({ sessionId: this.nativeSessionId }));
+    } finally {
+      // An agent may wait for its outstanding permission replies before ending the prompt.
+      if (active) this.finishTurnPermissions(active.turnId);
+    }
   }
 
   /**
@@ -1195,19 +1265,37 @@ class AcpRuntime {
     response: Extract<ProviderInput, { type: "session.permission" }>["response"],
   ): void {
     const pending = this.permissions.get(permissionId);
-    if (!pending) throw new Error(`Unknown ACP permission: ${permissionId}`);
+    if (!pending) return;
+    const active = this.activePrompt;
+    if (active?.cancelling && pending.turnId === active.turnId) return;
     const selected = selectPermissionOption(pending.request.options, response);
     if (response.selectedActionId !== undefined && !selected) {
       throw new Error(
         `ACP permission action '${response.selectedActionId}' does not exist or does not match '${response.behavior}' behavior`,
       );
     }
-    this.permissions.delete(permissionId);
-    pending.resolve({
+    this.resolvePermission(permissionId, pending, {
       outcome: selected
         ? { outcome: "selected", optionId: selected.optionId }
         : { outcome: "cancelled" },
     });
+  }
+
+  private finishTurnPermissions(turnId: string): void {
+    for (const [permissionId, pending] of this.permissions) {
+      if (pending.turnId === turnId) {
+        this.resolvePermission(permissionId, pending, { outcome: { outcome: "cancelled" } });
+      }
+    }
+  }
+
+  private resolvePermission(
+    permissionId: string,
+    pending: PendingPermission,
+    response: RequestPermissionResponse,
+  ): void {
+    this.permissions.delete(permissionId);
+    pending.resolve(response);
     this.emit({
       type: "session.permission_resolved",
       sessionId: this.options.boundarySessionId,
@@ -1218,6 +1306,17 @@ class AcpRuntime {
   async configure(
     changes: Extract<ProviderInput, { type: "session.configure" }>["changes"],
   ): Promise<void> {
+    const autoAcceptMode = this.options.options.acpOptions?.autoAcceptMode;
+    if (
+      autoAcceptMode &&
+      changes.mode !== undefined &&
+      (changes.mode === autoAcceptMode.mode.id) !== this.autoAccept &&
+      (this.activePrompt || this.permissions.size > 0)
+    ) {
+      throw new Error(
+        `Finish or stop the current turn before switching to or from ${autoAcceptMode.mode.label}.`,
+      );
+    }
     const requested: AcpConfigChange[] = [];
     if (changes.model !== undefined) requested.push({ target: "model", value: changes.model });
     if (changes.mode !== undefined) requested.push({ target: "mode", value: changes.mode });
@@ -1228,9 +1327,9 @@ class AcpRuntime {
       requested.push({ target: "setting", id, value });
     }
     const ordered = this.inAgentOrder(requested);
+    const previousAutoAccept = this.autoAccept;
     const previousModes = this.modes ? structuredClone(this.modes) : null;
     const previousOptions = structuredClone(this.configOptions);
-    const previousAutoAccept = this.autoAccept;
     this.configTransaction = true;
     this.stagedTransformerConfig = null;
     let committedConfig: ProviderConfigState | null = null;
@@ -1254,9 +1353,9 @@ class AcpRuntime {
         await this.close();
         throw failure;
       }
+      this.autoAccept = previousAutoAccept;
       this.modes = previousModes;
       this.configOptions = previousOptions;
-      this.autoAccept = previousAutoAccept;
       this.stagedTransformerConfig = null;
       throw error;
     } finally {
@@ -1351,7 +1450,9 @@ class AcpRuntime {
     // option order, checking effective values after each mutation because one can reset another.
     const requested: AcpConfigChange[] = [];
     if (config.model) requested.push({ target: "model", value: config.model });
-    if (config.mode) requested.push({ target: "mode", value: config.mode });
+    const autoAcceptMode = this.options.options.acpOptions?.autoAcceptMode;
+    const mode = config.mode ?? (autoAcceptMode?.default ? autoAcceptMode.mode.id : undefined);
+    if (mode) requested.push({ target: "mode", value: mode });
     if (config.thinkingOption) {
       requested.push({ target: "thinking", value: config.thinkingOption });
     }
@@ -1389,13 +1490,33 @@ class AcpRuntime {
     if (change.target === "thinking") {
       return this.configOptions.find((option) => option.category === "thought_level")?.id;
     }
-    return this.configOptions.find((option) => option.category === "mode")?.id;
+    return modeOption(this.configOptions)?.id;
   }
 
   private async applyConfigChange(change: AcpConfigChange): Promise<void> {
-    // Paseo owns this policy; it is not an agent ACP config option.
     if (change.target === "setting" && change.id === "auto_accept") {
+      if (this.activePrompt || this.permissions.size > 0) {
+        throw new Error("Finish or stop the current turn before switching auto-accept.");
+      }
       this.autoAccept = !this.hasToolPolicy && change.value === true;
+      return;
+    }
+    const autoAcceptMode = this.options.options.acpOptions?.autoAcceptMode;
+    if (
+      change.target === "mode" &&
+      autoAcceptMode &&
+      (this.autoAccept || change.value === autoAcceptMode.mode.id)
+    ) {
+      const enableAutoAccept = change.value === autoAcceptMode.mode.id;
+      const nativeMode = enableAutoAccept ? autoAcceptMode.nativeMode : change.value;
+      this.autoAccept = false;
+      if (nativeMode !== this.nativeModeId()) {
+        await this.applyNativeConfigChange({ target: "mode", value: nativeMode });
+      }
+      if (nativeMode !== this.nativeModeId()) {
+        throw new Error(`ACP agent did not switch to mode '${nativeMode}'`);
+      }
+      this.autoAccept = enableAutoAccept;
       return;
     }
     const access = this.configAccess();
@@ -1404,13 +1525,19 @@ class AcpRuntime {
         (await transformer.configure?.(change, {
           sessionId: this.options.boundarySessionId,
           config: access,
+          catalog: () => toProviderCatalog(this.modes, this.configOptions),
+          apply: (nativeChange) => this.applyNativeConfigChange(nativeChange),
         })) === "handled"
       ) {
         return;
       }
     }
-    if (change.target === "mode") {
-      if (!change.value || !this.modes) {
+    await this.applyNativeConfigChange(change);
+  }
+
+  private async applyNativeConfigChange(change: AcpConfigChange): Promise<void> {
+    if (change.target === "mode" && this.modes && !modeOption(this.configOptions)) {
+      if (!change.value) {
         throw new Error("ACP session does not expose mode configuration");
       }
       await this.call(
@@ -1465,6 +1592,10 @@ class AcpRuntime {
     this.emitConfigSnapshot(toProviderConfigState(this.modes, this.configOptions));
   }
 
+  private nativeModeId(): string | undefined {
+    return selectedValue(modeOption(this.configOptions)) ?? this.modes?.currentModeId;
+  }
+
   private emitConfigSnapshot(config: ProviderConfigState): void {
     config = {
       ...config,
@@ -1473,6 +1604,15 @@ class AcpRuntime {
         { type: "toggle", id: "auto_accept", label: "Auto-accept", value: this.autoAccept },
       ],
     };
+    const autoAcceptMode = this.options.options.acpOptions?.autoAcceptMode;
+    if (autoAcceptMode) {
+      if (this.nativeModeId() !== autoAcceptMode.nativeMode) this.autoAccept = false;
+      config = {
+        ...config,
+        mode: this.autoAccept ? autoAcceptMode.mode.id : config.mode,
+        modes: [...config.modes, { ...autoAcceptMode.mode, isUnattended: true }],
+      };
+    }
     this.emit({
       type: "session.config",
       sessionId: this.options.boundarySessionId,
@@ -1484,7 +1624,11 @@ class AcpRuntime {
     modes: NewSessionResponse["modes"],
     options: readonly SessionConfigOption[],
   ): Promise<void> {
-    if (modes?.currentModeId && this.modes?.currentModeId !== modes.currentModeId) {
+    if (
+      !modeOption(options) &&
+      modes?.currentModeId &&
+      this.modes?.currentModeId !== modes.currentModeId
+    ) {
       await this.call(
         this.connection.setSessionMode({
           sessionId: this.nativeSessionId,
@@ -1506,14 +1650,32 @@ class AcpRuntime {
     }
   }
 
-  private requestPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
-    const allows = request.options.filter((option) => option.kind === "allow_once");
-    if (this.autoAccept && allows.length === 1) {
-      return Promise.resolve({ outcome: { outcome: "selected", optionId: allows[0]!.optionId } });
+  private async requestPermission(
+    request: RequestPermissionRequest,
+  ): Promise<RequestPermissionResponse> {
+    await this.notificationLane;
+    if (this.closing || this.processFailed || this.activePrompt?.cancelling) {
+      return { outcome: { outcome: "cancelled" } };
+    }
+    if (
+      this.autoAccept &&
+      request.sessionId === this.nativeSessionId &&
+      !this.hasToolPolicy &&
+      (!this.options.options.acpOptions?.autoAcceptMode ||
+        this.nativeModeId() === this.options.options.acpOptions.autoAcceptMode.nativeMode)
+    ) {
+      const allowOptions = request.options.filter((option) => option.kind.startsWith("allow"));
+      const allowOnce = allowOptions.find((option) => option.kind === "allow_once");
+      if (
+        allowOnce &&
+        new Set(allowOptions.map((option) => option.kind)).size === allowOptions.length
+      ) {
+        return { outcome: { outcome: "selected", optionId: allowOnce.optionId } };
+      }
     }
     const permissionId = `permission:${request.toolCall.toolCallId}`;
     return new Promise((resolve) => {
-      this.permissions.set(permissionId, { request, resolve });
+      this.permissions.set(permissionId, { request, resolve, turnId: this.activePrompt?.turnId });
       this.emit({
         type: "session.permission",
         sessionId: this.options.boundarySessionId,
@@ -1538,9 +1700,19 @@ class AcpRuntime {
     // another client and must not be rendered here.
     if (this.detached) return;
     if (notification.sessionId !== this.nativeSessionId) return;
-    // A held peer update that follows the vendor turn's `started` is live, not replayed history:
-    // keep it even when the caller asked to skip the loaded history.
-    if (this.replayWindow === "skip" && !this.vendorTurn) return;
+    if (this.replayWindow) this.lastLoadUpdateAt = performance.now();
+    if (this.replayWindow === "skip" && !this.vendorTurn) {
+      const update = notification.update;
+      if (
+        update.sessionUpdate === "available_commands_update" ||
+        update.sessionUpdate === "config_option_update" ||
+        update.sessionUpdate === "current_mode_update" ||
+        update.sessionUpdate === "usage_update"
+      ) {
+        this.reduceStateUpdate(update);
+      }
+      return;
+    }
     if (
       !this.replayWindow &&
       !this.activePrompt &&
@@ -1558,7 +1730,7 @@ class AcpRuntime {
       if (next) {
         const [clientMessageId, steer] = next;
         const turnId = `acp:${clientMessageId}`;
-        this.activePrompt = { turnId, settled: steer.settled };
+        this.activePrompt = { turnId, settled: steer.settled, cancelling: false };
         this.fallbackChunkIds.clear();
         this.emit({
           type: "session.turn",
@@ -1746,11 +1918,17 @@ class AcpRuntime {
         sessionId: this.options.boundarySessionId,
         commands: this.classifyCommands(commands),
       });
+      this.receivedInitialCommands = true;
       this.commandWaiter?.();
-      this.commandWaiter = null;
       return;
     }
     if (update.sessionUpdate === "current_mode_update") {
+      const option = modeOption(this.configOptions);
+      if (option?.type === "select") {
+        this.configOptions = this.configOptions.map((candidate) =>
+          candidate === option ? { ...option, currentValue: update.currentModeId } : candidate,
+        );
+      }
       if (this.modes) this.modes = { ...this.modes, currentModeId: update.currentModeId };
       this.emitConfig();
       return;
@@ -2044,16 +2222,28 @@ class AcpRuntime {
   }
 
   private waitForInitialCommands(): Promise<void> {
+    if (this.receivedInitialCommands) return Promise.resolve();
     const timeoutMs = this.options.options.acpOptions?.initialCommandsTimeoutMs ?? 1_000;
     const commands = new Promise<void>((resolve) => {
       this.commandWaiter = resolve;
     });
-    const timeout = new Promise<void>((resolve) => {
-      setTimeout(resolve, timeoutMs);
-    });
-    return Promise.race([commands, timeout]).finally(() => {
-      this.commandWaiter = null;
-    });
+    return withTimeout(commands, timeoutMs, "ACP agent did not publish initial commands")
+      .catch(() => undefined)
+      .finally(() => {
+        this.commandWaiter = null;
+      });
+  }
+
+  private async waitForLoadReplay(quietPeriod: number): Promise<void> {
+    const start = performance.now();
+    const deadline = start + 5 * quietPeriod;
+    while (!this.closing && !this.processFailed) {
+      const idleAt = Math.max(start, this.lastLoadUpdateAt) + quietPeriod;
+      const remaining = Math.min(deadline, idleAt) - performance.now();
+      if (remaining <= 0) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+      await this.notificationLane;
+    }
   }
 }
 
@@ -2441,17 +2631,23 @@ function toProviderConfigState(
 ): ProviderConfigState {
   const model = modelOption(options);
   const thinking = options.find((option) => option.category === "thought_level");
+  const modeConfig = modeOption(options);
   return {
     model: selectedValue(model),
-    mode: modes?.currentModeId,
+    mode: selectedValue(modeConfig) ?? modes?.currentModeId,
     thinkingOption: selectedValue(thinking),
     models: selectOptions(model).map((option) => ({ id: option.value, label: option.label })),
-    modes:
-      modes?.availableModes.map((mode) => ({
-        id: mode.id,
-        label: mode.name,
-        description: mode.description ?? undefined,
-      })) ?? [],
+    modes: modeConfig
+      ? selectOptions(modeConfig).map((option) => ({
+          id: option.value,
+          label: option.label,
+          description: option.description,
+        }))
+      : (modes?.availableModes.map((mode) => ({
+          id: mode.id,
+          label: mode.name,
+          description: mode.description ?? undefined,
+        })) ?? []),
     thinkingOptions: selectOptions(thinking).map((option) => ({
       id: option.value,
       label: option.label,
@@ -2459,9 +2655,7 @@ function toProviderConfigState(
     settings: options
       .filter(
         (option) =>
-          option !== model &&
-          option.category !== "thought_level" &&
-          !(modes && option.category === "mode"),
+          option !== model && option.category !== "thought_level" && option !== modeConfig,
       )
       .map(toProviderSetting),
   };
@@ -2472,6 +2666,10 @@ function toProviderConfigState(
 function modelOption(options: readonly SessionConfigOption[]): SessionConfigOption | undefined {
   const candidates = options.filter((option) => option.category === "model");
   return candidates.find((option) => option.id === "model") ?? candidates[0];
+}
+
+function modeOption(options: readonly SessionConfigOption[]): SessionConfigOption | undefined {
+  return options.find((option) => option.category === "mode" && option.type === "select");
 }
 
 function toProviderCatalog(
@@ -2505,18 +2703,28 @@ function toProviderSetting(option: SessionConfigOption): ProviderSetting {
     label: option.name,
     description: option.description ?? undefined,
     value: option.currentValue,
-    options: selectOptions(option),
+    options: selectOptions(option).map(({ label, value }) => ({ label, value })),
   };
 }
 
 function selectOptions(
   option: SessionConfigOption | undefined,
-): Array<{ label: string; value: string }> {
+): Array<{ label: string; value: string; description?: string }> {
   if (!option || option.type === "boolean") return [];
   return option.options.flatMap((candidate) =>
     "group" in candidate
-      ? candidate.options.map((nested) => ({ label: nested.name, value: nested.value }))
-      : [{ label: candidate.name, value: candidate.value }],
+      ? candidate.options.map((nested) => ({
+          label: nested.name,
+          value: nested.value,
+          description: nested.description ?? undefined,
+        }))
+      : [
+          {
+            label: candidate.name,
+            value: candidate.value,
+            description: candidate.description ?? undefined,
+          },
+        ],
   );
 }
 
@@ -2535,16 +2743,18 @@ type ToolCallTimelineItem = Extract<ProviderTimelineItem, { type: "tool_call" }>
 function toolTimelineItem(snapshot: AcpToolCallSnapshot): ToolCallTimelineItem {
   const input = jsonRecord(snapshot.input);
   const isEdit = snapshot.kind === "edit" || snapshot.name?.toLowerCase().includes("edit") === true;
-  const detail = isEdit
-    ? {
-        type: "edit" as const,
-        filePath:
-          typeof input.filePath === "string" ? input.filePath : (snapshot.locations[0] ?? ""),
-        oldString: typeof input.oldString === "string" ? input.oldString : undefined,
-        newString: typeof input.newString === "string" ? input.newString : undefined,
-        unifiedDiff: typeof input.unifiedDiff === "string" ? input.unifiedDiff : undefined,
-      }
-    : { type: "unknown" as const, input: snapshot.input, output: snapshot.output };
+  const detail =
+    snapshot.detail ??
+    (isEdit
+      ? {
+          type: "edit" as const,
+          filePath:
+            typeof input.filePath === "string" ? input.filePath : (snapshot.locations[0] ?? ""),
+          oldString: typeof input.oldString === "string" ? input.oldString : undefined,
+          newString: typeof input.newString === "string" ? input.newString : undefined,
+          unifiedDiff: typeof input.unifiedDiff === "string" ? input.unifiedDiff : undefined,
+        }
+      : { type: "unknown" as const, input: snapshot.input, output: snapshot.output });
   const status =
     snapshot.status === "in_progress" || snapshot.status === "pending"
       ? "running"
@@ -2556,7 +2766,9 @@ function toolTimelineItem(snapshot: AcpToolCallSnapshot): ToolCallTimelineItem {
     name: snapshot.name ?? snapshot.title,
     detail,
   };
-  if (status === "failed") return { ...base, status, error: snapshot.output };
+  if (status === "failed") {
+    return { ...base, status, error: snapshot.output ?? { message: "Tool failed" } };
+  }
   return { ...base, status, error: null };
 }
 

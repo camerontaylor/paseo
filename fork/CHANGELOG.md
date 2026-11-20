@@ -4,6 +4,52 @@ Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
 record fork-only decisions and releases. See
 [the archived release-channel plan](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
 
+## 0.17.0-beta.1 base decision — 2026-11-20
+
+Merge upstream `v0.17.0-beta.1` (`6c89950b2ef77efee47b127d09d05eb347d25f33`)
+into committed custom, including the previously published custom head.
+
+Replace the fork's queue reservation errors and pre-send receipt cleanup with
+upstream #9757/#9580's `ForegroundPromptStart`, `idleOnly`, `admit` and
+`beforeDispatch`. Keep durable voice attachment and logical speech identities;
+the queued receipt callback runs after foreground reservation and acceptance
+waits for that prompt's start promise. Publish companion outcomes in the
+terminal snapshot after run settlement, so queue listeners never observe idle
+with a still-tracked run. A failure after the receipt boundary
+holds the item as uncertain until the user retries or discards it. Drop the
+old replacement-path tracing now that upstream owns the foreground lane.
+
+Rework shared/vendor ACP turn ownership, skill selection, steering, replay and
+detach onto #10193's permission cancellation and native unattended modes.
+Keep the fork's local auto-accept setting for agents without an unattended
+mode, sharing the new permission path and refusing policy bypass. Capture
+Stop's generation before upstream's mutation lane so Stop cancels every
+already-admitted prompt, including one waiting for another admission.
+
+Keep upstream #9927's Claude Bypass ask-source policy and ANSI-stripped
+permission descriptions; replace the older overlapping permission test with
+upstream's. Keep the fork's live-mode rollback and version probes alongside
+upstream's independent Ultracode control and live effort updates. Retire the
+fork test assumption that every effort change restarts a query; exercise
+rollback with the launch-time Ultracode change instead. Adopt the extracted native audio
+engine, retaining the fork's static module import and playback regression tests.
+
+Keep #9823/#9836's complete Pi/OMP model names, #10126's OMP approval mapping,
+#10187's OpenCode service-death settlement, #9781's plugin instruction wiring,
+#10049's plugin state hooks and #10153's provider-close reopening. Retain fork
+side conversations, attachment authority, restored native config and detach.
+
+Adapt fork-local PR lookup to upstream's shared poll reader and default-branch
+filter; check the fork before its parent. Combine workspace PR defaults with
+upstream existing-worktree selection, preserve companion capability and
+attention rows, and adapt artifact previews to the new loading/ready/failed
+URL result. Use upstream's sidebar row style and keep the PR shortcut.
+Regenerate the merged lockfile and Nix dependency hash.
+
+The manifest's `upgrade/basket-0.15.2` is already an ancestor of custom;
+retain its entry and all other carries. The initial conflict-only stop was
+withdrawn; source and assembled-build gates must pass before publication.
+
 ## 0.16.0-beta.2 base decision — 2026-11-12
 
 Advance custom to upstream `v0.16.0-beta.2`

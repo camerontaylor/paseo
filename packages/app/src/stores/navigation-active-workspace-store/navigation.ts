@@ -28,6 +28,7 @@ export interface NavigateToWorkspaceInput {
   serverId: string;
   workspaceId: string;
   target?: WorkspaceTabTarget;
+  surface?: "sidebar";
   pin?: boolean;
   placement?: WorkspaceTabPlacement;
   asTab?: boolean;
@@ -40,7 +41,7 @@ export interface NavigateToWorkspaceDeps extends PrepareWorkspaceTabDeps {
   rememberLastWorkspace: (selection: ActiveWorkspaceSelection) => void;
   navigateToRoute: (route: string) => void;
   revealTab: (workspaceKey: string, tabId: string | null) => void;
-  revealWorkspace: (workspaceKey: string) => void;
+  revealWorkspace: (workspaceKey: string, surface?: "sidebar") => void;
 }
 
 export interface NavigateToLastWorkspaceDeps extends NavigateToWorkspaceDeps {
@@ -105,7 +106,10 @@ export function navigateToWorkspace(
   if (input.target) {
     prepareWorkspaceTab({ ...input, target: input.target }, { openTab });
   } else {
-    deps.revealWorkspace(`${input.serverId}:${resolvedWorkspaceId ?? input.workspaceId}`);
+    deps.revealWorkspace(
+      `${input.serverId}:${resolvedWorkspaceId ?? input.workspaceId}`,
+      input.surface,
+    );
   }
 
   const route = buildHostWorkspaceRoute(input.serverId, input.workspaceId);

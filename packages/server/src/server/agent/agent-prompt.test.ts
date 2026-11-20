@@ -22,6 +22,7 @@ import {
   waitForAgentRunStartWithTimeout,
 } from "./agent-prompt.js";
 import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
+import { ForegroundPromptStart } from "./agent-run-state.js";
 import type {
   AgentClient,
   AgentRunResult,
@@ -787,7 +788,7 @@ class SlowStartAgentClient implements AgentClient {
 async function createRunStartScenario(startDelayMs: number | null): Promise<{
   agentManager: AgentManager;
   agentId: string;
-  startRun: () => Promise<void>;
+  startRun: () => Promise<{ started: Promise<void> }>;
   cleanup: () => Promise<void>;
 }> {
   const workdir = mkdtempSync(join(tmpdir(), "agent-run-start-budget-"));
@@ -804,14 +805,16 @@ async function createRunStartScenario(startDelayMs: number | null): Promise<{
   return {
     agentManager,
     agentId: snapshot.id,
-    // streamAgent registers the pending run synchronously, so the wait always observes it.
+    // Returns the sender's start, bound to the run streamAgent registers.
     startRun: async () => {
-      const run = agentManager.streamAgent(snapshot.id, "start the run");
+      const start = new ForegroundPromptStart(snapshot.id);
+      const run = agentManager.streamAgent(snapshot.id, "start the run", undefined, start);
       drained = (async () => {
         for await (const _event of run) {
           // Drain whatever the turn produces.
         }
       })().catch(() => undefined);
+      return { started: start.started };
     },
     cleanup: async () => {
       // Release any turn still held open, then close. The drain is deliberately not
@@ -833,8 +836,8 @@ test("waiting for a run start outlasts the slowest provider startup budget", asy
   vi.useFakeTimers();
 
   try {
-    await scenario.startRun();
-    const wait = waitForAgentRunStartWithTimeout(scenario.agentManager, scenario.agentId);
+    const { started } = await scenario.startRun();
+    const wait = waitForAgentRunStartWithTimeout(scenario.agentManager, scenario.agentId, started);
     let settled = false;
     const markSettled = () => {
       settled = true;
@@ -859,8 +862,8 @@ test("waiting for a run start still gives up at the run start budget", async () 
   vi.useFakeTimers();
 
   try {
-    await scenario.startRun();
-    const wait = waitForAgentRunStartWithTimeout(scenario.agentManager, scenario.agentId);
+    const { started } = await scenario.startRun();
+    const wait = waitForAgentRunStartWithTimeout(scenario.agentManager, scenario.agentId, started);
     const rejection = expect(wait).rejects.toThrow(
       "codex run did not start within 60 seconds (phase: run start)",
     );
@@ -981,6 +984,8 @@ test("queue acceptance waits on its own reserved provider run", async () => {
   const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
     workspaceId: undefined,
   });
+  const beforeDispatch = vi.fn(async () => {});
+  const competingBeforeDispatch = vi.fn(async () => {});
   try {
     // The queue's delivery: dispatch without replacement, then wait for the
     // reserved run to actually start before the receipt completes.
@@ -989,11 +994,13 @@ test("queue acceptance waits on its own reserved provider run", async () => {
       agentStorage: { get: async () => undefined } as unknown as AgentStorage,
       agentId: agent.id,
       prompt: "one",
-      replaceRunning: false,
+      beforeDispatch,
+      idleOnly: true,
       logger: createTestLogger(),
     }).then(async (result) => {
       expect(result.disposition).toBe("turn_started");
-      await waitForAgentRunStartWithTimeout(manager, agent.id);
+      if (result.disposition !== "turn_started") throw new Error("Expected a new run");
+      await waitForAgentRunStartWithTimeout(manager, agent.id, result.started);
       return true;
     });
     await vi.waitFor(() => expect(manager.hasInFlightRun(agent.id)).toBe(true));
@@ -1003,10 +1010,13 @@ test("queue acceptance waits on its own reserved provider run", async () => {
         agentStorage: { get: async () => undefined } as unknown as AgentStorage,
         agentId: agent.id,
         prompt: "competing",
-        replaceRunning: false,
+        beforeDispatch: competingBeforeDispatch,
+        idleOnly: true,
         logger: createTestLogger(),
       }),
-    ).rejects.toMatchObject({ code: "AGENT_RUN_BUSY" });
+    ).rejects.toThrow(/running|active run/);
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    expect(competingBeforeDispatch).not.toHaveBeenCalled();
     client.sessions[0].release();
     await expect(dispatch).resolves.toBe(true);
   } finally {
@@ -1057,12 +1067,12 @@ test("queued dispatch cannot claim a turn when an agent became archived", async 
     sendPromptToAgent({
       agentId: "archived",
       prompt: "queued speech",
-      replaceRunning: false,
+      idleOnly: true,
       unarchive: false,
       agentManager: { streamAgent } as unknown as AgentManager,
       agentStorage: { get: async () => ({ archivedAt: "2026-10-08" }) } as unknown as AgentStorage,
       logger: createTestLogger(),
     }),
-  ).rejects.toMatchObject({ code: "AGENT_PROMPT_NOT_SUBMITTED" });
+  ).rejects.toThrow("Queued agent is archived");
   expect(streamAgent).not.toHaveBeenCalled();
 });

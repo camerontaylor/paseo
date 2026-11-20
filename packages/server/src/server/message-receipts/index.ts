@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, rm } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { writeJsonFileAtomic } from "../atomic-file.js";
@@ -31,8 +31,11 @@ interface SendMessageInput {
     voiceOwner?: string;
     createdAt?: string;
   };
-  send: () => Promise<void>;
-  prepare?: () => Promise<void>;
+  /**
+   * Delivers the message. It awaits `beforeDispatch` immediately before the provider can receive
+   * the message; a failure before that call proves nothing was submitted and leaves no receipt.
+   */
+  send: (beforeDispatch: () => Promise<void>) => Promise<void>;
 }
 
 /** Owns message delivery receipts; creation is owned by CreationService. */
@@ -182,7 +185,6 @@ export class MessageReceipts {
       // A provider may have accepted the message before its receipt was committed.
       throw new Error("agent_request_outcome_unknown");
     }
-    await input.prepare?.();
     const receipt = {
       fingerprint,
       agentId: input.agentId,
@@ -195,22 +197,11 @@ export class MessageReceipts {
           }
         : {}),
     };
-    await writeJsonFileAtomic(file, { ...receipt, state: "pending" });
-    try {
-      await input.send();
-    } catch (error) {
-      // A competing run rejected the synchronous reservation before provider
-      // dispatch. This is the only post-receipt error safe to retry: the
-      // receipt would otherwise make the next attempt look ambiguous.
-      if (
-        error instanceof Error &&
-        "code" in error &&
-        (error.code === "AGENT_RUN_BUSY" || error.code === "AGENT_PROMPT_NOT_SUBMITTED")
-      ) {
-        await rm(file, { force: true });
-      }
-      throw error;
-    }
+    let pending: Promise<void> | null = null;
+    await input.send(() => {
+      pending ??= writeJsonFileAtomic(file, { ...receipt, state: "pending" });
+      return pending;
+    });
     if (input.attachment && input.attachment.messageId !== input.messageId) {
       // Keep the logical speech identity after the queue's bounded drained-id
       // window expires. Write this before completing the attempt so a crash

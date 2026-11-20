@@ -113,6 +113,7 @@ export interface SendQueuedPromptInput {
   agentId: string;
   prompt: AgentPromptInput;
   messageId: string;
+  beforeDispatch: () => Promise<void>;
 }
 
 /** The queue drains through the same receipt service the legacy send path uses. */
@@ -192,7 +193,8 @@ export class AgentQueueService {
           messageId: input.messageId,
           // A queued follow-up must never cancel and replace a turn that
           // started after the claim; losing the race is a failed attempt.
-          replaceRunning: false,
+          idleOnly: true,
+          beforeDispatch: input.beforeDispatch,
           // And it waits behind a permission wait: answering it is the user's
           // decision, never the queued prompt's.
           blockPendingPermissions: true,
@@ -882,6 +884,26 @@ export class AgentQueueService {
         this.publish(reverted);
         return;
       }
+      const outcome = await this.receipts?.outcome(
+        agentId,
+        attemptReceiptId(itemId, claimedItem.attemptSeq),
+      );
+      if (outcome === "pending") {
+        const uncertain = await this.store.mutate(agentId, (current) => ({
+          ...current,
+          items: current.items.map((candidate) =>
+            candidate.id === itemId
+              ? {
+                  ...candidate,
+                  deliveryState: "uncertain",
+                  lastError: "Provider acceptance is unknown; retry or discard explicitly.",
+                }
+              : candidate,
+          ),
+        }));
+        this.publish(uncertain);
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn({ err: error, agentId, itemId }, "Queued agent message failed to send");
       const failed = await this.store.mutate(agentId, (current) => ({
@@ -923,14 +945,19 @@ export class AgentQueueService {
     item: StoredQueuedMessage,
     prompt: AgentPromptInput,
   ): Promise<void> {
-    const send = async () => {
+    const send = async (beforeDispatch: () => Promise<void>) => {
       const result = (await this.sendPrompt({
         agentId,
         prompt,
         messageId: item.id,
-      })) as { disposition?: string } | undefined;
+        beforeDispatch,
+      })) as { disposition?: string; started?: Promise<void> } | undefined;
       if (result?.disposition === "turn_started") {
-        await waitForAgentRunStartWithTimeout(this.agentManager as AgentManager, agentId);
+        await waitForAgentRunStartWithTimeout(
+          this.agentManager as AgentManager,
+          agentId,
+          result.started!,
+        );
       }
     };
     if (this.receipts) {
@@ -952,7 +979,7 @@ export class AgentQueueService {
       });
       return;
     }
-    await send();
+    await send(async () => {});
   }
 
   /**

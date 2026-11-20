@@ -212,16 +212,20 @@ function ArtifactImage({
     },
   });
   const previewUrl = useAttachmentPreviewUrl(query.data);
-  const source = useMemo(() => ({ uri: previewUrl ?? "" }), [previewUrl]);
+  const previewSource = useMemo(
+    () => (previewUrl.status === "ready" ? { uri: previewUrl.url } : undefined),
+    [previewUrl],
+  );
 
-  if (query.isPending) {
+  const isLoading = query.isPending || (query.isSuccess && previewUrl.status === "loading");
+  if (isLoading) {
     return (
       <View style={styles.previewState}>
         <ActivityIndicator size="small" />
       </View>
     );
   }
-  if (query.isError || !previewUrl) {
+  if (query.isError || previewUrl.status !== "ready") {
     return (
       <View style={styles.previewState}>
         <ThemedArtifactKindIcon kind="image" size={24} uniProps={mutedIconMapping} />
@@ -233,7 +237,7 @@ function ArtifactImage({
   }
   return (
     <View style={styles.preview}>
-      <ExpoImage source={source} contentFit="cover" style={previewImageStyle} />
+      <ExpoImage source={previewSource} contentFit="cover" style={previewImageStyle} />
     </View>
   );
 }

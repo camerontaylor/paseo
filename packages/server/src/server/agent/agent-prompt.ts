@@ -7,6 +7,7 @@ import type {
   AgentRunOptions,
 } from "./agent-sdk-types.js";
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
+import { ForegroundPromptStart } from "./agent-run-state.js";
 import type { AgentStorage } from "./agent-storage.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
@@ -28,7 +29,12 @@ export type AgentRunController = Pick<
   reloadAgentSession(agentId: string): Promise<unknown>;
 };
 
+export class AgentTurnBusyError extends Error {}
+
 export interface StartAgentRunOptions {
+  beforeDispatch?: () => Promise<void>;
+  idleOnly?: boolean;
+  admit?: () => boolean;
   /** Called after selecting the run, before consuming its events. */
   onDispatch?: (disposition: PromptDispatchDisposition) => void;
   replaceRunning?: boolean;
@@ -40,11 +46,17 @@ export interface StartAgentRunOptions {
 
 export type PromptDispatchDisposition = "out_of_band" | "steered" | "turn_started";
 
+/** A dispatched prompt. A started turn carries its sender's start outcome. */
+export type PromptDispatchResult =
+  | { disposition: "turn_started"; started: Promise<void> }
+  | { disposition: Exclude<PromptDispatchDisposition, "turn_started"> };
+
 async function steerOrReplaceActiveRun(
   agentManager: AgentRunController,
   agentId: string,
   prompt: AgentPromptInput,
   options: StartAgentRunOptions | undefined,
+  promptStart: ForegroundPromptStart,
 ): Promise<
   | { disposition: "steered" }
   | {
@@ -59,7 +71,12 @@ async function steerOrReplaceActiveRun(
   const steerOptions = options.clearPendingPermissions
     ? { ...options.runOptions, clearPendingPermissions: true }
     : options.runOptions;
-  const result = await agentManager.steerOrReplaceActiveTurn(agentId, prompt, steerOptions);
+  const result = await agentManager.steerOrReplaceActiveTurn(
+    agentId,
+    prompt,
+    steerOptions,
+    promptStart,
+  );
   if (result.status === "steered") {
     return { disposition: "steered" };
   }
@@ -74,30 +91,15 @@ async function startOrReplaceRun(
   agentId: string,
   prompt: AgentPromptInput,
   options: StartAgentRunOptions | undefined,
+  promptStart: ForegroundPromptStart,
 ): Promise<{
   iterator: AsyncGenerator<import("./agent-sdk-types.js").AgentStreamEvent>;
   replaced: boolean;
 }> {
   const replaced = Boolean(options?.replaceRunning && agentManager.hasInFlightRun(agentId));
-  let iterator: AsyncGenerator<import("./agent-sdk-types.js").AgentStreamEvent>;
-  if (replaced) {
-    iterator = await agentManager.replaceAgentRun(agentId, prompt, options?.runOptions);
-  } else {
-    try {
-      iterator = agentManager.streamAgent(agentId, prompt, options?.runOptions);
-    } catch (cause) {
-      // streamAgent reserves synchronously; an exception here preceded startTurn.
-      if (
-        options?.replaceRunning === false &&
-        !(cause instanceof Error && "code" in cause && cause.code === "AGENT_RUN_BUSY")
-      ) {
-        throw Object.assign(new Error("Agent run reservation failed", { cause }), {
-          code: "AGENT_PROMPT_NOT_SUBMITTED",
-        });
-      }
-      throw cause;
-    }
-  }
+  const iterator = replaced
+    ? await agentManager.replaceAgentRun(agentId, prompt, options?.runOptions, promptStart)
+    : agentManager.streamAgent(agentId, prompt, options?.runOptions, promptStart);
   return { iterator, replaced };
 }
 
@@ -115,7 +117,7 @@ export async function startAgentRun(
   prompt: AgentPromptInput,
   logger: Logger,
   options?: StartAgentRunOptions,
-): Promise<{ disposition: PromptDispatchDisposition }> {
+): Promise<PromptDispatchResult> {
   const snapshot = agentManager.getAgent(agentId);
   logger.trace(
     {
@@ -132,22 +134,34 @@ export async function startAgentRun(
   // Out-of-band commands (e.g. /goal pause) must run WITHOUT canceling an
   // in-flight turn — replaceAgentRun would interrupt the running turn. The
   // intercept lives at this layer so it covers every prompt entrypoint.
-  if (await agentManager.tryRunOutOfBand(agentId, prompt, options?.runOptions)) {
+  const admit = options?.admit;
+  const admitCommand = async () => {
+    if (admit && !admit()) throw new Error("Queued agent message was withdrawn");
+    await options?.beforeDispatch?.();
+  };
+  if (await agentManager.tryRunOutOfBand(agentId, prompt, options?.runOptions, admitCommand)) {
     options?.onDispatch?.("out_of_band");
     return { disposition: "out_of_band" };
   }
+  const promptStart = new ForegroundPromptStart(agentId, admit, options?.beforeDispatch);
   try {
-    await agentManager.reloadStalePluginSession(agentId);
-    return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
+    try {
+      await agentManager.reloadStalePluginSession(agentId);
+      return await startAgentRunInner(agentManager, agentId, prompt, logger, options, promptStart);
+    } catch (error) {
+      if (!isStaleProviderSessionError(error)) throw error;
+      logger.info(
+        { agentId, err: error },
+        "Provider session went stale; reopening from persistence",
+      );
+      // The live session belongs to a retired plugin runtime. Reload swaps in a
+      // fresh session on the current runtime while preserving history and labels.
+      await agentManager.reloadAgentSession(agentId);
+      return await startAgentRunInner(agentManager, agentId, prompt, logger, options, promptStart);
+    }
   } catch (error) {
-    // A queue attempt must fail as not-submitted instead of silently reloading
-    // and retrying: the caller owns whether the prompt is attempted again.
-    if (options?.replaceRunning === false || !isStaleProviderSessionError(error)) throw error;
-    logger.info({ agentId, err: error }, "Provider session went stale; reopening from persistence");
-    // The live session belongs to a retired plugin runtime. Reload swaps in a
-    // fresh session on the current runtime while preserving history and labels.
-    await agentManager.reloadAgentSession(agentId);
-    return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
+    promptStart.end();
+    throw error;
   }
 }
 
@@ -156,17 +170,23 @@ async function startAgentRunInner(
   agentId: string,
   prompt: AgentPromptInput,
   logger: Logger,
-  options?: StartAgentRunOptions,
-): Promise<{ disposition: PromptDispatchDisposition }> {
+  options: StartAgentRunOptions | undefined,
+  promptStart: ForegroundPromptStart,
+): Promise<PromptDispatchResult> {
   const snapshot = agentManager.getAgent(agentId);
-  const steered = await steerOrReplaceActiveRun(agentManager, agentId, prompt, options);
+  const steered = options?.idleOnly
+    ? null
+    : await steerOrReplaceActiveRun(agentManager, agentId, prompt, options, promptStart);
+  if (options?.idleOnly && agentManager.hasInFlightRun(agentId)) {
+    throw new AgentTurnBusyError(`Agent ${agentId} is running`);
+  }
   if (steered?.disposition === "steered") {
     options?.onDispatch?.("steered");
     return steered;
   }
   const { iterator, replaced } = steered
     ? { iterator: steered.iterator, replaced: true }
-    : await startOrReplaceRun(agentManager, agentId, prompt, options);
+    : await startOrReplaceRun(agentManager, agentId, prompt, options, promptStart);
   logger.trace(
     {
       agentId,
@@ -188,7 +208,7 @@ async function startAgentRunInner(
           "Provider session went stale; reopening from persistence",
         );
         await agentManager.reloadAgentSession(agentId);
-        const retry = await startOrReplaceRun(agentManager, agentId, prompt, options);
+        const retry = await startOrReplaceRun(agentManager, agentId, prompt, options, promptStart);
         await drainAgentRunIterator(retry.iterator);
       }
       logger.trace(
@@ -210,9 +230,11 @@ async function startAgentRunInner(
         "agent.session.iterator.error",
       );
       logger.error({ err: error, agentId }, "Agent stream failed");
+    } finally {
+      promptStart.end();
     }
   })();
-  return { disposition: "turn_started" };
+  return { disposition: "turn_started", started: promptStart.started };
 }
 
 /**
@@ -233,6 +255,10 @@ export async function unarchiveAgentState(
 }
 
 export interface SendPromptToAgentParams {
+  idleOnly?: boolean;
+  admit?: StartAgentRunOptions["admit"];
+  /** Awaited after the agent is loaded and its mode is set, before the prompt is handed to a run. */
+  beforeDispatch?: () => Promise<void>;
   onDispatch?: StartAgentRunOptions["onDispatch"];
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -253,13 +279,7 @@ export interface SendPromptToAgentParams {
   unarchive?: boolean;
   /** See {@link StartAgentRunOptions.clearPendingPermissions}. */
   clearPendingPermissions?: boolean;
-  /**
-   * Default true: an explicit send replaces an in-flight turn. Queue delivery
-   * passes false, so losing a busy race fails the attempt instead of
-   * interrupting the turn that won it.
-   */
-  replaceRunning?: boolean;
-  /** Queue delivery waits while a provider permission request is pending. */
+  /** Queued speech never answers a pending permission. */
   blockPendingPermissions?: boolean;
   logger: Logger;
 }
@@ -290,8 +310,9 @@ export interface StartCreatedAgentInitialPromptParams {
 const AGENT_RUN_START_TIMEOUT_MS = 60_000;
 
 export async function waitForAgentRunStartWithTimeout(
-  agentManager: AgentManager,
+  agentManager: Pick<AgentManager, "getAgent">,
   agentId: string,
+  started: Promise<void>,
   signal?: AbortSignal,
 ): Promise<void> {
   const provider = agentManager.getAgent(agentId)?.provider ?? "provider";
@@ -306,13 +327,26 @@ export async function waitForAgentRunStartWithTimeout(
     AGENT_RUN_START_TIMEOUT_MS,
   );
 
+  const abortSignal = signal ? AbortSignal.any([startAbort.signal, signal]) : startAbort.signal;
+  let onAbort: (() => void) | null = null;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(createStartAbortError(abortSignal.reason));
+    if (abortSignal.aborted) onAbort();
+    else abortSignal.addEventListener("abort", onAbort, { once: true });
+  });
   try {
-    await agentManager.waitForAgentRunStart(agentId, {
-      signal: signal ? AbortSignal.any([startAbort.signal, signal]) : startAbort.signal,
-    });
+    await Promise.race([started, aborted]);
   } finally {
     clearTimeout(startTimeout);
+    if (onAbort) abortSignal.removeEventListener("abort", onAbort);
   }
+}
+
+function createStartAbortError(reason: unknown): Error {
+  let message = "wait_for_agent_start aborted";
+  if (typeof reason === "string") message = reason;
+  else if (reason instanceof Error) message = reason.message;
+  return Object.assign(new Error(message), { name: "AbortError" });
 }
 
 async function resolvePromptSource(
@@ -320,7 +354,7 @@ async function resolvePromptSource(
   manager: Pick<AgentManager, "getAgent">,
   storage: AgentStorage,
 ): Promise<AgentPromptSource | undefined> {
-  if (!source || source.title) return source;
+  if (!source || source.kind === "change-request-update" || source.title) return source;
   const title = (
     manager.getAgent(source.agentId)?.config.title ?? (await storage.get(source.agentId))?.title
   )?.trim();
@@ -340,7 +374,7 @@ async function resolvePromptSource(
  */
 export async function sendPromptToAgent(
   params: SendPromptToAgentParams,
-): Promise<{ disposition: PromptDispatchDisposition }> {
+): Promise<PromptDispatchResult> {
   const source = await resolvePromptSource(params.source, params.agentManager, params.agentStorage);
   const delivery = prepareAgentMessage(params.prompt, source, params.messageId);
   return sendPreparedPromptToAgent({
@@ -355,67 +389,72 @@ export async function sendPromptToAgent(
 /** Dispatch daemon-prepared context without reclassifying it as human input. */
 export async function sendPreparedPromptToAgent(
   params: Omit<SendPromptToAgentParams, "source" | "messageId">,
-): Promise<{ disposition: PromptDispatchDisposition }> {
+): Promise<PromptDispatchResult> {
   const unarchive = params.unarchive ?? true;
+  const idleOnly = params.idleOnly;
 
-  try {
-    const record = await params.agentStorage.get(params.agentId);
-    let archivedAtToRestore: string | null = null;
-    if (record?.archivedAt) {
-      if (!unarchive) {
-        if (params.replaceRunning === false) throw new Error("Queued agent is archived");
-        return { disposition: "turn_started" };
-      }
-      if (await unarchiveAgentState(params.agentStorage, params.agentManager, params.agentId)) {
-        archivedAtToRestore = record.archivedAt;
-      }
+  const record = await params.agentStorage.get(params.agentId);
+  let archivedAtToRestore: string | null = null;
+  if (record?.archivedAt) {
+    if (!unarchive) {
+      if (idleOnly) throw new Error("Queued agent is archived");
+      return { disposition: "turn_started", started: Promise.resolve() };
     }
-    try {
-      await ensureAgentLoaded(params.agentId, {
-        agentManager: params.agentManager,
-        agentStorage: params.agentStorage,
-        logger: params.logger,
-      });
-    } catch (error) {
-      // Restore an archive cleared by a send whose provider failed to load.
-      if (archivedAtToRestore) {
-        await params.agentManager.archiveSnapshot(params.agentId, archivedAtToRestore);
-      }
-      throw error;
+    if (await unarchiveAgentState(params.agentStorage, params.agentManager, params.agentId)) {
+      archivedAtToRestore = record.archivedAt;
     }
-
-    if (params.sessionMode) {
-      await params.agentManager.setAgentMode(params.agentId, params.sessionMode);
-    }
-
-    if (
-      params.blockPendingPermissions &&
-      params.agentManager.getPendingPermissions(params.agentId).length
-    ) {
-      const error = new Error(`Agent ${params.agentId} is waiting for permission`);
-      Object.assign(error, { code: "AGENT_RUN_BUSY" });
-      throw error;
-    }
-  } catch (cause) {
-    // No prompt dispatch has happened; a queue can safely retain and retry this head.
-    if (params.replaceRunning === false)
-      throw Object.assign(new Error("Agent prompt preparation failed", { cause }), {
-        code: "AGENT_PROMPT_NOT_SUBMITTED",
-      });
-    throw cause;
   }
 
-  const runOptions = params.runOptions;
+  try {
+    await ensureAgentLoaded(params.agentId, {
+      agentManager: params.agentManager,
+      agentStorage: params.agentStorage,
+      logger: params.logger,
+    });
+  } catch (error) {
+    // A send that could not load the agent leaves it where it was: still archived.
+    // Concurrent sends share this load, so none of them holds a live session.
+    if (archivedAtToRestore) {
+      await params.agentManager.archiveSnapshot(params.agentId, archivedAtToRestore);
+    }
+    throw error;
+  }
 
+  if (idleOnly && params.agentManager.hasInFlightRun(params.agentId)) {
+    throw new AgentTurnBusyError(`Agent ${params.agentId} is running`);
+  }
+  if (params.sessionMode) {
+    await params.agentManager.setAgentMode(params.agentId, params.sessionMode);
+  }
+
+  const runOptions = queuedRunOptions(params);
+  if (!idleOnly) await params.beforeDispatch?.();
+  if (!idleOnly && params.admit?.() === false) {
+    throw new Error("Queued agent message was withdrawn");
+  }
   return await startAgentRun(params.agentManager, params.agentId, params.prompt, params.logger, {
-    replaceRunning: params.replaceRunning ?? true,
+    replaceRunning: !idleOnly,
+    idleOnly,
+    beforeDispatch: idleOnly ? params.beforeDispatch : undefined,
+    admit: params.admit,
     onDispatch: params.onDispatch,
     activeTurnBehavior: params.activeTurnBehavior,
     clearPendingPermissions: params.clearPendingPermissions,
-    runOptions: params.blockPendingPermissions
-      ? { ...runOptions, requireNoPendingPermissions: true }
-      : runOptions,
+    runOptions,
   });
+}
+
+function queuedRunOptions(params: SendPromptToAgentParams): AgentRunOptions | undefined {
+  if (
+    params.blockPendingPermissions &&
+    params.agentManager.getPendingPermissions(params.agentId).length
+  ) {
+    throw new AgentTurnBusyError(`Agent ${params.agentId} is waiting for permission`);
+  }
+  const runOptions = params.blockPendingPermissions
+    ? { ...params.runOptions, requireNoPendingPermissions: true }
+    : params.runOptions;
+  return runOptions;
 }
 
 export async function startCreatedAgentInitialPrompt(
@@ -444,7 +483,11 @@ export async function startCreatedAgentInitialPrompt(
   );
 
   if (dispatchResult.disposition === "turn_started") {
-    await waitForAgentRunStartWithTimeout(params.agentManager, params.agentId);
+    await waitForAgentRunStartWithTimeout(
+      params.agentManager,
+      params.agentId,
+      dispatchResult.started,
+    );
   }
 
   const refreshedSnapshot = params.agentManager.getAgent(params.agentId) ?? params.snapshot ?? null;
