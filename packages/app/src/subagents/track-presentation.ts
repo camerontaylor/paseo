@@ -25,11 +25,9 @@ function presentationStatus(row: SubagentRow) {
 export function deriveSubagentStatusBucket(
   status: AgentLifecycleStatus,
   backgroundWork?: AgentBackgroundWorkSummary | null,
-  requiresAttention = false,
 ): SidebarStateBucket {
   if (status === "error") return "failed";
   if (isAgentRunning({ status, backgroundWork })) return "running";
-  if (requiresAttention) return "attention";
   return "done";
 }
 
@@ -60,7 +58,6 @@ export function buildSubagentRowPresentationData(row: SubagentRow): SubagentRowP
     statusBucket: deriveSubagentStatusBucket(
       status,
       row.kind === "paseo" ? row.backgroundWork : undefined,
-      row.kind === "side_conversation" && row.requiresAttention,
     ),
   };
 }

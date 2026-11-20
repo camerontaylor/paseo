@@ -703,31 +703,6 @@ export interface AgentPermissionResult {
   followUpPrompt?: AgentPromptInput;
 }
 
-export type SideConversationThreading = "threaded" | "single_shot";
-
-export interface SideConversationExchange {
-  question: string;
-  answer: string;
-}
-
-/**
- * Why a side answer is unavailable. `unsupported_provider` is a permanent property of the
- * provider; `session_closed` means the agent tore down while the question was in flight. Absent
- * when the caller cannot know more than "unavailable".
- */
-export type SideAnswerUnavailableReason = "unsupported_provider" | "session_closed";
-
-export type SideAnswer =
-  | {
-      status: "answered";
-      content: string;
-      synthetic: boolean;
-      threading: SideConversationThreading;
-    }
-  | { status: "unavailable"; reason?: SideAnswerUnavailableReason }
-  | { status: "timed_out"; threading: SideConversationThreading }
-  | { status: "failed"; error: string; threading: SideConversationThreading };
-
 export interface AgentUsageSession {
   provider: string;
   model?: string;
@@ -757,11 +732,6 @@ export interface AgentSession {
   /** Returns an ID unique across the agent lifetime, including resumed sessions and daemon restarts. */
   startTurn(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<{ turnId: string }>;
   steerActiveTurn?(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult>;
-  askSideQuestion?(
-    question: string,
-    history: readonly SideConversationExchange[],
-    options?: { signal?: AbortSignal },
-  ): Promise<SideAnswer>;
   subscribe(callback: (event: AgentStreamEvent) => void): () => void;
   streamHistory(): AsyncGenerator<AgentStreamEvent>;
   getRuntimeInfo(): Promise<AgentRuntimeInfo>;

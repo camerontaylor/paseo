@@ -7,7 +7,7 @@ Your code never leaves your machine. Paseo is local-first.
 Daemon-owned outbound connections and routed API scope ownership are described in
 [Connected hosts](connected-hosts.md).
 
-See [companion streams](companion-stream.md) for side-conversation ownership and [queue mirroring](queue-mirroring.md) for durable queued prompt delivery.
+See [companion streams](companion-stream.md) for per-chat Stream ownership and [queue mirroring](queue-mirroring.md) for durable queued prompt delivery.
 
 ## System overview
 

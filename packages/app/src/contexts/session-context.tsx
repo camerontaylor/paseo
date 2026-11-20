@@ -50,7 +50,6 @@ import { toErrorMessage } from "@/utils/error-messages";
 import { showProviderNoticeToast } from "@/utils/provider-notice-toast";
 import { applyCheckoutStatusUpdateFromEvent } from "@/git/checkout-status-cache";
 import { resyncProviderSubagents, useProviderSubagentStore } from "@/subagents/provider-store";
-import { useSideConversationStore } from "@/side-conversations/store";
 
 // Re-export types from session-store and draft-store for backward compatibility
 export type { DraftInput } from "@/stores/draft-store";
@@ -518,10 +517,6 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         "agent_permission_request",
         "agent_permission_resolved",
         "agent.provider_subagents.update",
-        // The client drops these selectors against a host that does not advertise
-        // features.sideConversationEvents, so a shared list stays honest across versions.
-        "agent.side_conversation.update",
-        "agent.side_conversation.removed",
         // The client drops this one against a host that does not advertise
         // features.durableAgentQueueV1, for the same reason.
         "agent.queue.update",
@@ -564,18 +559,8 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       useSessionStore.getState().applyAgentQueueSnapshot(serverId, message.payload);
     });
 
-    const unsubSideConversationUpdate = client.on("agent.side_conversation.update", (message) => {
-      if (message.type !== "agent.side_conversation.update") return;
-      useSideConversationStore.getState().applySnapshot(serverId, message.payload);
-    });
-
     // The daemon drops threads on archive, reload, and history clear. Without this the row stays
     // in the subagents track and its tab opens a thread nothing on the host still has.
-    const unsubSideConversationRemoved = client.on("agent.side_conversation.removed", (message) => {
-      if (message.type !== "agent.side_conversation.removed") return;
-      const { parentAgentId, threadId } = message.payload;
-      useSideConversationStore.getState().remove(serverId, parentAgentId, threadId);
-    });
 
     const unsubCheckoutStatusUpdate = onFeed("checkout_status_update", (message) => {
       if (message.type !== "checkout_status_update") return;
@@ -760,8 +745,6 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         .catch((error) => console.warn("[Session] Failed to release feeds", error));
       unsubProviderSubagentUpdate();
       unsubAgentQueueUpdate();
-      unsubSideConversationUpdate();
-      unsubSideConversationRemoved();
       unsubAgentAttention();
       unsubCheckoutStatusUpdate();
       unsubStatus();
