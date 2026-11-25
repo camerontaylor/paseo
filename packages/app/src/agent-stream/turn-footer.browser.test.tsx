@@ -8,6 +8,7 @@ import { FloatingPanelPortalHost } from "@/components/ui/floating-panel-portal";
 import { i18n } from "@/i18n/i18next";
 import type { TurnTiming } from "@/timeline/turn-time";
 import type { StreamItem } from "@/types/stream";
+import { formatMessageTimestamp } from "@/utils/time";
 import { createNativeStreamStrategy } from "./strategy-native";
 import { CompletedTurnFooterRow } from "./turn-footer";
 
@@ -93,7 +94,7 @@ it.each([
 
   expect(paintedLinesByLabel(host)).toEqual({
     [input.duration]: 1,
-    "Friday 11:11 PM": 1,
+    [formatMessageTimestamp(FRIDAY_NIGHT, NOW)]: 1,
   });
 });
 

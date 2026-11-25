@@ -28,6 +28,7 @@ import {
   resolveStoredAgentUpdatedAt,
   toAgentPersistenceHandle,
 } from "../persistence-hooks.js";
+import { restoreCompanionEntries } from "./companion-stream.js";
 export type { ManagedAgent };
 
 interface ProjectionOptions {
@@ -113,6 +114,8 @@ export function toStoredAgentRecord(
     internal: options?.internal,
     ...(agent.background ? { background: true } : {}),
     owner: agent.owner,
+    artifacts: agent.artifacts ?? [],
+    companionEntries: agent.companionEntries ?? [],
   } satisfies StoredAgentRecord;
 }
 
@@ -168,6 +171,8 @@ export function toAgentPayload(
     metadata: agent.metadata,
     archivedAt: options?.archivedAt ?? null,
     ...visibilityFlags(agent),
+    artifacts: agent.artifacts ?? [],
+    companionEntries: agent.companionEntries ?? [],
     ...projectSessionMetrics(agent.sessionMetrics),
   };
 
@@ -263,6 +268,16 @@ function buildStoredOptionControls(
   };
 }
 
+/** Stream facts a stored record carries: artifacts always, companion entries when present. */
+function buildStoredStreamFacts(
+  record: StoredAgentRecord,
+): Pick<AgentSnapshotPayload, "artifacts" | "companionEntries"> {
+  return {
+    artifacts: record.artifacts ?? [],
+    companionEntries: restoreCompanionEntries(record),
+  };
+}
+
 function visibleStoredBackgroundWork(
   record: StoredAgentRecord,
   summary: AgentSnapshotPayload["backgroundWork"],
@@ -331,6 +346,7 @@ export function buildStoredAgentPayload(
     labels: normalizeLabels(record.labels),
     metadata: record.metadata,
     ...(typeof record.lastError === "string" ? { lastError: record.lastError } : {}),
+    ...buildStoredStreamFacts(record),
     ...projectSessionMetrics(record.sessionMetrics),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
   };
@@ -508,6 +524,9 @@ function projectPersistenceHandleForWire(
     return projected;
   }
   delete projected.metadata.mcpServers;
+  // Resume log only. Clients read pending questions from pendingPermissions,
+  // and this array dominates directory snapshots (kilobytes per agent).
+  delete projected.metadata.asyncQuestions;
   delete projected.metadata.pluginAppendSystemPrompt;
   delete projected.metadata.daemonAppendSystemPrompt;
   delete projected.metadata.paseoInstructionReceipt;

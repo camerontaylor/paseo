@@ -162,6 +162,7 @@ const GitHubIssueSummarySchema = z.object({
 });
 
 const GitHubPullRequestSummarySchema = z.object({
+  statusCheckRollup: z.unknown().optional(),
   number: z.number(),
   title: z.string().catch(""),
   url: z.string().catch(""),
@@ -1114,10 +1115,10 @@ interface GitHubPollTarget extends CurrentPullRequestLookup {
 }
 
 interface GitHubBatchPollEntry {
-  target: GitHubPollTarget;
-  host: string;
   originOwner: string;
   originName: string;
+  target: GitHubPollTarget;
+  host: string;
   owner: string;
   name: string;
   headRepositoryOwner?: string;
@@ -1186,10 +1187,6 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
   // Rollup nodes for merged/closed PRs keyed by repo#number@headOid: their
   // checks can no longer change, so each is fetched at most once per daemon run.
   const frozenPullRequestChecksCache = new Map<string, unknown[]>();
-  const pollRepositoryRedirects = new Map<
-    string,
-    { owner: string; name: string; headRepositoryOwner: string }
-  >();
   const pollPausedUntilByHost = new Map<string, number>();
   const hostQueries = new Map<string, Promise<unknown>>();
   const authenticatedWatchHosts = new Set<string>();
@@ -1574,10 +1571,10 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
       const key = host.value ?? "github.com";
       const group = batchGroups.get(key) ?? [];
       group.push({
-        target,
-        host: key,
         originOwner: owner,
         originName: name,
+        target,
+        host: key,
         owner,
         name,
       });
@@ -1896,16 +1893,15 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
     startedAt: number,
     read: GitHubPollReader,
   ): Promise<void> {
-    const addressedEntries = entries.map(addressGitHubBatchEntry);
-    const firstEntry = addressedEntries[0];
+    const firstEntry = entries[0];
     if (!firstEntry) {
       return;
     }
-    const selections = buildBatchPullRequestStatusSelections(addressedEntries);
+    const selections = buildBatchPullRequestStatusSelections(entries);
     const document = {
       name: "PaseoBatchPullRequestStatus",
       cwd: firstEntry.target.cwd,
-      targetCount: addressedEntries.length,
+      targetCount: entries.length,
       selections: () => selections,
       fragments: BATCH_PR_STATUS_FRAGMENT,
     };
@@ -1916,20 +1912,17 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
       `query=${renderGitHubPollQuery(document.name, selections, document.fragments)}`,
     ];
     const response = await read(document).catch((error) => {
-      reportGitHubBatchError(addressedEntries, error);
+      reportGitHubBatchError(entries, error);
       return undefined;
     });
     if (!response) return;
     if (response.paused && response.rateLimit) {
-      reportGitHubBatchError(
-        addressedEntries,
-        new GitHubGraphqlPollPausedError(response.rateLimit),
-      );
+      reportGitHubBatchError(entries, new GitHubGraphqlPollPausedError(response.rateLimit));
       return;
     }
 
     const distribution = distributeGitHubPollBatch({
-      entries: addressedEntries,
+      entries,
       aliases: response.aliases,
       args,
       startedAt,
@@ -1975,22 +1968,35 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
         );
         continue;
       }
-      if (repository.data.isFork && repository.data.parent) {
-        const forkOwner = repository.data.owner?.login ?? entry.owner;
-        pollRepositoryRedirects.set(batchRepositoryRedirectKey(entry), {
-          owner: repository.data.parent.owner.login,
-          name: repository.data.parent.name,
-          headRepositoryOwner: forkOwner,
-        });
-        distribution.redirected.push(entry);
-        continue;
-      }
       const node = selectBatchPollNode(entry, repository.data);
       if (!node) {
+        // A full page cannot prove the fork has no matching PR. Resolve the
+        // fork's head-qualified candidates before considering its parent.
+        if (
+          repository.data.isFork &&
+          repository.data.pullRequests.nodes.length >= BATCH_PR_CANDIDATE_LIMIT
+        ) {
+          distribution.legacyFallback.push(entry.target);
+          continue;
+        }
+        // A fork's own PR list is checked first and only a miss goes to the
+        // parent: a long-lived personal fork opens PRs against itself, and gh's
+        // own base-repo resolution never sees those. The redirect is decided per
+        // entry per tick rather than remembered per repository, because sibling
+        // branches of one fork can live in different repositories.
+        if (repository.data.isFork && repository.data.parent) {
+          distribution.redirected.push({
+            ...entry,
+            owner: repository.data.parent.owner.login,
+            name: repository.data.parent.name,
+            headRepositoryOwner: repository.data.owner?.login ?? entry.owner,
+          });
+          continue;
+        }
         // Legacy fallback covers the two ways "no match" can be wrong: a fork
-        // whose PR lives in the parent repository, and a full candidate page —
-        // ten newer same-named fork PRs can crowd the checkout's own PR out of
-        // the first:N window, so absence is only conclusive on a partial page.
+        // whose parent is not visible, and a full candidate page — ten newer
+        // same-named fork PRs can crowd the checkout's own PR out of the
+        // first:N window, so absence is only conclusive on a partial page.
         if (
           repository.data.isFork ||
           repository.data.pullRequests.nodes.length >= BATCH_PR_CANDIDATE_LIMIT
@@ -2059,22 +2065,6 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
         ? repository
         : GitHubDefaultBranchSchema.safeParse(originAlias).data;
     return isOnDefaultBranch(entry.target, origin?.defaultBranchRef?.name);
-  }
-
-  function addressGitHubBatchEntry(entry: GitHubBatchPollEntry): GitHubBatchPollEntry {
-    const redirect = pollRepositoryRedirects.get(batchRepositoryRedirectKey(entry));
-    return redirect
-      ? {
-          ...entry,
-          owner: redirect.owner,
-          name: redirect.name,
-          headRepositoryOwner: redirect.headRepositoryOwner,
-        }
-      : entry;
-  }
-
-  function batchRepositoryRedirectKey(entry: GitHubBatchPollEntry): string {
-    return `${entry.host}\n${entry.originOwner}/${entry.originName}`;
   }
 
   function selectBatchPollNode(
@@ -2311,21 +2301,41 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
         args: { query: input.query ?? "", limit: input.limit ?? 20 },
         readOptions: input,
         load: async () => {
-          const items = await runGhJson(
-            [
-              "pr",
-              "list",
-              "--search",
-              input.query ?? "",
-              "--json",
-              "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
-              "--limit",
-              String(input.limit ?? 20),
-            ],
-            { cwd: input.cwd },
-            z.array(GitHubPullRequestSummarySchema),
-            "[]",
-          );
+          // gh may resolve a fork checkout to its parent; pin the listing to
+          // the checkout's origin so fork-local PRs remain visible.
+          const repoSlug = await resolveRepoSlugCached(input.cwd);
+          const args = [
+            "pr",
+            "list",
+            ...(repoSlug ? ["--repo", repoSlug] : []),
+            "--search",
+            input.query ?? "",
+            "--json",
+            "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,statusCheckRollup",
+            "--limit",
+            String(input.limit ?? 20),
+          ];
+          let items: z.infer<typeof GitHubPullRequestSummarySchema>[];
+          try {
+            items = await runGhJson(
+              args,
+              { cwd: input.cwd },
+              z.array(GitHubPullRequestSummarySchema),
+              "[]",
+            );
+          } catch (error) {
+            if (!isStatusCheckRollupPermissionError(error)) throw error;
+            // A token without Checks permission can still list PRs. Omit CI facts.
+            const retryArgs = [...args];
+            retryArgs[retryArgs.indexOf("--json") + 1] =
+              "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt";
+            items = await runGhJson(
+              retryArgs,
+              { cwd: input.cwd },
+              z.array(GitHubPullRequestSummarySchema),
+              "[]",
+            );
+          }
           return items.map(toPullRequestSummary);
         },
       });
@@ -2742,6 +2752,7 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
       if (shouldFetchPullRequests && prsResult.status === "fulfilled") {
         for (const item of prsResult.value ?? []) {
           items.push({
+            ...(item.checks !== undefined ? { checks: item.checks } : {}),
             kind: "change_request",
             number: item.number,
             title: item.title,
@@ -2993,7 +3004,6 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
       }
       pollTargets.clear();
       watchedRequests.clear();
-      pollRepositoryRedirects.clear();
       pollPausedUntilByHost.clear();
       rateLimitResetLoads.clear();
     },
@@ -3334,28 +3344,66 @@ async function resolveCurrentPullRequestView(
   if (viewMatch?.status.state === "open") {
     return viewMatch.status;
   }
-
-  let headRepositoryOwner = options.headRepositoryOwner;
-
-  if (!headRepositoryOwner) {
-    const repo = await options.readRepo();
-    const forkOwner = repo?.owner?.login;
-    const parentOwner = repo?.parent?.owner?.login;
-    const parentName = repo?.parent?.name;
-    if (!forkOwner) {
-      return viewMatch?.status ?? null;
-    }
-    if (parentOwner && parentName) {
-      return resolveForkPullRequestView({
-        ...options,
-        forkOwner,
-        viewMatch,
-        repo: `${parentOwner}/${parentName}`,
-      });
-    }
-    headRepositoryOwner = forkOwner;
+  if (!options.headRepositoryOwner) {
+    return resolvePullRequestViewWithoutHeadOwner(options, viewMatch);
   }
+  return resolveListedPullRequestStatus(options, viewMatch, options.headRepositoryOwner);
+}
 
+async function resolvePullRequestViewWithoutHeadOwner(
+  options: Parameters<typeof resolveCurrentPullRequestView>[0],
+  viewMatch: ResolvedPullRequestCandidate | null,
+): Promise<CurrentPullRequestStatus | null> {
+  const repo = await options.readRepo();
+  const forkOwner = repo?.owner?.login;
+  const forkName = repo?.name;
+  const parentOwner = repo?.parent?.owner?.login;
+  const parentName = repo?.parent?.name;
+  if (!forkOwner) {
+    return viewMatch?.status ?? null;
+  }
+  if (parentOwner && parentName) {
+    return resolveParentForkPullRequestView(options, viewMatch, {
+      forkOwner,
+      forkName,
+      parentOwner,
+      parentName,
+    });
+  }
+  return resolveListedPullRequestStatus(options, viewMatch, forkOwner);
+}
+
+async function resolveParentForkPullRequestView(
+  options: Parameters<typeof resolveCurrentPullRequestView>[0],
+  viewMatch: ResolvedPullRequestCandidate | null,
+  owners: { forkOwner: string; forkName?: string; parentOwner: string; parentName: string },
+): Promise<CurrentPullRequestStatus | null> {
+  // gh resolves a fork's base to its parent. Query the fork explicitly before
+  // looking for a PR opened against the parent.
+  const forkMatch = owners.forkName
+    ? await resolveForkLocalPullRequestView({
+        ...options,
+        forkOwner: owners.forkOwner,
+        viewMatch,
+        repo: `${owners.forkOwner}/${owners.forkName}`,
+      })
+    : null;
+  if (forkMatch) {
+    return forkMatch;
+  }
+  return resolveForkPullRequestView({
+    ...options,
+    forkOwner: owners.forkOwner,
+    viewMatch,
+    repo: `${owners.parentOwner}/${owners.parentName}`,
+  });
+}
+
+async function resolveListedPullRequestStatus(
+  options: Parameters<typeof resolveCurrentPullRequestView>[0],
+  viewMatch: ResolvedPullRequestCandidate | null,
+  headRepositoryOwner: string,
+): Promise<CurrentPullRequestStatus | null> {
   const candidates = await listCurrentPullRequestCandidates({
     cwd: options.cwd,
     headRef: options.headRef,
@@ -3370,8 +3418,28 @@ async function resolveCurrentPullRequestView(
   return match?.status ?? null;
 }
 
-// A fork checkout's pull request lives in the parent repository, where only
-// its head repository tells it apart from every other fork's pull request on
+async function resolveForkLocalPullRequestView(
+  options: Parameters<typeof resolveForkPullRequestView>[0],
+): Promise<CurrentPullRequestStatus | null> {
+  const candidates = await listCurrentPullRequestCandidates(options);
+  const match = pickPullRequestCandidate({
+    candidates,
+    headRef: options.headRef,
+    headSha: options.headSha,
+    headRepositoryOwner: options.forkOwner,
+  });
+  if (match) {
+    return match.status;
+  }
+  // A full unqualified page can hide this fork's PR behind same-named heads
+  // from other forks. The REST query filters by the checkout's head owner.
+  if (candidates.length >= BATCH_PR_CANDIDATE_LIMIT) {
+    return resolveForkPullRequestView(options);
+  }
+  return null;
+}
+
+// In the parent, only its head repository tells it apart from other forks on
 // the same branch name. `gh pr list --head` cannot ask that question: it
 // forwards the whole value as a head branch name, so "owner:branch" matches
 // nothing (cli/cli#10945), and the bare branch name loses a common name like
@@ -3530,8 +3598,19 @@ async function listCurrentPullRequestCandidates(options: {
   cwd: string;
   headRef: string;
   run: (args: string[], options: GitHubCommandRunnerOptions) => Promise<string>;
+  repo?: string;
 }): Promise<ResolvedPullRequestCandidate[]> {
-  const args = ["pr", "list", "--state", "all", "--head", options.headRef, "--limit", "10"];
+  const args = [
+    "pr",
+    "list",
+    ...(options.repo ? ["--repo", options.repo] : []),
+    "--state",
+    "all",
+    "--head",
+    options.headRef,
+    "--limit",
+    "10",
+  ];
   try {
     const stdout = await runCurrentPullRequestStatusCommand({
       cwd: options.cwd,
@@ -3927,6 +4006,9 @@ function toPullRequestSummary(
   item: z.infer<typeof GitHubPullRequestSummarySchema>,
 ): PullRequestSummary {
   return {
+    ...(item.statusCheckRollup !== undefined
+      ? { checks: parseStatusCheckRollup(item.statusCheckRollup) }
+      : {}),
     number: item.number,
     title: item.title,
     url: item.url,

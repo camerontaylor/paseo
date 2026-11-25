@@ -52,6 +52,7 @@ export interface ListUsageReportsOptions {
 
 /** Groups discovered logins by account and caches their usage for five minutes. */
 export class UsageSourceRegistry {
+  private generation = 0;
   private readonly sources = new Map<string, UsageSource>();
   private readonly known = new Map<string, KnownReport>();
   private defaults = new Map<string, KnownReport>();
@@ -86,9 +87,18 @@ export class UsageSourceRegistry {
     for (const key of this.pending.keys()) if (key.startsWith(`${id}:`)) this.pending.delete(key);
   }
 
+  invalidateReports(predicate: (id: string) => boolean): void {
+    this.generation++;
+    this.byAgent.clear();
+    for (const map of [this.defaults, this.known, this.cache, this.successful, this.pending]) {
+      for (const id of map.keys()) if (predicate(id)) map.delete(id);
+    }
+  }
+
   async listReports(options: ListUsageReportsOptions = {}): Promise<UsageReportEntry[]> {
     if (options.agentId !== undefined && options.reportIds !== undefined)
       throw new Error("agentId and reportIds cannot be combined");
+    const generation = this.generation;
     this.pruneAgents();
     let ids: string[];
     let reports = this.known;
@@ -99,6 +109,10 @@ export class UsageSourceRegistry {
       this.mergeKnown();
       ids = [...reports.keys()];
     } else if (options.reportIds !== undefined) {
+      if (options.reportIds.some((id) => !this.known.has(id))) {
+        this.defaults = await this.discover({ kind: "global" });
+        this.mergeKnown();
+      }
       ids = options.reportIds;
     } else {
       const [defaults] = await Promise.all([
@@ -109,12 +123,13 @@ export class UsageSourceRegistry {
       this.mergeKnown();
       ids = [...this.known.keys()];
     }
+    if (generation !== this.generation) return this.listReports(options);
     const uniqueIds = [...new Set(ids)];
     const checkProvider =
       options.agentId === undefined
         ? this.createProviderActivityChecker(options.forceRefresh)
         : undefined;
-    return Promise.all(
+    const entries = await Promise.all(
       uniqueIds.flatMap((id) => {
         const known = reports.get(id);
         if (!known) return [];
@@ -126,12 +141,13 @@ export class UsageSourceRegistry {
             this.resolveDefaultEnabled(known, checkProvider),
           ]).then(([entry, defaultEnabled]) => {
             const stamped = defaultEnabled === false ? { ...entry, defaultEnabled: false } : entry;
-            options.onReport?.(stamped);
+            if (generation === this.generation) options.onReport?.(stamped);
             return stamped;
           }),
         ];
       }),
     );
+    return generation === this.generation ? entries : this.listReports(options);
   }
 
   private hintedProviders(known: KnownReport): string[] {
@@ -245,23 +261,37 @@ export class UsageSourceRegistry {
         try {
           const accounts = z
             .array(
-              z.object({
-                key: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/),
-                label: z.string().optional(),
-                harness: z.string().min(1).optional(),
-                provider: z.string().min(1).optional(),
-                input: z.json(),
-              }),
+              z.union([
+                z.object({
+                  key: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/),
+                  label: z.string().optional(),
+                  harness: z.string().min(1).optional(),
+                  provider: z.string().min(1).optional(),
+                  input: z.json(),
+                }),
+                z
+                  .object({
+                    providerId: z.string().regex(/^[A-Za-z0-9._-]{1,119}$/),
+                    label: z.string(),
+                  })
+                  .catchall(z.json()),
+              ]),
             )
             .parse(await source.discover(scope));
           for (const account of accounts) {
-            const id = `${source.id}:${account.key}`;
+            const key = "providerId" in account ? `provider.${account.providerId}` : account.key;
+            const id = `${source.id}:${key}`;
             const known = reports.get(id);
             // COMPAT(usageLoginHarness): added in v0.11.0, remove after 2027-04-05 once plugin floor >= v0.11.0.
             const login: Login = {
-              input: account.input,
-              harness: account.harness ?? source.label,
-              ...(account.provider ? { provider: account.provider } : {}),
+              input: "providerId" in account ? account : account.input,
+              harness:
+                "harness" in account && typeof account.harness === "string"
+                  ? account.harness
+                  : source.label,
+              ...("provider" in account && typeof account.provider === "string"
+                ? { provider: account.provider }
+                : {}),
             };
             if (known) {
               if (!known.logins.some((existing) => loginKey(existing) === loginKey(login)))
@@ -296,18 +326,25 @@ export class UsageSourceRegistry {
             reports[0]!.fetchedAt,
           )
         : new Date(this.now()).toISOString(),
-      providers: reports.map((entry) => ({
-        providerId: entry.sourceId,
-        displayName: entry.account.label
-          ? `${entry.sourceLabel} (${entry.account.label})`
-          : entry.sourceLabel,
-        status: entry.report.status,
-        planLabel: entry.report.status === "available" ? (entry.report.planLabel ?? null) : null,
-        windows: entry.report.status === "available" ? entry.report.windows : [],
-        balances: entry.report.status === "available" ? (entry.report.balances ?? []) : [],
-        details: entry.report.status === "available" ? (entry.report.details ?? []) : [],
-        error: legacyError(entry.report, this.now()),
-      })),
+      providers: reports.map((entry) => {
+        const prefix = `${entry.sourceId}:provider.`;
+        const custom = entry.id.startsWith(prefix);
+        let displayName = entry.sourceLabel;
+        if (entry.account.label) displayName = `${entry.sourceLabel} (${entry.account.label})`;
+        if (custom) displayName = entry.account.label ?? entry.sourceLabel;
+        const provider: ProviderUsage = {
+          providerId: custom ? entry.id.slice(prefix.length) : entry.sourceId,
+          displayName,
+          status: entry.report.status,
+          planLabel: entry.report.status === "available" ? (entry.report.planLabel ?? null) : null,
+          windows: entry.report.status === "available" ? entry.report.windows : [],
+          balances: entry.report.status === "available" ? (entry.report.balances ?? []) : [],
+          details: entry.report.status === "available" ? (entry.report.details ?? []) : [],
+          error: legacyError(entry.report, this.now()),
+        };
+        if (custom) provider.baseProviderId = entry.sourceId;
+        return provider;
+      }),
     };
   }
 
@@ -319,6 +356,7 @@ export class UsageSourceRegistry {
       return Promise.resolve(cached.entry);
     const pending = this.pending.get(cacheKey);
     if (pending) return pending;
+    const generation = this.generation;
     const request = (async () => {
       const fetchedAt = new Date(this.now()).toISOString();
       const outcome = await this.fetchWithFallback(known);
@@ -338,6 +376,7 @@ export class UsageSourceRegistry {
         entry.lastSuccessful = this.successful.get(cacheKey);
       }
       if (
+        generation === this.generation &&
         this.sources.get(known.source.id) === known.source &&
         this.activeCacheKeys().has(cacheKey)
       ) {

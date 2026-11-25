@@ -572,9 +572,11 @@ function createDefaultDeps(
   resolveOrigin: (serverId: string) => DaemonClient | null = () => null,
 ): HostRuntimeControllerDeps {
   const browserHostRegistration = getDesktopBrowserHostRegistration();
-  const appCapabilities = browserHostRegistration
-    ? { [CLIENT_CAPS.browserHost]: browserHostRegistration }
-    : {};
+  const appCapabilities = {
+    ...(browserHostRegistration ? { [CLIENT_CAPS.browserHost]: browserHostRegistration } : {}),
+    // COMPAT(companionStreamPortV1): added in v0.11.0-beta.3-fork, remove after 2027-04-01.
+    [CLIENT_CAPS.companionStreamPortV1]: true,
+  };
 
   return {
     createClient: ({ host, connection, clientId, runtimeGeneration }) => {

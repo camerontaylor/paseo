@@ -109,11 +109,9 @@ export function workspaceTabTargetsEqual(
   if (left.kind === "agent" && right.kind === "agent") {
     return left.agentId === right.agentId;
   }
-  if (left.kind === "provider_subagent" && right.kind === "provider_subagent") {
-    return left.parentAgentId === right.parentAgentId && left.subagentId === right.subagentId;
-  }
-  if (left.kind === "terminal" && right.kind === "terminal") {
-    return left.terminalId === right.terminalId;
+  const nestedAgentTargetEquality = nestedAgentWorkspaceTabTargetsEqual(left, right);
+  if (nestedAgentTargetEquality !== undefined) {
+    return nestedAgentTargetEquality;
   }
   if (left.kind === "plugin" && right.kind === "plugin") {
     return (
@@ -125,6 +123,19 @@ export function workspaceTabTargetsEqual(
     );
   }
   return secondaryWorkspaceTabTargetsEqual(left, right);
+}
+
+function nestedAgentWorkspaceTabTargetsEqual(
+  left: WorkspaceTabTarget,
+  right: WorkspaceTabTarget,
+): boolean | undefined {
+  if (left.kind === "provider_subagent" && right.kind === "provider_subagent") {
+    return left.parentAgentId === right.parentAgentId && left.subagentId === right.subagentId;
+  }
+  if (left.kind === "terminal" && right.kind === "terminal") {
+    return left.terminalId === right.terminalId;
+  }
+  return undefined;
 }
 
 function secondaryWorkspaceTabTargetsEqual(

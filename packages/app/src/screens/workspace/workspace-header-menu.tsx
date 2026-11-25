@@ -1,5 +1,5 @@
 import type { WorkspaceCompactHeaderActions } from "./adaptive-workspace-chrome";
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { View } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -269,11 +269,14 @@ export function WorkspaceHeaderMenuMobile({
   const handleEditProfiles = useCallback(() => {
     router.push(buildSettingsHostSectionRoute(normalizedServerId, "terminals") as Href);
   }, [normalizedServerId, router]);
+  const [menuOpen, setMenuOpen] = useState(false);
   const { canArchive, archive } = useActiveWorkspaceArchive();
   const handleArchiveWorkspace = useCallback(() => {
     archive();
   }, [archive]);
-  const scriptsMenu = useWorkspaceScriptsMenuPages(scripts);
+  // Discovery belongs to the open menu: the scripts page asks for package scripts only once the
+  // user opens it, so a compact workspace does not poll for scripts it never shows.
+  const scriptsMenu = useWorkspaceScriptsMenuPages({ ...scripts, menuOpen });
   const pluginMenu = usePluginWorkspaceMenu(normalizedServerId, normalizedWorkspaceId);
   const pages = useMemo(
     () => [...scriptsMenu.pages, ...pluginMenu.pages],
@@ -281,7 +284,7 @@ export function WorkspaceHeaderMenuMobile({
   );
 
   return (
-    <DropdownMenu compactMode="sheet">
+    <DropdownMenu compactMode="sheet" onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger
         testID="workspace-header-menu-trigger"
         style={triggerStyle}

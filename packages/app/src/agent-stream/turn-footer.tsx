@@ -54,6 +54,7 @@ export const TurnFooter = memo(function TurnFooter({
   supportsTimelineCursor,
   onForkAssistantTurn,
   onForkInFlightTurn,
+  onPin,
 }: {
   isRunning: boolean;
   inFlightTurnStartedAt: Date | null;
@@ -62,6 +63,7 @@ export const TurnFooter = memo(function TurnFooter({
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
   onForkInFlightTurn?: InFlightTurnForkHandler;
+  onPin?: (text: string) => void;
 }) {
   if (isRunning) {
     return (
@@ -85,6 +87,7 @@ export const TurnFooter = memo(function TurnFooter({
       turnMetrics={host.turnMetrics}
       supportsTimelineCursor={supportsTimelineCursor}
       onForkAssistantTurn={onForkAssistantTurn}
+      onPin={onPin}
     />
   );
 });
@@ -97,6 +100,7 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   turnMetrics,
   supportsTimelineCursor,
   onForkAssistantTurn,
+  onPin,
 }: {
   strategy: TurnContentStrategy;
   items: StreamItem[];
@@ -105,6 +109,7 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   turnMetrics?: AgentMetric[];
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
+  onPin?: (text: string) => void;
 }) {
   return (
     <TurnFooterRow>
@@ -116,6 +121,7 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
         turnMetrics={turnMetrics}
         supportsTimelineCursor={supportsTimelineCursor}
         onForkAssistantTurn={onForkAssistantTurn}
+        onPin={onPin}
       />
     </TurnFooterRow>
   );
@@ -173,6 +179,7 @@ function CompletedTurnFooter({
   turnMetrics,
   supportsTimelineCursor,
   onForkAssistantTurn,
+  onPin,
 }: {
   strategy: TurnContentStrategy;
   items: StreamItem[];
@@ -181,6 +188,7 @@ function CompletedTurnFooter({
   turnMetrics?: AgentMetric[];
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
+  onPin?: (text: string) => void;
 }) {
   const getContent = useCallback(
     () =>
@@ -212,6 +220,7 @@ function CompletedTurnFooter({
         completedAt={timing?.completedAt}
         durationMs={timing?.durationMs}
         onFork={boundary && onForkAssistantTurn ? handleFork : undefined}
+        onPin={onPin}
         metrics={turnMetrics}
       />
     </View>
@@ -249,7 +258,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     paddingBottom: TURN_FOOTER_BOTTOM_SPACING,
   },
   turnFooterContent: {
-    height: TURN_FOOTER_CONTENT_HEIGHT,
+    minHeight: TURN_FOOTER_CONTENT_HEIGHT,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-start",

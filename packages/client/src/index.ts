@@ -39,6 +39,7 @@ import type {
   WorkspaceCreateRequest,
 } from "@getpaseo/protocol/messages";
 import { DaemonClient, type CreateAgentRequestOptions } from "./daemon-client.js";
+import { createAgentQueueHandle, type PaseoAgentQueueHandle } from "./agent-queue-handle.js";
 import {
   createTerminalActions,
   type PaseoTerminalActions,
@@ -435,6 +436,8 @@ export interface PaseoAgentHandle {
   readonly archivedAt: NonNullable<PaseoAgent["archivedAt"]> | null;
   readonly timeline: PaseoAgentTimelineHandle;
   readonly backgroundWork: PaseoAgentBackgroundWorkHandle;
+  /** The user's composer queue for this agent. FORK: see `agent-queue-handle.ts`. */
+  readonly queue: PaseoAgentQueueHandle;
   current(): PaseoAgent | null;
   refresh(requestId?: string): Promise<PaseoAgentRefetchResult | null>;
   /**
@@ -466,6 +469,8 @@ export interface PaseoAgentHandle {
   commands(options?: PaseoAgentCommandsOptions): Promise<PaseoAgentCommandsResult>;
   archive(): Promise<{ archivedAt: string }>;
   detach(): Promise<void>;
+  /** Leave the provider's shared session; the provider keeps work started on it. */
+  detachProviderSession(): Promise<void>;
   subscribe(handler: (update: PaseoAgentUpdate) => void): () => void;
 }
 
@@ -1017,6 +1022,7 @@ function createAgentHandleFactory(
         if (!serverId) throw new Error("Connect to a host before obtaining an agent address");
         return { serverId, agentId: id };
       },
+      queue: createAgentQueueHandle(daemonClient, id), // FORK: durable agent queue
       timeline: {
         append: (item) => daemonClient.appendAgentTimelineItem(id, item),
         refetch: async (options) => {
@@ -1194,6 +1200,9 @@ function createAgentHandleFactory(
       },
       detach: async () => {
         await daemonClient.detachAgent(id);
+      },
+      detachProviderSession: async () => {
+        await daemonClient.detachProviderSession(id);
       },
       subscribe: (handler) =>
         listen((update) => {
@@ -1382,6 +1391,13 @@ function createGeneratedClientId(): string {
   return `paseo-sdk-${randomId}`;
 }
 
+export {
+  AgentQueueUnsupportedError,
+  type AgentQueueSnapshot,
+  type PaseoAgentQueueEnqueueOptions,
+  type PaseoAgentQueueHandle,
+  type QueuedAgentDeliveryIntent,
+} from "./agent-queue-handle.js";
 export type { DiffCompare, DiffState, DiffEntry, ResolvedShas } from "./diff/index.js";
 
 interface WorkspaceLabelAssignment {

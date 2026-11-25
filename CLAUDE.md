@@ -26,6 +26,8 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 | [docs/product.md](docs/product.md)                                   | What Paseo is, who it's for, where it's going                                                                                  |
 | [docs/architecture.md](docs/architecture.md)                         | System design, package layering, WebSocket protocol, agent lifecycle, data flow                                                |
 | [docs/agent-lifecycle.md](docs/agent-lifecycle.md)                   | Agent states, parent/child relationships, archive semantics, tabs vs archive, subagents track                                  |
+| [docs/companion-stream.md](docs/companion-stream.md)                 | Per-chat Stream and artifact ownership                                                                                         |
+| [docs/queue-mirroring.md](docs/queue-mirroring.md)                   | Durable queued prompts and cross-client delivery                                                                               |
 | [docs/data-model.md](docs/data-model.md)                             | File-based JSON persistence, Zod schemas, atomic writes, no migrations                                                         |
 | [docs/glossary.md](docs/glossary.md)                                 | Authoritative terminology — UI label wins, no synonyms                                                                         |
 | [docs/coding-standards.md](docs/coding-standards.md)                 | Type hygiene, error handling, state design, React patterns, file organization                                                  |
@@ -203,3 +205,11 @@ The app runs on iOS, Android, web (browser), and web (Electron desktop). Code is
 ## Debugging
 
 Find the complete daemon logs and traces in the $PASEO_HOME/daemon.log
+
+<!-- paseo-daemon-policy:028d951bb04c1160ac308c5ec234f622026daf88065a705373d524e4502e093a -->
+
+## Agent operating policy
+
+Unattended agents (spawned by another agent or a schedule): wait cheaply. If an event will wake you (a child agent you created with notifyOnFinish), end your turn with one line `WAITING: <what> | resume-when: <condition>`. Otherwise make ONE long wait (codex: a single sleep of 5-20 minutes is fine here) instead of repeated short sleeps or status polls; long commands run in the background with output to a file. Interactive sessions: ignore this.
+
+<!-- /paseo-daemon-policy -->

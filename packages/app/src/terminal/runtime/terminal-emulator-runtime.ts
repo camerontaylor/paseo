@@ -169,6 +169,24 @@ export function encodeTerminalOutput(text: string): TerminalOutputData {
   return terminalOutputEncoder.encode(text);
 }
 
+function hostHasLayoutSize(root: HTMLElement): boolean {
+  return root.offsetWidth > 0 && root.offsetHeight > 0;
+}
+
+function shouldSkipUnchangedFit(input: {
+  shouldRefresh: boolean;
+  previous: { rows: number; cols: number } | null;
+  nextRows: number;
+  nextCols: number;
+}): boolean {
+  return (
+    !input.shouldRefresh &&
+    input.previous !== null &&
+    input.previous.rows === input.nextRows &&
+    input.previous.cols === input.nextCols
+  );
+}
+
 function prependTerminalOutput(
   prefix: TerminalOutputData,
   data: TerminalOutputData,
@@ -303,6 +321,8 @@ export class TerminalEmulatorRuntime {
   private replayResize: TerminalResizeRequest | null = null;
   private fitAndEmitResize: ((input?: TerminalResizeRequest) => void) | null = null;
   private lastSize: { rows: number; cols: number } | null = null;
+  private hostCollapsed = false;
+  private restoreWebglRenderer: (() => void) | null = null;
   private cleanup: (() => void) | null = null;
   private outputOperations: TerminalOutputOperation[] = [];
   private inFlightOutputOperation: TerminalOutputOperation | null = null;
@@ -329,13 +349,25 @@ export class TerminalEmulatorRuntime {
       return;
     }
 
+    this.restoreSurface();
+  };
+
+  /**
+   * Re-measure and redraw after the host was hidden (`display: none` / collapsed)
+   * or a WebGL context was lost. Tab switches keep `document.visibilityState`
+   * visible, so callers must invoke this on panel restore — not only on
+   * document visibilitychange.
+   */
+  restoreSurface(): void {
+    this.restoreWebglRenderer?.();
     this.fitAndEmitResize?.({ forceRefresh: true, shouldClaim: false });
     if (typeof window.requestAnimationFrame === "function") {
       window.requestAnimationFrame(() => {
+        this.restoreWebglRenderer?.();
         this.fitAndEmitResize?.({ forceRefresh: true, shouldClaim: false });
       });
     }
-  };
+  }
 
   setCallbacks(input: { callbacks: TerminalEmulatorRuntimeCallbacks }): void {
     this.callbacks = input.callbacks;
@@ -552,6 +584,8 @@ export class TerminalEmulatorRuntime {
 
     input.host.innerHTML = "";
     this.lastSize = null;
+    this.hostCollapsed = false;
+    this.restoreWebglRenderer = null;
     this.inputModeTracker.reset();
     this.emitInputModeChange();
 
@@ -668,10 +702,14 @@ export class TerminalEmulatorRuntime {
     };
     registerProtocolQuerySuppression();
 
-    let webglAddonRaf: number | null = requestAnimationFrame(() => {
-      webglAddonRaf = null;
+    const tryLoadWebglRenderer = (): void => {
+      if (webglAddon) {
+        return;
+      }
+      if (!hostHasLayoutSize(input.root)) {
+        return;
+      }
       try {
-        disposeWebglRenderer();
         webglAddon = new WebglAddon();
         webglAddon.onContextLoss(() => {
           disposeWebglRenderer();
@@ -684,6 +722,12 @@ export class TerminalEmulatorRuntime {
       } catch {
         disposeWebglRenderer();
       }
+    };
+    this.restoreWebglRenderer = tryLoadWebglRenderer;
+
+    let webglAddonRaf: number | null = requestAnimationFrame(() => {
+      webglAddonRaf = null;
+      tryLoadWebglRenderer();
     });
 
     const restoreDocumentStyles = this.applyDocumentBoundsStyles({
@@ -708,8 +752,15 @@ export class TerminalEmulatorRuntime {
         return;
       }
 
-      if (input.root.offsetWidth === 0 || input.root.offsetHeight === 0) {
+      if (!hostHasLayoutSize(input.root)) {
+        this.hostCollapsed = true;
         return;
+      }
+
+      const restoringCollapsedHost = this.hostCollapsed;
+      if (restoringCollapsedHost) {
+        this.hostCollapsed = false;
+        this.restoreWebglRenderer?.();
       }
 
       try {
@@ -720,13 +771,13 @@ export class TerminalEmulatorRuntime {
 
       const nextRows = currentTerminal.rows;
       const nextCols = currentTerminal.cols;
-      const previous = this.lastSize;
       if (
-        !forceRefresh &&
-        !forceClaim &&
-        previous &&
-        previous.rows === nextRows &&
-        previous.cols === nextCols
+        shouldSkipUnchangedFit({
+          shouldRefresh: forceRefresh || restoringCollapsedHost || forceClaim,
+          previous: this.lastSize,
+          nextRows,
+          nextCols,
+        })
       ) {
         return;
       }
@@ -1133,6 +1184,8 @@ export class TerminalEmulatorRuntime {
     this.fitAddon = null;
     this.fitAndEmitResize = null;
     this.lastSize = null;
+    this.hostCollapsed = false;
+    this.restoreWebglRenderer = null;
     this.themeBackgroundElements = [];
     this.suppressInput = false;
     this.inputModeDecoder.decode();

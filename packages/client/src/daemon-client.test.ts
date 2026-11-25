@@ -1144,6 +1144,9 @@ test("advertises client capabilities in hello", async () => {
       terminal_reflowable_snapshot: true,
       terminal_chunked_replay: true,
       timeline_notifications: true,
+      companion_stream_port_v1: true,
+      durable_agent_queue: true,
+      durable_voice_input_v1: true,
       plugin_timeline_items: true,
       plugin_binary_payloads: true,
       workspace_setup_blocked: true,
@@ -6138,6 +6141,73 @@ test("renames a branch via RPC", async () => {
   });
 });
 
+test("sets a checkout base ref via RPC", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen({ features: { checkoutBaseRefSet: true } });
+  await connectPromise;
+
+  const promise = client.setCheckoutBaseRef({
+    cwd: "/tmp/project",
+    baseRef: "origin/develop",
+    requestId: "req-base-ref",
+  });
+  const request = JSON.parse(assertStr(mock.sent[0])) as {
+    message: { type: string; cwd: string; baseRef: string; requestId: string };
+  };
+  expect(request.message).toEqual({
+    type: "checkout.base_ref.set.request",
+    cwd: "/tmp/project",
+    baseRef: "origin/develop",
+    requestId: "req-base-ref",
+  });
+
+  const payload = {
+    requestId: "req-base-ref",
+    success: true,
+    cwd: "/tmp/project",
+    baseRef: "develop",
+    error: null,
+  };
+  mock.triggerMessage(
+    JSON.stringify({
+      type: "session",
+      message: { type: "checkout.base_ref.set.response", payload },
+    }),
+  );
+  await expect(promise).resolves.toEqual(payload);
+});
+
+test("refuses to set a checkout base ref when the host lacks the feature", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen();
+  await connectPromise;
+
+  await expect(
+    client.setCheckoutBaseRef({ cwd: "/tmp/project", baseRef: "origin/develop" }),
+  ).rejects.toThrow("Update the host to change the comparison base.");
+  expect(mock.sent).toHaveLength(0);
+});
+
 test("returns renameBranch business failures", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();
@@ -8648,77 +8718,91 @@ test.each([
   expect(supportsUsageReports(features)).toBe(expected);
 });
 
-test("uses modern usage RPC when both capabilities are advertised", async () => {
-  const mock = createMockTransport();
-  const client = new DaemonClient({
-    url: "ws://test",
-    clientId: "clsk_unit_test",
-    logger: createMockLogger(),
-    reconnect: { enabled: false },
-    transportFactory: () => mock.transport,
-  });
-  clients.push(client);
-  const connected = client.connect();
-  mock.triggerOpen({ features: { usageSources: true, providerUsageList: true } });
-  await connected;
-  const updates: unknown[] = [];
-  const result = client.listUsageReports(
-    {
+test.each([false, true])(
+  "uses modern usage RPC with terminal reports %s",
+  async (terminalReports) => {
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_unit_test",
+      logger: createMockLogger(),
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+    const connected = client.connect();
+    mock.triggerOpen({
+      features: {
+        usageSources: true,
+        usageReportsStreaming: terminalReports,
+        providerUsageList: true,
+      },
+    });
+    await connected;
+    const updates: unknown[] = [];
+    const result = client.listUsageReports(
+      {
+        requestId: "modern-usage",
+        reportIds: ["claude:work"],
+        forceRefresh: true,
+      },
+      (report) => updates.push(report),
+    );
+    expect(parseSentFrame(mock.sent[0])).toEqual({
+      type: "usage.list_reports.request",
       requestId: "modern-usage",
+      ...(terminalReports ? { streaming: true } : {}),
       reportIds: ["claude:work"],
       forceRefresh: true,
-    },
-    (report) => updates.push(report),
-  );
-  expect(parseSentFrame(mock.sent[0])).toEqual({
-    type: "usage.list_reports.request",
-    requestId: "modern-usage",
-    reportIds: ["claude:work"],
-    forceRefresh: true,
-  });
-  const payload = {
-    requestId: "modern-usage",
-    reports: [
-      {
-        id: "claude:work",
-        sourceId: "claude",
-        sourceLabel: "Claude",
-        account: { label: "Work" },
-        fetchedAt: "2026-09-30T00:00:00.000Z",
-        report: { status: "available", windows: [] },
-      },
-    ],
-  };
-  const report = payload.reports[0];
-  mock.triggerMessage(
-    wrapSessionMessage({
-      type: "usage.list_reports.update",
-      payload: { requestId: "foreign", report },
-    }),
-  );
-  expect(updates).toEqual([]);
-  mock.triggerMessage(
-    wrapSessionMessage({
-      type: "usage.list_reports.update",
-      payload: { requestId: payload.requestId, report },
-    }),
-  );
-  expect(updates).toEqual([report]);
-  mock.triggerMessage(
-    wrapSessionMessage({
-      type: "usage.list_reports.response",
-      payload: { requestId: payload.requestId, error: null },
-    }),
-  );
-  mock.triggerMessage(
-    wrapSessionMessage({
-      type: "usage.list_reports.update",
-      payload: { requestId: payload.requestId, report },
-    }),
-  );
-  expect(await result).toStrictEqual(payload);
-  expect(updates).toEqual([report]);
-});
+    });
+    const payload = {
+      requestId: "modern-usage",
+      reports: [
+        {
+          id: "claude:work",
+          sourceId: "claude",
+          sourceLabel: "Claude",
+          account: { label: "Work" },
+          fetchedAt: "2026-09-30T00:00:00.000Z",
+          report: { status: "available", windows: [] },
+        },
+      ],
+    };
+    const report = payload.reports[0];
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "usage.list_reports.update",
+        payload: { requestId: "foreign", report },
+      }),
+    );
+    expect(updates).toEqual([]);
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "usage.list_reports.update",
+        payload: { requestId: payload.requestId, report },
+      }),
+    );
+    expect(updates).toEqual([report]);
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "usage.list_reports.response",
+        payload: {
+          requestId: payload.requestId,
+          error: null,
+          ...(terminalReports ? { reports: payload.reports } : {}),
+        },
+      }),
+    );
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "usage.list_reports.update",
+        payload: { requestId: payload.requestId, report },
+      }),
+    );
+    expect(await result).toStrictEqual(payload);
+    expect(updates).toEqual([report]);
+  },
+);
 
 test("rejects usage requests when the host has neither capability", async () => {
   const mock = createMockTransport();
@@ -8783,6 +8867,90 @@ test("usage request timeout detaches its update listener", async () => {
   }
 });
 
+test.each([undefined, null])(
+  "reads terminal usage reports from older hosts with error %s",
+  async (error) => {
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_unit_test",
+      logger: createMockLogger(),
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+    const connected = client.connect();
+    mock.triggerOpen({ features: { usageSources: true } });
+    await connected;
+    const updates: unknown[] = [];
+    const result = client.listUsageReports({ requestId: "older-usage" }, (report) =>
+      updates.push(report),
+    );
+    expect(parseSentFrame(mock.sent[0])).toEqual({
+      type: "usage.list_reports.request",
+      requestId: "older-usage",
+    });
+    const report = {
+      id: "fixture:one",
+      sourceId: "fixture",
+      sourceLabel: "Fixture",
+      account: {},
+      fetchedAt: "2026-10-08T00:00:00.000Z",
+      report: { status: "available", windows: [] },
+    };
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "usage.list_reports.response",
+        payload: {
+          requestId: "older-usage",
+          reports: [report],
+          ...(error === undefined ? {} : { error }),
+        },
+      }),
+    );
+    expect(await result).toEqual({ requestId: "older-usage", reports: [report] });
+    expect(updates).toEqual([report]);
+  },
+);
+
+test.each([false, true])(
+  "usage failures reject with the daemon error with streaming %s",
+  async (streaming) => {
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_unit_test",
+      logger: createMockLogger(),
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+    const connected = client.connect();
+    mock.triggerOpen({ features: { usageSources: true, usageReportsStreaming: streaming } });
+    await connected;
+    const result = client.listUsageReports({ requestId: "failed-usage" });
+    const rejected = expect(result).rejects.toThrow("quota service down");
+    mock.triggerMessage(
+      wrapSessionMessage(
+        streaming
+          ? {
+              type: "usage.list_reports.response",
+              payload: { requestId: "failed-usage", reports: [], error: "quota service down" },
+            }
+          : {
+              type: "rpc_error",
+              payload: {
+                requestId: "failed-usage",
+                requestType: "usage.list_reports.request",
+                code: "usage_list_reports_failed",
+                error: "quota service down",
+              },
+            },
+      ),
+    );
+    await rejected;
+  },
+);
 test.each([false, true])(
   "agent provenance requires host support=%s while human sends remain compatible",
   async (supported) => {
@@ -8828,6 +8996,124 @@ test.each([false, true])(
     await send;
   },
 );
+
+test("sendMessage preserves explicit skill selection and null clears on the wire", async () => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "skill-selection",
+    transportFactory: () => transport.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  transport.triggerOpen({});
+  await connecting;
+
+  const accept = (request: { requestId: string }) =>
+    transport.triggerMessage(
+      wrapSessionMessage({
+        type: "send_agent_message_response",
+        payload: {
+          requestId: request.requestId,
+          agentId: "agent-1",
+          accepted: true,
+          error: null,
+        },
+      }),
+    );
+
+  const cleared = client.sendMessage("agent-1", "/model gpt-5.2", { skill: null });
+  const clearedRequest = parseSentFrame(transport.sent[0]);
+  expect(clearedRequest).toMatchObject({
+    type: "send_agent_message_request",
+    text: "/model gpt-5.2",
+    skill: null,
+  });
+  accept(clearedRequest);
+  await cleared;
+
+  const selected = client.sendMessage("agent-1", "/model gpt-5.2", { skill: "other" });
+  const selectedRequest = parseSentFrame(transport.sent[1]);
+  expect(selectedRequest).toMatchObject({
+    type: "send_agent_message_request",
+    text: "/model gpt-5.2",
+    skill: "other",
+  });
+  accept(selectedRequest);
+  await selected;
+
+  const omitted = client.sendMessage("agent-1", "/model gpt-5.2");
+  const omittedRequest = parseSentFrame(transport.sent[2]);
+  expect(omittedRequest).toMatchObject({
+    type: "send_agent_message_request",
+    text: "/model gpt-5.2",
+  });
+  expect(omittedRequest).not.toHaveProperty("skill");
+  accept(omittedRequest);
+  await omitted;
+});
+
+test("the queue selector follows the host capability across one client's reconnects", async () => {
+  const capable = createMockTransport();
+  const incapable = createMockTransport();
+  const capableAgain = createMockTransport();
+  const transports = [capable, incapable, capableAgain];
+  let transportIndex = 0;
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "queue_selector_unit_test",
+    reconnect: { enabled: true, baseDelayMs: 1, maxDelayMs: 1 },
+    transportFactory: () => {
+      const transport = transports[transportIndex];
+      if (!transport) throw new Error("unexpected extra reconnect");
+      transportIndex += 1;
+      return transport.transport;
+    },
+  });
+  clients.push(client);
+
+  const subscriptionSelectors = (mock: ReturnType<typeof createMockTransport>) =>
+    mock.sent
+      .map((frame) => parseSentFrame(frame))
+      .filter((message) => message.type === "session.events.set_subscription.request")
+      .map((message) => message.events as string[]);
+
+  const initialConnect = client.connect();
+  capable.triggerOpen({ features: { ownedSubscriptions: true, durableAgentQueueV1: true } });
+  await initialConnect;
+
+  client.observeEvents(["agent.queue.update", "status.server_info"]);
+  expect(subscriptionSelectors(capable).at(-1)).toEqual([
+    "agent.queue.update",
+    "status.server_info",
+  ]);
+
+  // Downgrade: the same client reconnects to a host that never saw the fork flag.
+  capable.triggerClose({ code: 1001, reason: "daemon restarted" });
+  client.ensureConnected();
+  incapable.triggerOpen({ features: { ownedSubscriptions: true } });
+  await vi.waitFor(() =>
+    expect(subscriptionSelectors(incapable).at(-1)).toEqual(["status.server_info"]),
+  );
+  for (const selectors of subscriptionSelectors(incapable)) {
+    expect(selectors).not.toContain("agent.queue.update");
+  }
+
+  // Restore: the flag returns with the next handshake, so the selector comes back.
+  incapable.triggerClose({ code: 1001, reason: "daemon upgraded" });
+  client.ensureConnected();
+  capableAgain.triggerOpen({ features: { ownedSubscriptions: true, durableAgentQueueV1: true } });
+  await vi.waitFor(() =>
+    expect(subscriptionSelectors(capableAgain).at(-1)).toEqual([
+      "agent.queue.update",
+      "status.server_info",
+    ]),
+  );
+
+  // The mock daemon never answers a release, so teardown closes the client instead.
+  await client.close();
+});
 
 describe("agent sender active-turn behaviors", () => {
   async function connect(features: Record<string, boolean>) {

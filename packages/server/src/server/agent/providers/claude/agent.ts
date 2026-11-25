@@ -8,6 +8,7 @@ import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { promises } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { LRUCache } from "lru-cache";
 import stripAnsi from "strip-ansi";
@@ -2674,10 +2675,9 @@ class ClaudeAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
+    this.assertSessionOpen();
     await this.ensureHistoryReady();
-    if (this.closed) {
-      throw new Error("Claude session is closed");
-    }
+    this.assertSessionOpen();
     if (this.activeForegroundTurnId) {
       throw new Error("A foreground turn is already active");
     }
@@ -3804,8 +3804,22 @@ class ClaudeAgentSession implements AgentSession {
     }
   }
 
+  private assertSessionOpen(): void {
+    if (this.closed) {
+      throw new Error("Claude session is closed");
+    }
+  }
+
+  /**
+   * The only place a Claude CLI process tree is spawned. Contract: throws
+   * `Error("Claude session is closed")` when the session is closed, at entry and after the
+   * `buildOptions()` await — a torn-down session must never get a fresh query, and a throw is
+   * the one failure mode a call site cannot silently drop.
+   */
   private async ensureQuery(launchMode: PermissionMode = this.currentMode): Promise<Query> {
+    this.assertSessionOpen();
     await this.ensureHistoryReady();
+    this.assertSessionOpen();
     // Controls use the running turn's query. Pending launch settings take effect
     // after that turn finishes, when its active query handle has been cleared.
     if (this.query && (!this.queryRestartNeeded || this.activeForegroundQuery === this.query)) {
@@ -3827,7 +3841,7 @@ class ClaudeAgentSession implements AgentSession {
     try {
       options = await this.buildOptions(launchMode);
       // Closure can finish while launch options are being prepared.
-      if (this.closed) throw new Error("Claude session is closed");
+      this.assertSessionOpen();
     } catch (error) {
       this.queryStarting = false;
       throw error;
@@ -3961,7 +3975,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private buildSdkEnv() {
-    return createProviderEnv({
+    const env = createProviderEnv({
       baseEnv: process.env,
       runtimeSettings: this.runtimeSettings,
       overlays: [
@@ -3971,6 +3985,16 @@ class ClaudeAgentSession implements AgentSession {
         { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" },
       ],
     });
+    // A macOS LaunchAgent does not receive USER. Claude uses that value as the
+    // Keychain account name; without it, older CLI versions fall back to the
+    // credentials file and can rotate a different copy of the refresh token.
+    if (process.platform === "darwin" && !env.USER) {
+      env.USER = os.userInfo().username;
+    }
+    if (process.platform === "darwin" && !env.LOGNAME) {
+      env.LOGNAME = env.USER ?? os.userInfo().username;
+    }
+    return env;
   }
 
   private async buildOptions(permissionMode: PermissionMode): Promise<ClaudeOptions> {
@@ -4492,6 +4516,8 @@ class ClaudeAgentSession implements AgentSession {
   private async runQueryPump(): Promise<void> {
     let activeQuery: Query;
     try {
+      // A closed session throws here ("Claude session is closed"); the catch below ends the
+      // pump, and failActiveTurns is a no-op because close() already cleared active turns.
       activeQuery = await this.ensureQuery();
     } catch (error) {
       this.logger.trace(

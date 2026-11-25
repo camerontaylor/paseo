@@ -1,0 +1,68 @@
+# Fork-only CI. Upstream has no file by this name, so it cannot land in a
+# rebase conflict — see fork/README.md for the namespace convention, and
+# fork/ci.md for why it is shaped like this. Everything runs on GitHub-hosted
+# runners.
+#
+# ci.yml already runs on every pull_request, whatever the base branch, so a
+# pull request into custom gets the full matrix from ci.yml directly. This file
+# adds the two things ci.yml does not do: the fork tooling tests, and the full
+# matrix on pushes to custom (ci.yml's push trigger covers main only).
+name: Fork CI
+
+on:
+  pull_request:
+  push:
+    branches: [custom]
+  workflow_dispatch:
+
+concurrency:
+  group: fork-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # ci.yml's `changes` job requests pull-requests: read for dorny/paths-filter.
+  # A called workflow cannot exceed the caller's grant, so it has to be here.
+  pull-requests: read
+
+env:
+  # Matches .github/workflows/ci.yml: the onnxruntime-node postinstall pulls a
+  # large CUDA payload from NuGet that makes npm ci flaky.
+  ONNXRUNTIME_NODE_INSTALL: skip
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
+
+jobs:
+  fork-checks:
+    name: fork-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Run fork tooling tests
+        run: npx vitest run fork/scripts --bail=1
+
+  # The full GitHub-hosted matrix for pushes to custom, which ci.yml's own
+  # push trigger does not reach. Pull requests are left to ci.yml's
+  # pull_request trigger, so the matrix runs once per pull request, not twice.
+  full-matrix:
+    name: full matrix
+    # `secrets: inherit` below must not reach code from someone else's fork.
+    # A push to custom needs write access, and a manual run is the owner's.
+    if: github.event_name != 'pull_request' && github.actor == github.repository_owner
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+    permissions:
+      contents: read
+      pull-requests: read

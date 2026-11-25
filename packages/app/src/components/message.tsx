@@ -51,8 +51,10 @@ import {
   CircleDot,
   Copy,
   FileSymlink,
+  HelpCircle,
   Info,
   MicVocal,
+  Pin,
   Plus,
   Scissors,
   TriangleAlertIcon,
@@ -95,6 +97,7 @@ import { capAssistantMessageForRender, getUtf8ByteLength } from "./assistant-mes
 import { getTurnDurationLabel } from "./assistant-turn-footer-label";
 import { getCompactionMarkerLabel } from "./message-compaction-label";
 import { PlanCard } from "./plan-card";
+import type { AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
 import { ToolCallDetailsContent } from "./tool-call-details";
 import { useToolCallSheet } from "./tool-call-sheet";
 export type { InlinePathTarget } from "@/assistant-file-links";
@@ -111,6 +114,8 @@ interface UserMessageProps {
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
   timestamp: number;
+  onPin?: (text: string) => void;
+  onQAndA?: (text: string, messageId?: string) => void;
   capabilities?: AgentCapabilityFlags;
   client?: DaemonClient | null;
   isFirstInGroup?: boolean;
@@ -411,6 +416,8 @@ export const UserMessage = memo(function UserMessage({
   images = [],
   attachments = [],
   timestamp,
+  onPin,
+  onQAndA,
   capabilities,
   client,
   isFirstInGroup = true,
@@ -441,6 +448,11 @@ export const UserMessage = memo(function UserMessage({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const getMessageContent = useCallback(() => message, [message]);
+  const handlePin = useCallback(() => onPin?.(message), [onPin, message]);
+  const handleQAndA = useCallback(
+    () => onQAndA?.(message, messageId),
+    [onQAndA, message, messageId],
+  );
   const handleRewind = useCallback(
     (input: { mode: RewindMode; rewoundText: string }) => {
       return rewindMutation.rewindAgent(input);
@@ -547,6 +559,15 @@ export const UserMessage = memo(function UserMessage({
                 onRewind={handleRewind}
               />
             ) : null}
+            {onPin ? (
+              <TurnPinButton onPin={handlePin} containerStyle={userMessageStylesheet.copyButton} />
+            ) : null}
+            {onQAndA ? (
+              <TurnQAndAButton
+                onQAndA={handleQAndA}
+                containerStyle={userMessageStylesheet.copyButton}
+              />
+            ) : null}
             <TurnCopyButton
               getContent={getMessageContent}
               containerStyle={userMessageStylesheet.copyButton}
@@ -565,6 +586,7 @@ interface AssistantTurnFooterProps {
   completedAt?: Date;
   durationMs?: number | null;
   onFork?: (target: AssistantForkTarget) => Promise<void> | void;
+  onPin?: (text: string) => void;
   /** What the provider reported about the turn. Without any, the footer has no stats button. */
   metrics?: AgentMetric[];
 }
@@ -575,6 +597,7 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
     minWidth: 0,
     minHeight: 24,
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "flex-start",
     gap: theme.spacing[2],
   },
@@ -593,10 +616,10 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
   },
   labelButton: {
     flex: 1,
+    minWidth: 72,
     minHeight: 24,
     flexDirection: "row",
     alignItems: "center",
-    minWidth: 0,
   },
   label: {
     width: "100%",
@@ -626,6 +649,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   completedAt,
   durationMs,
   onFork,
+  onPin,
   metrics,
 }: AssistantTurnFooterProps) {
   const { t } = useTranslation();
@@ -669,29 +693,14 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
       revealTimerRef.current = null;
     }, TIMESTAMP_REVEAL_MS);
   }, [canSwap]);
-  const handleFork = useCallback(
-    (target: AssistantForkTarget) => {
-      return onFork?.(target);
-    },
-    [onFork],
-  );
-  const canFork = Boolean(onFork);
-  const hasMetrics = metrics !== undefined && metrics.length > 0;
-
   return (
     <View style={assistantTurnFooterStylesheet.container}>
-      {getContent || canFork || hasMetrics ? (
-        <View style={assistantTurnFooterStylesheet.actions}>
-          {getContent ? (
-            <TurnCopyButton
-              getContent={getContent}
-              containerStyle={assistantTurnFooterStylesheet.copyButton}
-            />
-          ) : null}
-          {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
-          {hasMetrics ? <TurnMetricsButton metrics={metrics} /> : null}
-        </View>
-      ) : null}
+      <AssistantTurnActions
+        getContent={getContent}
+        onFork={onFork}
+        onPin={onPin}
+        metrics={metrics}
+      />
       {primaryLabel ? (
         <Pressable
           style={assistantTurnFooterStylesheet.labelButton}
@@ -731,6 +740,46 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
     </View>
   );
 });
+
+/** The footer's buttons: pin, copy, fork and the turn's stats, each when it applies. */
+function AssistantTurnActions({
+  getContent,
+  onFork,
+  onPin,
+  metrics,
+}: Pick<AssistantTurnFooterProps, "getContent" | "onFork" | "onPin" | "metrics">) {
+  const handleFork = useCallback(
+    (target: AssistantForkTarget) => {
+      return onFork?.(target);
+    },
+    [onFork],
+  );
+  const handlePin = useCallback(() => {
+    if (onPin && getContent) {
+      onPin(getContent());
+    }
+  }, [onPin, getContent]);
+  const hasMetrics = metrics !== undefined && metrics.length > 0;
+  if (!onPin && !getContent && !onFork && !hasMetrics) return null;
+  return (
+    <View style={assistantTurnFooterStylesheet.actions}>
+      {onPin ? (
+        <TurnPinButton
+          onPin={handlePin}
+          containerStyle={assistantTurnFooterStylesheet.copyButton}
+        />
+      ) : null}
+      {getContent ? (
+        <TurnCopyButton
+          getContent={getContent}
+          containerStyle={assistantTurnFooterStylesheet.copyButton}
+        />
+      ) : null}
+      {onFork ? <AssistantForkMenu onFork={handleFork} /> : null}
+      {hasMetrics ? <TurnMetricsButton metrics={metrics} /> : null}
+    </View>
+  );
+}
 
 interface LiveElapsedProps {
   startedAt: Date;
@@ -852,6 +901,68 @@ const turnCopyButtonStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
   },
 }));
+
+interface TurnPinButtonProps {
+  onPin: () => void;
+  containerStyle?: StyleProp<ViewStyle>;
+}
+
+export const TurnPinButton = memo(function TurnPinButton({
+  onPin,
+  containerStyle,
+}: TurnPinButtonProps) {
+  const pressableStyle = useMemo(
+    () => [turnCopyButtonStylesheet.container, containerStyle],
+    [containerStyle],
+  );
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      style={pressableStyle}
+      onPress={onPin}
+      accessibilityLabel="Pin to stream"
+    >
+      {({ hovered }) => {
+        const iconColor = hovered
+          ? turnCopyButtonStylesheet.iconHoveredColor.color
+          : turnCopyButtonStylesheet.iconColor.color;
+        return <Pin size={ICON_SIZE.sm} color={iconColor} />;
+      }}
+    </Pressable>
+  );
+});
+
+interface TurnQAndAButtonProps {
+  onQAndA: () => void;
+  containerStyle?: StyleProp<ViewStyle>;
+}
+
+export const TurnQAndAButton = memo(function TurnQAndAButton({
+  onQAndA,
+  containerStyle,
+}: TurnQAndAButtonProps) {
+  const pressableStyle = useMemo(
+    () => [turnCopyButtonStylesheet.container, containerStyle],
+    [containerStyle],
+  );
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      style={pressableStyle}
+      onPress={onQAndA}
+      accessibilityLabel="Track Q&A"
+    >
+      {({ hovered }) => {
+        const iconColor = hovered
+          ? turnCopyButtonStylesheet.iconHoveredColor.color
+          : turnCopyButtonStylesheet.iconColor.color;
+        return <HelpCircle size={ICON_SIZE.sm} color={iconColor} />;
+      }}
+    </Pressable>
+  );
+});
 
 interface TurnCopyButtonProps {
   getContent: () => string;
@@ -2263,6 +2374,7 @@ interface ToolCallProps {
   itemId: string;
   /** Shown as its own row rather than inside a tool call group. */
   standalone?: boolean;
+  source?: AgentDeepLinkTarget;
 }
 
 export const ToolCall = memo(function ToolCall({
@@ -2285,6 +2397,7 @@ export const ToolCall = memo(function ToolCall({
   maxDetailHeight = 400,
   itemId,
   standalone = true,
+  source,
 }: ToolCallProps) {
   const { openToolCall } = useToolCallSheet();
   const { expanded: isExpanded, toggle: toggleExpanded } = useToolCallExpanded({
@@ -2409,6 +2522,7 @@ export const ToolCall = memo(function ToolCall({
       <PlanCard
         text={effectiveDetail.text}
         outcome={presentation.planOutcome}
+        source={source}
         testID="timeline-plan-card"
         disableOuterSpacing={disableOuterSpacing}
       />
@@ -2452,5 +2566,6 @@ function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
   if (previous.maxDetailHeight !== next.maxDetailHeight) return false;
   if (previous.itemId !== next.itemId) return false;
   if (previous.standalone !== next.standalone) return false;
+  if (previous.source !== next.source) return false;
   return true;
 }

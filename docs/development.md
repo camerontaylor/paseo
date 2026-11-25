@@ -68,6 +68,16 @@ PASEO_DEV_RESET_HOME=1 npm run dev            # clear and reseed the derived wor
 - Root checkout desktop dev Expo: first free port from `8082` through `8089`.
 - `npm run dev` (Windows): `localhost:6767` for the daemon.
 
+### Daemon auth and isolated homes
+
+`PASEO_PASSWORD` in the environment beats `daemon.auth` in `$PASEO_HOME/config.json` (`resolveAuthConfig` checks env first). A shell that exports it launches every daemon with that password — including homes whose config has no auth section. Scrub it when the config should decide:
+
+```bash
+# Isolated home on a non-6767 port, auth exactly as its config specifies
+env -u PASEO_PASSWORD PASEO_HOME=~/.paseo-sideconv PASEO_LISTEN=127.0.0.1:6769 \
+  bash scripts/dev-daemon.sh
+```
+
 In Paseo-managed worktree services, use the injected service environment rather than hardcoded root checkout ports.
 
 ### Expo Router

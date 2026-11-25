@@ -95,12 +95,27 @@ async function expectExplorerToggleHasNativeClickArea(toggle: Locator) {
   expect(regions.at(-1)).toBe("no-drag");
 }
 
+// Fork: the workspace header keeps its branch controls (current and base branch buttons) ahead of
+// Workspace actions, so the toggle's next stops may be those before Workspace actions.
+const MAX_BRANCH_CONTROL_STOPS = 3;
+
 async function expectExplorerToggleInHeaderTabOrder(page: Page, expanded: boolean) {
   const toggle = explorerToggle(page, expanded);
+  const workspaceActions = page.getByRole("button", { name: "Workspace actions", exact: true });
+  const branchControls = page.getByTestId("workspace-header-branches");
   await toggle.focus();
-  await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Workspace actions", exact: true })).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
+  let tabs = 0;
+  while (true) {
+    await page.keyboard.press("Tab");
+    tabs += 1;
+    if (await workspaceActions.evaluate((element) => element === document.activeElement)) break;
+    expect(tabs).toBeLessThanOrEqual(MAX_BRANCH_CONTROL_STOPS);
+    expect(
+      await branchControls.evaluate((element) => element.contains(document.activeElement)),
+    ).toBe(true);
+  }
+  await expect(workspaceActions).toBeFocused();
+  for (let index = 0; index < tabs; index += 1) await page.keyboard.press("Shift+Tab");
   await expect(toggle).toBeFocused();
 }
 

@@ -7,7 +7,12 @@ import { useProviderInstallation } from "@/components/provider-installation";
 import { SettingsAddRow, SettingsCard, SettingsSection } from "@/components/settings";
 import { Button } from "@/components/ui/button";
 import { SkeletonPulse, useSkeletonPulse } from "@/components/ui/skeleton";
+import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
+import {
+  groupProviderAccounts,
+  resolveProviderAccountBaseId,
+} from "@/provider-accounts/provider-account-form-model";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { settingsStyles } from "@/styles/settings";
 import { buildProviderDefinitions } from "@/utils/provider-definitions";
@@ -33,7 +38,12 @@ export function ProviderList({ serverId, onOpenProvider, sheetFrame }: ProviderL
   const isConnected = useHostRuntimeIsConnected(serverId) && serverId.length > 0;
   const { entries, isLoading } = useProvidersSnapshot(serverId);
   const { setEnabled, togglingProviderId } = useProviderConfigActions(serverId);
-  const definitions = useMemo(() => buildProviderDefinitions(entries), [entries]);
+  const { config } = useDaemonConfig(serverId);
+  // Fork: a provider account sits under the builtin provider it extends.
+  const definitions = useMemo(
+    () => groupProviderAccounts(buildProviderDefinitions(entries), config?.providers),
+    [config?.providers, entries],
+  );
   const [adding, setAdding] = useState(false);
   const openAdd = useCallback(() => setAdding(true), []);
   const closeAdd = useCallback(() => setAdding(false), []);
@@ -78,6 +88,9 @@ export function ProviderList({ serverId, onOpenProvider, sheetFrame }: ProviderL
               serverId={serverId}
               entry={entry}
               label={definition.label}
+              iconProvider={
+                resolveProviderAccountBaseId(definition.id, config?.providers) ?? definition.id
+              }
               toggling={togglingProviderId === definition.id}
               onOpen={onOpenProvider}
               onToggle={setEnabled}
@@ -120,6 +133,7 @@ function ListedProvider({
   serverId,
   entry,
   label,
+  iconProvider,
   toggling,
   onOpen,
   onToggle,
@@ -127,6 +141,8 @@ function ListedProvider({
   serverId: string;
   entry: ProviderEntry;
   label: string;
+  /** The provider whose icon the row shows; an account shows its base provider's. */
+  iconProvider: string;
   toggling: boolean;
   onOpen: (provider: string) => void;
   onToggle: (provider: string, enabled: boolean) => void;
@@ -137,8 +153,8 @@ function ListedProvider({
     visible: true,
   });
   const icon = useMemo(
-    () => <ProviderGlyph serverId={serverId} provider={entry.provider} />,
-    [entry.provider, serverId],
+    () => <ProviderGlyph serverId={serverId} provider={iconProvider} />,
+    [iconProvider, serverId],
   );
   return (
     <ProviderRow

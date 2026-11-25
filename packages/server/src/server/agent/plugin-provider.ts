@@ -334,6 +334,12 @@ class ProviderRuntime {
     if (this.sessions.has(input.sessionId)) {
       throw new Error(`Provider session already exists: ${input.sessionId}`);
     }
+    if (this.registration.supportsSystemPrompt === false && input.config.systemPrompt?.trim()) {
+      throw providerError({
+        code: "INVALID_CONFIGURATION",
+        message: `${this.registration.label} does not support additional system instructions. The configured agent systemPrompt or daemon.appendSystemPrompt cannot be delivered; use a provider that supports them.`,
+      });
+    }
     const connection = await this.getConnection();
     requireProviderCapabilities(connection.capabilities, {
       type: "session.open",
@@ -698,7 +704,9 @@ class ProviderRuntimeSession {
     Deferred<Extract<ProviderEvent, { type: "session.prompt_result" }>>
   >();
   private readonly activeTurnIds = new Set<string>();
+  private pendingWork = false;
   private terminal = false;
+  private detached = false;
   // The provider ended this session with session.closed, so it has nothing left to close.
   private closedByProvider = false;
   private closePromise: Promise<void> | null = null;
@@ -761,6 +769,7 @@ class ProviderRuntimeSession {
     if (
       this.terminal ||
       this.prompts.size ||
+      this.pendingWork ||
       this.activeTurnIds.size ||
       !this.capabilities.includes("session.can_stop_runtime")
     )
@@ -820,6 +829,10 @@ class ProviderRuntimeSession {
 
   async close(): Promise<void> {
     this.history.length = 0;
+    if (this.detached) {
+      this.runtime.removeSession(this.id, this.providerSessionId);
+      return;
+    }
     if (this.restoration === "parent" || this.closedByProvider) {
       this.runtime.removeSession(this.id, this.providerSessionId);
       return;
@@ -829,6 +842,22 @@ class ProviderRuntimeSession {
       throw error;
     });
     await this.closePromise;
+  }
+
+  async detachSharedSession(): Promise<void> {
+    this.history.length = 0;
+    if (this.restoration === "parent") {
+      this.runtime.removeSession(this.id, this.providerSessionId);
+      this.detached = true;
+      return;
+    }
+    await this.runtime.complete({
+      type: "session.detach",
+      requestId: randomUUID(),
+      sessionId: this.providerSessionId,
+    });
+    this.runtime.removeSession(this.id, this.providerSessionId);
+    this.detached = true;
   }
 
   private async closeNativeSession(): Promise<void> {
@@ -902,7 +931,7 @@ class ProviderRuntimeSession {
   connectionClosed(error = new Error("Provider connection closed")): void {
     // Closing fails only an interrupted turn. An idle session goes stale, and its next prompt
     // reopens it from persistence.
-    if (!this.terminal && this.activeTurnIds.size > 0) {
+    if (!this.terminal && (this.activeTurnIds.size > 0 || this.pendingWork)) {
       this.publish({
         type: "session.runtime_failed",
         sessionId: this.id,
@@ -933,6 +962,7 @@ class ProviderRuntimeSession {
   }
 
   private publish(event: ProviderEvent): void {
+    if (event.type === "session.pending_work") this.pendingWork = event.pending;
     if (event.type === "session.turn") {
       if (event.state === "started") this.activeTurnIds.add(event.turnId);
       else this.activeTurnIds.delete(event.turnId);
@@ -993,16 +1023,13 @@ export class PluginAgentClientRegistry {
 
     for (const [id, registration] of incoming) {
       if (this.providers.has(id)) continue;
-      const client = new PluginAgentClient(registration);
+      const client = new PluginAgentClient(registration, this.logger);
       const clients = new Set([client]);
-      const definition = createPluginProviderDefinition(
-        registration,
-        (_logger, runtimeSettings) => {
-          const configuredClient = new PluginAgentClient(registration, runtimeSettings);
-          clients.add(configuredClient);
-          return configuredClient;
-        },
-      );
+      const definition = createPluginProviderDefinition(registration, (logger, runtimeSettings) => {
+        const configuredClient = new PluginAgentClient(registration, logger, runtimeSettings);
+        clients.add(configuredClient);
+        return configuredClient;
+      });
       this.providers.set(id, { registration, client, definition, clients });
     }
   }
@@ -1061,10 +1088,16 @@ class PluginAgentClient implements AgentClient {
   private readonly pendingChildren: PendingChild[] = [];
 
   readonly getCatalogCacheKey?: AgentClient["getCatalogCacheKey"];
+  readonly restoresSessionConfig: boolean;
   readonly installation?: AgentClientInstallation;
 
-  constructor(registration: ProviderRegistration, runtimeSettings?: ProviderRuntimeSettings) {
+  constructor(
+    registration: ProviderRegistration,
+    private readonly logger: Logger,
+    runtimeSettings?: ProviderRuntimeSettings,
+  ) {
     this.provider = registration.id;
+    this.restoresSessionConfig = registration.restoresSessionConfig === true;
     this.label = registration.label;
     this.runtime = new ProviderRuntime(registration, runtimeSettings);
     if (registration.getCatalogCacheKey)
@@ -1264,6 +1297,7 @@ class PluginAgentClient implements AgentClient {
       },
       bind,
       config.settings,
+      this.logger,
       this.runtime.connectedLaunch
         ? {
             ...this.runtime.connectedLaunch,
@@ -1349,6 +1383,7 @@ class PluginAgentSession implements AgentSession {
   /** While `applyOptions` waits on the plugin, its `session.config` answers that call. */
   private applyingOptions = false;
   private currentTurnId: string | null = null;
+  private pendingWork = false;
   private closed = false;
   private replay: {
     persistence: ProviderPersistence;
@@ -1370,6 +1405,7 @@ class PluginAgentSession implements AgentSession {
     ) => Promise<ProviderRuntimeSession>,
     private readonly onBind: (bridge: ProviderRuntimeSession) => void,
     givenOptions: Readonly<Record<string, JsonValue>>,
+    private readonly logger: Logger,
     private readonly usageLaunch: ProviderLaunch | undefined,
   ) {
     this.subagentIdsBySession.set(bridge.id, null);
@@ -1431,10 +1467,15 @@ class PluginAgentSession implements AgentSession {
   ): Promise<{ turnId: string }> {
     this.assertReplayComplete();
     const clientMessageId = options.clientMessageId ?? randomUUID();
+    const mapped = mapPromptInput(prompt, this.bridge.commands, {
+      explicitSkill: options.skill !== undefined,
+    });
+    const skill = options.skill === undefined ? mapped.skill : options.skill;
     const result = await this.bridge.prompt({
       clientMessageId,
       delivery: "auto",
-      input: mapPromptInput(prompt, this.bridge.commands),
+      input: mapped.input,
+      ...(skill === undefined ? {} : { skill }),
       ...(options.outputSchema === undefined
         ? {}
         : { outputSchema: toJsonValue(options.outputSchema, "output schema") }),
@@ -1461,6 +1502,10 @@ class PluginAgentSession implements AgentSession {
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
     this.assertReplayComplete();
+    // A busy steer cannot change a sticky skill; reject before insertion instead of dropping it.
+    if (options.skill !== undefined) return { status: "unavailable" };
+    // Never insert into a turn other than the one the caller observed.
+    if (this.currentTurnId !== options.expectedTurnId) return { status: "unavailable" };
     const result = await this.bridge.prompt({
       clientMessageId: options.clientMessageId ?? randomUUID(),
       delivery: "steer",
@@ -1470,13 +1515,28 @@ class PluginAgentSession implements AgentSession {
         : { outputSchema: toJsonValue(options.outputSchema, "output schema") }),
       clearPendingPermissions: options.clearPendingPermissions,
     });
-    return result.type === "steer" && result.turnId === options.expectedTurnId
-      ? { status: "accepted" }
-      : { status: "unavailable" };
+    if (result.type === "steer" && result.turnId !== options.expectedTurnId) {
+      this.logger.warn(
+        { expectedTurnId: options.expectedTurnId, turnId: result.turnId, sessionId: this.id },
+        "Provider accepted steering into a different turn",
+      );
+    }
+    if (result.type === "failed") return { status: "unavailable" };
+    if (result.type !== "steer") {
+      throw new Error(`Provider returned ${result.type} after steering was dispatched`);
+    }
+    return { status: "accepted" };
   }
 
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
     this.listeners.add(callback);
+    // An attachment can announce a peer turn before the manager subscribes.
+    // Catch up this subscriber without replaying completed turns or notifying existing listeners.
+    if (this.pendingWork)
+      callback({ type: "pending_work", provider: this.provider, pending: true });
+    if (this.currentTurnId) {
+      callback({ type: "turn_started", provider: this.provider, turnId: this.currentTurnId });
+    }
     return () => this.listeners.delete(callback);
   }
 
@@ -1548,11 +1608,20 @@ class PluginAgentSession implements AgentSession {
     this.closed = true;
     this.listeners.clear();
     await this.replaying?.catch(() => undefined);
-    await this.clearBinding();
-    this.replay = null;
-    this.listeners.clear();
-    this.onClose();
-    await this.bridge.close();
+    try {
+      await this.clearBinding();
+    } finally {
+      this.replay = null;
+      this.listeners.clear();
+      this.onClose();
+    }
+  }
+
+  async detachSharedSession(): Promise<void> {
+    if (this.closed) return;
+    await this.replaying?.catch(() => undefined);
+    await this.bridge.detachSharedSession();
+    await this.close();
   }
 
   async listCommands(): Promise<AgentSlashCommand[]> {
@@ -1673,13 +1742,17 @@ class PluginAgentSession implements AgentSession {
   private accept(event: ProviderEvent, live: boolean): void {
     const translated = this.translate(event);
     for (const next of translated) {
-      this.history.push(next);
+      if (next.type !== "pending_work") this.history.push(next);
       if (live) this.emit(next);
     }
   }
 
   private translate(event: ProviderEvent): AgentStreamEvent[] {
     switch (event.type) {
+      case "session.pending_work":
+        if (this.pendingWork === event.pending) return [];
+        this.pendingWork = event.pending;
+        return [{ type: "pending_work", provider: this.provider, pending: event.pending }];
       case "session.turn":
         return [this.translateTurn(event)];
       case "session.usage":
@@ -1710,12 +1783,21 @@ class PluginAgentSession implements AgentSession {
       case "session.notice":
         return this.translateNotice(event);
       case "session.runtime_failed":
-        return [this.translateFailure(event.error)];
+        return [this.translateFailure(event.error), ...this.clearPendingWork()];
       case "session.closed":
-        return event.error ? [this.translateFailure(event.error)] : [];
+        return [
+          ...(event.error ? [this.translateFailure(event.error)] : []),
+          ...this.clearPendingWork(),
+        ];
       default:
         return [];
     }
+  }
+
+  private clearPendingWork(): AgentStreamEvent[] {
+    if (!this.pendingWork) return [];
+    this.pendingWork = false;
+    return [{ type: "pending_work", provider: this.provider, pending: false }];
   }
 
   private translateTurn(event: Extract<ProviderEvent, { type: "session.turn" }>): AgentStreamEvent {
@@ -1963,12 +2045,12 @@ class PluginAgentSession implements AgentSession {
   }
 
   private async clearBinding(): Promise<void> {
+    const [bridgeClose] = await Promise.allSettled([this.bridge.close()]);
     this.unsubscribe?.();
     this.unsubscribe = null;
-    for (const child of this.children.values()) {
-      child.unsubscribe();
-      await child.session.close();
-    }
+    const childCloses = await Promise.allSettled(
+      [...this.children.values()].map((child) => child.session.close().finally(child.unsubscribe)),
+    );
     this.children.clear();
     this.subagentIdsBySession.clear();
     this.history.clear();
@@ -1979,6 +2061,9 @@ class PluginAgentSession implements AgentSession {
     this.pendingPermissions.clear();
     this.permissionResponses.clear();
     this.currentTurnId = null;
+    this.pendingWork = false;
+    const failure = [bridgeClose, ...childCloses].find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
   }
 
   private assertReplayComplete(): void {
@@ -2014,7 +2099,6 @@ class PluginAgentSession implements AgentSession {
         this.permissionResponses.delete(request.id);
       }
       await this.clearBinding();
-      await this.bridge.close();
       replay.closed = true;
     }
     const bridge = await this.reopen(replay.persistence, replay.config, this.committedOptions);
@@ -2071,6 +2155,7 @@ class PluginAgentSession implements AgentSession {
 function agentCapabilities(capabilities: readonly string[]): AgentCapabilityFlags {
   const supports = (capability: ProviderCapability) => capabilities.includes(capability);
   return {
+    supportsSharedTurns: supports("session.shared_turns"),
     supportsStreaming: true,
     supportsSessionPersistence: supports("session.persistence"),
     supportsSessionListing: supports("session.list"),
@@ -2151,20 +2236,28 @@ function combineSystemPrompts(
 
 function mapPromptInput(
   prompt: AgentPromptInput,
-  commands: readonly { name: string }[],
-): ProviderPrompt["input"] {
-  if (typeof prompt === "string" && prompt.startsWith("/")) {
+  commands: readonly ProviderCommand[],
+  options: { explicitSkill: boolean } = { explicitSkill: false },
+): { input: ProviderPrompt["input"]; skill?: string } {
+  // Caller-supplied skill metadata is authoritative. Converting a slash command here would
+  // replace the original text with bare arguments, so a clear or an explicit override could
+  // never submit the command the user actually typed.
+  if (!options.explicitSkill && typeof prompt === "string" && prompt.startsWith("/")) {
     const separator = prompt.indexOf(" ");
     const name = prompt.slice(1, separator === -1 ? undefined : separator);
-    if (commands.some((command) => command.name === name)) {
+    const command = commands.find((candidate) => candidate.name === name);
+    if (command) {
       return {
-        type: "command",
-        name,
-        arguments: separator === -1 ? "" : prompt.slice(separator + 1),
+        input: {
+          type: "command",
+          name,
+          arguments: separator === -1 ? "" : prompt.slice(separator + 1),
+        },
+        ...(command.kind === "skill" ? { skill: name } : {}),
       };
     }
   }
-  return { type: "message", content: mapPromptContent(prompt) };
+  return { input: { type: "message", content: mapPromptContent(prompt) } };
 }
 
 function mapPromptContent(prompt: AgentPromptInput): ProviderContent[] {
@@ -2257,6 +2350,11 @@ function decodePersistence(handle: AgentPersistenceHandle): ProviderPersistence 
   const fromMetadata = handle.metadata?.pluginProviderPersistence;
   if (fromMetadata !== undefined) {
     return ProviderPersistenceSchema.parse(fromMetadata);
+  }
+  // COMPAT(legacy-acp-persistence): added in v0.15.3, remove after 2027-05-10.
+  // Legacy ACP sessions stored the native id before the plugin migration.
+  if (handle.metadata?.provider === "acp" && !handle.sessionId.startsWith("plugin:")) {
+    return { version: 1, data: { sessionId: handle.sessionId } };
   }
   if (FORMER_ACP_PROVIDERS.has(handle.provider) && !handle.sessionId.startsWith("plugin:")) {
     return { version: 1, data: { sessionId: handle.sessionId } };

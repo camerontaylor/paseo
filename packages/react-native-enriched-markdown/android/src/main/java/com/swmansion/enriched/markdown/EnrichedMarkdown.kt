@@ -259,6 +259,8 @@ class EnrichedMarkdown(
   fun setIsSelectable(value: Boolean) {
     if (selectable == value) return
     selectable = value
+    dirtyFlags += DirtyFlag.RECREATE_SEGMENTS
+    renderPending = true
     segmentViews.filterIsInstance<EnrichedMarkdownInternalText>().forEach {
       it.setIsSelectable(value)
     }
@@ -291,6 +293,8 @@ class EnrichedMarkdown(
   }
 
   private fun applySelectionColorsToSegments() {
+    dirtyFlags += DirtyFlag.RECREATE_SEGMENTS
+    renderPending = true
     segmentViews.filterIsInstance<EnrichedMarkdownInternalText>().forEach {
       it.applySelectionColors(selectionColor, selectionHandleColor)
     }

@@ -15,11 +15,17 @@ import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.style.AlignmentSpan
 import android.text.style.MetricAffectingSpan
+import android.os.Build
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
+import android.view.textclassifier.TextClassifier
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
 import androidx.core.view.ViewCompat
+import com.swmansion.enriched.markdown.R
 import com.swmansion.enriched.markdown.accessibility.AccessibilityLabels
 import com.swmansion.enriched.markdown.parser.MarkdownASTNode
 import com.swmansion.enriched.markdown.parser.MarkdownASTNode.NodeType
@@ -34,6 +40,8 @@ import com.swmansion.enriched.markdown.utils.common.serialization.MarkdownASTSer
 import com.swmansion.enriched.markdown.utils.text.conversion.HTMLGenerator
 import com.swmansion.enriched.markdown.utils.text.extensions.replaceMathSpansWithPlaceholders
 import com.swmansion.enriched.markdown.utils.text.span.prepareWidthAwareSpans
+import com.swmansion.enriched.markdown.utils.text.view.applySelectableState
+import com.swmansion.enriched.markdown.utils.text.view.applySelectionColors
 import com.swmansion.enriched.markdown.utils.text.view.LinkLongPressMovementMethod
 import com.swmansion.enriched.markdown.utils.text.view.cancelJSTouchForLinkTap
 import com.swmansion.enriched.markdown.utils.text.view.reallowParentInterceptIfLinkReleased
@@ -54,6 +62,12 @@ class TableContainerView(
   override val segmentMarginBottom: Int get() = tableStyle.marginBottom.toInt()
   private val density = resources.displayMetrics.density
   private val isRtl = resources.isLayoutRTL()
+
+  var selectable = true
+  var selectionColor: Int? = null
+  var selectionHandleColor: Int? = null
+  private val copyTableItemId = View.generateViewId()
+  private val copyMarkdownItemId = View.generateViewId()
 
   var allowFontScaling = true
   var maxFontSizeMultiplier = 0f
@@ -290,7 +304,35 @@ class TableContainerView(
             Layout.Alignment.ALIGN_OPPOSITE -> Gravity.END
             else -> Gravity.START
           }
-        setOnLongClickListener { view -> showContextMenu(view) }
+        applySelectableState(selectable)
+        (movementMethod as LinkLongPressMovementMethod).preferTextSelection = selectable
+        applySelectionColors(selectionColor, selectionHandleColor)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) setTextClassifier(TextClassifier.NO_OP)
+        if (selectable) {
+          customSelectionActionModeCallback = object : ActionMode.Callback {
+            override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+              menu.add(Menu.NONE, copyTableItemId, Menu.NONE, R.string.enriched_copy_table)
+              menu.add(Menu.NONE, copyMarkdownItemId, Menu.NONE, R.string.enriched_copy_table_markdown)
+              return true
+            }
+
+            override fun onPrepareActionMode(mode: ActionMode, menu: Menu) = false
+
+            override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+              when (item.itemId) {
+                copyTableItemId -> copyTable()
+                copyMarkdownItemId -> copyTableAsMarkdown()
+                else -> return false
+              }
+              mode.finish()
+              return true
+            }
+
+            override fun onDestroyActionMode(mode: ActionMode) = Unit
+          }
+        } else {
+          setOnLongClickListener { view -> showContextMenu(view) }
+        }
       }
     val horizontalPadding = tableStyle.cellPaddingHorizontal
     val verticalPadding = tableStyle.cellPaddingVertical
@@ -394,25 +436,29 @@ class TableContainerView(
 
   private fun showContextMenu(anchor: View): Boolean {
     if (!dynamicProps.enableBlockContextMenu) return false
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     ContextMenuPopup.show(anchor, this) {
-      item(ContextMenuPopup.Icon.COPY, dynamicProps.copyLabel) {
-        val plainText = rows.joinToString("\n") { row -> row.joinToString("\t") { it.plainText } }
-        if (plainText.isNotEmpty()) {
-          val displayMetrics = context.resources.displayMetrics
-          val tableRows =
-            rows.map { row ->
-              row.map { cell -> Triple(cell.attributedText as CharSequence, cell.isHeader, cell.alignment) }
-            }
-          val html = HTMLGenerator.generateTableHTML(tableRows, styleConfig, displayMetrics.scaledDensity, displayMetrics.density)
-          clipboard.setPrimaryClip(ClipData.newHtmlText("Table", plainText, html))
-        }
-      }
-      item(ContextMenuPopup.Icon.DOCUMENT, dynamicProps.copyAsMarkdownLabel) {
-        if (tableMarkdown.isNotEmpty()) clipboard.setPrimaryClip(ClipData.newPlainText("Table", tableMarkdown))
-      }
+      item(ContextMenuPopup.Icon.COPY, dynamicProps.copyLabel) { copyTable() }
+      item(ContextMenuPopup.Icon.DOCUMENT, dynamicProps.copyAsMarkdownLabel) { copyTableAsMarkdown() }
     }
     return true
+  }
+
+  private fun copyTable() {
+    val plainText = rows.joinToString("\n") { row -> row.joinToString("\t") { it.plainText } }
+    if (plainText.isEmpty()) return
+    val displayMetrics = context.resources.displayMetrics
+    val tableRows = rows.map { row ->
+      row.map { cell -> Triple(cell.attributedText as CharSequence, cell.isHeader, cell.alignment) }
+    }
+    val html = HTMLGenerator.generateTableHTML(tableRows, styleConfig, displayMetrics.scaledDensity, displayMetrics.density)
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newHtmlText("Table", plainText, html))
+  }
+
+  private fun copyTableAsMarkdown() {
+    if (tableMarkdown.isEmpty()) return
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("Table", tableMarkdown))
   }
 
   private fun buildMarkdownFromRows(): String =

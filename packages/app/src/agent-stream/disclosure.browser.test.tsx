@@ -11,6 +11,7 @@ import { PlanCard } from "@/components/plan-card";
 import { MessagePreview } from "@/components/user-message";
 import { createUserMessageExpansion } from "@/components/user-message/expansion";
 import { UserMessageExpansionContext } from "@/components/user-message/expansion-context";
+import { ToastApiProvider } from "@/contexts/toast-context";
 import { DisclosureRow } from "./disclosure";
 import type { DisclosureTriggerEdge, StreamViewportHandle } from "./strategy";
 
@@ -49,6 +50,17 @@ interface Hold {
  * A timeline row whose viewport records each hold. Like the strategies, it runs `apply` itself, so
  * a toggle that skips the hold still changes state but leaves no record.
  */
+const toastApi = { show: () => () => {}, copied: () => {}, error: () => {} };
+
+// Plan cards copy through the toast context, which the real app shell always provides.
+function withProviders(node: ReactNode) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ToastApiProvider api={toastApi}>{node}</ToastApiProvider>
+    </QueryClientProvider>
+  );
+}
+
 function mountRow(rowId: string, isApplied: () => boolean, children: ReactNode) {
   const holds: Hold[] = [];
   const viewport: StreamViewportHandle = {
@@ -63,11 +75,11 @@ function mountRow(rowId: string, isApplied: () => boolean, children: ReactNode) 
   viewportRef.current = viewport;
   act(() =>
     root.render(
-      <QueryClientProvider client={queryClient}>
+      withProviders(
         <DisclosureRow rowId={rowId} viewportRef={viewportRef}>
           {children}
-        </DisclosureRow>
-      </QueryClientProvider>,
+        </DisclosureRow>,
+      ),
     ),
   );
   return holds;
@@ -127,11 +139,7 @@ describe("timeline disclosures hold their row", () => {
 
   it("toggles a plan card outside a timeline row, as the pending permission card renders", () => {
     act(() =>
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <PlanCard title="Plan" text="Step one" outcome="pending" />
-        </QueryClientProvider>,
-      ),
+      root.render(withProviders(<PlanCard title="Plan" text="Step one" outcome="pending" />)),
     );
     const header = () => view().getByRole("button", { name: "Plan" });
     const isExpanded = () => header().getAttribute("aria-expanded") === "true";

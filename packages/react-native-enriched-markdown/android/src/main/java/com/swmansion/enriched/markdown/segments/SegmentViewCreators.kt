@@ -131,6 +131,9 @@ object SegmentViewCreators {
     segment: RenderedSegment.Table,
     config: SegmentViewConfig,
   ) = TableContainerView(config.context, config.style).apply {
+    selectable = config.selectable
+    selectionColor = config.selectionColor
+    selectionHandleColor = config.selectionHandleColor
     dynamicProps = config.dynamicProps
     allowFontScaling = config.allowFontScaling
     maxFontSizeMultiplier = config.maxFontSizeMultiplier

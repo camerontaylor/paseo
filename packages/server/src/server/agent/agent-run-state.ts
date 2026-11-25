@@ -359,6 +359,7 @@ export class ForegroundPromptStart {
   constructor(
     private readonly agentId: string,
     readonly admit?: () => boolean,
+    readonly beforeDispatch?: () => Promise<void>,
   ) {
     this.started = new Promise<void>((resolve, reject) => {
       this.resolveStarted = resolve;

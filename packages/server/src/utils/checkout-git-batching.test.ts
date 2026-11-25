@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import { startGitCommandMetrics, stopGitCommandMetrics } from "@server/utils/run-git-command.js";
 
-import { getCheckoutDiff } from "./checkout-git.js";
+import { getCheckoutDiff, getCheckoutPlacement, getCheckoutStatus } from "./checkout-git.js";
+import { writePaseoWorktreeMetadata } from "./worktree-metadata.js";
 
 function initRepoWithTrackedChanges(fileCount: number): { tempDir: string; repoDir: string } {
   const tempDir = realpathSync(mkdtempSync(join(tmpdir(), "checkout-git-batch-test-")));
@@ -43,6 +44,56 @@ describe("checkout git diff batching", () => {
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("reads placement without diff, upstream or comparison commands", async () => {
+    const status = await getCheckoutStatus(repoDir);
+    startGitCommandMetrics();
+    const placement = await getCheckoutPlacement(repoDir);
+    const metrics = stopGitCommandMetrics();
+    expect(placement).toEqual({
+      isGit: true,
+      repoRoot: repoDir,
+      mainRepoRoot: null,
+      currentBranch: "main",
+      remoteUrl: null,
+      isPaseoOwnedWorktree: false,
+    });
+    expect(status).toMatchObject(placement);
+    const argumentsUsed = metrics.commands.flatMap(({ args }) => args);
+    expect(argumentsUsed).not.toEqual(expect.arrayContaining(["status"]));
+    expect(argumentsUsed).not.toEqual(expect.arrayContaining(["diff"]));
+    expect(argumentsUsed).not.toEqual(expect.arrayContaining(["rev-list"]));
+    expect(argumentsUsed).not.toEqual(expect.arrayContaining(["for-each-ref"]));
+    expect(argumentsUsed).not.toEqual(expect.arrayContaining(["show-ref"]));
+  });
+
+  it.each([false, true])("preserves placement for a worktree (Paseo-owned: %s)", async (owned) => {
+    const paseoHome = join(tempDir, "home");
+    const worktree = owned
+      ? join(paseoHome, "worktrees", "repo", "feature")
+      : join(tempDir, "linked");
+    execFileSync("git", ["worktree", "add", "-b", "feature", worktree], { cwd: repoDir });
+    if (owned) await writePaseoWorktreeMetadata(worktree, { baseRefName: "main" });
+    const context = { paseoHome };
+    const status = await getCheckoutStatus(worktree, context);
+    const placement = await getCheckoutPlacement(worktree, context);
+    expect(placement).toMatchObject({
+      isGit: true,
+      repoRoot: worktree,
+      mainRepoRoot: repoDir,
+      currentBranch: "feature",
+      isPaseoOwnedWorktree: owned,
+    });
+    expect(status).toMatchObject(placement);
+    execFileSync("git", ["checkout", "--detach"], { cwd: worktree });
+    expect(await getCheckoutStatus(worktree, context)).toMatchObject(
+      await getCheckoutPlacement(worktree, context),
+    );
+  });
+
+  it("keeps non-repository directories classified as non-Git", async () => {
+    expect(await getCheckoutPlacement(tempDir)).toEqual({ isGit: false });
   });
 
   it("collects ordinary tracked patches with one bounded Git command", async () => {

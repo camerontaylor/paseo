@@ -572,6 +572,66 @@ export async function installAcpCatalogProvider(page: Page, providerName: string
   });
 }
 
+export interface ProviderAccountFormInput {
+  label: string;
+  providerId?: string;
+  description?: string;
+  env?: { key: string; value: string }[];
+}
+
+/** Accounts are added from the builtin provider's detail page. */
+export async function openProviderAccountForm(
+  page: Page,
+  provider: { id: string; name: string },
+): Promise<void> {
+  await openProviderDetail(page, provider.name);
+  await page.getByTestId(`provider-add-account-${provider.id}`).click();
+  await expect(page.getByTestId("provider-account-sheet")).toBeVisible();
+}
+
+/** An account is edited from its own detail page. */
+export async function openProviderAccountEditForm(
+  page: Page,
+  provider: { id: string; name: string },
+): Promise<void> {
+  await openProviderDetail(page, provider.name);
+  await page.getByTestId(`provider-edit-account-${provider.id}`).click();
+  await expect(page.getByTestId("provider-account-sheet")).toBeVisible();
+}
+
+/** Saving an account keeps the detail page it was opened from; the list shows the account. */
+export async function expectProviderAccountListed(page: Page, providerName: string): Promise<void> {
+  await leaveProviderDetail(page);
+  await expect(
+    page.getByRole("button", { name: `${providerName} provider details`, exact: true }),
+  ).toBeVisible();
+}
+
+export async function fillProviderAccountForm(
+  page: Page,
+  input: ProviderAccountFormInput,
+): Promise<void> {
+  await page.getByTestId("provider-account-label-input").fill(input.label);
+  if (input.providerId !== undefined) {
+    await page.getByTestId("provider-account-id-input").fill(input.providerId);
+  }
+  if (input.description !== undefined) {
+    await page.getByTestId("provider-account-description-input").fill(input.description);
+  }
+  const env = input.env ?? [];
+  for (const [index, variable] of env.entries()) {
+    if (index > 0) {
+      await page.getByTestId("provider-account-env-add").click();
+    }
+    await page.getByTestId(`provider-account-env-key-${index}`).fill(variable.key);
+    await page.getByTestId(`provider-account-env-value-${index}`).fill(variable.value);
+  }
+}
+
+export async function submitProviderAccountForm(page: Page): Promise<void> {
+  await page.getByTestId("provider-account-submit").click();
+}
+
 /** Adding opens the new provider's page; its row waits in the list behind it. */
 export async function expectProviderInstalledInSettings(
   page: Page,

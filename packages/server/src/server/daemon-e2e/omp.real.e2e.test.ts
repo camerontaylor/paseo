@@ -87,32 +87,102 @@ async function createHarness(options: { ompHome?: string } = {}): Promise<Harnes
   const staticDir = mkdtempSync(path.join(tmpdir(), "paseo-real-omp-static-"));
   for (const root of [cwd, paseoHomeRoot, staticDir]) roots.add(root);
   const logger = pino({ level: process.env.OMP_E2E_LOG_LEVEL ?? "silent" });
-  const daemon = await createTestPaseoDaemon({
-    agentClients: options.ompHome
-      ? {
-          omp: new OmpAgentClient({
-            logger,
-            runtimeSettings: {
-              env: { HOME: options.ompHome, ANTHROPIC_API_KEY: "", ANTHROPIC_OAUTH_TOKEN: "" },
-            },
-          }),
-        }
-      : createRealProviderClients(["omp"], logger),
-    providerOverrides: { omp: { enabled: true } },
-    logger,
-    paseoHomeRoot,
-    staticDir,
-    cleanup: false,
-  });
-  const client = new DaemonClient({
-    url: `ws://127.0.0.1:${daemon.port}/ws`,
-    appVersion: "0.1.45",
-  });
-  await client.connect();
-  await client.fetchAgents({
-    subscribe: {},
-  });
-  return { daemon, client, cwd, paseoHomeRoot, staticDir };
+  let daemon: TestPaseoDaemon | undefined;
+  let client: DaemonClient | undefined;
+  try {
+    daemon = await createTestPaseoDaemon({
+      agentClients: options.ompHome
+        ? {
+            omp: new OmpAgentClient({
+              logger,
+              runtimeSettings: {
+                env: { HOME: options.ompHome, ANTHROPIC_API_KEY: "", ANTHROPIC_OAUTH_TOKEN: "" },
+              },
+            }),
+          }
+        : createRealProviderClients(["omp"], logger),
+      providerOverrides: { omp: { enabled: true } },
+      logger,
+      paseoHomeRoot,
+      staticDir,
+      cleanup: false,
+    });
+    client = new DaemonClient({
+      url: `ws://127.0.0.1:${daemon.port}/ws`,
+      appVersion: "0.1.45",
+    });
+    await client.connect();
+    await client.fetchAgents({
+      subscribe: {},
+    });
+    return { daemon, client, cwd, paseoHomeRoot, staticDir };
+  } catch (error) {
+    const failures: unknown[] = [];
+    await cleanupAcquiredHarness({ daemon, client, cwd, paseoHomeRoot, staticDir }, failures);
+    reportCleanupFailures(failures);
+    throw error;
+  }
+}
+
+async function cleanupAcquiredHarness(
+  harness: Partial<Harness>,
+  failures: unknown[],
+): Promise<void> {
+  const cleanups = [
+    async () => {
+      await harness.client?.close();
+    },
+    async () => {
+      await harness.daemon?.close();
+    },
+    ...[harness.cwd, harness.paseoHomeRoot, harness.staticDir]
+      .filter((root): root is string => root !== undefined)
+      .map((root) => async () => {
+        roots.delete(root);
+        rmSync(root, { recursive: true, force: true });
+      }),
+  ];
+  for (const cleanup of cleanups) {
+    try {
+      await cleanup();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+}
+
+function reportCleanupFailures(failures: unknown[]): void {
+  if (failures.length) {
+    process.stderr.write(`OMP real test cleanup failures: ${failures.map(String).join("; ")}\n`);
+  }
+}
+
+async function withHarness(
+  options: { ompHome?: string },
+  run: (harness: Harness, addCleanup: (cleanup: () => Promise<void>) => void) => Promise<void>,
+): Promise<void> {
+  const harness = await createHarness(options);
+  const additionalCleanups: Array<() => Promise<void>> = [];
+  const cleanupFailures: unknown[] = [];
+  let primaryFailed = false;
+  try {
+    await run(harness, (cleanup) => additionalCleanups.push(cleanup));
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
+  } finally {
+    for (const cleanup of additionalCleanups.toReversed()) {
+      try {
+        await cleanup();
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+    await cleanupAcquiredHarness(harness, cleanupFailures);
+    if (primaryFailed) reportCleanupFailures(cleanupFailures);
+  }
+  if (cleanupFailures.length)
+    throw new AggregateError(cleanupFailures, "OMP real test cleanup failed");
 }
 
 async function closeHarness(harness: Harness): Promise<void> {
@@ -265,22 +335,66 @@ async function contextWindowUsedTokens(client: DaemonClient, agentId: string) {
   return result?.agent.lastUsage?.contextWindowUsedTokens;
 }
 
+async function idleFollowUp(harness: Harness): Promise<void> {
+  const agent = await createAgent(harness, "idle-follow-up");
+  await harness.client.sendMessage(agent.id, "/follow-up Reply exactly IDLE_FOLLOWUP_OK");
+  await expect
+    .poll(() => readAssistantText(harness, agent.id), { timeout: 30_000 })
+    .toContain("IDLE_FOLLOWUP_OK");
+  const finish = await harness.client.waitForFinish(agent.id, TIMEOUT_MS);
+  expect(finish.status).toBe("idle");
+}
+
+async function agentSentIdleFollowUp(
+  harness: Harness,
+  addCleanup: (cleanup: () => Promise<void>) => void,
+): Promise<void> {
+  const mcp = new Client({ name: "idle-follow-up-test", version: "1.0.0" });
+  addCleanup(() => mcp.close());
+  const parent = await createAgent(harness, "follow-up-parent");
+  const child = await createAgent(harness, "follow-up-child");
+  await mcp.connect(
+    new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${harness.daemon.port}/mcp/agents?callerAgentId=${parent.id}`),
+    ),
+  );
+  const response = await mcp.callTool({
+    name: "send_agent_prompt",
+    arguments: { agentId: child.id, prompt: "/follow-up Reply exactly MCP_IDLE_FOLLOWUP_OK" },
+  });
+  expect(response.isError).not.toBe(true);
+  expect(response.structuredContent).toMatchObject({
+    success: true,
+    disposition: "out_of_band",
+  });
+  await expect
+    .poll(() => readAssistantText(harness, child.id), { timeout: 30_000 })
+    .toContain("MCP_IDLE_FOLLOWUP_OK");
+  await expect
+    .poll(
+      async () => {
+        const items = await timeline(harness.client, parent.id);
+        let notifications = 0;
+        for (const item of items) {
+          if (
+            item.type === "tool_call" &&
+            item.agentMessage?.sender.id === child.id &&
+            item.agentMessage.event === "finished"
+          )
+            notifications++;
+        }
+        return notifications;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(1);
+}
+
 describe("daemon E2E (real OMP)", () => {
   test(
     "an idle out-of-band follow-up starts a turn",
     async () => {
-      const harness = await createHarness();
-      try {
-        const agent = await createAgent(harness, "idle-follow-up");
-        await harness.client.sendMessage(agent.id, "/follow-up Reply exactly IDLE_FOLLOWUP_OK");
-        await expect
-          .poll(() => readAssistantText(harness, agent.id), { timeout: 30_000 })
-          .toContain("IDLE_FOLLOWUP_OK");
-        const finish = await harness.client.waitForFinish(agent.id, TIMEOUT_MS);
-        expect(finish.status).toBe("idle");
-      } finally {
-        await closeHarness(harness);
-      }
+      await withHarness({}, idleFollowUp);
     },
     TIMEOUT_MS,
   );
@@ -288,52 +402,7 @@ describe("daemon E2E (real OMP)", () => {
   test(
     "an agent-sent idle follow-up starts a turn and notifies its parent",
     async () => {
-      const harness = await createHarness();
-      const mcp = new Client({ name: "idle-follow-up-test", version: "1.0.0" });
-      try {
-        const parent = await createAgent(harness, "follow-up-parent");
-        const child = await createAgent(harness, "follow-up-child");
-        await mcp.connect(
-          new StreamableHTTPClientTransport(
-            new URL(
-              `http://127.0.0.1:${harness.daemon.port}/mcp/agents?callerAgentId=${parent.id}`,
-            ),
-          ),
-        );
-        const response = await mcp.callTool({
-          name: "send_agent_prompt",
-          arguments: { agentId: child.id, prompt: "/follow-up Reply exactly MCP_IDLE_FOLLOWUP_OK" },
-        });
-        expect(response.isError).not.toBe(true);
-        expect(response.structuredContent).toMatchObject({
-          success: true,
-          disposition: "out_of_band",
-        });
-        await expect
-          .poll(() => readAssistantText(harness, child.id), { timeout: 30_000 })
-          .toContain("MCP_IDLE_FOLLOWUP_OK");
-        await expect
-          .poll(
-            async () => {
-              const items = await timeline(harness.client, parent.id);
-              let notifications = 0;
-              for (const item of items) {
-                if (
-                  item.type === "tool_call" &&
-                  item.agentMessage?.sender.id === child.id &&
-                  item.agentMessage.event === "finished"
-                )
-                  notifications++;
-              }
-              return notifications;
-            },
-            { timeout: 15_000 },
-          )
-          .toBe(1);
-      } finally {
-        await mcp.close();
-        await closeHarness(harness);
-      }
+      await withHarness({}, agentSentIdleFollowUp);
     },
     TIMEOUT_MS,
   );
@@ -341,8 +410,7 @@ describe("daemon E2E (real OMP)", () => {
   test.each(["Reply with ok.", "/follow-up Reply with ok."])(
     "a rejected %s fails the turn with OMP's error",
     async (prompt) => {
-      const harness = await createHarness({ ompHome: createOfflineOmpHome() });
-      try {
+      await withHarness({ ompHome: createOfflineOmpHome() }, async (harness) => {
         const agent = await harness.client.createAgent({
           cwd: harness.cwd,
           title: "no-credentials",
@@ -354,9 +422,7 @@ describe("daemon E2E (real OMP)", () => {
         const finish = await harness.client.waitForFinish(agent.id, 60_000);
         expect(finish.status).toBe("error");
         expect(finish.error).toContain("No API key found for anthropic");
-      } finally {
-        await closeHarness(harness);
-      }
+      });
     },
     TIMEOUT_MS,
   );

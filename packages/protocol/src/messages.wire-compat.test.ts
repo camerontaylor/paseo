@@ -7,7 +7,10 @@ import {
   AgentSnapshotPayloadSchema,
   AgentStreamEventPayloadSchema,
   AgentTimelineItemPayloadSchema,
+  BranchSuggestionsResponseSchema,
   ServerInfoStatusPayloadSchema,
+  SessionEventsSetSubscriptionRequestSchema,
+  SessionInboundMessageSchema,
   SessionOutboundMessageSchema,
   WSHelloMessageSchema,
   WorkspaceSetupSnapshotSchema,
@@ -70,6 +73,52 @@ test("base selection RPCs are correlated while older checkout and branch message
     },
   };
   expect(WorkspaceBaseBranchSetResponseSchema.parse(response)).toEqual(response);
+});
+
+test("side conversation events parse with and without the owned proof tag", () => {
+  const removed = {
+    type: "agent.side_conversation.removed",
+    payload: { parentAgentId: "agent", threadId: "thread" },
+  };
+  expect(SessionOutboundMessageSchema.parse(removed)).toEqual(removed);
+  const ownedRemoved = {
+    ...removed,
+    payload: { ...removed.payload, subscriptionId: "sub-1" },
+  };
+  expect(SessionOutboundMessageSchema.parse(ownedRemoved)).toEqual(ownedRemoved);
+
+  const update = {
+    type: "agent.side_conversation.update",
+    payload: {
+      parentAgentId: "agent",
+      threadId: "thread",
+      items: [],
+      pendingQuestion: null,
+      lastAnswer: null,
+    },
+  };
+  expect(SessionOutboundMessageSchema.parse(update)).toEqual(update);
+  const ownedUpdate = { ...update, payload: { ...update.payload, subscriptionId: "sub-1" } };
+  expect(SessionOutboundMessageSchema.parse(ownedUpdate)).toEqual(ownedUpdate);
+});
+
+test("side conversation selectors and the handshake feature parse", () => {
+  const selectors = ["agent.side_conversation.update", "agent.side_conversation.removed"];
+  expect(
+    SessionEventsSetSubscriptionRequestSchema.parse({
+      type: "session.events.set_subscription.request",
+      requestId: "request",
+      events: selectors,
+    }).events,
+  ).toEqual(selectors);
+
+  expect(
+    ServerInfoStatusPayloadSchema.parse({
+      status: "server_info",
+      serverId: "server",
+      features: { sideConversations: true, sideConversationEvents: true },
+    }).features,
+  ).toEqual({ sideConversations: true, sideConversationEvents: true });
 });
 
 test("terminal listings accept older rows and retain new per-terminal directories", () => {
@@ -199,6 +248,70 @@ describe("wire schema compatibility", () => {
       version: null,
       features: { agentTurnIdentity: true },
     });
+  });
+
+  test("base ref mutation capability is optional for older daemons", () => {
+    const legacy = ServerInfoStatusPayloadSchema.parse({
+      status: "server_info",
+      serverId: "legacy-server",
+      features: {},
+    });
+    const capable = ServerInfoStatusPayloadSchema.parse({
+      status: "server_info",
+      serverId: "capable-server",
+      features: { checkoutBaseRefSet: true },
+    });
+
+    expect(legacy.features.checkoutBaseRefSet).toBeUndefined();
+    expect(capable.features.checkoutBaseRefSet).toBe(true);
+  });
+
+  test("base ref mutation uses a correlated request and response", () => {
+    const request = {
+      type: "checkout.base_ref.set.request",
+      cwd: "/repo",
+      baseRef: "develop",
+      requestId: "base-1",
+    };
+    const response = {
+      type: "checkout.base_ref.set.response",
+      payload: {
+        cwd: "/repo",
+        success: true,
+        baseRef: "develop",
+        error: null,
+        requestId: "base-1",
+      },
+    };
+
+    expect(SessionInboundMessageSchema.parse(request)).toEqual(request);
+    expect(SessionOutboundMessageSchema.parse(response)).toEqual(response);
+  });
+
+  test("branch suggestions accept optional qualified ref identities", () => {
+    const payload = {
+      branches: ["foo"],
+      branchDetails: [{ name: "foo", committerDate: 1, hasLocal: true, hasRemote: true }],
+      error: null,
+      requestId: "branches-1",
+    };
+    const legacy = { type: "branch_suggestions_response", payload };
+    const capable = {
+      type: "branch_suggestions_response",
+      payload: {
+        ...payload,
+        branchDetails: [
+          {
+            ...payload.branchDetails[0],
+            localRefs: ["refs/heads/foo", "refs/heads/origin/foo"],
+            remoteRefs: ["refs/remotes/origin/foo"],
+          },
+        ],
+      },
+    };
+
+    expect(BranchSuggestionsResponseSchema.parse(legacy)).toEqual(legacy);
+    expect(BranchSuggestionsResponseSchema.parse(capable)).toEqual(capable);
   });
 
   test("assistant timeline message ids are optional on the wire", () => {
@@ -510,6 +623,33 @@ test("usage login errors are additive and older reports still parse", () => {
   expect(SessionOutboundMessageSchema.parse(oldMessage)).toEqual(oldMessage);
   expect(SessionOutboundMessageSchema.parse(newMessage)).toEqual(newMessage);
   expect(legacy.parse(newMessage)).toEqual(oldMessage);
+});
+
+test("usage terminal responses accept beta.3 reports and beta.4 streaming completion", () => {
+  const legacy = z.object({
+    type: z.literal("usage.list_reports.response"),
+    payload: z.object({ requestId: z.string(), reports: z.array(z.unknown()) }),
+  });
+  const reports = [
+    {
+      id: "fixture:one",
+      sourceId: "fixture",
+      sourceLabel: "Fixture",
+      account: {},
+      fetchedAt: "2026-10-08T00:00:00.000Z",
+      report: { status: "available", windows: [] },
+    },
+  ];
+  const beta3 = { type: "usage.list_reports.response", payload: { requestId: "usage", reports } };
+  const current = { ...beta3, payload: { ...beta3.payload, error: null } };
+  expect(SessionOutboundMessageSchema.parse(beta3)).toEqual(beta3);
+  expect(SessionOutboundMessageSchema.parse(current)).toEqual(current);
+  expect(legacy.parse(current)).toEqual(beta3);
+  const streaming = {
+    type: "usage.list_reports.response",
+    payload: { requestId: "usage", error: null },
+  };
+  expect(SessionOutboundMessageSchema.parse(streaming)).toEqual(streaming);
 });
 
 test("usage entries accept older failures and additive successful snapshots", () => {

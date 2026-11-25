@@ -10,11 +10,14 @@ export const PROVIDER_CAPABILITIES = [
   "prompt.output_schema",
   "prompt.steer",
   "session.can_stop_runtime",
+  "session.detach",
   "session.archive",
   "session.configure",
   "session.list",
   "session.metrics",
   "session.persistence",
+  // Provider-reported peer turns belong to another client and are canceled only by explicit Stop.
+  "session.shared_turns",
   "session.revert.both",
   "session.revert.conversation",
   "session.revert.files",
@@ -28,6 +31,14 @@ export const PROVIDER_CAPABILITIES = [
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 
 export interface ProviderRegistration {
+  /** False rejects nonempty system instructions. Omission preserves the existing provider contract. */
+  supportsSystemPrompt?: boolean;
+  /**
+   * True when a loaded session restores its own model and thinking option and reports them in
+   * `session.config`. The daemon then sends only explicit changes when it loads a session.
+   * Omission preserves the existing contract: the daemon sends its saved selection on every load.
+   */
+  restoresSessionConfig?: boolean;
   /** Activate only while agents.providers contains this provider ID, independently of enabled. */
   requiresConfiguration?: boolean;
   /** Equal keys share discovery within this provider. Include effective configuration and execution environment. */
@@ -234,6 +245,12 @@ export interface ProviderPrompt {
   input:
     | { type: "message"; content: ProviderContent[] }
     | { type: "command"; name: string; arguments: string };
+  /**
+   * Explicit attachment-local skill selection. `undefined` leaves the selection alone, a name
+   * selects it, and `null` clears it before the prompt text is read. Only providers that
+   * advertise the behavior accept it.
+   */
+  skill?: string | null;
   outputSchema?: JsonValue;
   clearPendingPermissions?: boolean;
 }
@@ -378,6 +395,8 @@ export type ProviderInput =
   | { type: "session.archive"; requestId: string; persistence: ProviderPersistence }
   | { type: "session.unarchive"; requestId: string; persistence: ProviderPersistence }
   | { type: "session.can_stop_runtime"; requestId: string; sessionId: string }
+  /** Leave this attachment without stopping work it inserted into a shared session. */
+  | { type: "session.detach"; requestId: string; sessionId: string }
   | { type: "session.close"; requestId: string; sessionId: string };
 
 export interface ProviderThinkingOption {
@@ -491,6 +510,10 @@ export interface ProviderCommand {
   name: string;
   description: string;
   argumentHint?: string;
+  /**
+   * ACP only describes slash commands. A provider that can distinguish its skills reports them
+   * here so the client can select the skill explicitly instead of relying on textual parsing.
+   */
   kind?: "command" | "skill";
 }
 
@@ -741,6 +764,8 @@ export type ProviderEvent =
       /** Shown on the turn's footer. Read when `state` is `"completed"`. */
       metrics?: readonly ProviderMetric[];
     }
+  /** Submitted work can remain pending between native turn brackets. */
+  | { type: "session.pending_work"; sessionId: string; pending: boolean }
   | { type: "session.usage"; sessionId: string; turnId?: string; usage: ProviderUsage }
   | {
       type: "session.metrics";
@@ -798,6 +823,8 @@ export function requiredProviderCapabilities(input: ProviderInput): readonly Pro
     case "session.interrupt":
     case "session.close":
       return [];
+    case "session.detach":
+      return ["session.detach"];
     case "sessions":
       return ["session.list"];
     case "session.open": {
@@ -1034,6 +1061,7 @@ const promptSchema = z
       z.object({ type: z.literal("message"), content: z.array(providerContentSchema) }).strict(),
       z.object({ type: z.literal("command"), name: idSchema, arguments: z.string() }).strict(),
     ]),
+    skill: z.string().nullable().optional(),
     outputSchema: z.json().optional(),
     clearPendingPermissions: z.boolean().optional(),
   })
@@ -1076,6 +1104,9 @@ export const ProviderInputSchema: z.ZodType<ProviderInput> = z.discriminatedUnio
     .strict(),
   z
     .object({ type: z.literal("session.interrupt"), requestId: idSchema, sessionId: idSchema })
+    .strict(),
+  z
+    .object({ type: z.literal("session.detach"), requestId: idSchema, sessionId: idSchema })
     .strict(),
   z
     .object({
@@ -1586,6 +1617,9 @@ export const ProviderEventSchema: z.ZodType<ProviderEvent> = z.discriminatedUnio
       error: providerErrorSchema.optional(),
       metrics: z.array(metricSchema).optional(),
     })
+    .strip(),
+  z
+    .object({ type: z.literal("session.pending_work"), sessionId: idSchema, pending: z.boolean() })
     .strip(),
   z
     .object({

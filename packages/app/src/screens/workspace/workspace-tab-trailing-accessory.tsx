@@ -10,6 +10,7 @@ import {
   Ellipsis,
   Pencil,
   RotateCw,
+  Search,
   X,
 } from "lucide-react-native";
 import {
@@ -31,6 +32,7 @@ const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
 const ThemedPencil = withUnistyles(Pencil);
 const ThemedX = withUnistyles(X);
+const ThemedSearch = withUnistyles(Search);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -62,6 +64,8 @@ function MobileTabDropdownMenuItem({
         return <ThemedPencil size={16} uniProps={mutedColorMapping} />;
       case "x":
         return <ThemedX size={16} uniProps={mutedColorMapping} />;
+      case "search":
+        return <ThemedSearch size={16} uniProps={mutedColorMapping} />;
       default:
         return undefined;
     }

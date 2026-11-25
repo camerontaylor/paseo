@@ -1,0 +1,64 @@
+
+ RUN  v4.1.7 /tmp/tmad-port/frozen-plus-voice
+
+ ❯ packages/server/src/server/session.test.ts (160 tests | 1 failed) 197ms
+   × side conversation manager events reach every capable client 53ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/server/src/server/session.test.ts > side conversation manager events reach every capable client
+AssertionError: expected [] to deeply equal [ { …(2) }, { …(2) } ]
+
+- Expected
++ Received
+
+- [
+-   {
+-     "payload": {
+-       "items": [
+-         {
+-           "text": "What happened?",
+-           "type": "user_message",
+-         },
+-         {
+-           "text": "A merge conflict.",
+-           "type": "assistant_message",
+-         },
+-       ],
+-       "lastAnswer": {
+-         "content": "A merge conflict.",
+-         "status": "answered",
+-         "synthetic": false,
+-         "threading": "threaded",
+-       },
+-       "parentAgentId": "11111111-1111-4111-8111-111111111111",
+-       "pendingQuestion": null,
+-       "threadId": "thread-1",
+-     },
+-     "type": "agent.side_conversation.update",
+-   },
+-   {
+-     "payload": {
+-       "parentAgentId": "11111111-1111-4111-8111-111111111111",
+-       "threadId": "thread-1",
+-     },
+-     "type": "agent.side_conversation.removed",
+-   },
+- ]
++ []
+
+ ❯ packages/server/src/server/session.test.ts:404:20
+    402|   });
+    403|
+    404|   expect(messages).toEqual([
+       |                    ^
+    405|     { type: "agent.side_conversation.update", payload: SIDE_CONVERSATI…
+    406|     {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 3 passed (4)
+      Tests  1 failed | 215 passed (370)
+   Start at  11:02:32
+   Duration  26.04s (transform 40.15s, setup 0ms, import 48.94s, tests 5.31s, environment 1ms)

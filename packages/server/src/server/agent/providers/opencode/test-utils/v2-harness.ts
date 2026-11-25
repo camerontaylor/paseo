@@ -4,6 +4,7 @@ import type {
   SessionMessageInfo,
   SessionCreateInput,
   SessionLogItem,
+  SessionInstructionsEntryPutInput,
 } from "@opencode/client";
 import type { V2Api } from "../v2/api.js";
 import type { V2Connection } from "../v2/runtime.js";
@@ -28,6 +29,7 @@ export class V2Harness {
   readonly prompts: string[] = [];
   readonly environments: Array<{ sessionID: string; variables: Record<string, string> }> = [];
   readonly mcpAdds: string[] = [];
+  readonly instructionEntries: SessionInstructionsEntryPutInput[] = [];
   readonly instructions = new Map<string, string>();
   releases = 0;
   active = false;
@@ -161,7 +163,9 @@ export class V2Harness {
       instructions: {
         entry: {
           list: async () => [...this.instructions].map(([key, value]) => ({ key, value })),
-          put: async ({ key, value }) => {
+          put: async (input) => {
+            this.instructionEntries.push(input);
+            const { key, value } = input;
             this.instructions.set(key, String(value));
           },
           remove: async ({ key }) => {

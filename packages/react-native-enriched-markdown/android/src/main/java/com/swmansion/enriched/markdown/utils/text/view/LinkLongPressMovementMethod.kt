@@ -26,6 +26,9 @@ import kotlin.math.abs
  * See: https://github.com/software-mansion/enriched-markdown/issues/580
  */
 class LinkLongPressMovementMethod : ArrowKeyMovementMethod() {
+  // Table cells use long-press for selection, including recognized file links.
+  var preferTextSelection = false
+
   private val handler = Handler(Looper.getMainLooper())
   private var longPressRunnable: Runnable? = null
 
@@ -70,7 +73,9 @@ class LinkLongPressMovementMethod : ArrowKeyMovementMethod() {
           }
         isLinkTouchActive = pressedLink != null || pressedImage != null || pressedCodeBlock != null
         isTouchWithinTextBounds = charOffsetAt(widget, event) != null || pressedCodeBlock != null
-        pressedLink?.let { scheduleLongPress(widget, it) }
+        if (!preferTextSelection || !widget.isTextSelectable) {
+          pressedLink?.let { scheduleLongPress(widget, it) }
+        }
       }
 
       MotionEvent.ACTION_MOVE -> {
@@ -103,7 +108,9 @@ class LinkLongPressMovementMethod : ArrowKeyMovementMethod() {
         // LinkSpan.onClick itself swallows the click that follows a completed
         // long-press (and resets its internal flag), so it is always invoked
         // for a tap that started and ended on the same link.
-        if (tappedLink != null && findLinkSpan(widget, buffer, event) === tappedLink) {
+        if (tappedLink != null && findLinkSpan(widget, buffer, event) === tappedLink &&
+          !(preferTextSelection && widget.hasSelection())
+        ) {
           tappedLink.onClick(widget)
           return true
         }

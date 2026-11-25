@@ -118,9 +118,10 @@ test.describe("provider removal", () => {
       await openSettingsHost(page, getServerId());
       await openSettingsHostSection(page, getServerId(), "providers");
 
-      // A built-in provider has no Danger zone.
+      // A built-in provider has no Danger zone; it offers Add account instead.
       await openProviderDetail(page, "Claude");
       await expect(page.getByTestId("provider-remove")).toHaveCount(0);
+      await expect(page.getByTestId("provider-add-account-claude")).toBeVisible();
       await leaveProviderDetail(page);
 
       await openAddProvider(page);

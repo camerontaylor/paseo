@@ -10,6 +10,18 @@ import type { z } from "zod";
 
 export type AgentProvider = string;
 
+export type AgentArtifactKind = "html" | "markdown" | "image" | "svg" | "pdf" | "diff";
+
+export interface AgentArtifact {
+  path: string;
+  name: string;
+  kind: AgentArtifactKind;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AgentMetadata {
   [key: string]: unknown;
 }
@@ -126,6 +138,8 @@ export interface ProviderSnapshotEntry {
   status: ProviderStatus;
   enabled: boolean;
   source?: "builtin" | "custom";
+  /** Builtin provider this entry extends, when it is a custom provider account. */
+  baseProviderId?: string;
   error?: string;
   models?: AgentModelDefinition[];
   modes?: AgentMode[];

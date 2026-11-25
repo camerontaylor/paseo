@@ -122,3 +122,12 @@ it("keeps text around nested plugin blocks in separate occurrences", () => {
   expect(findRenderedMatches(row, "details").map((range) => range.toString())).toEqual(["details"]);
   expect(findRenderedMatches(row, "beta").map((range) => range.toString())).toEqual(["beta"]);
 });
+
+it("finds wide-character text across inline formatting", () => {
+  const row = content(
+    '<div data-paseo-markdown-tag="p">통합 <strong>구현은</strong> 전체 테스트</div>',
+  );
+  expect(findRenderedMatches(row, "구현은 전체").map((range) => range.toString())).toEqual([
+    "구현은 전체",
+  ]);
+});

@@ -168,6 +168,8 @@ import {
 } from "./workspace-registry.js";
 import { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import { ScheduleService } from "./schedule/service.js";
+import { AgentQueueService } from "./agent-queue/service.js";
+import { AgentQueueStore } from "./agent-queue/store.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
 import { createOrchestrationSkills } from "./orchestration-skills/index.js";
 import {
@@ -440,6 +442,7 @@ export interface PaseoDaemonConfig {
   autoArchiveAfterMerge?: boolean;
   enableTerminalAgentHooks?: boolean;
   appendSystemPrompt?: string;
+  appendSystemPromptExcludedProviders?: string[];
   terminalProfiles?: TerminalProfile[];
   agentProfiles?: AgentProfile[];
   skillSelection?: AgentSkillSelection;
@@ -586,7 +589,9 @@ function resolveReloadEnv(config: PaseoDaemonConfig): NodeJS.ProcessEnv {
   return config.configReload?.env ?? process.env;
 }
 
-function createInitialMutableDaemonConfig(config: ResolvedDaemonSettings): MutableDaemonConfig {
+export function createInitialMutableDaemonConfig(
+  config: ResolvedDaemonSettings,
+): MutableDaemonConfig {
   const providers = config.providerOverrides ?? {};
 
   const initialConfig: MutableDaemonConfig = {
@@ -615,6 +620,7 @@ function createInitialMutableDaemonConfig(config: ResolvedDaemonSettings): Mutab
     resumeOnStartup: config.resumeOnStartup === true,
     resumePrompt: config.resumePrompt ?? "Resume working.",
     appendSystemPrompt: config.appendSystemPrompt ?? "",
+    appendSystemPromptExcludedProviders: config.appendSystemPromptExcludedProviders,
     pluginsEnabled: config.pluginsEnabled ?? false,
     plugins: config.plugins ?? {},
     skills: { selection: config.skillSelection },
@@ -1046,6 +1052,7 @@ export async function createPaseoDaemon(
     providerDefinitions: initialAgentManagerState.providerDefinitions,
     registry: agentStorage,
     appendSystemPrompt: config.appendSystemPrompt,
+    appendSystemPromptExcludedProviders: config.appendSystemPromptExcludedProviders,
     onWorkspaceStateMayHaveChanged: ({ cwd }) => {
       workspaceGitService.onWorkspaceStateMayHaveChanged(cwd);
     },
@@ -1531,6 +1538,16 @@ export async function createPaseoDaemon(
     }
   });
   logger.info({ elapsed: elapsed() }, "Schedule service initialized");
+  // The durable agent message queue: constructed here so it loads persisted
+  // state, but activated only once the server accepts connections — loading
+  // and dispatching stay separate phases (AgentQueueService.activate).
+  const agentQueueService = new AgentQueueService({
+    store: new AgentQueueStore(path.join(config.paseoHome, "queues")),
+    agentManager,
+    agentStorage,
+    logger,
+  });
+  logger.info({ elapsed: elapsed() }, "Agent message queue initialized");
   logger.info({ elapsed: elapsed() }, "Loading persisted agent registry");
   // Startup loads persisted agent history once before restoring the registry.
   const persistedRecords = await agentStorage.listAll();
@@ -1850,6 +1867,11 @@ export async function createPaseoDaemon(
             daemonConfigStore.onFieldChange("appendSystemPrompt", (value) => {
               agentManager.setAppendSystemPrompt(typeof value === "string" ? value : "");
             });
+            daemonConfigStore.onFieldChange("appendSystemPromptExcludedProviders", () => {
+              agentManager.setAppendSystemPromptExcludedProviders(
+                daemonConfigStore.get().appendSystemPromptExcludedProviders ?? [],
+              );
+            });
             const relayEnabled = config.relayEnabled ?? true;
             const relayEndpoint = config.relayEndpoint ?? "relay.paseo.sh:443";
             const relayPublicEndpoint = config.relayPublicEndpoint ?? relayEndpoint;
@@ -1952,6 +1974,7 @@ export async function createPaseoDaemon(
               pluginRuntime,
               orchestrationSkills,
               workspaceLabelService,
+              agentQueueService,
               workspaceArchiveOperations,
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
@@ -1962,6 +1985,7 @@ export async function createPaseoDaemon(
             await changeRequestWatches.start();
             wsServer.beginAcceptingConnections();
             const relaySecurityLogger = logger.child({ module: "relay-security" });
+            await agentQueueService.activate();
             relayRuntime = createRelayRuntime({
               config: {
                 enabled: relayEnabled,
@@ -2099,6 +2123,7 @@ export async function createPaseoDaemon(
     }
     await speechService.stop();
     await scheduleService.stop().catch(() => undefined);
+    agentQueueService.stop();
     await relayRuntime?.stop().catch(() => undefined);
     if (wsServer) {
       await wsServer.close();

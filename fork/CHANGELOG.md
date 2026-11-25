@@ -1,0 +1,338 @@
+# Fork changelog
+
+Fork-local release notes. Upstream `CHANGELOG.md` is never touched; entries here
+record fork-only decisions and releases. See
+[the archived release-channel plan](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/fork/plans/ralplan-fork-release-channel.md) for the plan of record.
+
+## Unreleased
+
+Remove side conversations from the fork. Layout restore drops saved side
+conversation tabs, and the daemon returns a correlated error for older clients
+that still request a side conversation.
+
+## 0.17.4 base decision — 2026-11-25
+
+Merge upstream `v0.17.4` (`2b3559b10`: upstream main `1fea66215` plus four
+release commits) into committed custom `45ae7fcb9`. Upstream main
+`b6375b142` was 26 commits ahead when the base was chosen and was not adopted:
+the cycle adopts release tags. The release branch does not contain
+`v0.17.0-beta.1`, so resolve against beta.1 rather than Git's 0.16.2 merge base.
+
+Keep the fork's ACP prompt lane, shared/vendor turns, steering and detach, and
+graft upstream #10310's deferred turns onto them: a turn deferred on running
+background tools takes steers into its follow-up reply; a new prompt completes
+a deferred turn whose wire prompt already returned; Stop retires it; and the
+deferred settle releases the ordered prompt response before waiting. Every local
+terminal, including upstream's deferred ones, goes through the fork's
+deduplicating `endLocalTurn`. The wire router keeps the fork's update slots and
+prompt-response ordering and adds upstream's wire sequence observer. Adopt
+upstream's per-command transformer hook, giving it the connection policy, and
+classify jcode skills per command. Session listing keeps upstream's scan cap and
+the fork's repeated-cursor guard.
+
+Adopt #10483's agent `queue`/`steer`/`interrupt` semantics and its old-client
+mapping. Keep the fork's skill and expected-turn guards before a plugin steer is
+inserted. Port provider accounts onto #9661's provider pages: Add account on a
+builtin provider's page, Edit account on an account's page, grouped list rows
+with the base provider's icon. The fork's Android table and text selection
+change now lives in the vendored `packages/react-native-enriched-markdown`
+(#10499), which replaces the patch file. Carry session metrics through the
+fork's record initialisation. Regenerate the lockfile and Nix dependency hash.
+
+## 0.17.0-beta.1 base decision — 2026-11-20
+
+Merge upstream `v0.17.0-beta.1` (`6c89950b2ef77efee47b127d09d05eb347d25f33`)
+into committed custom, including the previously published custom head.
+
+Replace the fork's queue reservation errors and pre-send receipt cleanup with
+upstream #9757/#9580's `ForegroundPromptStart`, `idleOnly`, `admit` and
+`beforeDispatch`. Keep durable voice attachment and logical speech identities;
+the queued receipt callback runs after foreground reservation and acceptance
+waits for that prompt's start promise. Publish companion outcomes in the
+terminal snapshot after run settlement, so queue listeners never observe idle
+with a still-tracked run. A failure after the receipt boundary
+holds the item as uncertain until the user retries or discards it. Drop the
+old replacement-path tracing now that upstream owns the foreground lane.
+
+Rework shared/vendor ACP turn ownership, skill selection, steering, replay and
+detach onto #10193's permission cancellation and native unattended modes.
+Keep the fork's local auto-accept setting for agents without an unattended
+mode, sharing the new permission path and refusing policy bypass. Capture
+Stop's generation before upstream's mutation lane so Stop cancels every
+already-admitted prompt, including one waiting for another admission.
+
+Keep upstream #9927's Claude Bypass ask-source policy and ANSI-stripped
+permission descriptions; replace the older overlapping permission test with
+upstream's. Keep the fork's live-mode rollback and version probes alongside
+upstream's independent Ultracode control and live effort updates. Retire the
+fork test assumption that every effort change restarts a query; exercise
+rollback with the launch-time Ultracode change instead. Adopt the extracted native audio
+engine, retaining the fork's static module import and playback regression tests.
+
+Keep #9823/#9836's complete Pi/OMP model names, #10126's OMP approval mapping,
+#10187's OpenCode service-death settlement, #9781's plugin instruction wiring,
+#10049's plugin state hooks and #10153's provider-close reopening. Retain fork
+side conversations, attachment authority, restored native config and detach.
+
+Adapt fork-local PR lookup to upstream's shared poll reader and default-branch
+filter; check the fork before its parent. Combine workspace PR defaults with
+upstream existing-worktree selection, preserve companion capability and
+attention rows, and adapt artifact previews to the new loading/ready/failed
+URL result. Use upstream's sidebar row style and keep the PR shortcut.
+Regenerate the merged lockfile and Nix dependency hash.
+
+The manifest's `upgrade/basket-0.15.2` is already an ancestor of custom;
+retain its entry and all other carries. The initial conflict-only stop was
+withdrawn; source and assembled-build gates must pass before publication.
+
+## 0.16.0-beta.2 base decision — 2026-11-12
+
+Advance custom to upstream `v0.16.0-beta.2`
+(source commit `23bae61535542a45ade7196a7b3c152705f16de3`), retaining merged PR27's
+lean checkout-placement lookup. Keep the existing TMAD-derived carry for
+this release; its removal is a separate task after fleet activation.
+
+The beta and stable branches diverged before 0.15.3. Where custom was
+byte-identical to that stable tag, use the beta's updated owner, including
+responsive control sizing. Preserve fork-specific changes at the shared
+provider, side-conversation, plugin and protocol seams.
+
+ACP disconnect failure and abandoned-approval cleanup now share the fork's
+stop/successor admission path. The reservation rechecks transport death
+after queued admission, and terminal delivery leaves slot ownership to the
+identity-checked settlement path. Merge the enriched-markdown patches on
+their applied package sources, retaining Android table selection and copy
+alongside the beta's web inline-image fixes. Regenerate dependency metadata
+and the Nix hash from the merged manifests.
+
+## 0.15.2 build and deploy — 2026-11-06
+
+Built `0.15.2-fork.261106-2234.gae9279071e78` from
+`ae9279071e783898b5180a917805e8aa3c325e60` and published it: all seven
+packages resolve from npm and `mine` pushed cleanly through
+`fork-npm-publish.yml`. The basket carry needed one adaptation commit
+(`upgrade/basket-0.15.2`): 0.15.2 removed `buttonControlHeight`,
+`FieldControlSize` and the `xs` control size, and the merge applied the
+carried UI hunks cleanly beside custom's new-API code, so only typecheck
+saw it.
+
+Deployed to pluto (canary), ceres, makemake and triton, each verified on
+the stamp with real Claude and Codex turns on pluto. Pluto needed a manual
+step: its unit is a read-only nix-store symlink and the fork pin lives in
+`/etc/systemd/system.control/paseo-daemon.service.d/90-fork-release.conf`,
+which `setup-paseo.sh` does not rewrite, so the first run restarted the
+old 0.14.0 pin and reported success.
+
+Saturn failed. Its one-shot deploy installed the arm64 bundle and reached
+`canonical-daemon-start`, but the launchd-started daemon stalled after
+`Workspace registries bootstrapped` with the main thread blocked in
+`open()`; it never listened, and the starter gave up with `not ready`
+after 600s. Reproduced on a second kickstart. The same bundle started from
+an ssh shell (`daemon start`, identical argv) served health 200 in
+seconds, and a copy of the state dir without `models`/`runtime`/
+`opencode-worktrees` also started under ssh, so the trigger is the launchd
+job context and not the state or the bundle alone. The preserved 0.14.0
+bundle in the same job started in 10s, so saturn was rolled back to
+`0.14.0-fork.261030-0840.g64487f6805ee` and left healthy on it. Neptune was
+not deployed: the cycle stopped at the failed host.
+
+## 0.15.2 base decision — 2026-11-06
+
+Advance `custom` from `v0.15.1` to upstream stable `v0.15.2` (`e896c05b0`),
+a direct descendant of the previous base. 190 files, no conflicts. The
+release is the first-run setup flow (#8363, #8824): `packages/app/src/onboarding/`
+and `packages/app/src/project-suggestions/` are new, first launch goes from the
+loading screen into setup, the theme picker becomes a tile grid, and controls
+collapse to two sizes.
+
+It touches six files the fork also edits, and every one auto-merged: the nine
+i18n resource files (fork strings beside upstream's new setup keys),
+`protocol/src/messages.ts` with `authorization/operation-permissions.ts` (both
+exhaustive over message types, so a missed fork entry fails closed),
+`server/src/server/session.ts`, `websocket-server.ts`,
+`client/src/daemon-client.ts` and the theme-driven
+`screens/workspace/workspace-desktop-tabs-row.tsx`. Typecheck is the gate that
+catches that class; lint does not.
+
+`npm ci`, `build:server`, typecheck, lint and the seven authorization tests
+pass on neptune, plus the node suites for the seam features: app 232 (side
+conversations, subagents track, workspace tabs, panel manifest, i18n
+resources, native release version), server 348 (session, side conversations,
+provider registry wrap, plugin compiler and process), protocol 23, client 256.
+Android device validation remains outstanding.
+
+## 0.15.1 base decision — 2026-11-05
+
+Advance `custom` from `v0.15.0-beta.1` to upstream stable `v0.15.1`
+(`c4dc36272`), a direct descendant of the previous base. Nine commits, no
+conflicts. Interrupted-agent recovery becomes opt-in (#8619): `bootstrap.ts`
+and `config.ts` flip the `resumeOnStartup` default beside the fork's
+system-prompt policy fields, and no fork code relies on the old default.
+Native chats keep reconnect and update status visible (#8568), and the daemon
+starts when the terminal worker cannot (#8810).
+
+`npm ci`, `build:server`, typecheck, lint and the seven authorization tests
+pass on atlas.
+
+## 0.15.0-beta.1 base decision — 2026-11-03
+
+Advance `custom` from `v0.14.0` to upstream `v0.15.0-beta.1` (`8bd38fb23`),
+the newest published release including betas; `v0.15.0-beta.1` continues from
+mainline, which diverged from the `v0.14.0` release branch at `8419c2122`, so
+both sides carried version-field changes. Thirty-one conflicts: version
+fields, the lockfile and the store-screenshot staging take upstream; the fork
+keeps side-conversation rows, sheet targets, event-selector gating, the
+`pkg.version` app version source and the system-prompt policy picker.
+Upstream's terminal-keep capability, agent-resume settings and the
+`./internal/lifecycle` plugin export land beside the fork's seams. The fork's
+enriched-markdown patch is already a content superset of upstream's — the
+file-level conflict was textual only, and the fork's patch applies to the
+pristine package unchanged.
+
+## 0.14.0 base decision — 2026-10-30
+
+Advance `custom` from `v0.13.2` to upstream stable `v0.14.0`.
+Preserve version overrides, side conversations, closed-session fences and
+provider policy exclusions. Move the plugin SDK alias checks into upstream's
+worker-side compiler and side-conversation targets into the new in-place
+subagent target helper, retaining compact side-conversation tabs. Guard idle
+runtime cleanup while a side question is pending. Regenerate the enriched-markdown patch from merged
+dependency sources, retaining Android selection and table copy.
+
+## 0.13.2 base decision — 2026-10-27
+
+Advance `custom` to upstream stable `v0.13.2` (`d2941157a`). Regenerate the
+enriched-markdown patch from a source merge: retain Android cell selection,
+short link taps and whole-table copy alongside upstream's settled-row
+measurement and lifecycle fixes. The other upstream changes merge cleanly.
+
+Patch application, `build:server`, typecheck, lint and the seven authorization
+tests pass. Android device/instrumentation validation remains outstanding.
+The [difference audit](https://github.com/camerontaylor/agents/blob/cd412623d27b7f46ad2d7be5aa3fe782c0938947/docs/paseo-fork/archive/fork/audit-0.13.2.md) assesses permanent work and the live
+external basket, including upstream replacements and plugin extraction options.
+The concurrent unified artifact-version change is retained; its 27 release-tool
+and eight native-version tests pass on this base. Neptune's Desvio base pin and
+manifest header now name 0.13.2, with backups beside both files. No carries are
+removed and no plugins are migrated. Rebuild and gate the basket before
+publishing or deploying.
+
+## 0.13.0 base decision — 2026-10-25
+
+Advance `custom` from `v0.12.0` to upstream stable `v0.13.0` (`d34d17a90`).
+Thirteen conflicts, all import or union shaped: keep the fork's plugin SDK
+alias mapping and side-conversation rows, adopt upstream's plural
+`projectAgentMessages`, `SubagentRow.address` and `pickRelayPatch`, and keep
+upstream's `pluginReactNativeEntrypoint` compat entry annotated in the derived
+SDK specifier list. Upstream removed the WebView terminal renderer; the fork's
+terminal selection tests merge without a textual conflict, so re-run the native
+selection suite rather than trusting the merge. The Desvio base moves with this
+decision; rebuild the basket before publishing or deploying.
+
+## 0.12.0 base decision — 2026-10-20
+
+Advance the preserved beta.3 custom merge to upstream stable `v0.12.0`
+(`cafe4b01c`). Keep the five beta.3 conflict decisions and union upstream
+subagent selector imports with the fork's side-conversation selector tests.
+Retain the beta.3 postmortem below. Rebuild and gate the accepted basket on
+this stable base before publishing or deploying. Real OMP on Triton remains
+unverified because its selected provider has no credentials; preserve the failed
+receipt and verify authenticated providers during host canaries.
+
+The stable basket retains the accepted beta.1 owner deltas. Retire duplicate
+#7179 and #7169 production carries in favor of stable upstream implementations;
+keep fork closed-session/mode-error guards, sourced message identity, symmetric
+OMP command/ACK tests and cleanup failure reporting. Keep #6762, #7057, #7062,
+#7146 and #7106 because they remain unmerged. Preserve workspace-relative file
+opening and account cache invalidation through stable's replacement owners.
+
+## 0.12.0-beta.3 base decision — 2026-10-19
+
+Advance from the reviewed beta.1 custom merge to upstream `v0.12.0-beta.3`.
+Skip beta.2 and stable 0.11.4. Keep side conversations, closed-session fences,
+ACP cancellation ownership and Pi effort/cache-risk behavior. Preserve upstream
+active-query reuse and additive Usage snapshots. Rebuild the accepted beta.1
+basket separately, retiring carries only after proving upstream equivalence.
+Publication and host deployment remain gated by the fleet release cycle.
+
+## 0.13.0 same-base rebuild: tree-kill carry — 2026-10-25
+
+No new upstream tag: `v0.13.0` was already merged into `custom`. Rebuild
+`mine` on the same base to ship the new basket carry
+`fix/tree-kill-spare-detached` (upstream #7843, 402d083f5e). Paseo tree-killed
+a shared `jcode serve` whenever one ACP adapter (including the short-lived
+history-resume adapter) closed, failing every other jcode agent with
+`Jcode daemon disconnected` / `Broken pipe (os error 32)`. The carry makes
+tree-kill spare `setsid` descendants. This cycle syncs with `origin/custom`
+(which carries the `fork/repros/tree-kill-detached` harness) and gates a new
+`0.13.0-mine.<stamp>`; the pluto canary also runs that harness.
+
+## 0.11.2 base decision — 2026-10-11
+
+Advance `custom` and the Desvio base to upstream `v0.11.2`, the newest
+published release including betas. Preserve the six ordered carries and
+keep the ACP model-switch and CLI default-thinking fix as a separate carry.
+Rebuild and validate the complete basket before packaging; this cycle stops
+before publication and deployment.
+
+## 0.11.1 base decision — 2026-10-08
+
+Advance `custom` to upstream `v0.11.1`. Preserve cancellation ownership,
+side conversations and canonical host SDK identity. Repair Usage negotiation
+for mixed versions. Move ZCode to the pinned native provider plugin and put
+its daemon policy in global and project `AGENTS.md`; keep the system-policy
+path for other providers.
+
+Retire observer fanout #3117 and thinking display #4355. Keep only command
+argument hints from #3369. Port the remaining six PR carries and fourteen
+infi features onto the new base. The validated external basket stays separate
+from `custom`; no deployment or publication is implied by this source sync.
+
+## 0.11.0-beta.3 base decision — 2026-10-02
+
+Advance `custom` and the Desvio base to upstream `v0.11.0-beta.3`. The two
+intervening betas fix packaged plugin startup and usage source discovery and
+authentication. Rebuild the ordered carries, including every infi-pc intake
+branch, before deploying the fleet.
+
+## 0.11.0-beta.1 base decision — 2026-10-01
+
+Advance `custom` and the Desvio base to upstream `v0.11.0-beta.1`. Preserve
+the ACP cancellation boundary while adopting upstream provider options. Rebuild
+the ordered external carries before deploying the fleet.
+
+## 0.10.2 base decision — 2026-10-01
+
+Advance `custom` and the Desvio base to upstream `v0.10.2`. This release fixes
+OpenCode v2 long-running turns, edit details, question cards, and context usage.
+Rebuild the full basket so the infi-pc intake ports remain above `custom`.
+
+## 0.10.1 base decision — 2026-09-29
+
+Advance `custom` to upstream `v0.10.1`, the latest published release including
+betas. Pin the local Desvio build base to that tag; it includes #5227's
+external-volume protection. Preserve the fork's side conversations and ACP
+cancellation boundary alongside upstream's injectable Claude rewind SDK.
+
+## npm channel goes automatic — 2026-09-13
+
+Scope confirmed as **`@camerontaylor`** (the ADR's "personal scope, pending
+approval"). `.github/workflows/fork-npm-publish.yml` publishes every push to
+`mine` through npm trusted publishing (OIDC, GitHub-hosted runner, provenance
+attached) — no long-lived token, which npm is retiring for CI anyway. The
+first version of each of the 7 packages still has to go out with a token
+(npm cannot attach a trusted publisher to a package that does not exist,
+npm/cli#8544); the workflow carries a one-run `BOOTSTRAP_NPM_TOKEN` path for
+that. `release-fork.mjs` gained `--fork-number auto` (next N from the
+registry), `--no-github-release`, pushes only the tag (never the branch), and
+stamps `<base>-fork.N` when the base is a stable release: `0.8.0.fork.1` is
+not semver and npm rejected it at pack time. First automatic version:
+`0.8.0-fork.1`.
+
+## 0.7.0-beta.2 base decision — 2026-08-30
+
+Fork base advanced to upstream `v0.7.0-beta.2` (4e60c2880b4c9ebdb9937be4782a21406bab9933,
+CI green at tag time): the fork daemon must not be older than the stock
+0.7.0-beta.2 client it replaces
+(`fork/plans/ralplan-fork-release-channel.md`, Sitting 1 step 1). Branch
+`plan/fork-release-channel` rebased onto the tag ahead of the first fork release
+(0.7.0-beta.2.fork.1).

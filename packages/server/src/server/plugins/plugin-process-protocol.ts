@@ -19,6 +19,8 @@ import {
 import { z } from "zod";
 
 export interface PluginProviderMetadata {
+  supportsSystemPrompt?: boolean;
+  restoresSessionConfig?: boolean;
   requiresConfiguration?: boolean;
   hasCatalogCacheKey?: boolean;
   hasStatus?: boolean;
@@ -182,6 +184,8 @@ const providerMetadataSchema = z
     requiresConfiguration: z.boolean().optional(),
     hasCatalogCacheKey: z.boolean().optional(),
     hasStatus: z.boolean().optional(),
+    supportsSystemPrompt: z.boolean().optional(),
+    restoresSessionConfig: z.boolean().optional(),
     installation: z
       .object({
         installUrl: z.string().optional(),
