@@ -7,7 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
 import type { MutableDaemonConfig } from "@getpaseo/protocol/messages";
 
-const { snapshotState, configState, featureState } = vi.hoisted(() => ({
+const { snapshotState, configState, featureState, sheetState } = vi.hoisted(() => ({
+  sheetState: {
+    onSave: null as
+      | ((input: {
+          providerId: string;
+          originalProviderId?: string;
+          patch: unknown;
+        }) => Promise<boolean>)
+      | null,
+  },
   snapshotState: { entries: undefined as ProviderSnapshotEntry[] | undefined },
   configState: { config: null as MutableDaemonConfig | null },
   featureState: {} as Record<string, boolean>,
@@ -44,17 +53,21 @@ vi.mock("@/components/provider-account-sheet", () => ({
     visible,
     baseProviderId,
     account,
+    onSave,
   }: {
     visible?: boolean;
     baseProviderId?: string;
     account?: { providerId: string };
-  }) =>
-    visible
+    onSave?: typeof sheetState.onSave;
+  }) => {
+    sheetState.onSave = onSave ?? null;
+    return visible
       ? React.createElement("div", {
           "data-testid": `provider-account-sheet-${account?.providerId ?? baseProviderId}`,
           "data-base": baseProviderId,
         })
-      : null,
+      : null;
+  },
 }));
 
 vi.mock("@/hooks/use-providers-snapshot", () => ({
@@ -101,13 +114,18 @@ function makeConfig(providers: Record<string, unknown> = {}): MutableDaemonConfi
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
 
-function render(shown: ProviderSnapshotEntry, label: string) {
+function render(shown: ProviderSnapshotEntry, label: string, onRenamed?: () => void) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
     root?.render(
-      React.createElement(ProviderAccountsSection, { serverId: "host", entry: shown, label }),
+      React.createElement(ProviderAccountsSection, {
+        serverId: "host",
+        entry: shown,
+        label,
+        onRenamed,
+      }),
     );
   });
 }
@@ -128,6 +146,7 @@ describe("ProviderAccountsSection", () => {
       "claude-work": { extends: "claude", label: "Claude · Work" },
     });
     for (const feature of Object.keys(featureState)) delete featureState[feature];
+    sheetState.onSave = null;
   });
 
   afterEach(() => {
@@ -163,5 +182,42 @@ describe("ProviderAccountsSection", () => {
   it("shows nothing for an account when the daemon cannot replace it exactly", () => {
     render(claudeWorkEntry, "Claude · Work");
     expect(container?.textContent).toBe("");
+  });
+
+  it("leaves the detail after a save renames the account", async () => {
+    featureState.providerConfigReplace = true;
+    const onRenamed = vi.fn();
+    render(claudeWorkEntry, "Claude · Work", onRenamed);
+    click("provider-edit-account-claude-work");
+
+    await act(async () => {
+      await sheetState.onSave?.({
+        providerId: "claude-team",
+        originalProviderId: "claude-work",
+        patch: {},
+      });
+    });
+
+    expect(onRenamed).toHaveBeenCalledTimes(1);
+    expect(
+      container?.querySelector('[data-testid="provider-account-sheet-claude-work"]'),
+    ).toBeNull();
+  });
+
+  it("stays on the detail after a save that keeps the account's ID", async () => {
+    featureState.providerConfigReplace = true;
+    const onRenamed = vi.fn();
+    render(claudeWorkEntry, "Claude · Work", onRenamed);
+    click("provider-edit-account-claude-work");
+
+    await act(async () => {
+      await sheetState.onSave?.({
+        providerId: "claude-work",
+        originalProviderId: "claude-work",
+        patch: {},
+      });
+    });
+
+    expect(onRenamed).not.toHaveBeenCalled();
   });
 });

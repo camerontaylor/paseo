@@ -40,6 +40,8 @@ export interface ProviderDetailState {
   /** This page's Remove is running, or has succeeded and the page is closing. */
   removing: boolean;
   remove: () => void;
+  /** Fork: leave this detail, as after Remove; an account rename moves the provider to a new ID. */
+  leave: () => void;
 }
 
 /**
@@ -77,6 +79,7 @@ export function useProviderDetail({
     canRemove,
     removing: removing?.provider === provider,
     remove: handleRemove,
+    leave: onRemoved,
   };
 }
 
@@ -135,7 +138,12 @@ export function ProviderDetail({
           refresh={listsModels ? providerRefresh : null}
         />
       ) : null}
-      <ProviderAccountsSection serverId={serverId} entry={entry} label={label} />
+      <ProviderAccountsSection
+        serverId={serverId}
+        entry={entry}
+        label={label}
+        onRenamed={detail.leave}
+      />
       <Troubleshooting
         serverId={serverId}
         entry={entry}

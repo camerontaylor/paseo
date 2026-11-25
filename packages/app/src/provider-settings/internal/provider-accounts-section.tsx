@@ -34,10 +34,16 @@ export function ProviderAccountsSection({
   serverId,
   entry,
   label,
+  onRenamed,
 }: {
   serverId: string;
   entry: ProviderEntry;
   label: string;
+  /**
+   * An Edit account save moved this provider to a new ID. The enclosing detail still targets the
+   * old one, which the next snapshot drops, so it has to leave.
+   */
+  onRenamed?: () => void;
 }) {
   const { t } = useTranslation();
   const supportsReplace = useHostFeature(serverId, "providerConfigReplace");
@@ -72,13 +78,16 @@ export function ProviderAccountsSection({
   const close = useCallback(() => setTarget(null), []);
   const save = useCallback(
     async ({ providerId, originalProviderId, patch }: ProviderAccountSaveInput) => {
+      const renamed = Boolean(originalProviderId && originalProviderId !== providerId);
       try {
         await patchConfig(patch);
         await refresh(
-          originalProviderId && originalProviderId !== providerId
-            ? [originalProviderId, providerId]
-            : [providerId],
+          renamed && originalProviderId ? [originalProviderId, providerId] : [providerId],
         );
+        if (renamed) {
+          setTarget(null);
+          onRenamed?.();
+        }
         return true;
       } catch (error) {
         Alert.alert(
@@ -88,7 +97,7 @@ export function ProviderAccountsSection({
         return false;
       }
     },
-    [patchConfig, refresh, t],
+    [onRenamed, patchConfig, refresh, t],
   );
 
   if (!canAdd && !canEdit) return null;
