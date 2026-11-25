@@ -301,6 +301,7 @@ export type MutableDaemonConfig = z.infer<typeof MutableDaemonConfigSchema>;
 export type MutableDaemonConfigPatch = z.infer<typeof MutableDaemonConfigPatchSchema>;
 import type {
   AgentCapabilityFlags,
+  AgentMetric,
   AgentModelDefinition,
   AgentMode,
   AgentPermissionRequest,
@@ -442,6 +443,7 @@ export const ProviderSnapshotEntrySchema = z.object({
   label: z.string().optional(),
   description: z.string().optional(),
   iconSvg: z.string().optional(),
+  docsUrl: z.string().optional(),
   defaultModeId: z.string().nullable().optional(),
 });
 
@@ -493,6 +495,12 @@ const AgentUsageSchema: z.ZodType<AgentUsage> = z.object({
   totalCostUsd: z.number().optional(),
   contextWindowMaxTokens: z.number().optional(),
   contextWindowUsedTokens: z.number().optional(),
+});
+
+export const AgentMetricSchema: z.ZodType<AgentMetric> = z.object({
+  label: z.string(),
+  value: z.string(),
+  tone: z.enum(["default", "ok", "warning", "danger"]).optional(),
 });
 
 const McpStdioServerConfigSchema = z.object({
@@ -840,6 +848,7 @@ export const AgentStreamEventPayloadSchema = z.discriminatedUnion("type", [
     provider: AgentProviderSchema,
     turnId: z.string().optional(),
     usage: AgentUsageSchema.optional(),
+    metrics: z.array(AgentMetricSchema).optional(),
   }),
   z.object({
     type: z.literal("turn_failed"),
@@ -964,6 +973,7 @@ export const AgentSnapshotPayloadSchema = z.object({
   /** Opaque. Changes whenever the accounts this agent reports usage for can change. */
   usageScopeKey: z.string().optional(),
   lastUsage: AgentUsageSchema.optional(),
+  sessionMetrics: z.array(AgentMetricSchema).optional(),
   lastError: z.string().optional(),
   title: z.string().nullable(),
   labels: z.record(z.string(), z.string()).default({}),
@@ -1480,6 +1490,9 @@ const ImageAttachmentSchema = z.object({
 
 export const ActiveTurnBehaviorSchema = z.enum(["interrupt", "steer"]);
 export type ActiveTurnBehavior = z.infer<typeof ActiveTurnBehaviorSchema>;
+/** An agent sender may also queue: wait until the recipient's running turn ends. */
+export const AgentActiveTurnBehaviorSchema = z.enum(["interrupt", "steer", "queue"]);
+export type AgentActiveTurnBehavior = z.infer<typeof AgentActiveTurnBehaviorSchema>;
 
 export const SendAgentMessageSchema = z.object({
   type: z.literal("send_agent_message"),
@@ -1659,7 +1672,8 @@ export const SendAgentMessageRequestSchema = z.object({
   sourceAgentServerId: z.string().min(1).optional(),
   sessionMode: z.string().optional(),
   messageId: z.string().optional(), // Client-provided ID for deduplication
-  activeTurnBehavior: ActiveTurnBehaviorSchema.optional(),
+  /** queue needs an agent sender. */
+  activeTurnBehavior: AgentActiveTurnBehaviorSchema.optional(),
   images: z.array(ImageAttachmentSchema).optional(),
   attachments: AgentAttachmentsSchema,
 });
@@ -2113,6 +2127,34 @@ export const RefreshProvidersSnapshotRequestMessageSchema = z.object({
 
 export const ProviderDiagnosticRequestMessageSchema = z.object({
   type: z.literal("provider_diagnostic_request"),
+  provider: AgentProviderSchema,
+  requestId: z.string(),
+});
+
+export const ProviderInstallationInspectRequestMessageSchema = z.object({
+  type: z.literal("provider.installation.inspect.request"),
+  provider: AgentProviderSchema,
+  /** Skip the daemon's short result cache and ask the provider again. */
+  refresh: z.boolean().optional(),
+  requestId: z.string(),
+});
+
+export const ProviderInstallationCheckUpdatesRequestMessageSchema = z.object({
+  type: z.literal("provider.installation.check_updates.request"),
+  provider: AgentProviderSchema,
+  /** Skip the daemon's update-check cache and ask the provider again. */
+  refresh: z.boolean().optional(),
+  requestId: z.string(),
+});
+
+export const ProviderInstallationUpdateRequestMessageSchema = z.object({
+  type: z.literal("provider.installation.update.request"),
+  provider: AgentProviderSchema,
+  requestId: z.string(),
+});
+
+export const ProviderInstallationUpdateSubscribeRequestMessageSchema = z.object({
+  type: z.literal("provider.installation.update.subscribe.request"),
   provider: AgentProviderSchema,
   requestId: z.string(),
 });
@@ -3861,6 +3903,7 @@ export const HubExecutionAgentValidateRequestSchema = z.object({
   type: z.literal("hub.execution.agent.validate.request"),
   requestId: z.string(),
   provider: z.string(),
+  cwd: z.string().optional(),
   model: z.string().optional(),
   modeId: z.string().optional(),
   thinkingOptionId: z.string().optional(),
@@ -4073,6 +4116,10 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   GetProvidersSnapshotRequestMessageSchema,
   RefreshProvidersSnapshotRequestMessageSchema,
   ProviderDiagnosticRequestMessageSchema,
+  ProviderInstallationInspectRequestMessageSchema,
+  ProviderInstallationCheckUpdatesRequestMessageSchema,
+  ProviderInstallationUpdateRequestMessageSchema,
+  ProviderInstallationUpdateSubscribeRequestMessageSchema,
   ProviderUsageListRequestMessageSchema,
   UsageListReportsRequestMessageSchema,
   ResumeAgentRequestMessageSchema,
@@ -4428,6 +4475,8 @@ export const ServerInfoStatusPayloadSchema = z
         usageSetting: z.boolean().optional(),
         usageSources: z.boolean().optional(),
         usageReportsStreaming: z.boolean().optional(),
+        // COMPAT(providerInstallation): added in v0.17.0, remove gate after 2027-05-13.
+        providerInstallation: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: z.boolean().optional(),
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -4620,6 +4669,10 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(providerConfigRename): added in v0.2.X, remove after 2027-02-02 when old daemons are unsupported.
         // Daemon migrates persisted agents when a provider account is renamed.
         providerConfigRename: z.boolean().optional(),
+        // COMPAT(gooseProvider): added in v0.17.0, remove after 2027-05-20 once host floor includes the bundled adapter.
+        gooseProvider: z.boolean().optional(),
+        // COMPAT(hermesProvider): added in v0.17.4, remove after 2027-05-23 once host floor includes the bundled adapter.
+        hermesProvider: z.boolean().optional(),
         // COMPAT(importSessionWorkspaceTarget): added in v0.1.110, remove gate after 2027-01-16.
         importSessionWorkspaceTarget: z.boolean().optional(),
         // COMPAT(importSessionSearch): added in v0.8.0, remove gate after 2027-03-02.
@@ -4645,6 +4698,8 @@ export const ServerInfoStatusPayloadSchema = z
         canonicalSubmittedPrompts: z.boolean().optional(),
         agentMessageProvenance: z.boolean().optional(),
         agentMessageBatching: z.boolean().optional(),
+        // COMPAT(agentActiveTurnBehaviors): added in v0.17.2, remove gate after 2027-05-22.
+        agentActiveTurnBehaviors: z.boolean().optional(),
         // COMPAT(agentTurnIdentity): accept peers that observed pre-release v0.2.6 through 2027-01-31.
         agentTurnIdentity: z.boolean().optional(),
         // COMPAT(stableProjectIdentity): added in v0.1.109, remove gate after 2027-01-15.
@@ -5596,6 +5651,8 @@ export const AgentTimelineEntryPayloadSchema = z.object({
   seqEnd: z.number().int().nonnegative(),
   sourceSeqRanges: z.array(AgentTimelineSeqRangeSchema),
   collapsed: z.array(z.enum(["assistant_merge", "reasoning_merge", "tool_lifecycle", "identity"])),
+  /** Set on the row that carries the turn footer: the turn's last assistant message, else its last tool call. */
+  turnMetrics: z.array(AgentMetricSchema).optional(),
 });
 
 export const FetchAgentTimelineResponseMessageSchema = z.object({
@@ -6073,6 +6130,10 @@ export const SendAgentMessageResponseMessageSchema = z.object({
     agentId: z.string(),
     accepted: z.boolean(),
     deliveryStatus: z.literal("queued").optional(),
+    /** The behavior applied to a queued agent message. */
+    activeTurnBehavior: AgentActiveTurnBehaviorSchema.optional(),
+    /** What happens to a queued agent message, and how the sender can change it. */
+    guidance: z.string().optional(),
     error: z.string().nullable(),
   }),
 });
@@ -6343,6 +6404,17 @@ const CheckoutStatusCommonSchema = z.object({
   // upstream branch name is not necessarily currentBranch, so composing one is wrong.
   // aheadOfOrigin/behindOfOrigin are measured against exactly this ref.
   upstreamRef: z.string().nullable().optional(),
+  // How currentBranch relates to its upstream: "tracked" (upstreamRef and the counts are set),
+  // "none" (never pushed; Push does a first push), "gone" (the upstream's remote-tracking ref no
+  // longer exists, as after the remote branch is deleted), or "unknown" (the daemon cannot tell,
+  // as when the clone keeps no remote-tracking ref for the upstream). Absent from daemons that
+  // predate it, which report all but "tracked" as a null upstreamRef.
+  upstreamState: z.enum(["tracked", "none", "gone", "unknown"]).optional(),
+  // The remote a first push publishes currentBranch to, when the daemon can confirm git would
+  // push the branch there too. Null when there is no such remote, as when origin is missing or
+  // git is set to push the branch to another remote (branch.<name>.pushRemote,
+  // remote.pushDefault). Absent from daemons that predate it.
+  firstPushRemote: z.string().nullable().optional(),
   forgeWeb: ForgeWebSchema.optional(),
 });
 
@@ -7404,6 +7476,142 @@ export const ProviderDiagnosticResponseMessageSchema = z.object({
   }),
 });
 
+/** Provider-owned facts; `version` is an opaque string the app shows as written. */
+export const ProviderInstallationInspectionSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("installed"), version: z.string().optional() }),
+  z.object({ status: z.literal("not_installed") }),
+  z.object({ status: z.literal("error"), message: z.string() }),
+]);
+
+export const ProviderInstallationSchema = z.object({
+  installUrl: z.string().optional(),
+  updateUrl: z.string().optional(),
+  /** Absent when the provider does not report its installation. */
+  inspection: ProviderInstallationInspectionSchema.optional(),
+  /** True when the provider can run its own update through `provider.installation.update`. */
+  canUpdate: z.boolean().optional(),
+});
+
+export const ProviderInstallationInspectResponseMessageSchema = z.object({
+  type: z.literal("provider.installation.inspect.response"),
+  payload: z.object({
+    provider: AgentProviderSchema,
+    /** Null when the provider declares no installation contract. */
+    installation: ProviderInstallationSchema.nullable(),
+    error: z.string().nullable(),
+    requestId: z.string(),
+  }),
+});
+
+/**
+ * The provider's answer to "is a newer version available". `versions` and `message` are opaque
+ * strings the app shows as written. `error` means the check threw or missed its deadline.
+ */
+export const ProviderInstallationUpdateCheckSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("current") }),
+  z.object({
+    status: z.literal("available"),
+    versions: z.array(z.string()).optional(),
+    message: z.string().optional(),
+  }),
+  z.object({ status: z.literal("unknown"), message: z.string().optional() }),
+  z.object({ status: z.literal("error"), message: z.string() }),
+]);
+
+export const ProviderInstallationCheckUpdatesResponseMessageSchema = z.object({
+  type: z.literal("provider.installation.check_updates.response"),
+  payload: z.object({
+    provider: AgentProviderSchema,
+    /** Null when the provider cannot check for updates. */
+    updateCheck: ProviderInstallationUpdateCheckSchema.nullable(),
+    error: z.string().nullable(),
+    requestId: z.string(),
+  }),
+});
+
+/** One piece of updater output, shown unchanged and in order. */
+export const ProviderInstallationUpdateOutputSchema = z.object({
+  type: z.enum(["stdout", "stderr", "message"]),
+  text: z.string(),
+});
+
+/** The state of one provider update. Messages are the provider's, shown as written. */
+export const ProviderInstallationUpdateOperationSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("running"), id: z.string(), startedAt: z.string() }),
+  z.object({
+    status: z.literal("succeeded"),
+    id: z.string(),
+    startedAt: z.string(),
+    finishedAt: z.string(),
+    message: z.string().optional(),
+  }),
+  z.object({
+    status: z.literal("failed"),
+    id: z.string(),
+    startedAt: z.string(),
+    finishedAt: z.string(),
+    message: z.string(),
+  }),
+]);
+
+/** The latest update of a provider since the daemon started, with its retained output. */
+export const ProviderInstallationUpdateSchema = z.object({
+  operation: ProviderInstallationUpdateOperationSchema,
+  output: z.array(ProviderInstallationUpdateOutputSchema),
+  /** True when the oldest output was dropped to stay within the daemon's output limit. */
+  truncated: z.boolean().optional(),
+});
+
+export const ProviderInstallationUpdateResponseMessageSchema = z.object({
+  type: z.literal("provider.installation.update.response"),
+  payload: z.object({
+    provider: AgentProviderSchema,
+    /** The update this request started, or the one already running. */
+    update: ProviderInstallationUpdateSchema.nullable(),
+    error: z.string().nullable(),
+    requestId: z.string(),
+  }),
+});
+
+export const ProviderInstallationUpdateSubscribeResponseMessageSchema = z.object({
+  type: z.literal("provider.installation.update.subscribe.response"),
+  payload: z.object({
+    provider: AgentProviderSchema,
+    subscriptionId: z.string().optional(),
+    /** Null when the provider has not been updated since the daemon started. */
+    update: ProviderInstallationUpdateSchema.nullable(),
+    error: z.string().nullable(),
+    requestId: z.string(),
+  }),
+});
+
+/**
+ * Sent to `provider.installation.update.subscribe` owners when an update starts, reports output
+ * or finishes. `output` holds only the entries new since the previous progress for `operation.id`.
+ */
+export const ProviderInstallationUpdateProgressMessageSchema = z.object({
+  type: z.literal("provider.installation.update.progress"),
+  payload: z.object({
+    subscriptionId: z.string().optional(),
+    provider: AgentProviderSchema,
+    operation: ProviderInstallationUpdateOperationSchema,
+    output: z.array(ProviderInstallationUpdateOutputSchema),
+  }),
+});
+
+/**
+ * Sent to `provider.installation.update.subscribe` owners when a refresh of the provider drops
+ * the failed update `operationId`, so the provider has no current update.
+ */
+export const ProviderInstallationUpdateClearedMessageSchema = z.object({
+  type: z.literal("provider.installation.update.cleared"),
+  payload: z.object({
+    subscriptionId: z.string().optional(),
+    provider: AgentProviderSchema,
+    operationId: z.string(),
+  }),
+});
+
 export const ProviderUsageToneSchema = z.enum(["default", "ok", "warning", "danger"]);
 export const ProviderUsageStatusSchema = z.enum(["available", "unavailable", "error"]);
 
@@ -7420,6 +7628,7 @@ export const ProviderUsageWindowSchema = z.object({
   usedPct: z.number().nullable().optional(),
   remainingPct: z.number().nullable().optional(),
   resetsAt: z.string().nullable().optional(),
+  durationSeconds: z.number().optional(),
   runsOutAt: z.string().nullable().optional(),
   shortfallPct: z.number().nullable().optional(),
   tone: ProviderUsageToneSchema.optional(),
@@ -7484,6 +7693,7 @@ export const UsageProblemSchema = z.discriminatedUnion("kind", [
 const AvailableUsageReportSchema = z.object({
   status: z.literal("available"),
   planLabel: z.string().optional(),
+  observedAt: z.string().optional(),
   windows: z.array(ProviderUsageWindowSchema),
   balances: z.array(ProviderUsageBalanceSchema).optional(),
   details: z.array(ProviderUsageDetailSchema).optional(),
@@ -7500,6 +7710,8 @@ export const UsageReportEntrySchema = z.object({
   sourceId: z.string(),
   sourceLabel: z.string(),
   icon: z.string().optional(),
+  /** Host hint for whether this report starts shown until the user overrides it. Absent means true. */
+  defaultEnabled: z.boolean().optional(),
   report: UsageReportSchema,
   // Successful completion time; fetchedAt remains the attempt timestamp for ordering.
   successfulAt: z.string().optional(),
@@ -8296,6 +8508,12 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ProvidersSnapshotUpdateMessageSchema,
   RefreshProvidersSnapshotResponseMessageSchema,
   ProviderDiagnosticResponseMessageSchema,
+  ProviderInstallationInspectResponseMessageSchema,
+  ProviderInstallationCheckUpdatesResponseMessageSchema,
+  ProviderInstallationUpdateResponseMessageSchema,
+  ProviderInstallationUpdateSubscribeResponseMessageSchema,
+  ProviderInstallationUpdateProgressMessageSchema,
+  ProviderInstallationUpdateClearedMessageSchema,
   ProviderUsageListResponseMessageSchema,
   UsageListReportsUpdateMessageSchema,
   UsageListReportsResponseMessageSchema,
@@ -8482,6 +8700,30 @@ export type RefreshProvidersSnapshotResponseMessage = z.infer<
 >;
 export type ProviderDiagnosticResponseMessage = z.infer<
   typeof ProviderDiagnosticResponseMessageSchema
+>;
+export type ProviderInstallation = z.infer<typeof ProviderInstallationSchema>;
+export type ProviderInstallationInspection = z.infer<typeof ProviderInstallationInspectionSchema>;
+export type ProviderInstallationInspectResponseMessage = z.infer<
+  typeof ProviderInstallationInspectResponseMessageSchema
+>;
+export type ProviderInstallationUpdateCheck = z.infer<typeof ProviderInstallationUpdateCheckSchema>;
+export type ProviderInstallationCheckUpdatesResponseMessage = z.infer<
+  typeof ProviderInstallationCheckUpdatesResponseMessageSchema
+>;
+export type ProviderInstallationUpdateOutput = z.infer<
+  typeof ProviderInstallationUpdateOutputSchema
+>;
+export type ProviderInstallationUpdateOperation = z.infer<
+  typeof ProviderInstallationUpdateOperationSchema
+>;
+export type ProviderInstallationUpdate = z.infer<typeof ProviderInstallationUpdateSchema>;
+export type ProviderInstallationUpdateProgress = Omit<
+  z.infer<typeof ProviderInstallationUpdateProgressMessageSchema>["payload"],
+  "subscriptionId"
+>;
+export type ProviderInstallationUpdateCleared = Omit<
+  z.infer<typeof ProviderInstallationUpdateClearedMessageSchema>["payload"],
+  "subscriptionId"
 >;
 export type ProviderUsageTone = z.infer<typeof ProviderUsageToneSchema>;
 export type UsageProblem = z.infer<typeof UsageProblemSchema>;

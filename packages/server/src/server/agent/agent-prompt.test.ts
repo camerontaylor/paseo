@@ -17,7 +17,7 @@ import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import {
-  sendPromptToAgent,
+  sendPromptToAgentAlone,
   setupFinishNotification,
   waitForAgentRunStartWithTimeout,
 } from "./agent-prompt.js";
@@ -989,7 +989,7 @@ test("queue acceptance waits on its own reserved provider run", async () => {
   try {
     // The queue's delivery: dispatch without replacement, then wait for the
     // reserved run to actually start before the receipt completes.
-    const dispatch = sendPromptToAgent({
+    const dispatch = sendPromptToAgentAlone({
       agentManager: manager,
       agentStorage: { get: async () => undefined } as unknown as AgentStorage,
       agentId: agent.id,
@@ -1005,7 +1005,7 @@ test("queue acceptance waits on its own reserved provider run", async () => {
     });
     await vi.waitFor(() => expect(manager.hasInFlightRun(agent.id)).toBe(true));
     await expect(
-      sendPromptToAgent({
+      sendPromptToAgentAlone({
         agentManager: manager,
         agentStorage: { get: async () => undefined } as unknown as AgentStorage,
         agentId: agent.id,
@@ -1064,7 +1064,7 @@ test("queue reservation preserves a pending permission without a foreground run"
 test("queued dispatch cannot claim a turn when an agent became archived", async () => {
   const streamAgent = vi.fn();
   await expect(
-    sendPromptToAgent({
+    sendPromptToAgentAlone({
       agentId: "archived",
       prompt: "queued speech",
       idleOnly: true,

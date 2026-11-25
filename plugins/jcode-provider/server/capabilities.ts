@@ -64,16 +64,10 @@ export const jcodeCapabilities: AcpTransformer = {
     if (skill === undefined) return null;
     return { _meta: { jcode: { skill } } };
   },
-  command(commands, context) {
-    if (context.policy.skillSelection !== true) return null;
-    let changed = false;
-    const classified = commands.map((command) => {
-      if (command.kind !== undefined) return command;
-      if (!isSkillCommand(command)) return command;
-      changed = true;
-      return { ...command, kind: "skill" as const };
-    });
-    return changed ? classified : null;
+  command(command, context) {
+    if (context.policy.skillSelection !== true) return command;
+    if (command.kind !== undefined || !isSkillCommand(command)) return command;
+    return { ...command, kind: "skill" as const };
   },
 };
 

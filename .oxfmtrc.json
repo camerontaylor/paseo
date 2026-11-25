@@ -11,5 +11,11 @@
   "arrowParens": "always",
   "bracketSameLine": false,
   "bracketSpacing": true,
-  "ignorePatterns": ["*.lock", "**/*.gen.ts", "**/*.gen.tsx", "fork/**/*.md"]
+  "ignorePatterns": [
+    "*.lock",
+    "**/*.gen.ts",
+    "**/*.gen.tsx",
+    "fork/**/*.md",
+    "packages/react-native-enriched-markdown/**"
+  ]
 }

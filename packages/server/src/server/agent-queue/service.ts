@@ -13,7 +13,7 @@ import type { AgentManager } from "../agent/agent-manager.js";
 import type { AgentPromptInput } from "../agent/agent-sdk-types.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import { buildAgentPrompt } from "../agent/prompt-attachments.js";
-import { sendPromptToAgent, waitForAgentRunStartWithTimeout } from "../agent/agent-prompt.js";
+import { sendPromptToAgentAlone, waitForAgentRunStartWithTimeout } from "../agent/agent-prompt.js";
 import { wrapSpokenInput } from "../voice-config.js";
 import type { MessageReceipts } from "../message-receipts/index.js";
 import {
@@ -131,7 +131,7 @@ export interface AgentQueueServiceOptions {
   receipts?: AgentQueueReceiptController | null;
   /**
    * Injected so tests can substitute the send without module mocks; defaults to
-   * the same sendPromptToAgent the send_agent_message_request handler uses.
+   * the single-prompt dispatch (sendPromptToAgentAlone).
    */
   sendPrompt?: (input: SendQueuedPromptInput) => Promise<unknown>;
 }
@@ -185,7 +185,7 @@ export class AgentQueueService {
     this.sendPrompt =
       options.sendPrompt ??
       ((input) =>
-        sendPromptToAgent({
+        sendPromptToAgentAlone({
           agentManager: this.agentManager as AgentManager,
           agentStorage: this.agentStorage,
           agentId: input.agentId,

@@ -125,6 +125,7 @@ function createServer(
   const agentManager = {
     setAgentAttentionCallback: vi.fn(),
     subscribe: vi.fn(() => () => {}),
+    onStop: () => () => {},
     getAgent: vi.fn(() => null),
     getLastAssistantMessage: vi.fn(async () => null),
     getMetricsSnapshot: vi.fn(() => ({

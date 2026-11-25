@@ -1,0 +1,4 @@
+<resources>
+    <string name="enriched_copy_table">Copy table</string>
+    <string name="enriched_copy_table_markdown">Copy table as Markdown</string>
+</resources>
