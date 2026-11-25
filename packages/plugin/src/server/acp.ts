@@ -57,10 +57,30 @@ export interface AcpOptions {
    * vendor turn is open instead of treating it as the prompt's echo.
    */
   vendorTurnsAreNeverForeground?: boolean;
+  /**
+   * For an agent that lists thinking options only for the selected model: discovery selects each
+   * model in turn and records the thinking options the agent lists for it, or none.
+   */
+  perModelThinkingOptions?: boolean;
   waitForInitialCommands?: boolean;
   initialCommandsTimeoutMs?: number;
-  /** Allow delayed session/load updates before publishing the session as ready. */
+  /**
+   * For an agent that streams history after its session/load response: publish the session
+   * as ready once this long passes without a history update.
+   */
   loadReplayQuietPeriodMs?: number;
+  /**
+   * Keep a turn open after `end_turn` while qualifying tool calls are still running,
+   * settling once those tools finish and the agent finishes its follow-up reply.
+   */
+  deferTurnOnRunningTools?: {
+    /** Delay after `usage_update` closes a follow-up reply before settling. Defaults to 500ms. */
+    settleDelayMs?: number;
+    /** Quiet limit after qualifying tools finish if no reply settles via `usage_update`. Defaults to 120_000ms. */
+    quietLimitMs?: number;
+    /** Predicate deciding whether an open tool call keeps the turn open. Defaults to all running tools. */
+    keepsTurnOpen?: (toolCall: AcpToolCallSnapshot) => boolean;
+  };
   /** An unattended mode that approves ACP allow-once requests in the specified native mode. */
   autoAcceptMode?: {
     mode: Omit<ProviderMode, "isUnattended">;
@@ -111,12 +131,17 @@ export interface AcpConfigAccess {
   set(id: string, value: JsonValue): Promise<void>;
 }
 
+/** Sends an ACP extension request to the agent. Rejects with the agent's JSON-RPC error. */
+export type AcpRequest = (method: string, params: JsonValue) => Promise<JsonValue>;
+
 export interface AcpDiscoveryContext extends AcpContext {
   config: AcpConfigAccess;
+  request: AcpRequest;
 }
 
 export interface AcpConfigureContext extends AcpContext {
   config: AcpConfigAccess;
+  request: AcpRequest;
   catalog(): ProviderCatalog;
   apply(change: AcpConfigChange): Promise<void>;
 }
@@ -133,9 +158,14 @@ export interface AcpToolCallSnapshot {
   title: string;
   kind?: string;
   status: "pending" | "in_progress" | "completed" | "failed";
+  /** The call's ACP `rawInput`. */
   input: JsonValue;
+  /** The call's ACP `rawOutput`. */
   output: JsonValue;
+  /** The call's ACP `content` blocks. An update that sends `content` replaces them. */
+  content?: JsonValue;
   locations: readonly string[];
+  /** The row Paseo shows. Without it, Paseo builds the standard row for the call's ACP `kind`. */
   detail?: ProviderToolCallDetail;
 }
 
@@ -157,11 +187,6 @@ export interface AcpTransformer {
   attach?(info: { response: JsonValue }, context: AcpContext): AcpSessionPolicy | null;
   /** Vendor metadata for a prompt. The shim sends it as `_meta` on `session/prompt`. */
   prompt?(info: AcpPromptInfo, context: AcpPolicyContext): AcpPromptMetadata | null;
-  /** Classify advertised commands before the shim publishes them. */
-  command?(
-    commands: readonly ProviderCommand[],
-    context: AcpPolicyContext,
-  ): readonly ProviderCommand[] | null;
   /** Decode an older saved session and supply extension metadata for session/new or session/load. */
   sessionOpen?(context: {
     persistence?: ProviderPersistence;
@@ -174,11 +199,26 @@ export interface AcpTransformer {
     context: AcpDiscoveryContext,
   ): Promise<ProviderCatalog> | ProviderCatalog;
   configure?(change: AcpConfigChange, context: AcpConfigureContext): Promise<"handled" | "pass">;
+  /** Rewrites every session config snapshot before Paseo sees it. */
+  config?(state: ProviderConfigState, context: AcpContext): ProviderConfigState;
+  /**
+   * Rewrites each advertised ACP slash command before Paseo sees it. The connection policy lets a
+   * transformer classify skills only when the agent negotiated explicit skill selection.
+   */
+  command?(command: ProviderCommand, context: AcpPolicyContext): ProviderCommand;
   notification?(
     notification: { method: string; params: JsonValue },
     context: AcpContext,
   ): AcpVendorUpdate | readonly AcpVendorUpdate[] | null;
-  toolCall?(toolCall: AcpToolCallSnapshot, context: AcpContext): AcpToolCallSnapshot;
+  /** Rewrites each update of a tool call, merged with the call's earlier updates. */
+  toolCall?(
+    toolCall: AcpToolCallSnapshot,
+    context: AcpContext & {
+      mcpServerNames?: readonly string[];
+      /** The call as Paseo last presented it, after every transformer. Absent on its first update. */
+      previous?: AcpToolCallSnapshot;
+    },
+  ): AcpToolCallSnapshot;
 }
 
 export function runAcpProvider(options: RunAcpProviderOptions): ProviderRegistration {

@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { ClaudeResultMeter } from "./metrics.js";
 import { ClaudeRuntimeSafety } from "./runtime-safety.js";
 import type { ProviderOptions } from "@getpaseo/protocol/agent-types";
 import { applyProviderOptionsPatch } from "../../option-controls.js";
@@ -98,6 +99,15 @@ import {
 } from "./rewind.js";
 import { normalizeProviderReplayTimestamp } from "../../provider-history-timestamps.js";
 import { claudeConfigDir, claudeProjectDirSync, claudeTranscriptPath } from "./project-dir.js";
+import {
+  compareWithLatestRelease,
+  fetchHomebrewCaskVersion,
+  fetchReleaseText,
+  homebrewCaskOf,
+  resolveExecutablePath,
+  type LatestReleaseLookup,
+} from "../release-check.js";
+import { runUpdateCommand, updatedForNewAgents } from "../update-command.js";
 import { THINKING_APPLIES_NEXT_TURN_NOTICE } from "../../provider-notices.js";
 import {
   isProviderImageMarkdown,
@@ -116,6 +126,7 @@ import {
   type AgentOptionControl,
   type AgentLaunchContext,
   type AgentMetadata,
+  type AgentMetric,
   type AgentMode,
   type AgentModelDefinition,
   type AgentPermissionRequest,
@@ -136,6 +147,7 @@ import {
   type AgentTimelineItem,
   type AgentUsage,
   type AgentRuntimeInfo,
+  type AgentClientInstallation,
   type FetchCatalogOptions,
   type ImportableProviderSession,
   type ImportProviderSessionContext,
@@ -482,6 +494,8 @@ interface ClaudeAgentClientOptions {
   queryFactory?: ClaudeQueryFactory;
   resolveBinary?: () => Promise<string>;
   resolveVersion?: (signal?: AbortSignal) => Promise<string>;
+  /** Where update checks learn the newest release; defaults to Claude Code's release channel. */
+  lookupLatestRelease?: LatestReleaseLookup;
   rewindSdk?: ClaudeRewindSdk;
 }
 
@@ -1043,37 +1057,11 @@ function isTruthyEnvValue(value: string | undefined): boolean {
   );
 }
 
-function claudeAutoModeUnavailableOn(env: NodeJS.ProcessEnv): "Bedrock" | "Vertex" | null {
-  if (isTruthyEnvValue(env.CLAUDE_CODE_USE_BEDROCK)) {
-    return "Bedrock";
-  }
-  if (isTruthyEnvValue(env.CLAUDE_CODE_USE_VERTEX)) {
-    return "Vertex";
-  }
-  return null;
-}
-
-function assertClaudeModeCanRun(mode: PermissionMode, env: NodeJS.ProcessEnv): void {
-  if (mode !== "auto") {
-    return;
-  }
-  const transport = claudeAutoModeUnavailableOn(env);
-  if (transport === null) {
-    return;
-  }
-  throw new Error(
-    `Claude Auto mode requires the Anthropic API and is not supported when Claude Code uses ${transport}. Select another permission mode or unset the ${transport === "Bedrock" ? "CLAUDE_CODE_USE_BEDROCK" : "CLAUDE_CODE_USE_VERTEX"} environment variable.`,
-  );
-}
-
-function claudeModeCatalog(env: NodeJS.ProcessEnv): {
-  modes: AgentMode[];
-  defaultModeId: PermissionMode;
-} {
-  if (claudeAutoModeUnavailableOn(env)) {
-    return { modes: DEFAULT_MODES.filter((mode) => mode.id !== "auto"), defaultModeId: "default" };
-  }
-  return { modes: DEFAULT_MODES, defaultModeId: "auto" };
+function claudeDefaultMode(env: NodeJS.ProcessEnv): PermissionMode {
+  return isTruthyEnvValue(env.CLAUDE_CODE_USE_BEDROCK) ||
+    isTruthyEnvValue(env.CLAUDE_CODE_USE_VERTEX)
+    ? "default"
+    : "auto";
 }
 
 function coerceSessionMetadata(metadata: AgentMetadata | undefined): Partial<AgentSessionConfig> {
@@ -1615,6 +1603,43 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly discoverModels: typeof discoverClaudeModels;
   readonly provider = "claude" as const;
   readonly capabilities = CLAUDE_CAPABILITIES;
+  readonly installation: AgentClientInstallation = {
+    installUrl: CLAUDE_INSTALL_URL,
+    updateUrl: CLAUDE_UPDATE_URL,
+    inspect: async ({ signal }) => {
+      const probe = await readClaudeCodeVersion(this.runtimeSettings, signal);
+      if (probe.status === "not_installed") return probe;
+      return probe.version
+        ? { status: "installed", version: probe.version }
+        : { status: "installed" };
+    },
+    checkForUpdates: async ({ installedVersion, signal }) => {
+      if (!installedVersion)
+        return { status: "unknown", message: "The configured command does not report its version" };
+      const installed = await resolveInstalledClaude(this.runtimeSettings);
+      if (!installed) return { status: "unknown", message: "Claude Code is not installed" };
+      const latest = await this.lookupLatestRelease({
+        executablePath: await resolveExecutablePath(installed.executable),
+        signal,
+      });
+      return compareWithLatestRelease({ installed: installedVersion, latest });
+    },
+    // `claude update` updates native installs itself and package-manager installs through the
+    // package manager.
+    update: async (context) => {
+      const installed = await resolveInstalledClaude(this.runtimeSettings);
+      if (!installed) return { status: "failed", message: "Claude Code is not installed" };
+      return runUpdateCommand(
+        {
+          command: installed.executable,
+          args: [...installed.args, "update"],
+          env: createProviderEnvSpec({ runtimeSettings: this.runtimeSettings }),
+          successMessage: updatedForNewAgents("Claude Code"),
+        },
+        context,
+      );
+    },
+  };
 
   private readonly defaults?: { agents?: Record<string, AgentDefinition> };
   private readonly logger: Logger;
@@ -1623,6 +1648,7 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly resolveBinary: () => Promise<string>;
   private readonly resolveVersion: (signal?: AbortSignal) => Promise<string>;
   private version: Promise<string | undefined> | undefined;
+  private readonly lookupLatestRelease: LatestReleaseLookup;
   private readonly rewindSdk: ClaudeRewindSdk;
   private readonly scheduleImportDescriptors = createImportDescriptorScheduler(
     (candidate: ClaudeSessionCandidate, signal) => this.readImportDescriptor(candidate, signal),
@@ -1644,6 +1670,13 @@ export class ClaudeAgentClient implements AgentClient {
     this.resolveVersion =
       options.resolveVersion ??
       ((signal) => resolveClaudeCodeVersion(this.runtimeSettings, signal));
+    this.lookupLatestRelease =
+      options.lookupLatestRelease ??
+      ((input) =>
+        lookupLatestClaudeRelease({
+          ...input,
+          configDir: claudeConfigDir(this.buildProviderEnv()),
+        }));
     this.rewindSdk = options.rewindSdk ?? realClaudeRewindSdk;
   }
 
@@ -1724,6 +1757,7 @@ export class ClaudeAgentClient implements AgentClient {
     this.version = Promise.resolve(claudeCodeVersion);
     const env = this.buildProviderEnv();
     let discoveredModelIds = new Set<string>();
+    let incomplete = false;
     try {
       const advertisedModels = await runProviderRefreshActivity(context, "models", () =>
         this.discoverModels({
@@ -1740,6 +1774,7 @@ export class ClaudeAgentClient implements AgentClient {
       );
     } catch (error) {
       context?.signal.throwIfAborted();
+      incomplete = true;
       this.logger.warn(
         { err: error },
         "Claude model discovery failed; omitting discovery-required models",
@@ -1753,10 +1788,11 @@ export class ClaudeAgentClient implements AgentClient {
         discoveredModelIds,
       ),
     );
-    const modeCatalog = claudeModeCatalog(env);
     return {
       models,
-      ...modeCatalog,
+      modes: DEFAULT_MODES,
+      defaultModeId: claudeDefaultMode(env),
+      ...(incomplete ? { incomplete } : {}),
     };
   }
 
@@ -1765,7 +1801,7 @@ export class ClaudeAgentClient implements AgentClient {
   }
 
   async resolveDefaultModeId({ env: launchEnv }: ResolveAgentDefaultModeInput): Promise<string> {
-    return claudeModeCatalog(this.buildProviderEnv(launchEnv)).defaultModeId;
+    return claudeDefaultMode(this.buildProviderEnv(launchEnv));
   }
 
   private buildProviderEnv(launchEnv?: Record<string, string>): NodeJS.ProcessEnv {
@@ -1946,20 +1982,85 @@ async function resolveClaudeBinary(runtimeSettings?: ProviderRuntimeSettings): P
   );
 }
 
+const CLAUDE_INSTALL_URL = "https://code.claude.com/docs/en/setup#install-claude-code";
+const CLAUDE_UPDATE_URL = "https://code.claude.com/docs/en/setup#update-claude-code";
+
+type ClaudeCodeVersionRead =
+  | { status: "not_installed" }
+  /** `version` is null when the configured command is a wrapper that does not report Claude Code's version. */
+  | { status: "installed"; version: string | null };
+
+const CLAUDE_UPDATE_CHANNELS = new Set(["latest", "stable", "rc"]);
+
+/** The `autoUpdatesChannel` Claude Code updates from, `latest` unless settings pick another. */
+async function readClaudeUpdateChannel(configDir: string): Promise<string> {
+  try {
+    const settings: unknown = JSON.parse(
+      await promises.readFile(path.join(configDir, "settings.json"), "utf8"),
+    );
+    const channel =
+      settings && typeof settings === "object"
+        ? (settings as Record<string, unknown>).autoUpdatesChannel
+        : undefined;
+    return typeof channel === "string" && CLAUDE_UPDATE_CHANNELS.has(channel) ? channel : "latest";
+  } catch {
+    return "latest";
+  }
+}
+
+/**
+ * The release Claude Code's own updater offers: the Homebrew cask for cask installs, otherwise
+ * the version published on the configured update channel.
+ */
+async function lookupLatestClaudeRelease(input: {
+  executablePath: string;
+  configDir: string;
+  signal: AbortSignal;
+}): Promise<string> {
+  const cask = homebrewCaskOf(input.executablePath);
+  if (cask) return fetchHomebrewCaskVersion(cask, input.signal);
+  const channel = await readClaudeUpdateChannel(input.configDir);
+  return fetchReleaseText(
+    `https://downloads.claude.ai/claude-code-releases/${channel}`,
+    input.signal,
+  );
+}
+
 export async function resolveClaudeCodeVersion(
   runtimeSettings?: ProviderRuntimeSettings,
   signal?: AbortSignal,
 ): Promise<string> {
+  const read = await readClaudeCodeVersion(runtimeSettings, signal);
+  if (read.status === "not_installed") {
+    throw new Error("Claude binary not found while resolving Claude Code version");
+  }
+  if (!read.version) {
+    throw new Error("Unable to parse Claude Code version from --version output");
+  }
+  return read.version;
+}
+
+/** The executable and arguments a session would launch, or null when Claude Code is missing. */
+async function resolveInstalledClaude(
+  runtimeSettings: ProviderRuntimeSettings | undefined,
+): Promise<{ executable: string; args: string[] } | null> {
   const launch = await resolveProviderLaunch({
     commandConfig: runtimeSettings?.command,
     defaultBinary: "claude",
   });
   const availability = await checkProviderLaunchAvailable(launch);
-  if (!availability.available) {
-    throw new Error("Claude binary not found while resolving Claude Code version");
-  }
-  const executable = availability.resolvedPath ?? launch.command;
-  const { stdout, stderr } = await execCommand(executable, [...launch.args, "--version"], {
+  if (!availability.available) return null;
+  return { executable: availability.resolvedPath ?? launch.command, args: [...launch.args] };
+}
+
+async function readClaudeCodeVersion(
+  runtimeSettings: ProviderRuntimeSettings | undefined,
+  signal: AbortSignal | undefined,
+): Promise<ClaudeCodeVersionRead> {
+  const installed = await resolveInstalledClaude(runtimeSettings);
+  if (!installed) return { status: "not_installed" };
+  const { executable } = installed;
+  const { stdout, stderr } = await execCommand(executable, [...installed.args, "--version"], {
     ...createProviderEnvSpec({ runtimeSettings }),
     timeout: 5_000,
     signal,
@@ -1971,10 +2072,10 @@ export async function resolveClaudeCodeVersion(
   const version = /\d+\.\d+\.\d+\s+\(Claude Code\)/i.test(rawVersionOutput)
     ? parseClaudeCodeVersion(rawVersionOutput)
     : null;
-  if (!version) {
-    throw new Error("Unable to parse Claude Code version from --version output");
-  }
-  return version.join(".");
+  return {
+    status: "installed",
+    version: version ? version.join(".") : null,
+  };
 }
 
 async function resolveClaudeAuth(
@@ -2418,6 +2519,7 @@ class ClaudeAgentSession implements AgentSession {
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
   private lastOptionsModel: string | null = null;
   private lastRuntimeModel: string | null = null;
+  private readonly resultMeter = new ClaudeResultMeter();
   private compacting = false;
   private compactionMarkerOpen = false;
   private queryPumpPromise: Promise<void> | null = null;
@@ -2823,7 +2925,6 @@ class ClaudeAgentSession implements AgentSession {
     }
 
     const normalized = isPermissionMode(modeId) ? modeId : "default";
-    assertClaudeModeCanRun(normalized, this.harnessEnvironment);
     const previousMode = this.currentMode;
     const previousQuery = this.query;
     const activeQuery = await this.ensureQuery(normalized);
@@ -3751,6 +3852,7 @@ class ClaudeAgentSession implements AgentSession {
     this.dispatchEvents([{ type: "background_work", provider: "claude", items: null }]);
     // A fresh Claude process has no turn of its own in flight.
     this.mainTurnInFlight = false;
+    this.resultMeter.queryStarted();
     this.query = claudeQuery(
       { prompt: input.iterable, options },
       {
@@ -3906,7 +4008,6 @@ class ClaudeAgentSession implements AgentSession {
     const providerOptions = applyClaudeToolPolicy(sdkProviderOptions, this.config.toolPolicy);
     const settingsOptions = await this.buildSettingsOptions(providerOptions);
     const sdkEnv = this.harnessEnvironment;
-    assertClaudeModeCanRun(permissionMode, sdkEnv);
 
     const claudeBinary = await this.resolveBinary();
     this.logger.debug(
@@ -5275,6 +5376,25 @@ class ClaudeAgentSession implements AgentSession {
     message: Extract<SDKMessage, { type: "result" }>,
     events: AgentStreamEvent[],
   ): void {
+    const metrics = this.resultMeter.observe(
+      message,
+      this.lastRuntimeModel ?? this.config.model ?? null,
+    );
+    this.appendTurnOutcomeEvents(message, metrics.turn, events);
+    if (metrics.session?.length) {
+      events.push({
+        type: "session_metrics_updated",
+        provider: "claude",
+        metrics: metrics.session,
+      });
+    }
+  }
+
+  private appendTurnOutcomeEvents(
+    message: Extract<SDKMessage, { type: "result" }>,
+    turnMetrics: AgentMetric[],
+    events: AgentStreamEvent[],
+  ): void {
     const usage = this.convertUsage(message);
     // Claude Code reports a turn that stopped on an API error (a usage limit, an overloaded or
     // rejected request) as `success` with `is_error`, carrying the error text in `result`.
@@ -5318,7 +5438,7 @@ class ClaudeAgentSession implements AgentSession {
           },
         });
       }
-      events.push({ type: "turn_completed", provider: "claude", usage });
+      events.push({ type: "turn_completed", provider: "claude", usage, metrics: turnMetrics });
       return;
     }
     const errorMessage =

@@ -3,7 +3,7 @@ import { gotoAppShell, openSettings } from "../support/helpers/app";
 import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
 import { getServerId } from "../support/helpers/server-id";
 import {
-  expectProviderInstalledInSettings,
+  expectProviderAccountListed,
   fillProviderAccountForm,
   openProviderAccountEditForm,
   openProviderAccountForm,
@@ -13,6 +13,7 @@ import {
 } from "../support/helpers/settings";
 
 const BASE_PROVIDER_ID = "claude";
+const BASE_PROVIDER = { id: BASE_PROVIDER_ID, name: "Claude" } as const;
 const ACCOUNT = {
   id: "claude-work",
   label: "Claude (Work)",
@@ -57,7 +58,7 @@ test.describe("provider accounts", () => {
       await openSettingsHost(page, getServerId());
       await openSettingsHostSection(page, getServerId(), "providers");
 
-      await openProviderAccountForm(page, BASE_PROVIDER_ID);
+      await openProviderAccountForm(page, BASE_PROVIDER);
 
       // The id is derived from the label until it is edited by hand.
       await page.getByTestId("provider-account-label-input").fill(ACCOUNT.label);
@@ -78,7 +79,7 @@ test.describe("provider accounts", () => {
       await submitProviderAccountForm(page);
 
       await expect(page.getByTestId("provider-account-sheet")).toHaveCount(0);
-      await expectProviderInstalledInSettings(page, ACCOUNT.label);
+      await expectProviderAccountListed(page, ACCOUNT.label);
 
       await expect
         .poll(async () => {
@@ -99,7 +100,7 @@ test.describe("provider accounts", () => {
           env: { ANTHROPIC_API_KEY: "sk-e2e-test" },
         });
 
-      await openProviderAccountEditForm(page, ACCOUNT.id);
+      await openProviderAccountEditForm(page, { id: ACCOUNT.id, name: ACCOUNT.label });
       await expect(page.getByTestId("provider-account-label-input")).toHaveValue(ACCOUNT.label);
       await expect(page.getByTestId("provider-account-id-input")).toHaveValue(ACCOUNT.id);
       await expect(page.getByTestId("provider-account-description-input")).toHaveValue(
@@ -116,7 +117,7 @@ test.describe("provider accounts", () => {
       await submitProviderAccountForm(page);
 
       await expect(page.getByTestId("provider-account-sheet")).toHaveCount(0);
-      await expectProviderInstalledInSettings(page, EDITED_ACCOUNT.label);
+      await expectProviderAccountListed(page, EDITED_ACCOUNT.label);
       await expect
         .poll(async () => {
           const { config } = await client.getDaemonConfig();

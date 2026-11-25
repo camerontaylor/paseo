@@ -546,7 +546,11 @@ export class CheckoutSession {
     }
   }
 
-  emitStatusUpdate(cwd: string, snapshot: WorkspaceGitRuntimeSnapshot): void {
+  emitStatusUpdate(
+    cwd: string,
+    snapshot: WorkspaceGitRuntimeSnapshot,
+    options?: { force: boolean },
+  ): void {
     try {
       const requestId = `subscription:${cwd}`;
       const payload = {
@@ -562,7 +566,7 @@ export class CheckoutSession {
         }),
       };
       const fingerprint = JSON.stringify(payload);
-      if (this.statusUpdateFingerprints.get(cwd) === fingerprint) return;
+      if (!options?.force && this.statusUpdateFingerprints.get(cwd) === fingerprint) return;
       this.statusUpdateFingerprints.set(cwd, fingerprint);
       this.host.emit({
         type: "checkout_status_update",
@@ -982,7 +986,10 @@ export class CheckoutSession {
     const { cwd, requestId } = msg;
 
     try {
-      await pushCurrentBranch(cwd);
+      await pushCurrentBranch(cwd, undefined, {
+        paseoHome: this.paseoHome,
+        worktreesRoot: this.worktreesRoot,
+      });
       await this.gitMutation.notifyGitMutation(cwd, "push", { invalidateForge: true });
       this.host.emit({
         type: "checkout_push_response",

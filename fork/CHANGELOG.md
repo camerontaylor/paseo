@@ -10,6 +10,35 @@ Remove side conversations from the fork. Layout restore drops saved side
 conversation tabs, and the daemon returns a correlated error for older clients
 that still request a side conversation.
 
+## 0.17.4 base decision — 2026-11-25
+
+Merge upstream `v0.17.4` (`2b3559b10`: upstream main `1fea66215` plus four
+release commits) into committed custom `45ae7fcb9`. Upstream main
+`b6375b142` was 26 commits ahead when the base was chosen and was not adopted:
+the cycle adopts release tags. The release branch does not contain
+`v0.17.0-beta.1`, so resolve against beta.1 rather than Git's 0.16.2 merge base.
+
+Keep the fork's ACP prompt lane, shared/vendor turns, steering and detach, and
+graft upstream #10310's deferred turns onto them: a turn deferred on running
+background tools takes steers into its follow-up reply; a new prompt completes
+a deferred turn whose wire prompt already returned; Stop retires it; and the
+deferred settle releases the ordered prompt response before waiting. Every local
+terminal, including upstream's deferred ones, goes through the fork's
+deduplicating `endLocalTurn`. The wire router keeps the fork's update slots and
+prompt-response ordering and adds upstream's wire sequence observer. Adopt
+upstream's per-command transformer hook, giving it the connection policy, and
+classify jcode skills per command. Session listing keeps upstream's scan cap and
+the fork's repeated-cursor guard.
+
+Adopt #10483's agent `queue`/`steer`/`interrupt` semantics and its old-client
+mapping. Keep the fork's skill and expected-turn guards before a plugin steer is
+inserted. Port provider accounts onto #9661's provider pages: Add account on a
+builtin provider's page, Edit account on an account's page, grouped list rows
+with the base provider's icon. The fork's Android table and text selection
+change now lives in the vendored `packages/react-native-enriched-markdown`
+(#10499), which replaces the patch file. Carry session metrics through the
+fork's record initialisation. Regenerate the lockfile and Nix dependency hash.
+
 ## 0.17.0-beta.1 base decision — 2026-11-20
 
 Merge upstream `v0.17.0-beta.1` (`6c89950b2ef77efee47b127d09d05eb347d25f33`)

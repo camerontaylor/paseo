@@ -5,7 +5,7 @@ import {
   type ProjectedTimelineRow,
 } from "./timeline-projection.js";
 import { limitAgentTimelineItemContent } from "./agent-timeline-content.js";
-import type { AgentTimelineItem } from "./agent-sdk-types.js";
+import type { AgentMetric, AgentTimelineItem } from "./agent-sdk-types.js";
 import type {
   AgentTimelineFetchOptions,
   AgentTimelineFetchResult,
@@ -89,6 +89,15 @@ export class InMemoryAgentTimelineStore {
       clientMessageId,
       providerMessageId,
     );
+  }
+
+  /** Records a completed turn's metrics on its footer row. Null when the turn has none. */
+  stampTurnMetrics(
+    agentId: string,
+    metrics: AgentMetric[],
+    options?: { turnId?: string },
+  ): AgentTimelineRow | null {
+    return this.requireState(agentId).projection.stampTurnMetrics(metrics, options?.turnId);
   }
 
   getEpoch(agentId: string): string {

@@ -4,6 +4,7 @@ import { PluginSessionHistory } from "./plugin-session-history.js";
 import { resolve as resolvePath } from "node:path";
 import type { Logger } from "pino";
 import type { JsonValue, ProviderOptions } from "@getpaseo/protocol/agent-types";
+import type { ProviderInstallationInspection } from "@getpaseo/protocol/messages";
 import { z } from "zod";
 import {
   PROVIDER_CAPABILITIES,
@@ -12,6 +13,10 @@ import {
   ProviderInputSchema,
   ProviderStatusSchema,
   type ProviderStatus,
+  type ProviderInspection,
+  type ProviderUpdateCheck,
+  type ProviderUpdateResult,
+  type ProviderInstallationLaunch,
   type ProviderLaunch,
   requireProviderCapabilities,
   type ProviderCapability,
@@ -32,6 +37,9 @@ import {
 import type {
   AgentCapabilityFlags,
   AgentClient,
+  AgentClientInstallation,
+  AgentClientUpdateCheckContext,
+  AgentClientUpdateContext,
   AgentCreateSessionOptions,
   AgentLaunchContext,
   AgentMode,
@@ -58,6 +66,7 @@ import type {
   ProviderRefreshContext,
   SteerActiveTurnOptions,
   SteerResult,
+  AgentClientDiagnosticContext,
 } from "./agent-sdk-types.js";
 import {
   resolveProviderLaunch,
@@ -65,7 +74,13 @@ import {
   createProviderEnv,
   type ProviderRuntimeSettings,
 } from "./provider-launch-config.js";
+import { ImportedHistory } from "./provider-session-import.js";
 import { readPluginOptionState } from "./plugin-provider-options.js";
+import {
+  buildCommandResolutionDiagnosticRows,
+  formatProviderDiagnostic,
+  type DiagnosticEntry,
+} from "./providers/diagnostic-utils.js";
 import type { RegisteredProviderDefinition } from "./provider-registry.js";
 import { runProviderTurn } from "./providers/provider-runner.js";
 import { StaleProviderSessionError } from "./stale-provider-session-error.js";
@@ -129,8 +144,15 @@ function isProviderRequestReply(
   );
 }
 
+function describeVersion(inspection: ProviderInstallationInspection): string {
+  if (inspection.status === "not_installed") return "not installed";
+  if (inspection.status === "error") return `error: ${inspection.message}`;
+  return inspection.version?.trim() || "unknown";
+}
+
 class ProviderRuntime {
   private connection: ProviderConnection | null = null;
+  connectedLaunch: ProviderLaunch | undefined;
   private connecting: Promise<ProviderConnection> | null = null;
   private closed = false;
   private generation = 0;
@@ -157,7 +179,8 @@ class ProviderRuntime {
     private readonly runtimeSettings?: ProviderRuntimeSettings,
   ) {}
 
-  private async resolveLaunch(): Promise<ProviderLaunch | undefined> {
+  /** The launch after overrides, and where its executable resolves. */
+  private async resolveConfiguredLaunch() {
     const command = this.registration.command;
     if (!command) return undefined;
     const launch = await resolveProviderLaunch({
@@ -167,9 +190,77 @@ class ProviderRuntime {
     if (launch.source !== "override") launch.args.unshift(...command.slice(1));
     const env = createProviderEnv({ runtimeSettings: this.runtimeSettings });
     launch.env = env;
-    const availability = await checkProviderLaunchAvailable(launch);
-    if (!availability.resolvedPath) throw new Error(`${launch.command} not found on PATH`);
-    return { command: resolvePath(availability.resolvedPath), args: launch.args, env };
+    return { launch, env, availability: await checkProviderLaunchAvailable(launch) };
+  }
+
+  /** The effective launch, including when its executable does not resolve. */
+  private async resolveEffectiveLaunch(): Promise<ProviderInstallationLaunch | undefined> {
+    const configured = await this.resolveConfiguredLaunch();
+    if (!configured) return undefined;
+    const { launch, env, availability } = configured;
+    if (!availability.resolvedPath)
+      return { command: launch.command, args: launch.args, env, resolved: false };
+    return {
+      command: resolvePath(availability.resolvedPath),
+      args: launch.args,
+      env,
+      resolved: true,
+    };
+  }
+
+  private async resolveLaunch(): Promise<ProviderLaunch | undefined> {
+    const launch = await this.resolveEffectiveLaunch();
+    if (!launch) return undefined;
+    if (!launch.resolved) throw new Error(`${launch.command} not found on PATH`);
+    return { command: launch.command, args: launch.args, env: launch.env };
+  }
+
+  async resolveUsageLaunch(): Promise<ProviderLaunch | undefined> {
+    const launch = await this.resolveEffectiveLaunch();
+    if (!launch?.resolved) return undefined;
+    return { command: launch.command, args: launch.args, env: launch.env };
+  }
+
+  async inspectInstallation(signal: AbortSignal): Promise<ProviderInspection> {
+    const inspect = this.registration.installation?.inspect;
+    if (!inspect) throw new Error("Provider does not report its installation");
+    const launch = await this.resolveEffectiveLaunch();
+    signal.throwIfAborted();
+    return await inspect.call(this.registration.installation, { launch, signal });
+  }
+
+  async checkForUpdates(context: AgentClientUpdateCheckContext): Promise<ProviderUpdateCheck> {
+    const checkForUpdates = this.registration.installation?.checkForUpdates;
+    if (!checkForUpdates) throw new Error("Provider does not check for updates");
+    const launch = await this.resolveEffectiveLaunch();
+    context.signal.throwIfAborted();
+    return await checkForUpdates.call(this.registration.installation, { ...context, launch });
+  }
+
+  async update(context: AgentClientUpdateContext): Promise<ProviderUpdateResult> {
+    const update = this.registration.installation?.update;
+    if (!update) throw new Error("Provider does not update itself");
+    const launch = await this.resolveEffectiveLaunch();
+    context.signal.throwIfAborted();
+    return await update.call(this.registration.installation, { ...context, launch });
+  }
+
+  /** What the daemon launches, where it found the executable and which version it runs. */
+  async launchDiagnosticRows(context: AgentClientDiagnosticContext): Promise<DiagnosticEntry[]> {
+    const configured = await this.resolveConfiguredLaunch();
+    if (!configured) return [];
+    const { launch, env, availability } = configured;
+    const rows = [
+      ...(await buildCommandResolutionDiagnosticRows(launch, {
+        knownBinaryNames: [launch.command],
+        pathValue: env.PATH,
+      })),
+      { label: "Resolved path", value: availability.resolvedPath ?? "not found" },
+    ];
+    if (!availability.resolvedPath) return rows;
+    const inspection = await context.inspectInstallation();
+    if (inspection) rows.push({ label: "Version", value: describeVersion(inspection) });
+    return rows;
   }
 
   async status(): Promise<ProviderStatus> {
@@ -387,8 +478,9 @@ class ProviderRuntime {
   }
 
   private async establishConnection(generation: number): Promise<ProviderConnection> {
+    const launch = await this.resolveLaunch();
     const rawConnection = await this.registration.connect({
-      launch: await this.resolveLaunch(),
+      launch,
       versions: [PROVIDER_PROTOCOL_VERSION],
       capabilities: PROVIDER_CAPABILITIES,
     });
@@ -402,6 +494,7 @@ class ProviderRuntime {
       await rawConnection.close().catch(() => undefined);
       throw error;
     }
+    this.connectedLaunch = launch;
     const connection = normalizeConnection(rawConnection);
     const unsubscribe = connection.onEvent((event) => this.accept(event));
     if (this.closed || generation !== this.generation) {
@@ -695,6 +788,7 @@ class ProviderRuntimeSession {
   }
 
   async configure(changes: ProviderConfigChanges): Promise<void> {
+    if (this.terminal) throw new StaleProviderSessionError(this.id);
     const input: Extract<ProviderInput, { type: "session.configure" }> = {
       type: "session.configure",
       requestId: randomUUID(),
@@ -972,6 +1066,7 @@ function createPluginProviderDefinition(
     label: registration.label,
     description: registration.description ?? `Plugin provider ${registration.label}`,
     iconSvg: registration.icon,
+    docsUrl: registration.docsUrl,
     requiresConfiguration: registration.requiresConfiguration,
     defaultModeId: null,
     modes: [],
@@ -987,12 +1082,14 @@ interface PendingChild {
 
 class PluginAgentClient implements AgentClient {
   readonly provider: string;
+  private readonly label: string;
   private readonly runtime: ProviderRuntime;
   private readonly rootsBySession = new Map<string, PluginAgentSession>();
   private readonly pendingChildren: PendingChild[] = [];
 
   readonly getCatalogCacheKey?: AgentClient["getCatalogCacheKey"];
   readonly restoresSessionConfig: boolean;
+  readonly installation?: AgentClientInstallation;
 
   constructor(
     registration: ProviderRegistration,
@@ -1001,10 +1098,28 @@ class PluginAgentClient implements AgentClient {
   ) {
     this.provider = registration.id;
     this.restoresSessionConfig = registration.restoresSessionConfig === true;
+    this.label = registration.label;
     this.runtime = new ProviderRuntime(registration, runtimeSettings);
     if (registration.getCatalogCacheKey)
       this.getCatalogCacheKey = (options) => this.runtime.catalogCacheKey(options);
+    const installation = registration.installation;
+    if (installation)
+      this.installation = {
+        installUrl: installation.installUrl,
+        updateUrl: installation.updateUrl,
+        inspect: installation.inspect
+          ? ({ signal }) => this.runtime.inspectInstallation(signal)
+          : undefined,
+        checkForUpdates: installation.checkForUpdates
+          ? (context) => this.runtime.checkForUpdates(context)
+          : undefined,
+        update: installation.update ? (context) => this.runtime.update(context) : undefined,
+      };
     this.runtime.onSessionOpened((session, opened) => this.acceptChild(session, opened));
+  }
+
+  resolveUsageLaunch() {
+    return this.runtime.resolveUsageLaunch();
   }
 
   get capabilities(): AgentCapabilityFlags {
@@ -1069,9 +1184,20 @@ class PluginAgentClient implements AgentClient {
     return await this.runtime.isAvailable();
   }
 
-  async getDiagnostic(): Promise<{ diagnostic: string }> {
-    const status = await this.runtime.status();
-    return { diagnostic: status.diagnostic ?? "Provider is available" };
+  async getDiagnostic(context: AgentClientDiagnosticContext): Promise<{ diagnostic: string }> {
+    const [rows, status] = await Promise.all([
+      this.runtime.launchDiagnosticRows(context),
+      this.runtime.status(),
+    ]);
+    const report = [formatProviderDiagnostic(this.label, rows)];
+    if (!status.available) report.push(`  Error: ${status.diagnostic}`);
+    // An available provider adds its own rows, one per line.
+    else if (status.diagnostic) {
+      for (const line of status.diagnostic.split("\n")) {
+        if (line.trim()) report.push(`  ${line.trim()}`);
+      }
+    }
+    return { diagnostic: report.join("\n") };
   }
 
   async listImportableSessions(
@@ -1109,8 +1235,7 @@ class PluginAgentClient implements AgentClient {
       session,
       config: { ...context.storedConfig, provider: this.provider, cwd: input.cwd },
       persistence,
-      timeline: session.timelineHistory(),
-      providerSubagentEvents: session.subagentHistory(),
+      ...session.importedHistory(),
     };
   }
 
@@ -1173,6 +1298,12 @@ class PluginAgentClient implements AgentClient {
       bind,
       config.settings,
       this.logger,
+      this.runtime.connectedLaunch
+        ? {
+            ...this.runtime.connectedLaunch,
+            env: { ...this.runtime.connectedLaunch.env, ...config.env },
+          }
+        : undefined,
     );
     bind(bridge);
     return session;
@@ -1275,6 +1406,7 @@ class PluginAgentSession implements AgentSession {
     private readonly onBind: (bridge: ProviderRuntimeSession) => void,
     givenOptions: Readonly<Record<string, JsonValue>>,
     private readonly logger: Logger,
+    private readonly usageLaunch: ProviderLaunch | undefined,
   ) {
     this.subagentIdsBySession.set(bridge.id, null);
     // Every setting the session opened with that was not given, including ones nobody set.
@@ -1288,6 +1420,17 @@ class PluginAgentSession implements AgentSession {
       (entry) => entry.item.type === "notification",
     );
     this.unsubscribe = bridge.onEvent((event) => this.accept(event, true));
+  }
+
+  usageSession() {
+    if (this.closed || !this.usageLaunch) return null;
+    return {
+      provider: this.provider,
+      model: this.bridge.config.model,
+      env: this.usageLaunch.env,
+      launch: this.usageLaunch,
+      sessionKey: this.bridge.id,
+    };
   }
 
   get id(): string {
@@ -1346,19 +1489,23 @@ class PluginAgentSession implements AgentSession {
     return { turnId };
   }
 
-  async steerActiveTurn(
+  /** Offered only when the provider negotiated prompt.steer, so callers can ask before steering. */
+  get steerActiveTurn():
+    | ((prompt: AgentPromptInput, options: SteerActiveTurnOptions) => Promise<SteerResult>)
+    | undefined {
+    if (!this.bridge.negotiatedCapabilities.includes("prompt.steer")) return undefined;
+    return (prompt, options) => this.steer(prompt, options);
+  }
+
+  private async steer(
     prompt: AgentPromptInput,
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
     this.assertReplayComplete();
     // A busy steer cannot change a sticky skill; reject before insertion instead of dropping it.
     if (options.skill !== undefined) return { status: "unavailable" };
-    if (
-      !this.bridge.negotiatedCapabilities.includes("prompt.steer") ||
-      this.currentTurnId !== options.expectedTurnId
-    ) {
-      return { status: "unavailable" };
-    }
+    // Never insert into a turn other than the one the caller observed.
+    if (this.currentTurnId !== options.expectedTurnId) return { status: "unavailable" };
     const result = await this.bridge.prompt({
       clientMessageId: options.clientMessageId ?? randomUUID(),
       delivery: "steer",
@@ -1551,13 +1698,10 @@ class PluginAgentSession implements AgentSession {
       );
   }
 
-  subagentHistory(): NonNullable<ImportedProviderSession["providerSubagentEvents"]> {
-    return this.history
-      .read(this.provider)
-      .filter(
-        (event): event is Extract<AgentStreamEvent, { type: "provider_subagent" }> =>
-          event.type === "provider_subagent",
-      );
+  importedHistory(): ReturnType<ImportedHistory["result"]> {
+    const history = new ImportedHistory();
+    for (const event of this.history.read(this.provider)) history.add(event);
+    return history.result();
   }
 
   attachChild(
@@ -1620,6 +1764,14 @@ class PluginAgentSession implements AgentSession {
             turnId: event.turnId,
           },
         ];
+      case "session.metrics":
+        return [
+          {
+            type: "session_metrics_updated",
+            provider: this.provider,
+            metrics: event.metrics.map((metric) => ({ ...metric })),
+          },
+        ];
       case "timeline.item":
         return this.translateTimeline(event);
       case "session.permission":
@@ -1655,7 +1807,12 @@ class PluginAgentSession implements AgentSession {
     }
     if (this.currentTurnId === event.turnId) this.currentTurnId = null;
     if (event.state === "completed") {
-      return { type: "turn_completed", provider: this.provider, turnId: event.turnId };
+      return {
+        type: "turn_completed",
+        provider: this.provider,
+        turnId: event.turnId,
+        ...(event.metrics ? { metrics: event.metrics.map((metric) => ({ ...metric })) } : {}),
+      };
     }
     if (event.state === "canceled") {
       return {
@@ -2020,14 +2177,21 @@ function mapModel(
   catalogThinkingOptions: Extract<ProviderEvent, { type: "catalog" }>["catalog"]["thinkingOptions"],
   catalogDefaultThinkingOption: string | undefined,
 ): AgentModelDefinition {
-  const thinkingOptions = model.thinkingOptions ?? catalogThinkingOptions;
+  // A default belongs to the options it was chosen from, so a model with its own options never
+  // takes the catalog's default.
+  const thinking = model.thinkingOptions
+    ? { options: model.thinkingOptions, defaultId: model.defaultThinkingOptionId }
+    : {
+        options: catalogThinkingOptions,
+        defaultId: model.defaultThinkingOptionId ?? catalogDefaultThinkingOption,
+      };
   return {
     ...model,
     provider,
     isDefault: model.isDefault ?? model.id === defaultModel,
     metadata: model.metadata ? { ...model.metadata } : undefined,
-    thinkingOptions: thinkingOptions?.map((option) => Object.assign({}, option)),
-    defaultThinkingOptionId: model.defaultThinkingOptionId ?? catalogDefaultThinkingOption,
+    thinkingOptions: thinking.options?.map((option) => Object.assign({}, option)),
+    defaultThinkingOptionId: thinking.defaultId,
   };
 }
 
@@ -2174,6 +2338,14 @@ function encodePersistence(persistence: ProviderPersistence): string {
   return `plugin:${JSON.stringify(persistence)}`;
 }
 
+// Providers whose agents were saved by the generic ACP provider before they became plugins.
+const FORMER_ACP_PROVIDERS = new Set<string>([
+  // COMPAT(gooseProvider): added in v0.17.0, remove after 2027-05-20 once legacy handles have migrated.
+  "goose",
+  // COMPAT(hermesProvider): added in v0.17.4, remove after 2027-05-23 once legacy handles have migrated.
+  "hermes",
+]);
+
 function decodePersistence(handle: AgentPersistenceHandle): ProviderPersistence {
   const fromMetadata = handle.metadata?.pluginProviderPersistence;
   if (fromMetadata !== undefined) {
@@ -2182,6 +2354,9 @@ function decodePersistence(handle: AgentPersistenceHandle): ProviderPersistence 
   // COMPAT(legacy-acp-persistence): added in v0.15.3, remove after 2027-05-10.
   // Legacy ACP sessions stored the native id before the plugin migration.
   if (handle.metadata?.provider === "acp" && !handle.sessionId.startsWith("plugin:")) {
+    return { version: 1, data: { sessionId: handle.sessionId } };
+  }
+  if (FORMER_ACP_PROVIDERS.has(handle.provider) && !handle.sessionId.startsWith("plugin:")) {
     return { version: 1, data: { sessionId: handle.sessionId } };
   }
   return decodePersistenceId(handle.sessionId);
