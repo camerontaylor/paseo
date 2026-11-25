@@ -413,6 +413,25 @@ export async function sendPromptToAgent(
   );
 }
 
+/**
+ * Fork: dispatch one prompt by itself, as every send did before upstream #10483. The durable
+ * queue and finish notifications own their own ordering and receipts, so they never carry the
+ * agent's queued messages along the way `sendPromptToAgent` does.
+ */
+export async function sendPromptToAgentAlone(
+  params: SendPromptToAgentParams,
+): Promise<PromptDispatchResult> {
+  const source = await resolvePromptSource(params.source, params.agentManager, params.agentStorage);
+  const delivery = prepareAgentMessage(params.prompt, source, params.messageId);
+  return sendPreparedPromptToAgent({
+    ...params,
+    prompt: delivery.prompt,
+    runOptions: delivery.messageId
+      ? { ...params.runOptions, clientMessageId: delivery.messageId }
+      : params.runOptions,
+  });
+}
+
 /** Dispatch daemon-prepared context without reclassifying it as human input. */
 export async function sendPreparedPromptToAgent(
   params: Omit<SendPromptToAgentParams, "source" | "messageId">,
@@ -703,7 +722,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
       permissionRequest,
     });
 
-    await sendPromptToAgent({
+    await sendPromptToAgentAlone({
       agentManager,
       agentStorage,
       agentId: callerAgentId,

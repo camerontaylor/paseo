@@ -55,16 +55,19 @@ describe("combined model selector data", () => {
   }
 
   it("orders provider accounts after their base provider and borrows its icon", () => {
-    const providers = buildSelectableProviderSelectorProviders([
-      snapshotEntry({ provider: "claude", label: "Claude" }),
-      snapshotEntry({ provider: "codex", label: "Codex" }),
-      snapshotEntry({
-        provider: "claude-work",
-        label: "Claude (Work)",
-        source: "custom",
-        baseProviderId: "claude",
-      }),
-    ]);
+    const providers = buildSelectableProviderSelectorProviders(
+      [
+        snapshotEntry({ provider: "claude", label: "Claude" }),
+        snapshotEntry({ provider: "codex", label: "Codex" }),
+        snapshotEntry({
+          provider: "claude-work",
+          label: "Claude (Work)",
+          source: "custom",
+          baseProviderId: "claude",
+        }),
+      ],
+      { selectedProvider: null },
+    );
 
     expect(providers.map((provider) => provider.id)).toEqual(["claude", "claude-work", "codex"]);
     expect(resolveProviderIconId(providers, "claude-work")).toBe("claude");

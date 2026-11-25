@@ -3,7 +3,7 @@ import type { Logger } from "pino";
 
 import type { AgentAttachment, QueuedAgentDeliveryIntent } from "@getpaseo/protocol/messages";
 
-import { sendPromptToAgent } from "../agent/agent-prompt.js";
+import { sendPromptToAgentAlone } from "../agent/agent-prompt.js";
 import type { AgentManager } from "../agent/agent-manager.js";
 import type { AgentRunOptions } from "../agent/agent-sdk-types.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
@@ -37,9 +37,9 @@ export interface SendOrQueuePromptParams {
   logger: Logger;
   /**
    * Injected so tests can substitute the send without module mocks; defaults
-   * to the same sendPromptToAgent every prompt surface uses.
+   * to the single-prompt dispatch (sendPromptToAgentAlone).
    */
-  send?: typeof sendPromptToAgent;
+  send?: typeof sendPromptToAgentAlone;
 }
 
 export interface SendOrQueueResult {
@@ -96,7 +96,7 @@ export async function sendOrQueuePromptToAgent(
     return { queued: true, outOfBand: false };
   }
 
-  const send = params.send ?? sendPromptToAgent;
+  const send = params.send ?? sendPromptToAgentAlone;
   const result = await send({
     agentManager: params.agentManager,
     agentStorage: params.agentStorage,

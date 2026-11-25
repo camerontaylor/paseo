@@ -585,7 +585,12 @@ export async function fetchUsage(
     });
   const { oauth } = credentials;
   const now = credentialLookup.now ?? Date.now;
-  const rejected = await verifyLoginAccount(oauth.accessToken, input.accountKey, fetchApi, now);
+  const rejected = await verifyLoginAccount(
+    oauth.accessToken,
+    "route" in input ? input.accountKey : undefined,
+    fetchApi,
+    now,
+  );
   if (rejected !== undefined)
     return unavailable({ kind: "rejected", status: rejected, refreshedBy });
 
