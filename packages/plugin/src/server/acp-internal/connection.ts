@@ -131,7 +131,10 @@ export async function createAcpProviderConnection(
   if (probe.agentCapabilities.loadSession) {
     supportedCapabilities.push("session.persistence");
   }
-  if (options.acpOptions?.deferTurnOnRunningTools) {
+  if (
+    options.acpOptions?.deferTurnOnRunningTools &&
+    !supportedCapabilities.includes("prompt.steer")
+  ) {
     supportedCapabilities.push("prompt.steer");
   }
   await probe.close();
@@ -855,6 +858,11 @@ class AcpRuntime {
     return nativeSessionId;
   }
 
+  /** The agent and this attachment negotiated steering into a running shared turn. */
+  private steersSharedTurns(): boolean {
+    return this.connectionPolicy.steering === true && this.sessionPolicy.steering === true;
+  }
+
   private sessionCapabilities(
     connectionCapabilities: readonly ProviderCapability[],
   ): ProviderCapability[] {
@@ -863,7 +871,8 @@ class AcpRuntime {
       (capability) =>
         capability !== "session.detach" &&
         (capability !== "prompt.steer" ||
-          (this.connectionPolicy.steering === true && this.sessionPolicy.steering === true)),
+          this.options.options.acpOptions?.deferTurnOnRunningTools !== undefined ||
+          this.steersSharedTurns()),
     );
     if (this.sessionPolicy.detach === true) sessionCapabilities.push("session.detach");
     return sessionCapabilities;
@@ -950,8 +959,10 @@ class AcpRuntime {
     }
     this.assertPromptSelection(input.prompt);
     if (input.prompt.delivery === "steer") {
-      // A turn deferred on running background tools takes steers into its follow-up reply.
-      if (this.activePrompt?.deferred) {
+      // A turn deferred on running background tools takes steers into its follow-up reply. An
+      // agent without shared-turn steering can be steered only then; the deferred path refuses
+      // the steer otherwise.
+      if (this.activePrompt?.deferred || !this.steersSharedTurns()) {
         this.steerDeferredPrompt(input);
         return Promise.resolve();
       }
@@ -1327,12 +1338,16 @@ class AcpRuntime {
         if (
           response.stopReason === "end_turn" &&
           !sharedExecution &&
-          this.shouldDeferTurn(activePrompt)
+          this.options.options.acpOptions?.deferTurnOnRunningTools !== undefined
         ) {
-          // Release the wire first: settling the deferred turn waits on later session updates.
+          // Release the wire first: updates that follow end_turn (a tool reclassified as a
+          // daemon) decide whether to defer, and settling a deferred turn waits on them.
           releaseResponse();
-          await this.settleDeferredPrompt(activePrompt);
-          return undefined;
+          await this.drainNotifications();
+          if (this.shouldDeferTurn(activePrompt)) {
+            await this.settleDeferredPrompt(activePrompt);
+            return undefined;
+          }
         }
         if (this.activePrompt?.turnId === turnId) this.activePrompt = null;
         this.finishTurnPermissions(turnId);
@@ -1699,7 +1714,10 @@ class AcpRuntime {
     const requested: AcpConfigChange[] = [];
     if (config.model) requested.push({ target: "model", value: config.model });
     const autoAcceptMode = this.options.options.acpOptions?.autoAcceptMode;
-    const { settings, legacyAutoAccept } = this.withoutLegacyAutoAccept(config.settings);
+    // Without an unattended mode, auto_accept is the fork's local setting, not a legacy toggle.
+    const { settings, legacyAutoAccept } = autoAcceptMode
+      ? this.withoutLegacyAutoAccept(config.settings)
+      : { settings: config.settings, legacyAutoAccept: false };
     // The toggle stays saved after a mode is chosen here, so it counts only while the saved mode
     // is one the generic adapter wrote.
     const mode =
@@ -2605,21 +2623,12 @@ class AcpRuntime {
     this.fallbackChunkIds.clear();
     this.terminalizeTransientItems(state, options);
     this.finishTurnPermissions(turnId);
-    if (state === "failed") {
-      this.emit({
-        type: "session.turn",
-        sessionId: this.options.boundarySessionId,
-        turnId,
-        state,
-        error: error ?? { message: "ACP turn failed" },
-      });
-      return;
-    }
     this.emit({
       type: "session.turn",
       sessionId: this.options.boundarySessionId,
       turnId,
       state,
+      ...(error === undefined ? {} : { error }),
     });
   }
 

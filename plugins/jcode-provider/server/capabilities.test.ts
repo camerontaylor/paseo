@@ -140,17 +140,16 @@ describe("jcodeCapabilities", () => {
       },
       { name: "plain", description: "No hint" },
     ];
-    const classified = jcodeCapabilities.command?.(commands, {
-      sessionId: "s",
-      policy: { skillSelection: true },
-    });
-    expect(classified).toEqual([commands[0], { ...commands[1], kind: "skill" }, commands[2]]);
-    expect(
-      jcodeCapabilities.command?.(commands, {
-        sessionId: "s",
-        policy: { skillSelection: false },
-      }),
-    ).toBeNull();
+    const classify = (skillSelection: boolean) =>
+      commands.map(
+        (command) =>
+          jcodeCapabilities.command?.(command, {
+            sessionId: "s",
+            policy: { skillSelection },
+          }) ?? command,
+      );
+    expect(classify(true)).toEqual([commands[0], { ...commands[1], kind: "skill" }, commands[2]]);
+    expect(classify(false)).toEqual(commands);
   });
 
   it("does not retain initialize state between attachments", () => {
