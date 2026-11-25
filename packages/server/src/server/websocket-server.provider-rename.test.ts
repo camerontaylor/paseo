@@ -65,6 +65,8 @@ function createWebSocketServer(params: {
   const agentManager = {
     setAgentAttentionCallback() {},
     subscribe: () => () => {},
+    // Queued agent message delivery (upstream #10404) listens for stops at construction.
+    onStop: () => () => {},
     updateProviderRegistry() {},
     renameProviderOnLiveAgents: params.renameProviderOnLiveAgents,
     getMetricsSnapshot: () => ({
